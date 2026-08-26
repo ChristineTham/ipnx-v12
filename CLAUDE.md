@@ -84,7 +84,7 @@ for anything else ("a list that appears twice will disagree").
 emulation. It is checked out beside this one at `../ipnx`, but referenced from the docs
 only by URL — deliberately.
 
-**The V10 source tree is not copied here and must not be.** Every V10 number quoted
+**The V10 measurement tree lives in `../ipnx`, not here.** Every V10 number quoted
 (61,072 kernel lines, 239 `fork(` sites, `sh/xec.c:432`, `sysent.c` slot 66) was measured
 in `../ipnx` and is recorded **as data** because it cannot be re-derived here. A new
 measurement is taken in `../ipnx` against `v10/usr/src/…` and recorded with file-and-line
@@ -193,11 +193,14 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
   a measurement or source. State the decision, then the constraint that forced it.
 - **Measure rather than assume** — engine capabilities here contradicted folklore (legacy
   EH gone, `try_table` on); RESEARCH.md records measured tables with dates.
-- **No Plan 9, plan9port, APE or Research Unix source is copied in.** `LICENSE` is MIT
-  *inherited* from Plan 9 (Foundation transfer, March 2021); Plan 9-derived material keeps
-  the Foundation's notice; Research Unix is a separate estate (Nokia's 2017 covenant),
-  explicitly not covered. A V12 image mixes the estates — answered before code; revisit
-  LICENSE then.
+- **Upstream source may be brought in; provenance and notices travel with it.** Plan 9,
+  plan9port and APE are MIT (Foundation transfer, March 2021) and the plan calls APE "a
+  source to cut down" — importing such source is expected, keeping the Foundation's
+  notice per `LICENSE`. Research Unix source is governed by the covenant reasoning in
+  the parent repository; when any lands here, update `LICENSE`'s scope note in the same
+  commit. Separate from licensing: **the V10 tree used for measurements stays in
+  `../ipnx`** so every quoted number keeps file-and-line provenance (RESEARCH.md's own
+  rule).
 - Prose is British-inflected (`licence`, `rasterise`), em-dashed; tables carry comparisons.
   Guest C is Plan 9 style (tabs, `nil`, no const clutter); the build silences the
   builtin-redeclaration warnings that style causes.

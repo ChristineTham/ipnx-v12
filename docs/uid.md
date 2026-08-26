@@ -103,13 +103,19 @@ family remain with the protocol-extension decision they always shared (9P2000.u/
 prove the wire room; choosing extension-vs-mint is its own small task now that the uid
 question no longer gates it).
 
-## Deferrals — measurements to take in ../ipnx, not open questions
+## Deferrals — measured 2026-08-26 (provenance in RESEARCH §3)
 
-- **D1**: V10's exact `getuid`/`setuid` return packing and `setruid` semantics, from
-  `os/sys1.c` and libc, before the personality libc freezes its ABI.
-- **D2**: the gid/groups surface (`setgroups`/`getgroups` width, NGROUPS) — same design,
-  measured limits.
-- **D3**: whether V10 lets an owner give a file away (`chown` semantics) — enforcement
-  default here is eve-only until measured.
-- **D4**: group of a created file (creator's gid vs directory's) — V7 says creator's;
-  confirm against V10's `maknode`.
+- **D1 — closed.** `getuid` returns both ids in two registers (`os/sys4.c:90`;
+  `_geteuid` is the same trap plus `movl r1,r0` in `libc/sys/getuid.s`), `setuid` sets
+  real and effective together and **silently no-ops on denial**, `setruid` is root-only.
+  The personality's libc mirrors exactly that: one ctl write, both fields; denial
+  swallowed, not errored.
+- **D2 — measured, implementation deferred.** `NGROUPS 32`, `short` gids,
+  `NOGROUP`-terminated, `setgroups` root-only. The kernel design (a `groups` list in the
+  credential, same ctl vehicle) is unchanged.
+- **D3 — closed, and the default stands.** V10's non-root owner cannot give a file away
+  (`chown1` requires the uid to be unchanged for non-root; `accowner` + root gates the
+  rest), so the PoC's eve-only chown **is** V10 semantics for the uid half; non-root gid
+  changes within membership arrive with D2.
+- **D4 — closed.** A created file takes the creator's effective uid and gid
+  (`os/iget.c:314`), not the directory's — matching what ramfs already does.

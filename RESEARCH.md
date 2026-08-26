@@ -284,6 +284,23 @@ Taken against the parent repository's tree, and not re-derivable here:
   kernel would need a tagged personality as well as a second `a.out` format.
 - `sysent.c` slot 66 is `0, fork, /* 64 +2 = former vfork */` — vfork's number, aliased back
   to `fork` once the VAX had virtual memory to make copying cheap.
+- **The uid family, measured 2026-08-26** (closing docs/uid.md's D1–D4):
+  - `os/sys4.c:74` `setuid`: permitted when `u.u_ruid == uid || u.u_uid == uid || suser()`,
+    sets `u_uid`, `p_uid` **and** `u_ruid` — and on denial it **silently does nothing**
+    (no `u_error`), V7's manner. `sys4.c:97` `setruid`: `suser()` only.
+  - `os/sys4.c:90` `getuid`: `r_val1 = u.u_ruid; r_val2 = u.u_uid` — **one trap returns
+    both ids in two registers**, and `libc/sys/getuid.s` holds the pair: `_getuid` takes
+    `r0`, `_geteuid` is the *same* `chmk $getuid` followed by `movl r1,r0`. The
+    personality's `geteuid` is a register pick, not a second call.
+  - `sys/sys/param.h:12`: `NGROUPS 32`, groups are `short`s ending at a `NOGROUP`
+    sentinel; `sys4.c:132` `setgroups` is `suser()`-only with `EINVAL` past the array.
+  - `os/sys4.c` `chown1` + `os/fio.c:203` `accowner`: the gate is owner-or-root, but a
+    **non-root owner cannot give a file away** — `chown1` requires `ip->i_uid == uid` and
+    a member gid for non-root, so only root changes a file's uid (and a gid change clears
+    `ISGID` unless `ICONC`). The PoC's eve-only chown was already V10's rule.
+  - `os/iget.c:314` `maknode`: `i_mode = IFREG|(0666 & ~u.u_cmask)`, `i_uid = u.u_uid`,
+    `i_gid = u.u_gid` — a created file takes the **creator's** effective ids, not the
+    directory's.
 
 ---
 
