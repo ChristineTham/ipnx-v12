@@ -49,7 +49,8 @@ int   rfork(int flags);
 typedef void (*Forkfn)(void*);
 int   procrfork(int flags, Forkfn fn, void *arg);   /* the no-asyncify fork+exec path */
 int   exec(char *path, char *argv[]);
-void  exits(char *msg);
+void  exits(char *msg);		/* real libc's, over atexit; raw floor is _exits */
+void  _exits(char *msg);
 int   await(char *s, int n);
 int   stat(char *path, uchar *edir, int n);
 int   fstat(int fd, uchar *edir, int n);
@@ -71,21 +72,36 @@ int   lstat(char *path, uchar *edir, int n);
 #define DMSETUID 0x00080000	/* 9P2000.u's bit position (docs/uid.md) */
 #define DMSYMLINK 0x02000000	/* ditto */
 
-/* library */
+/* library: strings and prints are the REAL Plan 9 sources (libp9.a);
+ * these declarations mirror their ABI for our own commands */
 long  strlen(char *s);
 int   strcmp(char *a, char *b);
-char* strchr(char *s, int c);
-char* strstr(char *s, char *sub);
-void* memcpy(void *dst, void *src, ulong n);
-void* memset(void *dst, int c, ulong n);
-int   vfmt9(char *buf, int nbuf, char *fmt, __builtin_va_list a);
-int   fprint(int fd, char *fmt, ...);
-int   print(char *fmt, ...);
-int   atoi(char *s);
-void* malloc(ulong n);
-char* strdup(char *s);
 int   strncmp(char *a, char *b, ulong n);
 char* strcpy(char *dst, char *src);
+char* strchr(char *s, int c);
+char* strrchr(char *s, int c);
+char* strstr(char *s, char *sub);
+char* strcat(char *dst, char *src);
+char* strdup(char *s);
+void* memcpy(void *dst, void *src, ulong n);
+void* memmove(void *dst, void *src, ulong n);
+void* memset(void *dst, int c, ulong n);
+int   memcmp(void *a, void *b, ulong n);
+int   atoi(char *s);
+long  atol(char *s);
+int   fprint(int fd, char *fmt, ...);
+int   print(char *fmt, ...);
+char* seprint(char *buf, char *e, char *fmt, ...);
+char* vseprint(char *buf, char *e, char *fmt, __builtin_va_list arg);
+int   snprint(char *buf, int n, char *fmt, ...);
+char* smprint(char *fmt, ...);
+void  sysfatal(char *fmt, ...);
+extern char *argv0;
+void* malloc(ulong n);
+void  free(void *p);
+void* realloc(void *p, ulong n);
+vlong nsec(void);
+int   fd2path(int fd, char *buf, int n);
 /* 9P2000 stat record: extract length, mode and name (convM2D, abridged) */
 uvlong statlen(uchar *edir);
 ulong  statmode(uchar *edir);

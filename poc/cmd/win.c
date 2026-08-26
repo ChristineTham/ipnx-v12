@@ -4,7 +4,7 @@
 #include "lib9.h"
 
 static char **cmdav;
-char *smprint(char*);
+static char *binpath(char*);
 
 static void
 child(void *v)
@@ -27,13 +27,13 @@ child(void *v)
 	dup(fd, 0);
 	dup(fd, 1);
 	dup(fd, 2);
-	exec(cmdav[0][0] == '/' ? cmdav[0] : smprint(cmdav[0]), cmdav);
+	exec(cmdav[0][0] == '/' ? cmdav[0] : binpath(cmdav[0]), cmdav);
 	fprint(2, "win: exec: %r\n");
 	exits("exec");
 }
 
-char *
-smprint(char *cmd)
+static char *
+binpath(char *cmd)
 {
 	static char path[64];
 

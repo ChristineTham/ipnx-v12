@@ -22,11 +22,16 @@ function loadSeed(dir, name = "/") {
 const host = {
   spawnWorker: (initMsg, transfer) => {
     const w = new Worker(join(here, "worker.mjs"));
+    let handler = () => {};
+    let errh = () => {};
+    w.on("message", (m) => handler(m));
+    w.on("error", (e) => errh(e));
     w.postMessage(initMsg, transfer);
     return {
       post: (m, t = []) => w.postMessage(m, t),
-      onMessage: (cb) => w.on("message", cb),
-      onError: (cb) => w.on("error", cb),
+      setHandler: (cb) => { handler = cb; },
+      onMessage: (cb) => { handler = cb; },
+      onError: (cb) => { errh = cb; },
       terminate: () => w.terminate(),
     };
   },

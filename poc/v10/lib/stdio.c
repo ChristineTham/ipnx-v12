@@ -41,7 +41,7 @@ fprintf(FILE *f, char *fmt, ...)
 	__builtin_va_list a;
 
 	__builtin_va_start(a, fmt);
-	n = vfmt9(buf, sizeof buf, fmt, a);
+	n = vseprint(buf, buf + sizeof buf, fmt, a) - buf;
 	__builtin_va_end(a);
 	_v10flush();
 	return write(f == (FILE*)1 ? 1 : 2, buf, n);

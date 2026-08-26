@@ -17,19 +17,21 @@ const derr = (m) => Object.assign(new Error(m), { guest: true });
 // Enforcement here is V10's regime (docs/uid.md): every node carries uid and
 // mode, checked against the caller's credential; eve bypasses as root does.
 export function makeRamfs(seed, eve = "glenda") {
+  const now = () => Math.floor(Date.now() / 1000);
+  const boot = now();
   function load(s, name) {
     if (s.dir) {
-      const node = { name, qpath: qgen++, dir: true, kids: new Map(), uid: eve, mode: 0o755 };
+      const node = { name, qpath: qgen++, dir: true, kids: new Map(), uid: eve, mode: 0o755, atime: boot, mtime: boot };
       for (const k of s.kids) node.kids.set(k.name, load(k, k.name));
       return node;
     }
-    return { name, qpath: qgen++, dir: false, data: s.data, uid: eve, mode: 0o644 };
+    return { name, qpath: qgen++, dir: false, data: s.data, uid: eve, mode: 0o644, atime: boot, mtime: boot };
   }
   const root = load(seed, "/");
   if (!root.kids.has("tmp"))                      // a writable corner, always
     root.kids.set("tmp", { name: "tmp", qpath: qgen++, dir: true, kids: new Map(), uid: eve, mode: 0o777 });
   const statNode = (k) => marshalStat({
-    name: k.name, uid: k.uid, qpath: k.qpath,
+    name: k.name, uid: k.uid, qpath: k.qpath, atime: k.atime, mtime: k.mtime,
     qtype: k.dir ? QTDIR : k.symlink !== undefined ? QTSYMLINK : QTFILE,
     mode: ((k.dir ? DMDIR : k.symlink !== undefined ? DMSYMLINK : 0) | k.mode) >>> 0,
     length: k.dir ? 0 : k.symlink !== undefined ? k.symlink.length : k.data.length,
@@ -78,6 +80,8 @@ export function makeRamfs(seed, eve = "glenda") {
         node.data = grown;
       }
       node.data.set(data, o);
+      node.mtime = now();
+      delete node._mod;
       return data.length;
     },
     create: (parent, name, perm, isdir, omode, cred) => {
@@ -95,6 +99,8 @@ export function makeRamfs(seed, eve = "glenda") {
         : { name, qpath: qgen++, dir: false, data: empty };
       node.uid = cred?.euid ?? eve;
       node.mode = perm & 0o7777;
+      node.atime = node.mtime = now();
+      parent.mtime = now();
       parent.kids.set(name, node);
       return node;
     },
@@ -123,7 +129,7 @@ export function makeRamfs(seed, eve = "glenda") {
       if (node.symlink === undefined) throw derr("not a symlink");
       return node.symlink;
     },
-    wstat: (node, ch, cred) => {                   // chmod: owner or eve; chown: eve (D3)
+    wstat: (node, ch, cred, rawRec, parent, base) => {  // chmod/chown/rename/touch
       if (ch.mode !== undefined) {
         if (cred && cred.euid !== eve && cred.euid !== node.uid)
           throw derr(`not owner of '${node.name}'`);
@@ -134,8 +140,18 @@ export function makeRamfs(seed, eve = "glenda") {
           throw derr("only the host owner may chown (docs/uid.md D3)");
         node.uid = ch.uid;
       }
+      if (ch.name !== undefined && parent && ch.name !== base) {
+        if (cred && cred.euid !== eve && cred.euid !== node.uid)
+          throw derr(`not owner of '${node.name}'`);
+        if (parent.kids.has(ch.name)) throw derr(`'${ch.name}' already exists`);
+        parent.kids.delete(base);
+        node.name = ch.name;
+        parent.kids.set(ch.name, node);
+        parent.mtime = now();
+      }
+      if (ch.mtime !== undefined) node.mtime = ch.mtime;
     },
-    truncate: (node) => { if (!node.dir) node.data = empty; },
+    truncate: (node) => { if (!node.dir) { node.data = empty; delete node._mod; } },
     stat: statNode,
     len: (node) => (node.dir ? 0 : node.data.length),
   };
@@ -146,6 +162,8 @@ export function makeCons(out) {
   const root = { name: "/", qpath: qgen++, dir: true };
   const cons = { name: "cons", qpath: qgen++, dir: false };
   const userf = { name: "user", qpath: qgen++, dir: false };
+  const pidf = { name: "pid", qpath: qgen++, dir: false };
+  const nullf = { name: "null", qpath: qgen++, dir: false };
   let buf = empty, eof = false;
   const parked = [];
   const serve = () => {
@@ -160,10 +178,15 @@ export function makeCons(out) {
     name: "cons",
     attach: () => root,
     walk: (node, name) =>
-      node === root ? (name === "cons" ? cons : name === "user" ? userf : null) : null,
+      node === root
+        ? ({ cons, user: userf, pid: pidf, null: nullf }[name] ?? null)
+        : null,
     read: (node, n, off, ctx) => {
       if (node === userf)                          // /dev/user: the caller's euid
         return Number(off) === 0 ? new TextEncoder().encode(ctx?.cred?.euid ?? "") : empty;
+      if (node === pidf)                           // #c/pid: what getpid(2) reads
+        return Number(off) === 0 ? new TextEncoder().encode(String(ctx?.pid ?? 0)) : empty;
+      if (node === nullf) return empty;
       if (node !== cons) return empty;
       if (buf.length || eof) {
         const give = buf.subarray(0, Math.min(n, buf.length));
@@ -173,7 +196,11 @@ export function makeCons(out) {
       parked.push({ n, ctx });
       return undefined;                            // parked
     },
-    write: (node, data) => { out(new Uint8Array(data)); return data.length; },
+    write: (node, data) => {
+      if (node === nullf) return data.length;
+      out(new Uint8Array(data));
+      return data.length;
+    },
     stat: (node) => marshalStat({
       name: node.name, qtype: node.dir ? QTDIR : QTFILE, qpath: node.qpath,
       mode: node.dir ? DMDIR | 0o555 : 0o666, length: 0,

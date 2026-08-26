@@ -726,13 +726,35 @@ shadow-stack pointer (65472, one frame below a 64 KB stack top), which is what l
 fork guard receive `sp` as an ordinary argument instead of exporting the `__stack_pointer`
 global. The WASI sysroot is present and deliberately unused.
 
+Three findings from growing the real userspace (2026-08-26), each measured the hard way:
+
+- **`-fno-builtin` is load-bearing when the source IS the libc.** clang's libcall
+  recogniser rewrote `strchr(s, 0) - s` *inside* `port/strlen.c` back into a call to
+  `strlen` — self-recursion the optimiser then collapsed into "return an uninitialised
+  local", so every `strlen` returned 0 and argv assembly degraded into per-byte
+  suffixes. The same recogniser had earlier turned a bare `fprintf` into `fwrite`.
+- **`memory.grow` detaches the old buffer.** A cached `Uint8Array` view over guest
+  memory went stale the moment rc's heap crossed the linked initial size; the throw
+  surfaced *inside the fork guard's extent*, was swallowed by `catch_all` as a foreign
+  exception, and the guard returned a stale pid — a hang two causes removed from its
+  symptom. Views are now refreshed against `memory.buffer` identity on every use.
+- **Browsers budget wasm memory per tab, and terminated Workers return it lazily.**
+  ~100 allocate-and-abandon guest Workers exhausted Chrome's budget
+  (`WebAssembly.Memory(): could not allocate memory`) even at small maxima. The kernel
+  now pools retired Workers — a retired guest zeroes its memory and waits for the next
+  image — and caches compiled Modules per file node, which also made the in-page suite
+  several times faster.
+
 The kencc-vs-clang question now has measured data at both ends of the timeline: real
 **4th-edition** sources (`cat.c`, `echo.c`) compile **unmodified** against two shim
 headers, and real **V10** sources — K&R definitions, implicit ints, implicit function
 declarations — compile with `-std=c89 -fno-builtin` plus three warning suppressions
 (`-fno-builtin` matters: the libcall optimiser rewrote a bare `fprintf` into `fwrite`).
-`-fms-extensions` is the reserve for kencc's anonymous members when libdraw's structures
-arrive. Neither tree needed a source change.
+`-fms-extensions` now carries kencc's anonymous members in earnest — `Biobuf` embeds
+`Biobufhdr` unnamed, and `-Wno-incompatible-pointer-types` reproduces kencc's implicit
+`Biobuf*`→`Biobufhdr*` conversion (sound: the header is the first member). grep's yacc
+grammar regenerates with the host's bison 2.3 at build time, which is the same door rc's
+`syn.y` will use. Neither tree needed a source change.
 
 ---
 

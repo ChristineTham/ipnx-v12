@@ -12,7 +12,7 @@
 // feed console input into.
 import { makeRamfs, makeCons, makePipeDev } from "./devs.mjs";
 import { makeMntDev, mountConn } from "./mnt9p.mjs";
-import { parseStat, DMSETUID } from "./stat9.mjs";
+import { parseStat, marshalStat, DMSETUID } from "./stat9.mjs";
 import { makeWsys } from "./devwsys.mjs";
 import { sbytes, bstr, concat } from "./bytes.mjs";
 
@@ -23,6 +23,7 @@ const T = { BIND: 2, CHDIR: 3, CLOSE: 4, DUP: 5, EXEC: 7, EXITS: 8, OPEN: 14,
   SLEEP: 17, RFORK: 19, PIPE: 21, CREATE: 22, REMOVE: 25, SEEK: 39, ERRSTR: 41,
   STAT: 42, FSTAT: 43, WSTAT: 44, MOUNT: 46, AWAIT: 47, PREAD: 50, PWRITE: 51,
   LINK: 60, SYMLINK: 61, READLINK: 62,   // the V12 additions (docs/syscalls.md)
+  FD2PATH: 23, NSEC: 53, FWSTAT: 45,
   ARGS: 200 };
 const RF = { NAMEG: 1, FDG: 4, PROC: 16, MEM: 32 };
 const OTRUNC = 16, DMDIR = 0x80000000;
@@ -101,6 +102,60 @@ async function nsInsert(self, old, chan, flag) {
   }
   if (mode === 2) list.push(el);                              // MAFTER
   else list.unshift(el);                                      // MBEFORE
+}
+
+// ---- devenv: '#e' — per-process environment; RFENVG copies, RFCENVG
+// clears, the default shares (the map object itself is the sharing) ----
+let envqid = 900000;
+function makeEnvDev() {
+  const err9 = (m) => Object.assign(new Error(m), { guest: true });
+  const st = (name, length) => marshalStat({ name, qtype: name === "/" ? 0x80 : 0,
+    qpath: envqid++, mode: (name === "/" ? 0x80000000 | 0o775 : 0o664) >>> 0, length });
+  return {
+    name: "env",
+    attach: (spec, proc) => ({ kind: "root", env: proc.env }),
+    walk: (n, name, walker) => {
+      if (n.kind !== "root") return null;
+      const env = n.env;
+      if (!env.has(name)) return null;
+      return { kind: "var", name, env };
+    },
+    open: (n, mode) => { if ((mode & 16) && n.kind === "var") n.env.set(n.name, new Uint8Array(0)); },
+    create: (parent, name) => {
+      parent.env.set(name, new Uint8Array(0));
+      return { kind: "var", name, env: parent.env };
+    },
+    remove: (parent, name) => { if (!parent.env.delete(name)) throw err9(`'${name}' not set`); },
+    read: (n, count, off) => {
+      if (n.kind === "root") {
+        let skip = Number(off);
+        const out = [];
+        let total = 0;
+        for (const [k, v] of n.env) {
+          const rec = st(k, v.length);
+          if (skip >= rec.length) { skip -= rec.length; continue; }
+          if (total + rec.length > count) break;
+          out.push(rec); total += rec.length;
+        }
+        return concat(out);
+      }
+      const v = n.env.get(n.name) ?? new Uint8Array(0);
+      const end = Math.min(Number(off) + count, v.length);
+      return v.subarray(Math.min(Number(off), v.length), end);
+    },
+    write: (n, data, off) => {
+      if (n.kind !== "var") throw err9("not writable");
+      const old = n.env.get(n.name) ?? new Uint8Array(0);
+      const o = Number(off), end = o + data.length;
+      const nu = new Uint8Array(Math.max(old.length, end));
+      nu.set(old); nu.set(new Uint8Array(data), o);
+      n.env.set(n.name, nu);
+      return data.length;
+    },
+    truncate: (n) => { if (n.kind === "var") n.env.set(n.name, new Uint8Array(0)); },
+    stat: (n) => (n.kind === "var" ? st(n.name, (n.env.get(n.name) ?? []).length) : st("/", 0)),
+    len: (n) => (n.kind === "var" ? (n.env.get(n.name) ?? []).length : 0),
+  };
 }
 
 // ---- devproc: '#p' — <pid>/{ctl,status} and self; the identity transition
@@ -226,7 +281,7 @@ async function walkOnce(proc, path, nofollowLast) {
       return { redirect: canon(rem ? base + "/" + rem : base, proc.cwd) };
     }
   }
-  return { dev, node };
+  return { dev, node, path };
 }
 async function walkParent(proc, path) {            // for create/remove
   path = canon(path, proc.cwd);
@@ -250,15 +305,15 @@ async function readAll(c) {                        // exec's image read; open if
 const err = (msg) => Object.assign(new Error(msg), { guest: true });
 
 // ---- processes, channels, descriptor tables ----
-function newProc(ppid, { ns, fdt, cwd, cred }) {
+function newProc(ppid, { ns, fdt, cwd, cred, env }) {
   const pid = nextpid++;
-  const p = { pid, ppid, ns, fdt, cwd, cred, umask: 0o22, errstr: "",
+  const p = { pid, ppid, ns, fdt, cwd, cred, env: env ?? new Map(), umask: 0o22, errstr: "",
     zombies: [], awaitPending: false,
     borrower: null, worker: null, mb: null, tx: null, argv: [] };
   procs.set(pid, p);
   return p;
 }
-const newChan = (c, mode) => ({ dev: c.dev, node: c.node, mode, offset: 0, refs: 1 });
+const newChan = (c, mode) => ({ dev: c.dev, node: c.node, path: c.path, mode, offset: 0, refs: 1 });
 const nsCopy = (ns) => new Map([...ns].map(([k, v]) => [k, v.slice()]));
 const incref = (c) => { c.refs++; return c; };
 const decref = (c) => { if (--c.refs === 0) c.dev.clunk?.(c.node); };
@@ -288,17 +343,24 @@ function fdchk(self, fd) {
 const isAsyncified = (mod) =>
   WebAssembly.Module.exports(mod).some((e) => e.name === "asyncify_start_unwind");
 
+// Workers are pooled: a hundred allocate-and-abandon cycles exhausted
+// Chrome's wasm-memory budget (measured); a retired worker zeroes its
+// memory and waits for the next guest.
+const workerPool = [];
 function spawn(proc, mod, argv, asy = null) {
   proc.mb = new Int32Array(new SharedArrayBuffer(64));
   proc.tx = new Uint8Array(new SharedArrayBuffer(TXSIZE));
   proc.argv = argv;
   proc.module = mod;
   proc.asyncified = isAsyncified(mod);
-  const w = host.spawnWorker(
-    { t: "init", mb: proc.mb, tx: proc.tx, mod, snap: asy?.snap, dataPtr: asy?.dataPtr },
-    asy ? [asy.snap] : []);
+  const initMsg = { t: "init", mb: proc.mb, tx: proc.tx, mod,
+    snap: asy?.snap, dataPtr: asy?.dataPtr,
+    maxPages: proc.asyncified ? 256 : 80 };
+  let w = workerPool.pop();
+  if (w) w.post(initMsg, asy ? [asy.snap] : []);
+  else w = host.spawnWorker(initMsg, asy ? [asy.snap] : []);
   proc.worker = w;
-  w.onMessage((m) => {
+  w.setHandler((m) => {
     if (m.t === "sc") onSyscall(proc);
     // The parent's Worker finished its unwind: the child (whose proc record
     // rfork already made) gets a fresh Worker over the copied memory.
@@ -395,10 +457,26 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     const ch = {};
     if ((st.mode >>> 0) !== 0xffffffff) ch.mode = st.mode >>> 0;
     if (st.uid !== "") ch.uid = st.uid;
-    const c = await walk(self, path);
+    if (st.name !== "") ch.name = st.name;
+    if ((st.mtime >>> 0) !== 0xffffffff) ch.mtime = st.mtime >>> 0;
+    const { parent, base } = await walkParent(self, path);
+    const c = await walk(self, path, true);
     if (!c.dev.wstat) throw err("wstat not supported on this device");
-    await c.dev.wstat(c.node, ch, self.cred, rec);
+    await c.dev.wstat(c.node, ch, self.cred, rec, parent.node, base);
     c.dev.discard?.(c.node);
+    parent.dev.discard?.(parent.node);
+    return 0;
+  }
+  case T.FWSTAT: {
+    const rec = host.tx.subarray(0, a2);
+    const st = parseStat(rec);
+    const ch = {};
+    if ((st.mode >>> 0) !== 0xffffffff) ch.mode = st.mode >>> 0;
+    if (st.uid !== "") ch.uid = st.uid;
+    if ((st.mtime >>> 0) !== 0xffffffff) ch.mtime = st.mtime >>> 0;
+    const c = fdchk(self, a0);
+    if (!c.dev.wstat) throw err("wstat not supported on this device");
+    await c.dev.wstat(c.node, ch, self.cred, rec, null, null);
     return 0;
   }
   case T.MOUNT: {
@@ -429,7 +507,7 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     const n = Math.min(a2, TXSIZE);
     const cur = (a3 >>> 0) === 0xffffffff && (a4 >>> 0) === 0xffffffff;
     const off = cur ? c.offset : (a4 * 0x100000000 + (a3 >>> 0));
-    const ctx = { cred: self.cred, done: (data) => { if (cur) c.offset += data.length; host.tx.set(data); reply(host, data.length); } };
+    const ctx = { cred: self.cred, pid: self.pid, done: (data) => { if (cur) c.offset += data.length; host.tx.set(data); reply(host, data.length); } };
     const data = await c.dev.read(c.node, n, off, ctx);
     if (data === undefined) return undefined;      // parked in the device
     if (cur) c.offset += data.length;
@@ -492,8 +570,23 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     host.tx.set(rec);
     return rec.length;
   }
-  case T.ERRSTR: {
-    const b = sbytes(self.errstr.slice(0, a1 - 1) + "\0");
+  case T.ERRSTR: {                               // exchange, per errstr(2)
+    const olde = self.errstr;
+    self.errstr = txstr(host);
+    const b = sbytes(olde.slice(0, a1 - 1) + "\0");
+    host.tx.set(b);
+    return b.length - 1;
+  }
+  case T.NSEC: {
+    const b = new Uint8Array(8);
+    new DataView(b.buffer).setBigInt64(0, BigInt(Date.now()) * 1000000n, true);
+    host.tx.set(b);
+    return 8;
+  }
+  case T.FD2PATH: {
+    const c = fdchk(self, a0);
+    const b = sbytes((c.path ?? "") + "\0");
+    if (b.length > a2) throw err("fd2path buffer too small");
     host.tx.set(b);
     return b.length - 1;
   }
@@ -519,6 +612,7 @@ function rfork(host, self, flags, marker) {
       fdt: flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
       cwd: self.cwd,
     cred: { ...self.cred },
+    env: flags & 0x800 ? new Map() : flags & 2 ? new Map(self.env) : self.env,
     });
     child.module = self.module;
     child.asyncified = true;
@@ -532,6 +626,7 @@ function rfork(host, self, flags, marker) {
     fdt: flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
     cwd: self.cwd,
     cred: { ...self.cred },
+    env: flags & 0x800 ? new Map() : flags & 2 ? new Map(self.env) : self.env,
   });
   host.borrower = child;   // child borrows the parent's Worker and stack
   return { ret: 0, aux: child.pid };  // worker saves [0,sp) on seeing aux!=0
@@ -547,7 +642,11 @@ async function exec(host, self, argc) {
   const c = await walk(self, path);
   let st = null;
   try { st = parseStat(await c.dev.stat(c.node)); } catch { /* dev without stat */ }
-  const mod = await WebAssembly.compile(await readAll(c));
+  let mod = c.node._mod;                               // per-node compile cache
+  if (!mod) {
+    mod = await WebAssembly.compile(await readAll(c));
+    if (typeof c.node === "object") c.node._mod = mod;
+  }
   self.argv = argv.length ? argv : [path];
   if (st && (st.mode & DMSETUID))
     self.cred = { ...self.cred, euid: st.uid };    // the setuid bit (docs/uid.md)
@@ -573,10 +672,15 @@ function exits(host, self) {
     zombie(parent, self.pid, msg);
     return { ret: R_FORKRESUME, aux: self.pid };
   }
-  host.worker?.terminate();
-  if (self.pid === 1) return shutdown(msg === "" ? 0 : 1);
+  if (self.pid === 1) { host.worker?.terminate(); return shutdown(msg === "" ? 0 : 1); }
+  if (host.worker) {                                   // retire into the pool
+    const w = host.worker;
+    w.setHandler(() => {});
+    workerPool.push(w);
+    host.worker = null;
+  }
   zombie(parent, self.pid, msg);
-  return undefined;                                    // no one to reply to
+  return { ret: -2000, aux: 0 };                       // R_RETIRE: worker parks itself
 }
 function zombie(parent, pid, msg) {
   if (!parent) return;
@@ -599,6 +703,7 @@ function sendWait(self, inline = false) {
 }
 function shutdown(code) {
   for (const p of procs.values()) p.worker?.terminate();
+  for (const w of workerPool) w.terminate();
   setTimeout(() => host.exit(typeof code === "number" ? code : 1), 20);
   return undefined;
 }
@@ -610,7 +715,7 @@ export async function boot(theHost, { rootSeed, interactive }) {
   const hostRef = { host };
   const wsys = makeWsys(hostRef);
   devs = { M: makeRamfs(rootSeed, EVE), c: cons, "|": makePipeDev(), m: makeMntDev(),
-    p: makeProcDev(), w: wsys };
+    p: makeProcDev(), e: makeEnvDev(), w: wsys };
   const init = newProc(0, { ns: new Map(), fdt: newFdt(), cwd: "/",
     cred: { euid: EVE, ruid: EVE } });
   const image = await readAll(await walk(init, "/bin/init"));

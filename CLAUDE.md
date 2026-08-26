@@ -24,22 +24,26 @@ back out, and the window server: `#w` mints windows, `bind '#w/N' /dev` makes a
 namespace a window, `/dev/draw` is a real per-window file with text (`y i l s` and an
 8×8 font of our own authorship), `win rc` is a shell in a browser window, and the
 link/symlink family lands as the V12 additions, and **both real userspaces have their
-first citizens**: 4th-edition `cat`/`echo` compiled unmodified, TUHS-tape V10
-`cat`/`echo` in K&R C at `/v10/bin`, each on its own rewritten libc.a (`lib9`,
-`libv10`) — eighty-three acceptance tests). Everything else is design documents.
+real libraries**: `libp9.a` is ~150 files of genuine 4th-edition libc/libbio/libregexp
+over one platform shim (`u.h`), twenty-five real commands ride it, V10 `cat`/`echo` sit
+in `/v10/bin` on `libv10` — ninety acceptance tests). Everything else is design
+documents.
 
 ## Commands
 
-Build the guest binaries (requires wasi-sdk at `~/.local/opt/wasi-sdk` and binaryen's
-wasm-opt at `~/.local/opt/binaryen` — override with `WASI_SDK`/`BINARYEN`; Apple's clang
-has no wasm backend). `mk.sh`'s `ASYNCIFY` list names the binaries that may bare-fork:
+Build the guest binaries (requires wasi-sdk at `~/.local/opt/wasi-sdk`, binaryen's
+wasm-opt at `~/.local/opt/binaryen` — override with `WASI_SDK`/`BINARYEN` — and the
+host's `bison` for vendored yacc grammars; Apple's clang has no wasm backend). `mk.sh`'s
+`ASYNCIFY` list names the binaries that may bare-fork. Compiling vendored libc source
+REQUIRES `-fno-builtin`: clang's libcall recogniser otherwise rewrites strlen's own body
+into a self-call (measured; RESEARCH §9.4):
 
 ```bash
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints eighty-three PASS
-lines, exits 0:
+Boot the kernel — init (pid 1) runs the acceptance tests, prints ninety PASS lines,
+exits 0:
 
 ```bash
 bash poc/run.sh
@@ -225,7 +229,8 @@ in Chrome 148); `?i` boots to an interactive `rc` where `win bounce &`, `win scr
 and `win rc &` open live windows (drag by title bar; click to focus; typing lands in the
 focused window's cons). Milestones on `main`: initial commit, rc, wire 9P, asyncify, the
 browser port, unions + exportfs, the uid model, the window server, text in draw, the
-link/symlink family, D1–D4 measured, and the first real citizens of both userspaces.
-Next: grow both trees command by command (Plan 9: toward `sam` via the real libdraw/
-libframe with `-fms-extensions`; V10: toward `sh` via libv10's stdio), and the native
-WasmKit host.
+link/symlink family, D1–D4 measured, and the real Plan 9 userspace grown to a system
+(real libc/bio/regexp + 25 commands; V10 waits for the parent project's ANSI
+conversion). Next: **real rc** (bison over `syn.y`, the door grep already opened), then
+`sam` via the real libdraw/libframe, then the native host — **macOS first, then iPad**
+(the user's platform order).

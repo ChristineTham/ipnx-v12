@@ -40,7 +40,7 @@ int dup(int o, int n)             { return _sys(DUP,o,n,0,0,0); }
 int bind(char *nm, char *old, int f){ return _sys(BIND,(int)nm,(int)old,f,0,0); }
 int chdir(char *p)                { return _sys(CHDIR,(int)p,0,0,0,0); }
 int exec(char *p, char *argv[])   { return _sys(EXEC,(int)p,(int)argv,0,0,0); }
-void exits(char *msg)             { _sys(EXITS,(int)msg,0,0,0,0); for(;;); }
+void _exits(char *msg)            { _sys(EXITS,(int)msg,0,0,0,0); for(;;); }
 int await(char *s, int n)         { return _sys(AWAIT,(int)s,n,0,0,0); }
 __attribute__((weak)) int stat(char *p, uchar *e, int n){ return _sys(STAT,(int)p,(int)e,n,0,0); }
 int lstat(char *p, uchar *e, int n){ return _sys(STAT,(int)p,(int)e,n,1,0); }
@@ -119,107 +119,145 @@ int procrfork(int flags, Forkfn fn, void *arg){
 		(int)__builtin_frame_address(0), (int)fn, (int)arg);
 }
 
-/* ---- library ---- */
-long strlen(char *s){ char *p=s; while(*p) p++; return p-s; }
-int strcmp(char *a, char *b){
-	for(; *a && *a==*b; a++, b++); return (uchar)*a - (uchar)*b; }
-char *strchr(char *s, int c){
-	for(; *s; s++) if(*s==c) return s; return c==0?s:nil; }
-char *strstr(char *s, char *sub){
-	long n=strlen(sub);
-	for(; *s; s++){ char *a=s,*b=sub; long i;
-		for(i=0;i<n && a[i]==b[i];i++); if(i==n) return s; }
-	return nil; }
-void *memcpy(void *d, void *s, ulong n){
-	uchar *dp=d, *sp=s; while(n--) *dp++=*sp++; return d; }
-void *memset(void *d, int c, ulong n){
-	uchar *p=d; while(n--) *p++=c; return d; }
-int atoi(char *s){ int v=0,neg=0;
-	while(*s==' '||*s=='\t') s++;
-	if(*s=='-'){neg=1;s++;}
-	while(*s>='0'&&*s<='9') v=v*10+*s++-'0'; return neg?-v:v; }
-int strncmp(char *a, char *b, ulong n){
-	for(; n && *a && *a==*b; a++, b++, n--)
-		;
-	return n ? (uchar)*a - (uchar)*b : 0; }
-char *strcpy(char *d, char *s){ char *r=d; while((*d++=*s++))
-		; return r; }
+/* ---- core the real libraries sit on ---- */
 
-/* bump allocator; nothing is ever freed (v0 — documented) */
+char *argv0;		/* set by ARGBEGIN; Plan 9's startup owns it, so ours does */
+
+/* malloc: first-fit free list over memory.grow — enough for the real
+ * userspace; Plan 9's pool allocator can come later if it matters */
+typedef struct Hdr Hdr;
+struct Hdr { ulong size; Hdr *next; };
+static Hdr *freelist;
 extern char __heap_base;
-void *malloc(ulong n){
-	static char *hp;
+static char *hp;
+
+static void *
+morecore(ulong n)
+{
 	char *r;
 
 	if(hp == nil)
 		hp = &__heap_base;
-	n = (n+7)&~7UL;
 	while(hp+n > (char*)(__builtin_wasm_memory_size(0)*65536UL))
 		if(__builtin_wasm_memory_grow(0, 16) == (ulong)-1)
-			exits("out of memory");
+			return nil;
 	r = hp;
 	hp += n;
 	return r;
 }
-char *strdup(char *s){ char *r=malloc(strlen(s)+1); strcpy(r,s); return r; }
-/* clang -O2 rewrites malloc+memset pairs into calloc; satisfy it (byte loop
- * rather than memset so the pattern cannot reappear inside) */
-void *calloc(ulong n, ulong m){
-	char *p = malloc(n*m); ulong i;
-	for(i = 0; i < n*m; i++) p[i] = 0;
-	return p;
-}
 
-/* fprint: %s %d %x %c %r and %% — all the tests need */
-static char *fmtnum(char *p, unsigned v, int base, int neg){
-	char t[16]; int i=0;
-	if(neg) *p++='-';
-	do{ t[i++]="0123456789abcdef"[v%base]; v/=base; }while(v);
-	while(i) *p++=t[--i];
-	return p;
-}
-int vfmt9(char *buf, int nbuf, char *fmt, __builtin_va_list a){
-	char *p=buf, *e=buf+nbuf-1, *s;
-	for(; *fmt && p<e; fmt++){
-		if(*fmt!='%'){ *p++=*fmt; continue; }
-		switch(*++fmt){
-		case 's': s=__builtin_va_arg(a,char*); if(s==nil)s="<nil>";
-			while(*s && p<e) *p++=*s++; break;
-		case 'd': { int v=__builtin_va_arg(a,int);
-			p=fmtnum(p, v<0?-(unsigned)v:(unsigned)v, 10, v<0); break; }
-		case 'x': p=fmtnum(p, __builtin_va_arg(a,unsigned), 16, 0); break;
-		case 'c': *p++=(char)__builtin_va_arg(a,int); break;
-		case 'r': { char eb[128]; errstr(eb,sizeof eb); s=eb;
-			while(*s && p<e) *p++=*s++; break; }
-		case '%': *p++='%'; break;
-		default: *p++='%'; if(p<e) *p++=*fmt;
+void *
+malloc(ulong n)
+{
+	Hdr *h, **pp;
+
+	n = ((n+7)&~7UL) + sizeof(Hdr);
+	for(pp = (Hdr**)&freelist; (h = *pp) != nil; pp = &h->next)
+		if(h->size >= n){
+			*pp = h->next;
+			return h+1;
 		}
+	h = morecore(n < 4096 ? 4096 : n);
+	if(h == nil)
+		return nil;
+	h->size = n < 4096 ? 4096 : n;
+	return h+1;
+}
+
+void
+free(void *p)
+{
+	Hdr *h;
+
+	if(p == nil)
+		return;
+	h = (Hdr*)p - 1;
+	h->next = freelist;
+	freelist = h;
+}
+
+void *
+realloc(void *p, ulong n)
+{
+	Hdr *h;
+	void *q;
+	ulong old;
+
+	if(p == nil)
+		return malloc(n);
+	h = (Hdr*)p - 1;
+	old = h->size - sizeof(Hdr);
+	if(old >= n)
+		return p;
+	q = malloc(n);
+	if(q != nil){
+		memmove(q, p, old);
+		free(p);
 	}
-	*p=0;
-	return p-buf;
-}
-char *argv0;
-
-void sysfatal(char *fmt, ...){
-	char buf[256];
-	__builtin_va_list a; __builtin_va_start(a,fmt);
-	vfmt9(buf,sizeof buf,fmt,a); __builtin_va_end(a);
-	fprint(2, "%s: %s\n", argv0 ? argv0 : "sysfatal", buf);
-	exits(buf);
+	return q;
 }
 
-int fprint(int fd, char *fmt, ...){
-	char buf[512]; int n;
-	__builtin_va_list a; __builtin_va_start(a,fmt);
-	n=vfmt9(buf,sizeof buf,fmt,a); __builtin_va_end(a);
-	return write(fd,buf,n);
+void *
+mallocz(ulong n, int clr)
+{
+	char *p = malloc(n);
+	ulong i;
+
+	if(p != nil && clr)
+		for(i = 0; i < n; i++)
+			p[i] = 0;
+	return p;
 }
-int print(char *fmt, ...){
-	char buf[512]; int n;
-	__builtin_va_list a; __builtin_va_start(a,fmt);
-	n=vfmt9(buf,sizeof buf,fmt,a); __builtin_va_end(a);
-	return write(1,buf,n);
+
+void *calloc(ulong n, ulong m){ return mallocz(n*m, 1); }
+void *sbrk(ulong n){ return morecore(n); }	/* grep brings its own allocator */
+void setmalloctag(void *p, ulong t){ USED(p); USED(t); }
+void setrealloctag(void *p, ulong t){ USED(p); USED(t); }
+ulong getmalloctag(void *p){ USED(p); return 0; }
+ulong getcallerpc(void *p){ USED(p); return 0; }
+void lock(void *l){ USED(l); }		/* one thread per process */
+void unlock(void *l){ USED(l); }
+int canlock(void *l){ USED(l); return 1; }
+int _efgfmt(void *f){ USED(f); return -1; }	/* floats: not on this port yet */
+void _assert(char *s){ fprint(2, "assert failed: %s\n", s); exits("assert"); }
+/* setjmp: only libregexp uses it here, to bail on a bad pattern after
+ * regerror() has spoken — so failing hard is honest until wasm SjLj
+ * lowering is wired (a recorded deviation) */
+int setjmp(long *b){ USED(b); return 0; }
+/* the rune-range binary search runetype.c leans on */
+unsigned short *_runebsearch(unsigned short c, unsigned short *t, int n, int ne){
+	unsigned short *p;
+	int m;
+
+	while(n > 1){
+		m = n/2;
+		p = t + m*ne;
+		if(c >= p[0]){
+			t = p;
+			n = n-m;
+		} else
+			n = m;
+	}
+	if(n && c >= t[0])
+		return t;
+	return 0;
 }
+/* notes are not delivered yet: handlers register and rest (deviation) */
+int notify(void (*f)(void*, char*)){ USED(f); return 0; }
+int noted(int v){ USED(v); return 0; }
+void longjmp(long *b, int v){ USED(b); USED(v); exits("longjmp"); }
+void abort(void){ exits("abort"); }
+
+vlong nsec(void){
+	vlong v;
+
+	if(_sys(53, (int)&v, 0, 0, 0, 0) != 8)
+		return -1;
+	return v;
+}
+int fd2path(int fd, char *buf, int n){ return _sys(23, fd, (int)buf, n, 0, 0); }
+int wstat(char *p, uchar *e, int n){ return _sys(44, (int)p, (int)e, n, 0, 0); }
+int fwstat(int fd, uchar *e, int n){ return _sys(45, fd, (int)e, n, 0, 0); }
 
 /* 9P2000 stat(5) record, abridged read: size[2] type[2] dev[4] qid[13]
  * mode[4] atime[4] mtime[4] length[8] name[s] ... */

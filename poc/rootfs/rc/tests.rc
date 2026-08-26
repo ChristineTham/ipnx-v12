@@ -49,6 +49,14 @@ if(~ `{/v10/bin/echo -n abc | wc} 0 1 3) echo PASS 'the real V10 echo: -n'; if n
 if(~ `{/v10/bin/echo -e 'a\tb' | wc} 1 2 4) echo PASS 'V10 echo -e escapes — the fingerprint Plan 9 echo lacks'; if not fails=bad
 if(~ `{/v10/bin/echo tenth edition | cat} tenth edition) echo PASS 'V10 and Plan 9 binaries, one pipeline, side by side'; if not fails=bad
 
+if(~ `{echo hello | sed s/hello/goodbye/} goodbye) echo PASS 'real sed rewrites (libregexp at work)'; if not fails=bad
+if(~ `{echo a b c | tr a-c A-C} A B C) echo PASS 'real tr maps ranges'; if not fails=bad
+if(~ `{(echo b; echo a; echo b) | sort | uniq | wc} 2) echo PASS 'real sort | uniq pipeline'; if not fails=bad
+if(~ `{ls /bin | grep '^grep$'} grep) echo PASS 'real grep, anchored regexp'; if not fails=bad
+if(~ `{date | wc} 1) echo PASS 'real date speaks (nsec, ctime)'; if not fails=bad
+if(test -f /etc/motd) echo PASS 'real test -f drives rc conditionals'; if not fails=bad
+if(test -d /nonexistent) fails=bad; if not echo PASS 'real test -d says no'
+
 if(~ $fails ok) echo rc: tests done
 if not echo rc: TESTS FAILED
 if(~ $fails ok) exit ''

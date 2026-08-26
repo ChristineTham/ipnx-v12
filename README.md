@@ -103,7 +103,7 @@ per window, per namespace** — `win rc` opens a shell in a browser window whose
 *is* the window. And the objective is now on screen: **real Plan 9 userspace and real
 V10 userspace, compiled to wasm from their own trees** — 4th-edition `cat` and `echo`
 unmodified, TUHS-tape V10 `cat` and `echo` in K&R C — side by side in one namespace,
-each on its own rewritten libc. Eighty-three acceptance tests passing, **on Node and in
+each on its own rewritten libc. Ninety acceptance tests passing, **on Node and in
 the browser from one platform-neutral kernel**. The documents:
 
 - **[RESEARCH.md](RESEARCH.md)** — the living evidence base: Plan 9's complete system call

@@ -111,11 +111,16 @@ document.addEventListener("keydown", (e) => {
 const host = {
   spawnWorker: (initMsg, transfer) => {
     const w = new Worker(new URL("./worker.mjs", import.meta.url), { type: "module" });
+    let handler = () => {};
+    let errh = () => {};
+    w.addEventListener("message", (e) => handler(e.data));
+    w.addEventListener("error", (e) => errh(e));
     w.postMessage(initMsg, transfer);
     return {
       post: (m, t = []) => w.postMessage(m, t),
-      onMessage: (cb) => w.addEventListener("message", (e) => cb(e.data)),
-      onError: (cb) => w.addEventListener("error", (e) => cb(e)),
+      setHandler: (cb) => { handler = cb; },
+      onMessage: (cb) => { handler = cb; },
+      onError: (cb) => { errh = cb; },
       terminate: () => w.terminate(),
     };
   },

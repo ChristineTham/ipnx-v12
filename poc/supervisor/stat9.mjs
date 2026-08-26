@@ -42,10 +42,12 @@ export function parseStat(b) {
     return { s: bstr(b.subarray(o + 2, o + 2 + n)), next: o + 2 + n };
   };
   const mode = v.getUint32(21, true);
+  const atime = v.getUint32(25, true);
+  const mtime = v.getUint32(29, true);
   const length = v.getBigUint64(33, true);
   let o = 41;
   const name = str(o); o = name.next;
   const uid = str(o); o = uid.next;
   const gid = str(o);
-  return { mode, length, name: name.s, uid: uid.s, gid: gid.s };
+  return { mode, atime, mtime, length, name: name.s, uid: uid.s, gid: gid.s };
 }
