@@ -14,23 +14,25 @@ semantics, and it was a choice rather than an oversight — "Compatibility was n
 requirement for the system" — which is what makes it undoable.* With V10 rather than POSIX,
 because every limitation APE confesses is a POSIX.1-1990 feature V10 does not have.
 
-The architecture runs, boots to a shell, and speaks its protocol: `poc/` is a working
-slice (hosted kernel in Node, freestanding-C wasm guests, per-process namespaces, the
-lazy-fork resume, pipes, a writable ramfs, a minimal `rc` with nine commands, and wire 9P
-at a mount boundary — a guest 9P2000 server mounted over a pipe; thirty-two acceptance
-tests). Everything else is design documents.
+The architecture runs, boots to a shell, forks both ways, and speaks its protocol:
+`poc/` is a working slice (hosted kernel in Node, freestanding-C wasm guests, per-process
+namespaces, the lazy-fork resume *and* the asyncify bare fork, pipes, a writable ramfs, a
+minimal `rc` with subshells and nine commands, and wire 9P at a mount boundary — a guest
+9P2000 server mounted over a pipe; forty acceptance tests). Everything else is design
+documents.
 
 ## Commands
 
-Build the guest binaries (requires wasi-sdk at `~/.local/opt/wasi-sdk`, or set `WASI_SDK`;
-Apple's clang has no wasm backend):
+Build the guest binaries (requires wasi-sdk at `~/.local/opt/wasi-sdk` and binaryen's
+wasm-opt at `~/.local/opt/binaryen` — override with `WASI_SDK`/`BINARYEN`; Apple's clang
+has no wasm backend). `mk.sh`'s `ASYNCIFY` list names the binaries that may bare-fork:
 
 ```bash
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints thirty-two PASS lines
-(eighteen kernel and mount, fourteen from `/rc/tests.rc`), exits 0:
+Boot the kernel — init (pid 1) runs the acceptance tests, prints forty PASS lines,
+exits 0:
 
 ```bash
 bash poc/run.sh
@@ -104,8 +106,11 @@ evidence, not a fresh opinion.
   the `[0, sp)` shadow-stack region saved at fork; the guard returns the pid. The catch
   frame must be live when the child execs, so the child's pre-exec code runs inside the
   guard's extent — **`procrfork(flags, fn, arg)`**, Plan 9's thread-library shape. Bare
-  dual-return `rfork(RFPROC)` on a JS engine is asyncify's case (per-binary flag, never
-  system-wide); the native interpreter owns its frames and can lift the restriction.
+  dual-return `rfork(RFPROC)` is asyncify's case, realised as a per-binary flag (never
+  system-wide): `wasm-opt --asyncify` with instrumentation confined to paths reaching
+  `env.forka` (rc costs +5.5%); the worker unwinds, snapshots the whole memory, the
+  supervisor spawns a fresh Worker over the copy, both sides rewind — pid and 0. rc's
+  subshells run this way; its exec'ing forks stay on the guard path.
 - **Syscall transport: a Worker is a process** (§5.3) — per-process SAB mailbox,
   `Atomics.wait` in the Worker, kernel never blocks. Browser deployment needs COOP/COEP;
   Node needs nothing. Guest memory stays unshared (so no atomics/shared-memory flags in
@@ -164,8 +169,8 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (2026-08-26)
 
-Documents and PoC written today; thirty-two acceptance tests pass (`bash poc/run.sh`)
-and `bash poc/run.sh -i` boots to an interactive `rc`. Milestones on `main`: initial
-commit, the rc milestone, wire 9P at a mount boundary. Next lifts, in value order (plan
-§The proof of concept): the asyncify path for bare `rfork` and rc's subshells, the
-browser port, union directories, exportfs — then the uid model design.
+Documents and PoC written today; forty acceptance tests pass (`bash poc/run.sh`) and
+`bash poc/run.sh -i` boots to an interactive `rc` with working subshells. Milestones on
+`main`: initial commit, the rc milestone, wire 9P at a mount boundary, the asyncify path.
+Next lifts, in value order (plan §The proof of concept): the browser port, union
+directories, exportfs — then the uid model design.

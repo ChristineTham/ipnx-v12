@@ -420,12 +420,15 @@ per-process namespaces, Plan 9 trap numbers, 9P2000 stat records — booting to 
 server in a guest process serving on a pipe, is attached with `mount(2)`
 (Tversion/Tattach), and every operation below the mount point is one tagged wire message
 through the mount driver — the only place the kernel marshals 9P, exactly the
-Dev-table-inside decision. Thirty-two acceptance tests pass end-to-end: eighteen kernel
-and mount tests (lazy-fork resume, namespace isolation through `exec`, bare-rfork
-refusal, Twalk/Topen/Tread/Tstat/Twrite over the wire, integral directory reads, `Rerror`
-arriving as `errstr`, two processes sharing one connection) and fourteen shell tests
-(pipelines, `` `{...} `` substitution via rc re-execing itself, glob over dirread,
-redirections onto ramfs writes, `$status`, `for`/`if`, `bind` as an ordinary command).
+Dev-table-inside decision — and **the asyncify path**: bare dual-return `rfork(RFPROC)`
+on transformed binaries (rc costs +5.5%, RESEARCH §5.2), which is what runs rc's
+subshells `(...)` as forked copies of the interpreter. Forty acceptance tests pass
+end-to-end: kernel, mount and fork tests (lazy-fork resume, namespace isolation through
+`exec`, Twalk/Topen/Tread/Tstat/Twrite over the wire, integral directory reads, `Rerror`
+arriving as `errstr`, two processes sharing one connection, dual return with copied
+memory and intact parent locals) and seventeen shell tests (pipelines, `` `{...} ``
+substitution, glob, redirections, `$status`, `for`/`if`, `bind` as an ordinary command,
+subshells as pipeline stages with copy semantics and status propagation).
 
 ```sh
 bash poc/mk.sh && bash poc/run.sh     # the tests
@@ -433,8 +436,7 @@ bash poc/run.sh -i                    # boot to an interactive rc
 ```
 
 What it deliberately does not do is listed in [poc/README.md](../poc/README.md); the next
-lifts, in value order: **the asyncify path** for bare `rfork` and rc's subshells
-(binaryen's pass, per-binary), **the browser port of the supervisor** (same design; needs
+lifts, in value order: **the browser port of the supervisor** (same design; needs
 COOP/COEP and `WebAssembly.compile` off-main-thread), **union directories** for `bind -a`
 and a real `/bin`, and **exportfs** (the other direction: a guest serving its namespace
 back over 9P). After those, the uid model is the next design item (Open questions).

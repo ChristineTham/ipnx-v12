@@ -29,6 +29,12 @@ cd /lib
 if(~ `{ls alt} motd) echo PASS 'cd builtin, relative walks'; if not fails=bad
 cd /
 
+if(~ `{(echo a; echo b) | wc} 2) echo PASS 'subshell as a pipeline stage (bare fork)'; if not fails=bad
+x=outer; (x=inner; echo $x > /tmp/sub)
+if(~ $x outer && ~ `{cat /tmp/sub} inner) echo PASS 'subshell state is a copy, its work is real'; if not fails=bad
+(exit boom)
+if(~ $status boom) echo PASS 'subshell status propagates'; if not fails=bad
+
 if(~ $fails ok) echo rc: tests done
 if not echo rc: TESTS FAILED
 if(~ $fails ok) exit ''

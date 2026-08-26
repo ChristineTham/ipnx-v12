@@ -51,8 +51,22 @@ int mount(int fd, int afd, char *old, int flag, char *aname){
 int create(char *p, int m, ulong perm){ return _sys(CREATE,(int)p,m,(int)perm,0,0); }
 int remove(char *p)               { return _sys(REMOVE,(int)p,0,0,0,0); }
 
+/* Bare dual-return rfork rides asyncify (RESEARCH §5.2): the worker unwinds
+ * this process's stack into _asydata, copies the whole linear memory, and
+ * rewinds both copies — pid into this one, 0 into the other. Only binaries
+ * transformed by wasm-opt --asyncify (mk.sh's ASYNCIFY list) can take it. */
+__attribute__((import_module("env"), import_name("forka")))
+extern int _forka(int flags, int databuf);
+
+static uchar _asydata[8 + 32768];
+
 int rfork(int flags){
-	return _sys(RFORK, flags, 0, 0, 0, 0);   /* bare RFPROC: the kernel says why not */
+	if(flags & RFPROC){
+		*(uint*)_asydata = (uint)(_asydata + 8);
+		*((uint*)_asydata + 1) = (uint)(_asydata + sizeof _asydata);
+		return _forka(flags, (int)_asydata);
+	}
+	return _sys(RFORK, flags, 0, 0, 0, 0);
 }
 
 int procrfork(int flags, Forkfn fn, void *arg){

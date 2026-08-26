@@ -9,13 +9,14 @@ fork's resume mechanism (RESEARCH.md §5.2) and the Worker/SAB syscall transport
 carry all of it.
 
 ```sh
-bash mk.sh       # build guests into rootfs/bin — needs wasi-sdk at ~/.local/opt/wasi-sdk
+bash mk.sh       # build guests — needs wasi-sdk and binaryen at ~/.local/opt/
 bash run.sh      # boot; init (pid 1) runs the acceptance tests and shuts down
 bash run.sh -i   # boot to an interactive rc on the console (EOF to shut down)
 ```
 
-The test boot prints thirty-two `PASS` lines — eighteen from init (kernel and mount
-tests), fourteen from `/rc/tests.rc` (the shell tests) — and exits 0.
+The test boot prints forty `PASS` lines — nineteen from init (kernel, mount, and the
+forktest harness), four from forktest itself, seventeen from `/rc/tests.rc` (the shell
+tests) — and exits 0.
 
 ## What it proves
 
@@ -31,6 +32,14 @@ tests), fourteen from `/rc/tests.rc` (the shell tests) — and exits 0.
   stack region saved at fork. rc forks every pipeline stage and every `` `{...} ``
   capture this way, including rc re-execing *itself* for command substitution. Bare
   dual-return `rfork(RFPROC)` is refused with an error naming why (asyncify's case).
+- **Bare dual-return `rfork(RFPROC)` works — on the binaries that pay for it.** The
+  asyncify path (`mk.sh`'s `ASYNCIFY` list, transformed by binaryen's `wasm-opt` with
+  instrumentation confined to paths reaching the fork import — rc costs +5.5%): the
+  worker unwinds the stack into the guest's buffer, snapshots the whole linear memory,
+  the supervisor spawns a fresh Worker over the copy, and both sides rewind — pid into
+  the parent, 0 into the child. rc's subshells `(...)` are exactly this: a forked copy of
+  the interpreter, usable as a pipeline stage. An untransformed binary calling bare
+  `rfork` is refused with an error naming the list.
 - **Namespaces are per-process, survive `exec`, and are shared by default.** rc runs in a
   namespace copy (`RFNAMEG`) and its binds never reach init; *within* rc, `bind` works as
   an ordinary command — the child shares rc's namespace, so its bind lands there. Both
@@ -59,6 +68,7 @@ tests), fourteen from `/rc/tests.rc` (the shell tests) — and exits 0.
 | `libc/` | `lib9.h`, `crt0.c`, `lib9.c` — Plan 9-shaped freestanding libc |
 | `cmd/rc.c` | the shell |
 | `cmd/hellofs.c` | a 9P2000 file server in a guest process, serving on fd 0 |
+| `cmd/forktest.c` | the bare dual-return fork, exercised |
 | `cmd/` | `init` (pid 1 + kernel tests), `cat`, `echo`, `ls`, `wc`, `cp`, `mkdir`, `rm`, `bind` |
 | `rootfs/` | the boot filesystem; `rc/tests.rc` is the shell test suite; `bin/` is generated |
 
@@ -68,12 +78,12 @@ Words with `'...'` quoting and `#` comments; `$var`, `$status`, `x=v` assignment
 arrive via substitution); `` `{...} `` command substitution; `*`/`?` globbing in the final
 path component; pipelines `|`; `;` `&` `&&` `||`; redirections `>` `>>` `<`;
 `if(list) pipeline`, `if not pipeline`, `for(x in words) pipeline` — single-pipeline
-bodies; builtins `cd`, `~`, `exit`. Statements are single-line.
+bodies; **subshells `(...)`**, standalone or as pipeline stages, running in a bare-forked
+copy of the interpreter; builtins `cd`, `~`, `exit`. Statements are single-line.
 
-Not there, each refused with an error rather than mis-run: subshells `(...)`, brace
-groups, functions — the fork-without-exec shapes that need the asyncify path. Known v0
-warts: quoted `*` still globs, builtins ignore redirections, prefix assignments persist
-rather than scope to the command.
+Not there: brace groups and functions (wrap in `( )` instead — the parser says so).
+Known v0 warts: quoted `*` still globs, builtins ignore redirections, prefix assignments
+persist rather than scope to the command.
 
 ## v0 deviations, all deliberate
 

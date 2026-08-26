@@ -449,6 +449,16 @@ rewind both instances, return pid to one and 0 to the other. This is what WASIX 
 the call stack, registers, and program counter", and the announcement credits
 `setjmp`/`longjmp` to "`asyncify` wizardy".
 
+Realised in the PoC (2026-08-26): `wasm-opt --asyncify` with
+`--pass-arg=asyncify-imports@env.forka`, so instrumentation is confined to call paths that
+can reach the bare-fork import. Measured on rc, the largest guest: **15,819 → 16,695
+bytes, +5.5%** (transformed with `-O2` in the same pass), against the folklore below. The
+worker's dance is unwind → snapshot the whole linear memory → post it to the supervisor,
+which spawns a fresh Worker over the copy → both sides rewind, pid into one, 0 into the
+other. rc's subshells run this way — a bare-forked copy of the interpreter — while its
+pipeline stages stay on the guard path, which is the per-binary, per-call-site cost
+placement the design asked for.
+
 Cost, from Emscripten's own docs: **"something like 50%"**, and **"no worse than double size
 / halve speed for most code"** — and the whole-program analysis that keeps it low **is
 defeated by indirect calls**, which a Unix userland is dense with. So it is a **per-binary

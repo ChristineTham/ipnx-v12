@@ -46,6 +46,22 @@ function guardBytes() {
 }
 
 let memory, memU8, curInst = null, savedStack = null, forkPid = 0;
+let pendingFork = null, rewinding = false, rewindReturn = 0;
+
+// Bare dual-return rfork, via asyncify (RESEARCH §5.2): unwind the whole
+// stack into the guest's buffer, snapshot linear memory, rewind twice.
+function forka(flags, databuf) {
+  if (rewinding) {                                   // the second return
+    curInst.exports.asyncify_stop_rewind();
+    rewinding = false;
+    return rewindReturn;
+  }
+  const pid = sys(19, flags, 0, 2, 0, 0);            // a2=2: asyncify fork
+  if (pid < 0) return -1;
+  pendingFork = { pid, databuf };
+  curInst.exports.asyncify_start_unwind(databuf);
+  return 0;                                          // dummy; we are unwinding
+}
 
 function sys(trap, a0, a1, a2, a3, a4) {
   // string/buffer arguments are copied into the transfer SAB
@@ -105,27 +121,50 @@ function raw0(flags, sp, fn, arg) {                   // the guard's raw rfork
   return ret;
 }
 
-async function run(modBytes, guardMod) {
-  memory = new WebAssembly.Memory({ initial: 64, maximum: 512 });
+function callStart() {
+  for (;;) {
+    curInst.exports._start();
+    if (!pendingFork) break;                         // only an unwind returns here
+    curInst.exports.asyncify_stop_unwind();
+    const { pid, databuf } = pendingFork;
+    pendingFork = null;
+    const snap = memU8.slice().buffer;               // the child's whole memory
+    parentPort.postMessage({ t: "asyfork", pid, snap, dataPtr: databuf }, [snap]);
+    rewindReturn = pid;                              // this side is the parent
+    rewinding = true;
+    curInst.exports.asyncify_start_rewind(databuf);
+  }
+}
+
+async function run(mod, guardMod, asy) {
+  const initial = asy ? Math.max(64, asy.snap.byteLength >>> 16) : 64;
+  memory = new WebAssembly.Memory({ initial, maximum: 512 });
   memU8 = new Uint8Array(memory.buffer);
   const guard = new WebAssembly.Instance(guardMod, { env: { raw0, forkpd: () => forkPid } });
-  const inst = new WebAssembly.Instance(new WebAssembly.Module(modBytes), {
-    env: { memory, sys },
+  const inst = new WebAssembly.Instance(mod, {
+    env: { memory, sys, forka },
     guard: { rfork: guard.exports.rfork },
   });
   curInst = inst;
   memU8 = new Uint8Array(memory.buffer);              // in case of growth on instantiation
-  inst.exports._start();
+  if (asy) {                                          // a freshly forked child: rewind
+    memU8.set(new Uint8Array(asy.snap));
+    rewindReturn = 0;
+    rewinding = true;
+    inst.exports.asyncify_start_rewind(asy.dataPtr);
+  }
+  callStart();
 }
 
 const guardMod = new WebAssembly.Module(guardBytes());
 let pending = Promise.resolve();
-function start(modBytes) {
-  pending = run(modBytes, guardMod).catch((e) => {
+function start(mod, asy) {
+  pendingFork = null; rewinding = false;
+  pending = run(mod, guardMod, asy).catch((e) => {
     if (e instanceof ForkResume) return;              // parent resumed and _start returned? no: guard caught inside — reaching here means unwound past _start: only if guard missing
     if (e instanceof ExecReplace) return;             // replaced; 'load' message follows
     throw e;
   });
 }
-parentPort.on("message", (m) => { if (m.t === "load") start(m.modBytes); });
-start(workerData.modBytes);
+parentPort.on("message", (m) => { if (m.t === "load") start(m.mod); });
+start(workerData.mod, workerData.snap ? { snap: workerData.snap, dataPtr: workerData.dataPtr } : null);

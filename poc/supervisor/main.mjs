@@ -129,15 +129,30 @@ function fdchk(self, fd) {
   return c;
 }
 
-function spawn(proc, modBytes, argv) {
+const isAsyncified = (mod) =>
+  WebAssembly.Module.exports(mod).some((e) => e.name === "asyncify_start_unwind");
+
+function spawn(proc, mod, argv, asy = null) {
   proc.mb = new Int32Array(new SharedArrayBuffer(64));
   proc.tx = new Uint8Array(new SharedArrayBuffer(TXSIZE));
   proc.argv = argv;
+  proc.module = mod;
+  proc.asyncified = isAsyncified(mod);
   const w = new Worker(join(here, "worker.mjs"), {
-    workerData: { mb: proc.mb, tx: proc.tx, modBytes },
+    workerData: { mb: proc.mb, tx: proc.tx, mod,
+      snap: asy?.snap, dataPtr: asy?.dataPtr },
+    transferList: asy ? [asy.snap] : [],
   });
   proc.worker = w;
-  w.on("message", (m) => { if (m.t === "sc") onSyscall(proc); });
+  w.on("message", (m) => {
+    if (m.t === "sc") onSyscall(proc);
+    // The parent's Worker finished its unwind: the child (whose proc record
+    // rfork already made) gets a fresh Worker over the copied memory.
+    if (m.t === "asyfork") {
+      const child = procs.get(m.pid);
+      if (child) spawn(child, proc.module, [...proc.argv], { snap: m.snap, dataPtr: m.dataPtr });
+    }
+  });
   w.on("error", (e) => { console.error(`worker pid ${proc.pid}:`, e); shutdown(1); });
   return w;
 }
@@ -290,12 +305,25 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
 }
 
 // ---- rfork / exec / exits / await ----
-function rfork(host, self, flags, guarded) {
+function rfork(host, self, flags, marker) {
   if (!(flags & RF.PROC)) return 0;                     // flag changes on self: v0 no-ops
-  if (!guarded)
-    throw err("bare rfork(RFPROC) needs asyncify on this engine; use procrfork (v0)");
-  if (!(flags & RF.MEM)) throw err("plain fork needs asyncify — v0 is the lazy path");
   if (host.borrower) throw err("nested lazy fork unsupported in v0");
+  if (marker === 2) {                                   // asyncify: bare dual return
+    if (!self.asyncified)
+      throw err("not an asyncify build — add it to ASYNCIFY in poc/mk.sh, or use procrfork");
+    if (flags & RF.MEM) throw err("RFMEM is the lazy path's flag; a bare fork copies");
+    const child = newProc(self.pid, {
+      ns: flags & RF.NAMEG ? new Map(self.ns) : self.ns,
+      fdt: flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
+      cwd: self.cwd,
+    });
+    child.module = self.module;
+    child.asyncified = true;
+    return child.pid;   // one kernel return; the worker synthesizes the two
+  }
+  if (marker !== 1)
+    throw err("bare rfork(RFPROC) needs an asyncify build; procrfork is the exec path");
+  if (!(flags & RF.MEM)) throw err("plain fork needs asyncify — the guard path is lazy");
   const child = newProc(self.pid, {
     ns: flags & RF.NAMEG ? new Map(self.ns) : self.ns,
     fdt: flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
@@ -309,17 +337,18 @@ async function exec(host, self) {
   const argv = [];
   for (let o = path.length + 1; host.tx[o];) { const s = txstr(host, o); argv.push(s); o += s.length + 1; }
   const c = await walk(self, path);
-  const bytes = await readAll(c);
-  new WebAssembly.Module(bytes);                       // validate before committing
+  const mod = new WebAssembly.Module(await readAll(c));
   self.argv = argv.length ? argv : [path];
   if (host.borrower === self) {
     // Lazy-fork child leaves the borrowed stack for its own instance; the
     // parent's Worker restores [0,sp) and unwinds to the rfork guard (§5.2).
     host.borrower = null;
-    spawn(self, bytes, self.argv);
+    spawn(self, mod, self.argv);
     return { ret: R_FORKRESUME, aux: self.pid };
   }
-  host.worker.postMessage({ t: "load", modBytes: bytes });
+  self.module = mod;
+  self.asyncified = isAsyncified(mod);
+  host.worker.postMessage({ t: "load", mod });
   return R_EXECSELF;
 }
 function exits(host, self) {
@@ -364,5 +393,5 @@ function shutdown(code) {
 
 // ---- boot: pid 1 ----
 const init = newProc(0, { ns: new Map(), fdt: newFdt(), cwd: "/" });
-spawn(init, readFileSync(join(rootdir, "bin", "init")),
+spawn(init, new WebAssembly.Module(readFileSync(join(rootdir, "bin", "init"))),
   interactive ? ["init", "-i"] : ["init"]);

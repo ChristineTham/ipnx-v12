@@ -5,8 +5,8 @@
  * substitution; * ? globbing in the final path component; pipelines |;
  * ; & && ||; redirections > >> <; if(list) pline, if not pline,
  * for(x in words) pline — single-pipeline bodies, no braces; builtins
- * cd, ~, exit. Subshells and functions need the asyncify path and are
- * refused with an error saying so.
+ * cd, ~, exit; subshells (...) — which run in a bare-forked copy of the
+ * interpreter, the asyncify path. Functions are still refused.
  *
  * Every fork is procrfork(RFFDG, fn, arg): the child dups, closes and
  * execs inside the fork guard's extent (RESEARCH.md §5.2).
@@ -21,13 +21,14 @@ typedef struct Cmd Cmd;
 typedef struct Pline Pline;
 typedef struct Seq Seq;
 struct Cmd {
-	int type;		/* 'x' simple, 'i' if, 'n' if not, 'f' for */
+	int type;		/* 'x' simple, 'i' if, 'n' if not, 'f' for, 's' subshell */
 	Word *raw;		/* simple: raw words (unexpanded) */
 	Redir *redirs;
 	Seq *cond;		/* if */
 	char *forvar;
 	Word *forraw;		/* for: raw list */
 	Pline *body;		/* if/for */
+	Seq *sub;		/* subshell */
 };
 struct Pline { Cmd *stage[16]; int n; };
 typedef struct AndOr AndOr;
@@ -141,6 +142,28 @@ parsecmd(void)
 
 	memset(c, 0, sizeof *c);
 	c->type = 'x';
+	if(peek()->type==TLP){
+		next();
+		c->type = 's';
+		c->sub = parseseq(1);
+		if(c->sub == nil){
+			if(perr == nil)
+				perr = "empty subshell";
+			return nil;
+		}
+		if(next()->type != TRP){ perr = "expected ) after subshell"; return nil; }
+		rtail = &c->redirs;
+		while(peek()->type==TGT || peek()->type==TGTGT || peek()->type==TLT){
+			Redir *r = malloc(sizeof *r);
+			int t = next()->type;
+			r->type = t==TGT ? '>' : t==TGTGT ? 'a' : '<';
+			if(peek()->type != TWORD){ perr = "expected file after redirection"; return nil; }
+			r->raw = next()->s;
+			r->next = nil;
+			*rtail = r; rtail = &r->next;
+		}
+		return c;
+	}
 	if(peek()->type==TWORD && strcmp(peek()->s, "if")==0){
 		next();
 		if(peek()->type==TWORD && strcmp(peek()->s, "not")==0){
@@ -204,10 +227,7 @@ parsecmd(void)
 		break;
 	}
 	if(c->raw == nil && c->redirs == nil){
-		if(peek()->type == TLP)
-			perr = "subshells need the asyncify path (v0)";
-		else
-			perr = "expected command";
+		perr = "expected command";
 		return nil;
 	}
 	return c;
@@ -681,12 +701,56 @@ runsimple(Cmd *c, int infd, int outfd, int *closefds, int nclose, int *pidout)
 }
 
 static void
+subfork(Cmd *c, int infd, int outfd, int *closefds, int nclose, int *pidout)
+{
+	Redir *r;
+	int i, pid;
+
+	pid = rfork(RFFDG|RFPROC);	/* bare: both sides keep interpreting */
+	if(pid < 0){
+		fprint(2, "rc: fork: %r\n");
+		strcpy(status, "fork");
+		*pidout = -1;
+		return;
+	}
+	if(pid == 0){
+		if(infd >= 0) dup(infd, 0);
+		if(outfd >= 0) dup(outfd, 1);
+		for(i = 0; i < nclose; i++)
+			close(closefds[i]);
+		for(r = c->redirs; r; r = r->next){
+			Word *f = expandlist(mkword(r->raw, nil), 1);
+			int fd;
+			if(f == nil || f->next)
+				exits("redir");
+			if(r->type == '<')
+				fd = open(f->s, OREAD);
+			else if(r->type == 'a'){
+				fd = open(f->s, OWRITE);
+				if(fd >= 0) seek(fd, 0, 2);
+				else fd = create(f->s, OWRITE, 0644);
+			} else
+				fd = create(f->s, OWRITE, 0644);
+			if(fd < 0){
+				fprint(2, "rc: can't open %s: %r\n", f->s);
+				exits("redir");
+			}
+			dup(fd, r->type=='<' ? 0 : 1);
+			close(fd);
+		}
+		runseq(c->sub);
+		exits(status[0] ? status : nil);
+	}
+	*pidout = pid;
+}
+
+static void
 runpline(Pline *p, int bg)
 {
 	int pipes[15][2], pids[16], closefds[40];
 	int i, nclose = 0;
 
-	if(p->n == 1 && p->stage[0]->type != 'x'){
+	if(p->n == 1 && p->stage[0]->type != 'x' && p->stage[0]->type != 's'){
 		Cmd *c = p->stage[0];
 		if(c->type == 'i'){
 			runseq(c->cond);
@@ -716,13 +780,16 @@ runpline(Pline *p, int bg)
 		}
 	}
 	for(i = 0; i < p->n; i++)
-		if(p->stage[i]->type != 'x'){
-			fprint(2, "rc: if/for in a pipeline needs asyncify (v0)\n");
+		if(p->stage[i]->type != 'x' && p->stage[i]->type != 's'){
+			fprint(2, "rc: if/for in a pipeline: wrap it in ( )\n");
 			strcpy(status, "pipeline");
 			return;
 		}
 	if(p->n == 1){
-		runsimple(p->stage[0], -1, -1, nil, 0, &pids[0]);
+		if(p->stage[0]->type == 's')
+			subfork(p->stage[0], -1, -1, nil, 0, &pids[0]);
+		else
+			runsimple(p->stage[0], -1, -1, nil, 0, &pids[0]);
 		if(pids[0] > 0){
 			if(bg){ status[0] = 0; return; }
 			strcpy(status, awaitpid(pids[0]));
@@ -738,11 +805,14 @@ runpline(Pline *p, int bg)
 		closefds[nclose++] = pipes[i][0];
 		closefds[nclose++] = pipes[i][1];
 	}
-	for(i = 0; i < p->n; i++)
-		runsimple(p->stage[i],
-			i > 0 ? pipes[i-1][0] : -1,
-			i < p->n - 1 ? pipes[i][1] : -1,
-			closefds, nclose, &pids[i]);
+	for(i = 0; i < p->n; i++){
+		int infd = i > 0 ? pipes[i-1][0] : -1;
+		int outfd = i < p->n - 1 ? pipes[i][1] : -1;
+		if(p->stage[i]->type == 's')
+			subfork(p->stage[i], infd, outfd, closefds, nclose, &pids[i]);
+		else
+			runsimple(p->stage[i], infd, outfd, closefds, nclose, &pids[i]);
+	}
 	for(i = 0; i < nclose; i++)
 		close(closefds[i]);
 	if(bg){ status[0] = 0; return; }

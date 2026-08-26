@@ -74,6 +74,16 @@ catchild(void *v)
 }
 
 static void
+forkchild(void *v)
+{
+	char *av[] = { "forktest", nil };
+
+	USED(v);
+	exec("/bin/forktest", av);
+	exits("exec");
+}
+
+static void
 rcinteractive(void)
 {
 	char *av[] = { "rc", nil };
@@ -193,6 +203,14 @@ main(int argc, char *argv[])
 	pid = procrfork(RFFDG, catchild, nil);
 	n = await(buf, sizeof buf);
 	ok(n > 0 && atoi(buf) == pid, "a second process reads through the same mount");
+
+	/* The asyncify path: forktest is a transformed binary whose bare
+	 * rfork(RFPROC) genuinely returns twice — its four checks print
+	 * inline; its empty exit status is ours to verify. */
+	pid = procrfork(RFFDG, forkchild, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && atoi(buf) == pid && strstr(buf, "''") != nil,
+	   "asyncify: forktest suite ran clean");
 
 	USED(pid);
 	if(nfail == 0)
