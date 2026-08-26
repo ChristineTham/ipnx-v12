@@ -45,7 +45,7 @@ slots are dropped entirely.
 |---|---|---|---|---|---|
 | 0 | `sysr1` | drop | — | — | reserved |
 | 1 | `_errstr` | drop | — | — | superseded by 41 |
-| 2 | `bind` | ns | — | ✓ | resolves source *at bind time*, stores the Chan |
+| 2 | `bind` | ns | — | ✓ | resolves source *at bind time*; MREPL/MBEFORE/MAFTER/MCREATE — a mount point is a union list |
 | 3 | `chdir` | fd | — | ✓ | cwd is a Chan in the proc |
 | 4 | `close` | 9P | `Tclunk` | ✓ | |
 | 5 | `dup` | fd | — | ✓ | |

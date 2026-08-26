@@ -498,8 +498,8 @@ guest memory with the supervisor is an optimisation, not a requirement.
 
 **Measured in the browser (2026-08-26, Chrome 148).** The PoC's kernel runs unmodified in
 a page — one platform-neutral `kernel.mjs`, thin Node and browser hosts — and the full
-acceptance suite passes there: lazy fork, asyncify fork, wire-9P mounts, rc with
-subshells, all forty. Two divergences Node hides, found by running: a browser
+acceptance suite passes there identically: lazy fork, asyncify fork, wire-9P mounts and
+exportfs, union directories, rc with subshells. Two divergences Node hides, found by running: a browser
 `TextDecoder` **refuses views over a `SharedArrayBuffer`** ("The provided ArrayBufferView
 value must not be shared") where Node's decodes them — copy shared views before decoding —
 and `new WebAssembly.Module` is size-restricted on the browser main thread, so the kernel

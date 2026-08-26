@@ -435,16 +435,23 @@ bash poc/mk.sh && bash poc/run.sh     # the tests
 bash poc/run.sh -i                    # boot to an interactive rc
 ```
 
+Union directories complete the namespace algebra — `bind -a`/`-b`/`-c`, ordered walks,
+concatenated directory reads, creates landing in the MCREATE element — and **exportfs**
+completes the boundary: a guest serving its own namespace (private binds included) over
+wire 9P, from which another process can read, list, and **exec binaries**. Both
+directions of the mount boundary are now guest-reachable.
+
 The kernel is **one platform-neutral module with two hosts**: `bash poc/run.sh` boots it
 on Node, and `node poc/serve.mjs` serves the same kernel into a page (the server exists
 only to set the COOP/COEP headers SharedArrayBuffer requires) — the full suite passes in
 Chrome 148, and `?i` boots the page to an interactive rc in a console window
 (RESEARCH §5.3, §7 for the Wanix/Apptron precedent that shapes where the GUI goes next).
 
-What it deliberately does not do is listed in [poc/README.md](../poc/README.md); the next
-lifts, in value order: **union directories** for `bind -a` and a real `/bin`, and
-**exportfs** (the other direction: a guest serving its namespace back over 9P). After
-those, the uid model is the next design item (Open questions).
+What it deliberately does not do is listed in [poc/README.md](../poc/README.md). The
+engineering lifts the plan named are done; what remains is design first: **the uid
+model** (Open questions — front of the queue), then `/dev/draw` and the rio-shaped
+window server (§The GUI, with RESEARCH §7's Wanix/Apptron precedent), and the native
+host over WasmKit.
 
 ## Sources
 

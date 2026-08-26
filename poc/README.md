@@ -21,9 +21,9 @@ hosts it in a page — the console is a window in the DOM, and `serve.mjs` exist
 set the COOP/COEP headers SharedArrayBuffer requires. The same forty tests pass in both
 (measured in Chrome 148).
 
-The test boot prints forty `PASS` lines — nineteen from init (kernel, mount, and the
-forktest harness), four from forktest itself, seventeen from `/rc/tests.rc` (the shell
-tests) — and exits 0.
+The test boot prints forty-seven `PASS` lines — twenty-three from init (kernel, mount,
+exportfs, and the forktest harness), four from forktest itself, twenty from
+`/rc/tests.rc` (the shell tests) — and exits 0, identically on Node and in the browser.
 
 ## What it proves
 
@@ -51,6 +51,16 @@ tests) — and exits 0.
   namespace copy (`RFNAMEG`) and its binds never reach init; *within* rc, `bind` works as
   an ordinary command — the child shares rc's namespace, so its bind lands there. Both
   directions are tested.
+- **Union directories are the namespace's algebra.** A mount point is a list: `bind -a`
+  and `-b` append and prepend, walks try elements in order, directory reads concatenate
+  (still an integral number of stat records), and creates land in the first element bound
+  with `-c` (MCREATE). The tests exec a binary *through* a union and create through one.
+- **exportfs closes the loop: a namespace is a value.** `exportfs` serves its own
+  process's namespace over wire 9P by answering every request with real system calls
+  against its own view — so an exporter that privately rebound `/etc` exports *that*
+  view, the mounter reads it at `/n/exp/etc/motd`, and `exec /n/exp/bin/echo` runs a
+  binary fetched across the wire. Serving and mounting are now both guest-reachable,
+  each side of the same boundary.
 - **The file interface is Plan 9's shape — and the wire is exactly at the boundary.**
   Devices (`ramfs`, `#c` cons, `#|` pipe) implement attach/walk/open/read/write/stat as
   function calls; **only the mount driver marshals 9P** (`supervisor/mnt9p.mjs`):
@@ -77,7 +87,9 @@ tests) — and exits 0.
 | `supervisor/stat9.mjs` | 9P2000 `stat(5)` marshalling |
 | `libc/` | `lib9.h`, `crt0.c`, `lib9.c` — Plan 9-shaped freestanding libc |
 | `cmd/rc.c` | the shell |
+| `libc/lib9p.h`, `libc/lib9p.c` | the guest side of wire 9P: marshal vocabulary, message framing |
 | `cmd/hellofs.c` | a 9P2000 file server in a guest process, serving on fd 0 |
+| `cmd/exportfs.c` | serves this process's namespace over 9P — binds and all |
 | `cmd/forktest.c` | the bare dual-return fork, exercised |
 | `cmd/` | `init` (pid 1 + kernel tests), `cat`, `echo`, `ls`, `wc`, `cp`, `mkdir`, `rm`, `bind` |
 | `rootfs/` | the boot filesystem; `rc/tests.rc` is the shell test suite; `bin/` is generated |
@@ -89,7 +101,9 @@ arrive via substitution); `` `{...} `` command substitution; `*`/`?` globbing in
 path component; pipelines `|`; `;` `&` `&&` `||`; redirections `>` `>>` `<`;
 `if(list) pipeline`, `if not pipeline`, `for(x in words) pipeline` — single-pipeline
 bodies; **subshells `(...)`**, standalone or as pipeline stages, running in a bare-forked
-copy of the interpreter; builtins `cd`, `~`, `exit`. Statements are single-line.
+copy of the interpreter; builtins `cd` and `exit`, and `~` as a syntactic form whose
+subject keeps its list identity and whose patterns are never globbed against the
+filesystem — the shape real rc gives it. Statements are single-line.
 
 Not there: brace groups and functions (wrap in `( )` instead — the parser says so).
 Known v0 warts: quoted `*` still globs, builtins ignore redirections, prefix assignments
@@ -98,8 +112,8 @@ persist rather than scope to the command.
 ## v0 deviations, all deliberate
 
 argv arrives via a boot syscall rather than pre-placed on the stack; `brk` is guest-local
-(`memory.grow`); `bind` is `MREPL` only, no union directories, no `..`; `errstr` reads but
-does not exchange; pipe writers never block (unbounded queue); one user; nested lazy fork
-within one Worker refused. On the wire: no `Tauth` (afid is always NOFID), no `Tflush`,
+(`memory.grow`); no `..`; `remove` inside a union picks no element (error); `errstr`
+reads but does not exchange; pipe writers never block (unbounded queue); one user; nested
+lazy fork within one Worker refused. On the wire: no `Tauth` (afid is always NOFID), no `Tflush`,
 walks are one name per `Twalk`, msize is fixed at 8216, `unmount` is absent, and a failed
 mid-walk leaks its intermediate fid. Each is a lifted restriction away, not a redesign.

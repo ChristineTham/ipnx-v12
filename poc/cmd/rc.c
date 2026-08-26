@@ -43,6 +43,8 @@ static char status[128];
 static int lastif = -1;		/* 1 true, 0 false, -1 none */
 static int interactive;
 
+static Word *mkword(char*, Word*);
+
 /* ---------- tokens ---------- */
 enum { TEOF, TWORD, TSEMI, TAMP, TPIPE, TANDAND, TOROR, TGT, TGTGT, TLT, TLP, TRP };
 typedef struct Tok Tok;
@@ -161,6 +163,19 @@ parsecmd(void)
 			r->raw = next()->s;
 			r->next = nil;
 			*rtail = r; rtail = &r->next;
+		}
+		return c;
+	}
+	if(peek()->type==TWORD && strcmp(peek()->s, "~")==0){
+		Word **wt;
+		next();
+		c->type = 'm';
+		if(peek()->type != TWORD){ perr = "~ needs a subject"; return nil; }
+		c->raw = mkword(next()->s, nil);	/* the subject, one raw word */
+		wt = &c->forraw;			/* the patterns */
+		while(peek()->type == TWORD){
+			*wt = mkword(next()->s, nil);
+			wt = &(*wt)->next;
 		}
 		return c;
 	}
@@ -607,17 +622,6 @@ builtin(Word *argv)
 			status[0] = 0;
 		return 1;
 	}
-	if(strcmp(argv->s, "~")==0){
-		Word *subj = argv->next, *pat;
-		if(subj == nil){ strcpy(status, "no match"); return 1; }
-		for(pat = subj->next; pat; pat = pat->next)
-			if(match(subj->s, pat->s)){
-				status[0] = 0;
-				return 1;
-			}
-		strcpy(status, "no match");
-		return 1;
-	}
 	if(strcmp(argv->s, "exit")==0){
 		char *m = argv->next ? argv->next->s : status;
 		exits(m[0] ? m : nil);
@@ -752,6 +756,19 @@ runpline(Pline *p, int bg)
 
 	if(p->n == 1 && p->stage[0]->type != 'x' && p->stage[0]->type != 's'){
 		Cmd *c = p->stage[0];
+		if(c->type == 'm'){
+			/* ~ subject patterns...: any element against any pattern;
+			 * patterns are never globbed against the filesystem */
+			Word *subj = expandlist(c->raw, 1), *pat, *w;
+			for(w = subj; w; w = w->next)
+				for(pat = expandlist(c->forraw, 0); pat; pat = pat->next)
+					if(match(w->s, pat->s)){
+						status[0] = 0;
+						return;
+					}
+			strcpy(status, "no match");
+			return;
+		}
 		if(c->type == 'i'){
 			runseq(c->cond);
 			lastif = status[0]==0;
@@ -781,7 +798,7 @@ runpline(Pline *p, int bg)
 	}
 	for(i = 0; i < p->n; i++)
 		if(p->stage[i]->type != 'x' && p->stage[i]->type != 's'){
-			fprint(2, "rc: if/for in a pipeline: wrap it in ( )\n");
+			fprint(2, "rc: ~/if/for in a pipeline: wrap it in ( )\n");
 			strcpy(status, "pipeline");
 			return;
 		}

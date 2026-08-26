@@ -14,11 +14,12 @@ semantics, and it was a choice rather than an oversight — "Compatibility was n
 requirement for the system" — which is what makes it undoable.* With V10 rather than POSIX,
 because every limitation APE confesses is a POSIX.1-1990 feature V10 does not have.
 
-The architecture runs, boots to a shell, forks both ways, and speaks its protocol:
-`poc/` is a working slice (hosted kernel in Node, freestanding-C wasm guests, per-process
-namespaces, the lazy-fork resume *and* the asyncify bare fork, pipes, a writable ramfs, a
-minimal `rc` with subshells and nine commands, and wire 9P at a mount boundary — a guest
-9P2000 server mounted over a pipe; forty acceptance tests). Everything else is design
+The architecture runs, boots to a shell, forks both ways, and speaks its protocol in
+both directions: `poc/` is a working slice (hosted kernel in Node and the browser from
+one neutral core, freestanding-C wasm guests, per-process namespaces with union
+directories, the lazy-fork resume *and* the asyncify bare fork, pipes, a writable ramfs,
+a minimal `rc` with subshells, wire 9P at the mount boundary, and exportfs serving a
+guest's namespace back out — forty-seven acceptance tests). Everything else is design
 documents.
 
 ## Commands
@@ -31,8 +32,8 @@ has no wasm backend). `mk.sh`'s `ASYNCIFY` list names the binaries that may bare
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints forty PASS lines,
-exits 0:
+Boot the kernel — init (pid 1) runs the acceptance tests, prints forty-seven PASS
+lines, exits 0:
 
 ```bash
 bash poc/run.sh
@@ -154,7 +155,12 @@ trap numbers; `read`/`write` are `pread`/`pwrite` at offset −1). Syscalls carr
 strings/buffers copy through a per-proc transfer SAB. A lazy-fork child *borrows the
 parent's Worker*: the supervisor routes syscalls arriving on the parent's mailbox to the
 child's proc record (`borrower`) — that is how a child's `bind` lands in the child's
-namespace while sharing the parent's stack. `cmd/rc.c` is the shell: every fork is
+namespace while sharing the parent's stack. A mount-table entry is a **union list**
+(`bind -a/-b/-c`): walks try elements in order, directory reads concatenate integrally,
+creates land in the MCREATE element. `cmd/exportfs.c` is devmnt's mirror — it serves its
+own namespace over wire 9P by relaying every request into real syscalls, so private
+binds travel and binaries exec across the wire; `libc/lib9p.[ch]` is the guest marshal
+vocabulary both servers share. `cmd/rc.c` is the shell: every fork is
 `procrfork(RFFDG, fn, arg)` (pipeline stages, `` `{...} `` captures — the latter exec
 `/bin/rc -c` so nothing ever forks without exec'ing), and subshells/functions are refused
 with an error naming the asyncify path. `supervisor/mnt9p.mjs` is devmnt — the only place
@@ -182,10 +188,11 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (2026-08-26)
 
-Documents and PoC written today; forty acceptance tests pass on Node (`bash poc/run.sh`)
-**and in the browser** (`node poc/serve.mjs` → `/browser/`, measured in Chrome 148);
-`-i`/`?i` boot to an interactive `rc` with working subshells. Milestones on `main`:
-initial commit, rc, wire 9P at a mount boundary, the asyncify path, the browser port.
-Next lifts, in value order (plan §The proof of concept): union directories, exportfs —
-then the uid model design. RESEARCH §7 records the Wanix/Apptron precedent shaping the
-GUI direction (windows as elements backed by per-window namespaces).
+Documents and PoC written today; forty-seven acceptance tests pass on Node
+(`bash poc/run.sh`) **and in the browser** (`node poc/serve.mjs` → `/browser/`, measured
+in Chrome 148); `-i`/`?i` boot to an interactive `rc` with working subshells. Milestones
+on `main`: initial commit, rc, wire 9P at a mount boundary, the asyncify path, the
+browser port, union directories + exportfs. The named engineering lifts are done; next
+is design: the uid model first (plan §Open questions), then `/dev/draw` and the window
+server (RESEARCH §7 records the Wanix/Apptron precedent — windows as elements backed by
+per-window namespaces), then the native WasmKit host.

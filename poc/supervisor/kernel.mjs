@@ -29,6 +29,74 @@ const TXSIZE = 65536;
 
 let host, cons, devs;
 
+// ---- union directories ----
+// A mount-table entry is a LIST of elements tried in order (bind -a/-b);
+// exactly Plan 9's shape. Walking the union point itself yields a synthetic
+// chan on UNION; creates go to the first element bound with MCREATE (-c).
+const UNION = {
+  name: "union",
+  walk: async (node, name) => {
+    for (const el of node.list) {
+      try {
+        const n2 = await el.c.dev.walk(el.c.node, name);
+        if (n2) return { union: el, node: n2 };   // unwrapped by kernel walk
+      } catch { /* try the next element */ }
+    }
+    return null;
+  },
+  read: async (node, n, off) => {
+    // concatenated listings, still an integral number of records
+    let skip = Number(off);
+    const out = [];
+    let total = 0;
+    for (const el of node.list) {
+      const listing = await listDir(el.c);
+      for (let o = 0; o < listing.length;) {
+        const size = listing[o] | (listing[o + 1] << 8);
+        const rec = listing.subarray(o, o + size + 2);
+        o += size + 2;
+        if (skip >= rec.length) { skip -= rec.length; continue; }
+        if (total + rec.length > n) return concatOut();
+        out.push(rec);
+        total += rec.length;
+      }
+    }
+    return concatOut();
+    function concatOut() { return concat(out); }
+  },
+  stat: (node) => node.list[0].c.dev.stat(node.list[0].c.node),
+  len: () => 0,
+};
+async function listDir(c) {                       // full listing of one element
+  let { dev, node } = c;
+  if (dev.clone && !node.ephemeral) node = await dev.clone(node);
+  if (dev.open) await dev.open(node, 0);
+  const parts = [];
+  for (let off = 0; ;) {
+    const chunk = await dev.read(node, 8192, off);
+    if (chunk.length === 0) break;
+    parts.push(new Uint8Array(chunk));
+    off += chunk.length;
+  }
+  if (node !== c.node) dev.clunk?.(node);
+  return concat(parts);
+}
+async function nsInsert(self, old, chan, flag) {
+  const mode = flag & 3, create = !!(flag & 4);
+  const el = { c: chan, create };
+  if (mode === 0) { self.ns.set(old, [el]); return; }         // MREPL
+  let list = self.ns.get(old);
+  if (!list) {
+    const under = await walk(self, old);                      // must exist, per bind(2)
+    list = under.dev === UNION
+      ? under.node.list.slice()                               // flatten an existing union
+      : [{ c: under, create: false }];
+    self.ns.set(old, list);
+  }
+  if (mode === 2) list.push(el);                              // MAFTER
+  else list.unshift(el);                                      // MBEFORE
+}
+
 // read a channel from kernel context, parking-aware, as a promise
 const readChan = (chan, n) => new Promise((res) => {
   const r = chan.dev.read(chan.node, n, -1, { done: res });
@@ -57,15 +125,23 @@ function attach(spec) {  // '#c' etc.
 async function walk(proc, path) {
   path = canon(path, proc.cwd);
   if (path.startsWith("#")) return attach(path);
-  let best = "", start = { dev: devs.M, node: devs.M.attach() };
-  for (const [pfx, chan] of proc.ns)
+  let best = "", list = null;
+  for (const [pfx, l] of proc.ns)
     if ((path === pfx || path.startsWith(pfx === "/" ? "/" : pfx + "/")) && pfx.length > best.length)
-      { best = pfx; start = chan; }
-  let { dev, node } = start;
+      { best = pfx; list = l; }
+  let dev, node;
+  if (list) {
+    if (list.length === 1) ({ dev, node } = list[0].c);
+    else { dev = UNION; node = { list }; }
+  } else {
+    dev = devs.M; node = devs.M.attach();
+  }
   const rest = path.slice(best.length).split("/").filter(Boolean);
   for (const name of rest) {
-    node = await dev.walk(node, name);
-    if (!node) throw err(`'${path}' does not exist`);
+    let next = await dev.walk(node, name);
+    if (next && next.union) { dev = next.union.c.dev; next = next.node; }  // left a union
+    if (!next) throw err(`'${path}' does not exist`);
+    node = next;
   }
   return { dev, node };
 }
@@ -99,6 +175,7 @@ function newProc(ppid, { ns, fdt, cwd }) {
   return p;
 }
 const newChan = (c, mode) => ({ dev: c.dev, node: c.node, mode, offset: 0, refs: 1 });
+const nsCopy = (ns) => new Map([...ns].map(([k, v]) => [k, v.slice()]));
 const incref = (c) => { c.refs++; return c; };
 const decref = (c) => { if (--c.refs === 0) c.dev.clunk?.(c.node); };
 const newFdt = () => ({ refs: 1, fds: [] });
@@ -186,7 +263,8 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
   }
   case T.BIND: {
     const name = txstr(host), old = txstr(host, name.length + 1);
-    self.ns.set(canon(old, self.cwd), await walk(self, name));   // resolved now, per bind(2)
+    const src = await walk(self, name);                          // resolved now, per bind(2)
+    await nsInsert(self, canon(old, self.cwd), src, a2);
     return 0;
   }
   case T.CHDIR: {
@@ -206,6 +284,11 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
   }
   case T.CREATE: {
     let { parent, base } = await walkParent(self, txstr(host));
+    if (parent.dev === UNION) {
+      const el = parent.node.list.find((e) => e.create);
+      if (!el) throw err("create in a union needs an element bound with -c (MCREATE)");
+      parent = { dev: el.c.dev, node: el.c.node };
+    }
     if (!parent.dev.create) throw err("create not supported on this device");
     if (parent.dev.clone && !parent.node.ephemeral)          // Tcreate consumes the fid
       parent = { dev: parent.dev, node: await parent.dev.clone(parent.node) };
@@ -224,7 +307,7 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     const old = txstr(host), aname = txstr(host, old.length + 1);
     const c = incref(fdchk(self, a0));             // the kernel holds its own reference
     const node = await mountConn(c, readChan, aname);
-    self.ns.set(canon(old, self.cwd), { dev: devs.m, node });
+    await nsInsert(self, canon(old, self.cwd), { dev: devs.m, node }, a3);
     return 0;
   }
   case T.PIPE: {
@@ -307,7 +390,7 @@ function rfork(host, self, flags, marker) {
       throw err("not an asyncify build — add it to ASYNCIFY in poc/mk.sh, or use procrfork");
     if (flags & RF.MEM) throw err("RFMEM is the lazy path's flag; a bare fork copies");
     const child = newProc(self.pid, {
-      ns: flags & RF.NAMEG ? new Map(self.ns) : self.ns,
+      ns: flags & RF.NAMEG ? nsCopy(self.ns) : self.ns,
       fdt: flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
       cwd: self.cwd,
     });
@@ -319,7 +402,7 @@ function rfork(host, self, flags, marker) {
     throw err("bare rfork(RFPROC) needs an asyncify build; procrfork is the exec path");
   if (!(flags & RF.MEM)) throw err("plain fork needs asyncify — the guard path is lazy");
   const child = newProc(self.pid, {
-    ns: flags & RF.NAMEG ? new Map(self.ns) : self.ns,
+    ns: flags & RF.NAMEG ? nsCopy(self.ns) : self.ns,
     fdt: flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
     cwd: self.cwd,
   });

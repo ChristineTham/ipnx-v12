@@ -74,6 +74,32 @@ catchild(void *v)
 }
 
 static void
+expchild(void *v)
+{
+	char *av[] = { "exportfs", nil };
+
+	USED(v);
+	/* arrange a private view first: this namespace copy, not the
+	 * mounter's, is what travels over the wire */
+	bind("/lib/alt", "/etc", MREPL);
+	dup(srvfds[1], 0);
+	close(srvfds[0]);
+	close(srvfds[1]);
+	exec("/bin/exportfs", av);
+	exits("exec");
+}
+
+static void
+expcat(void *v)
+{
+	char *av[] = { "echo", "ran", "across", "the", "export", nil };
+
+	USED(v);
+	exec("/n/exp/bin/echo", av);
+	exits("exec");
+}
+
+static void
 forkchild(void *v)
 {
 	char *av[] = { "forktest", nil };
@@ -203,6 +229,31 @@ main(int argc, char *argv[])
 	pid = procrfork(RFFDG, catchild, nil);
 	n = await(buf, sizeof buf);
 	ok(n > 0 && atoi(buf) == pid, "a second process reads through the same mount");
+
+	/* exportfs: a guest serving its own namespace back over 9P — the
+	 * exporter privately rebinds /etc, and that private view is what
+	 * the mounter sees. Then exec a binary THROUGH the export. */
+	pipe(srvfds);
+	procrfork(RFFDG|RFNAMEG, expchild, nil);
+	close(srvfds[1]);
+	n = mount(srvfds[0], -1, "/n/exp", MREPL, "");
+	ok(n >= 0, "exportfs: mounted a guest exporting its namespace");
+	close(srvfds[0]);
+	fd = open("/n/exp/etc/motd", OREAD);
+	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
+	buf[n > 0 ? n : 0] = 0;
+	close(fd);
+	ok(strstr(buf, "private view") != nil,
+	   "exportfs: the exporter's private namespace is what travels");
+	fd = open("/n/exp/lib", OREAD);
+	n = fd >= 0 ? read(fd, (char*)edir, sizeof edir) : -1;
+	close(fd);
+	ok(n > 0 && strcmp(statname(edir, name, sizeof name), "alt") == 0,
+	   "exportfs: directory reads relay across the export");
+	pid = procrfork(RFFDG, expcat, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && atoi(buf) == pid && strstr(buf, "''") != nil,
+	   "exportfs: exec of a binary served over the export");
 
 	/* The asyncify path: forktest is a transformed binary whose bare
 	 * rfork(RFPROC) genuinely returns twice — its four checks print

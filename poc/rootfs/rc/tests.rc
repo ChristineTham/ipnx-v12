@@ -34,6 +34,13 @@ x=outer; (x=inner; echo $x > /tmp/sub)
 if(~ $x outer && ~ `{cat /tmp/sub} inner) echo PASS 'subshell state is a copy, its work is real'; if not fails=bad
 (exit boom)
 if(~ $status boom) echo PASS 'subshell status propagates'; if not fails=bad
+mkdir /tmp/xbin; cp /bin/echo /tmp/xbin/hello
+bind -a /tmp/xbin /bin
+if(~ `{hello union works} union works) echo PASS 'union: exec through bind -a'; if not fails=bad
+if(~ `{ls /bin} hello) echo PASS 'union: directory reads concatenate'; if not fails=bad
+bind -ac /tmp/xbin /bin
+echo made > /bin/unionfile
+if(~ `{cat /tmp/xbin/unionfile} made) echo PASS 'union: create lands in the MCREATE element'; if not fails=bad
 
 if(~ $fails ok) echo rc: tests done
 if not echo rc: TESTS FAILED
