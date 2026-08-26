@@ -608,8 +608,12 @@ headless buffer on Node, where the acceptance tests assert pixels through the na
 `win cmd` reproduces rio's spawn in forty lines, and `win rc` is a working shell in a
 window — typed at through focus, its output through its own `/dev/cons`. Verified in
 Chrome by synthesising pointer events against `scribble` and reading the inked pixels
-back off its canvas. Text in draw (fonts, the `s`/`x` messages) is the next GUI lift,
-and what `sam` waits on.
+back off its canvas. Text landed next (2026-08-26, same day): `y` uploads pixels, `i`
+declares a font cache with its ascent, `l` loads glyph slots, and `s` draws strings as
+alpha-masked blits — carrying an 8×8 font of this project's own authorship
+(`poc/libc/font8x8.h`; no font data is copied in). Glyph strokes, gaps and advances are
+asserted by pixel in the headless suite. What `sam` now waits on is not the device but
+the port: libframe's line-editing over exactly these messages.
 
 ### The thing plan9port could not do
 

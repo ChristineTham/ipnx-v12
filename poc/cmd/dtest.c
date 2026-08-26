@@ -54,6 +54,22 @@ main(int argc, char *argv[])
 	ok(pixel(&d, 300, 80) == 0x0000FFFF, "draw: E fills an ellipse (blue at centre)");
 	ok(pixel(&d, 10, 200) == 0xFFFFFFFF, "draw: the background is untouched white");
 
+	/* text: upload the font, draw 'H', assert its strokes and its gap;
+	 * draw "HH" and assert the second glyph advanced by 8 */
+	{
+		int font = drawfontinit(&d);
+		int green = drawcolor(&d, 0, 160, 0, 255);
+		drawtext(&d, 20, 200, "H", font, green);
+		drawtext(&d, 20, 220, "HH", font, green);
+		drawflush(&d);
+		ok(pixel(&d, 21, 195) == 0x00A000FF,
+		   "text: s draws H's left stroke (glyph via y, i, l)");
+		ok(pixel(&d, 20, 195) == 0xFFFFFFFF,
+		   "text: H's leftmost column is empty, background intact");
+		ok(pixel(&d, 29, 215) == 0x00A000FF,
+		   "text: the second H advanced by the slot width");
+	}
+
 	fd = open("/n/win/wctl", ORDWR);
 	n = read(fd, buf, sizeof buf - 1);
 	buf[n > 0 ? n : 0] = 0;

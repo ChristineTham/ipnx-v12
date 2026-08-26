@@ -21,8 +21,8 @@ hosts it in a page — the console is a window in the DOM, and `serve.mjs` exist
 set the COOP/COEP headers SharedArrayBuffer requires. The same forty tests pass in both
 (measured in Chrome 148).
 
-The test boot prints sixty-five `PASS` lines — thirty-two from init (kernel, mount,
-exportfs, uid, and the harnesses), nine from dtest (the window server), four from
+The test boot prints sixty-eight `PASS` lines — thirty-two from init (kernel, mount,
+exportfs, uid, and the harnesses), twelve from dtest (the window server and text), four from
 forktest, twenty from `/rc/tests.rc` — and exits 0, identically on Node and in the
 browser.
 
@@ -58,9 +58,13 @@ browser.
   namespace *be* the window — its own `cons`, `mouse`, `wctl`, `winid`, `label`, and a
   real `draw/` tree speaking draw(3)'s message subset (`b d f L e E v`, low-order byte
   first). `win cmd` is rio's spawn as a forty-line command; `win rc` is a shell in a
-  window. dtest asserts pixels headless through the v0 `rgb` file; in the browser,
-  windows are draggable DOM elements (canvas + text layer), `bounce` animates, `scribble`
-  inks where the pointer drags, and typing lands in the focused window's cons.
+  window. **Text lands in draw too**: the `y`/`i`/`l` messages carry an 8×8 font of this
+  project's own authorship (`libc/font8x8.h`) into a font-cache image, and `s` draws
+  strings through it as alpha masks — glyph strokes, gaps and advances asserted by pixel
+  headless, `win dtext` showing it live. dtest asserts pixels through the v0 `rgb` file;
+  in the browser, windows are draggable DOM elements (canvas + text layer), `bounce`
+  animates, `scribble` inks where the pointer drags, and typing lands in the focused
+  window's cons.
 - **The uid model runs — the thing APE called impossible** ([docs/uid.md](../docs/uid.md)).
   Credentials are mutable per-process kernel state: `/dev/user` names the caller,
   `/proc/self/ctl` accepts `user <name>` under the transition rule (the host owner may
@@ -136,8 +140,8 @@ argv arrives via a boot syscall rather than pre-placed on the stack; `brk` is gu
 (`memory.grow`); no `..`; `remove` inside a union picks no element (error); `errstr`
 reads but does not exchange; pipe writers never block (unbounded queue); gid/groups and
 the D1–D4 measurements are deferred per docs/uid.md; proc and wsys files have no stat or
-directory reads; draw speaks only `b d f L e E v` (no text — cons output is
-host-rendered, fonts are the next GUI lift), masks are opaque, `rgb` is a v0 test file;
+directory reads; draw speaks `b d f L e E y i l s v` (`x`, arcs and compressed images absent; cons output
+is still host-rendered), masks apply only to glyphs, `rgb` is a v0 test file;
 windows persist until `wctl delete`; nested lazy fork within one Worker refused. On the wire: no `Tauth` (afid is always NOFID), no `Tflush`,
 walks are one name per `Twalk`, msize is fixed at 8216, `unmount` is absent, and a failed
 mid-walk leaks its intermediate fid. Each is a lifted restriction away, not a redesign.

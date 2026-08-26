@@ -15,3 +15,6 @@ void drawline(Draw *d, int x0, int y0, int x1, int y1, int src);
 void drawellipse(Draw *d, int cx, int cy, int a, int b, int src, int filled);
 void drawfree(Draw *d, int id);
 void drawflush(Draw *d);
+/* text: an 8x8 font uploaded through y/i/l; strings drawn with s */
+int  drawfontinit(Draw *d);			/* returns the font image id */
+void drawtext(Draw *d, int x, int y, char *s, int fontid, int src);

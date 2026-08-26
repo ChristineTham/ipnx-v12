@@ -452,9 +452,10 @@ engineering lifts the plan named are done, the uid model is designed
 ([docs/uid.md](uid.md)) and running, and **the window server exists in v0 subset**
 (RESEARCH §7): `#w` mints windows, `bind '#w/N' /dev` makes a namespace a window,
 `/dev/draw` is an actual per-window file speaking draw(3)'s `b d f L e E v`, and
-`win rc` is a shell in a browser window. Next: **text in draw** (fonts, the `s`/`x`
-messages — what `sam` waits on), the native host over WasmKit, and the link/symlink
-protocol decision.
+`win rc` is a shell in a browser window, and **text lands in draw**: `y`/`i`/`l` carry
+an 8×8 font of our own authorship into a cache image, `s` draws strings through it,
+glyphs asserted by pixel on both hosts. Next: **the `sam` port** (libframe over exactly
+these messages), the native host over WasmKit, and the link/symlink protocol decision.
 
 ## Sources
 

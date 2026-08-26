@@ -138,3 +138,87 @@ drawflush(Draw *d)
 
 	write(d->fd, &c, 1);
 }
+
+/* ---- text: upload font8x8 as a 96x8-cell cache, draw strings with s ---- */
+#include "font8x8.h"
+
+enum { GW = 8, GH = 8, NGLYPH = 95 };
+
+int
+drawfontinit(Draw *d)
+{
+	static uchar big[64 + 21 + GW*GH*4];
+	uchar *p;
+	int id, ch, row, col, i;
+
+	id = d->nextid++;
+	p = big;
+	p = put8(p, 'b');			/* the cache image: NGLYPH*GW wide */
+	p = put32(p, id);
+	p = put32(p, 0);
+	p = put8(p, 0);
+	p = put32(p, 0);
+	p = put8(p, 0);
+	p = put32(p, 0); p = put32(p, 0); p = put32(p, NGLYPH*GW); p = put32(p, GH);
+	p = put32(p, 0); p = put32(p, 0); p = put32(p, NGLYPH*GW); p = put32(p, GH);
+	p = put8(p, 0); p = put8(p, 0); p = put8(p, 0); p = put8(p, 0);
+	write(d->fd, big, p - big);
+	p = big;				/* declare it a font */
+	p = put8(p, 'i');
+	p = put32(p, id);
+	p = put32(p, NGLYPH);
+	p = put8(p, 7);				/* ascent */
+	write(d->fd, big, p - big);
+	for(ch = 0; ch < NGLYPH; ch++){
+		p = big;			/* y: this glyph's pixels */
+		p = put8(p, 'y');
+		p = put32(p, id);
+		p = put32(p, ch*GW); p = put32(p, 0);
+		p = put32(p, ch*GW+GW); p = put32(p, GH);
+		for(row = 0; row < GH; row++)
+			for(col = 0; col < GW; col++){
+				int on = font8x8[ch][row] & (0x80 >> col);
+				for(i = 0; i < 4; i++)
+					*p++ = on ? 0xFF : 0x00;
+			}
+		write(d->fd, big, p - big);
+		p = big;			/* l: record the slot (self-copy) */
+		p = put8(p, 'l');
+		p = put32(p, id);
+		p = put32(p, id);
+		p = put16(p, ch);
+		p = put32(p, ch*GW); p = put32(p, 0);
+		p = put32(p, ch*GW+GW); p = put32(p, GH);
+		p = put32(p, ch*GW); p = put32(p, 0);
+		p = put8(p, 0);			/* left */
+		p = put8(p, GW);		/* width */
+		write(d->fd, big, p - big);
+	}
+	return id;
+}
+
+void
+drawtext(Draw *d, int x, int y, char *s, int fontid, int src)
+{
+	static uchar buf[64 + 2*256];
+	uchar *p;
+	int n;
+
+	n = strlen(s);
+	if(n > 256)
+		n = 256;
+	p = buf;
+	p = put8(p, 's');
+	p = put32(p, 0);			/* dst: the window */
+	p = put32(p, src);
+	p = put32(p, fontid);
+	p = put32(p, x); p = put32(p, y);
+	p = put32(p, 0); p = put32(p, 0); p = put32(p, d->w); p = put32(p, d->h);
+	p = put32(p, 0); p = put32(p, 0);	/* sp */
+	p = put16(p, n);
+	while(n--){
+		int c = *s++ - ' ';
+		p = put16(p, c < 0 || c >= NGLYPH ? 0 : c);
+	}
+	write(d->fd, buf, p - buf);
+}

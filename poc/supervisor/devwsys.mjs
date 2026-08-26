@@ -216,11 +216,52 @@ export function makeWsys(hostRef) {
         o += 37;
         break;
       }
+      case "y": {                          // id[4] r[16] data (RGBA, row-major)
+        const im = img(u32(o + 1));
+        const r = [s32(o + 5), s32(o + 9), s32(o + 13), s32(o + 17)];
+        const nb = (r[2] - r[0]) * (r[3] - r[1]) * 4;
+        D.loadPixels(im, r, b.subarray(o + 21, o + 21 + nb));
+        o += 21 + nb;
+        break;
+      }
+      case "i": {                          // id[4] nchars[4] ascent[1]: image becomes a font
+        const im = img(u32(o + 1));
+        im.font = { nchars: u32(o + 5), ascent: b[o + 9], slots: [] };
+        o += 10;
+        break;
+      }
+      case "l": {                          // cache[4] src[4] index[2] r[16] p[8] left[1] width[1]
+        const cache = img(u32(o + 1)), src = img(u32(o + 5));
+        if (!cache.font) throw derr("draw: l on a non-font image (send i first)");
+        const index = v.getUint16(o + 9, true);
+        const r = [s32(o + 11), s32(o + 15), s32(o + 19), s32(o + 23)];
+        D.copyRect(cache, r, src, [s32(o + 27), s32(o + 31)]);
+        cache.font.slots[index] = { r, left: v.getInt8(o + 35), width: b[o + 36] };
+        o += 37;
+        break;
+      }
+      case "s": {                          // dst[4] src[4] font[4] p[8] clipr[16] sp[8] ni[2] ni*index[2]
+        const dst = img(u32(o + 1)), src = img(u32(o + 5)), fontim = img(u32(o + 9));
+        if (!fontim.font) throw derr("draw: s needs a font image");
+        let x = s32(o + 13);
+        const y = s32(o + 17);
+        const sp = [s32(o + 37), s32(o + 41)];
+        const ni = v.getUint16(o + 45, true);
+        for (let k = 0; k < ni; k++) {
+          const slot = fontim.font.slots[v.getUint16(o + 47 + 2 * k, true)];
+          if (slot) {
+            D.glyph(dst, [x + slot.left, y - fontim.font.ascent], fontim, slot.r, src, sp);
+            x += slot.width;
+          }
+        }
+        o += 47 + 2 * ni;
+        break;
+      }
       case "v":
         hostRef.host.winPresent?.(win.wid, win.w, win.h, win.img.data);
         o += 1;
         break;
-      default: throw derr(`draw: message '${op}' not in the v0 subset (b d f L e E v)`);
+      default: throw derr(`draw: message '${op}' not in the v0 subset (b d f L e E y i l s v)`);
       }
     }
     return b.length;

@@ -89,3 +89,58 @@ export function ellipse(dst, c, a, b, src, sp, filled) {
       }
     }
 }
+
+// s: blit rectangle maskr of mask into dst at p, colouring by src — the
+// per-glyph half of the string message; mask alpha scales src alpha.
+export function glyph(dst, p, mask, maskr, src, sp) {
+  const [mx0, my0, mx1, my1] = maskr;
+  for (let y = my0; y < my1; y++)
+    for (let x = mx0; x < mx1; x++) {
+      const mi = pxOf(mask, x, y);
+      if (mi < 0) continue;
+      const ma = mask.data[mi + 3];
+      if (ma === 0) continue;
+      const di = pxOf(dst, p[0] + (x - mx0), p[1] + (y - my0));
+      if (di < 0) continue;
+      const si = pxOf(src, sp[0], sp[1]);
+      if (si < 0) continue;
+      blend2(dst.data, di,
+        (src.data[si] * ma / 255) | 0, (src.data[si + 1] * ma / 255) | 0,
+        (src.data[si + 2] * ma / 255) | 0, (src.data[si + 3] * ma / 255) | 0);
+    }
+}
+function blend2(dst, di, r, g, b, a) {
+  const ka = 255 - a;
+  dst[di] = r + ((dst[di] * ka / 255) | 0);
+  dst[di + 1] = g + ((dst[di + 1] * ka / 255) | 0);
+  dst[di + 2] = b + ((dst[di + 2] * ka / 255) | 0);
+  dst[di + 3] = a + ((dst[di + 3] * ka / 255) | 0);
+}
+// copy: plain rectangle copy (no blend) — 'y' uploads and 'l' loads use it
+export function loadPixels(img, r, bytes) {
+  const [x0, y0, x1, y1] = r;
+  let o = 0;
+  for (let y = y0; y < y1; y++)
+    for (let x = x0; x < x1; x++) {
+      const di = pxOf(img, x, y);
+      if (di >= 0) img.data.set(bytes.subarray(o, o + 4), di);
+      o += 4;
+    }
+}
+export function copyRect(dst, dr, src, sp) {
+  const [x0, y0, x1, y1] = dr;
+  for (let y = y0; y < y1; y++)
+    for (let x = x0; x < x1; x++) {
+      const di = pxOf(dst, x, y), si = pxOf(src, sp[0] + (x - x0), sp[1] + (y - y0));
+      if (di >= 0 && si >= 0) dst.data.set(src.data.subarray(si, si + 4), di);
+    }
+}
+export const pxOf = (img, x, y) => {
+  if (img.repl) {
+    x = ((x - img.r[0]) % img.w + img.w) % img.w;
+    y = ((y - img.r[1]) % img.h + img.h) % img.h;
+    return ((y * img.w) + x) * 4;
+  }
+  if (x < img.r[0] || x >= img.r[2] || y < img.r[1] || y >= img.r[3]) return -1;
+  return (((y - img.r[1]) * img.w) + (x - img.r[0])) * 4;
+};
