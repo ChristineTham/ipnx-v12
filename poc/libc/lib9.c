@@ -198,6 +198,16 @@ static int vfmt(char *buf, int nbuf, char *fmt, __builtin_va_list a){
 	*p=0;
 	return p-buf;
 }
+char *argv0;
+
+void sysfatal(char *fmt, ...){
+	char buf[256];
+	__builtin_va_list a; __builtin_va_start(a,fmt);
+	vfmt(buf,sizeof buf,fmt,a); __builtin_va_end(a);
+	fprint(2, "%s: %s\n", argv0 ? argv0 : "sysfatal", buf);
+	exits(buf);
+}
+
 int fprint(int fd, char *fmt, ...){
 	char buf[512]; int n;
 	__builtin_va_list a; __builtin_va_start(a,fmt);

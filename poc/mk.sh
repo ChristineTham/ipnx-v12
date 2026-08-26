@@ -12,9 +12,18 @@ LD="$SDK/bin/wasm-ld --no-entry --import-memory --stack-first -z stack-size=6553
 ASYNCIFY="rc forktest"
 mkdir -p build rootfs/bin
 $CC -c libc/crt0.c -o build/crt0.o
+$CC -c libc/crt9.c -o build/crt9.o
 $CC -c libc/lib9.c -o build/lib9.o
 $CC -c libc/lib9p.c -o build/lib9p.o
 $CC -c libc/draw9.c -o build/draw9.o
+# real Plan 9 sources (poc/plan9/NOTICE): compiled unmodified, void main,
+# through the shim headers — these SUPERSEDE any same-named PoC command
+for c in plan9/sys/src/cmd/*.c; do
+  b=$(basename "$c" .c)
+  $CC -Iplan9/include -Wno-main-return-type -c "$c" -o "build/p9-$b.o"
+  $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o "build/p9-$b.o" -o "rootfs/bin/$b"
+  echo "  bin/$b  $(wc -c < "rootfs/bin/$b" | tr -d ' ') bytes (Plan 9 source)"
+done
 for c in cmd/*.c; do
   b=$(basename "$c" .c)
   $CC -c "$c" -o "build/$b.o"

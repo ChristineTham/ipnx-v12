@@ -1,0 +1,15 @@
+The files under sys/ are Plan 9 from Bell Labs, Fourth Edition — verbatim,
+unmodified. Copyright © 2021 Plan 9 Foundation and contributors. Nokia Bell
+Labs transferred the Plan 9 copyright to the Plan 9 Foundation on 23 March
+2021, and the Foundation relicensed all editions under the MIT licence; this
+notice travels with the source per that licence and this repository's LICENSE.
+
+Provenance: fetched 2026-08-26 from the 0intro/plan9 mirror
+(https://github.com/0intro/plan9, master), the same mirror this repository's
+research cites for the system call table.
+  sys/src/cmd/cat.c   sha256 f9201501f531662d4320881682251e0dd93043996f40021b9a6e48fe0cb5ce04
+  sys/src/cmd/echo.c  sha256 115ce8d685d76b12070dc6ac72343461cfd30137f64c8cfc89a31672f0fa2609
+
+The include/ directory beside this notice is NOT Plan 9 source: u.h and
+libc.h there are this project's shim, mapping Plan 9's headers onto the PoC's
+freestanding libc so the sources above compile without modification.
