@@ -1,0 +1,149 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## What this repository is
+
+**ipnx-v12**: **a modified Plan 9 kernel hosted as an ordinary userspace process** on
+macOS, iPadOS and the browser; **9P as the only IPC**; **per-process namespaces**;
+**WebAssembly as the executable format**; and a **Research Unix Tenth Edition personality**
+alongside Plan 9's own userland.
+
+The thesis, from the README: *the Plan 9 authors' biggest mistake was not preserving Unix
+semantics, and it was a choice rather than an oversight — "Compatibility was not a
+requirement for the system" — which is what makes it undoable.* With V10 rather than POSIX,
+because every limitation APE confesses is a POSIX.1-1990 feature V10 does not have.
+
+The architecture runs: `poc/` is a working slice (hosted kernel in Node, freestanding-C
+wasm guests, per-process namespaces, the lazy-fork resume, eight acceptance tests).
+Everything else is design documents.
+
+## Commands
+
+Build the guest binaries (requires wasi-sdk at `~/.local/opt/wasi-sdk`, or set `WASI_SDK`;
+Apple's clang has no wasm backend):
+
+```bash
+bash poc/mk.sh
+```
+
+Boot the kernel — init (pid 1) runs the acceptance tests, prints eight PASS lines, exits 0:
+
+```bash
+bash poc/run.sh
+```
+
+Node ≥ 22 (`worker_threads`, SAB, wasm `try_table` exception handling — the legacy EH
+encoding is *rejected* by these engines, so any new wasm emission must use `try_table`).
+`poc/build/` and `poc/rootfs/bin/` are generated and gitignored. Guest binaries carry no
+`.wasm` extension: exec walks the namespace for `/bin/cat`, and a freshly produced module
+is indistinguishable from a shipped one.
+
+## The documents
+
+| | |
+|---|---|
+| `README.md` | public overview — why this repository is separate from the parent, the precedents, status |
+| `RESEARCH.md` | **living evidence base** — every finding with provenance: Plan 9's call list, `rfork` flags verbatim, APE's limits, the fork-resume mechanism and its measurements, WASI phases, the toolchain recipe (§9.4), V10 measurements |
+| `docs/v12-plan.md` | **the spec** — scope, decisions taken (with dates), open questions, PoC status |
+| `docs/syscalls.md` | **the derived call list** — Plan 9's 40 live calls dispositioned for V12; V10's 68 routines mapped onto them |
+| `poc/README.md` | what the PoC proves, its layout, its deliberate v0 deviations |
+
+Findings go in RESEARCH.md with provenance; decisions go in the plan; both are living.
+Keep them consistent — the architecture statement appears in README, RESEARCH TL;DR and
+the plan, deliberately, and a change to it changes all three. Prefer a pointer over a copy
+for anything else ("a list that appears twice will disagree").
+
+## The parent repository
+
+[ipnx](https://github.com/ChristineTham/ipnx) restores Research Unix under full-system VAX
+emulation. It is checked out beside this one at `../ipnx`, but referenced from the docs
+only by URL — deliberately.
+
+**The V10 source tree is not copied here and must not be.** Every V10 number quoted
+(61,072 kernel lines, 239 `fork(` sites, `sh/xec.c:432`, `sysent.c` slot 66) was measured
+in `../ipnx` and is recorded **as data** because it cannot be re-derived here. A new
+measurement is taken in `../ipnx` against `v10/usr/src/…` and recorded with file-and-line
+provenance in RESEARCH.md.
+
+## The decisions taken — do not re-derive them
+
+Each has its reasoning and citations in RESEARCH.md / the plan. Reopening one requires new
+evidence, not a fresh opinion.
+
+- **The kernel is Plan 9's, not V10 retargeted.** ~5% of V10's 61,072-line kernel has
+  anything to say on a target with no MMU and no hardware. The surgery runs Unix-onto-
+  Plan 9 (addition), never the reverse (eviction) — and V10's `chmk $n` trap numbers
+  collide with Plan 9's on the same instruction (`.set open,5` vs `DUP` 5).
+- **Hosted, not native, not emulated** — Inferno `emu`'s architecture with wasm in place
+  of Dis, forced by iOS (no child processes, no JIT).
+- **9P is the system interface; WASI is a shim** (`wasi:cli/command` only). WIT's typed
+  interfaces and 9P's uniform untyped one do not compose.
+- **9P2000.** `version(5)`: the only defined version; negotiation built in; nothing here
+  needs wire compatibility with original 9P.
+- **Wire 9P at boundaries, a Dev table inside** — Plan 9's own kernel shape: devices
+  present the file interface as function calls, only the mount driver marshals 9P.
+- **The kernel call list is derived** (`docs/syscalls.md`): of Plan 9's 40 live calls, 29
+  never leave the supervisor; ten are one 9P message each; `mount` is the boundary itself.
+  `Twalk` has no syscall, and `seek` is fd-table state, not a message.
+- **Class-B calls return as libc functions, never syscalls** — `chmod`/`fchmod`/`chown`/
+  `fchown`/`utime` collapse into `wstat` (V10 has no `rename`; renaming is `link`+`unlink`
+  in userland). 40 of V10's 68 routines — 59% — are direct or library-only; counts are of
+  routines, not `sysent.c` rows (`lseek`/`seek` and `gtime`/`ftime` pair up).
+- **The lazy fork's resume mechanism and its bound** (RESEARCH §5.2): the child's `exec`
+  throws; a hand-assembled `try_table`/`catch_all` guard catches; the supervisor restores
+  the `[0, sp)` shadow-stack region saved at fork; the guard returns the pid. The catch
+  frame must be live when the child execs, so the child's pre-exec code runs inside the
+  guard's extent — **`procrfork(flags, fn, arg)`**, Plan 9's thread-library shape. Bare
+  dual-return `rfork(RFPROC)` on a JS engine is asyncify's case (per-binary flag, never
+  system-wide); the native interpreter owns its frames and can lift the restriction.
+- **Syscall transport: a Worker is a process** (§5.3) — per-process SAB mailbox,
+  `Atomics.wait` in the Worker, kernel never blocks. Browser deployment needs COOP/COEP;
+  Node needs nothing. Guest memory stays unshared (so no atomics/shared-memory flags in
+  guest builds); sharing it is a later optimisation.
+- **One guest substrate** (wasm everywhere); base is **Plan 9 4th edition as reference,
+  9front consulted** (both MIT). **`/dev/tty` does not exist** — `/dev/cons`, aliased in
+  the personality's libc.
+- **`/dev/draw` stays an actual file, per window, per namespace** — the one place this
+  system can out-Plan 9 plan9port. The GUI target is rio's *interface*; `sam` first,
+  `acme` the real test. **Self-hosting is not a goal** (`/cc` as file server makes
+  compilation a capability).
+
+**The open design item is the uid model** — APE called it impossible; the hosted kernel
+can own per-process credentials and stamp every attach, and the `link`/`symlink`/`lstat`
+family rides on the same protocol decision (9P2000.L proves the extension expressible).
+
+## The PoC's shape (poc/)
+
+`supervisor/main.mjs` is the kernel (proc table, namespaces as per-proc mount maps with
+longest-prefix walk, dispatch, rfork/exec/exits/await). `supervisor/worker.mjs` is the
+guest runner: the mailbox protocol, and the fork guard — **the only hand-written wasm in
+the system**, emitted as bytes with computed section sizes. `libc/` is Plan 9-shaped
+freestanding C (Plan 9's own trap numbers; `read`/`write` are `pread`/`pwrite` at offset
+−1). Syscalls carrying strings/buffers copy through a per-proc transfer SAB. A lazy-fork
+child *borrows the parent's Worker*: the supervisor routes syscalls arriving on the
+parent's mailbox to the child's proc record (`borrower`) — that is how a child's `bind`
+lands in the child's namespace while sharing the parent's stack.
+
+## Conventions
+
+- **Cite primary sources, quote verbatim in blockquotes; numbers are load-bearing** —
+  line counts, call counts and file:line references carry the argument, and each traces to
+  a measurement or source. State the decision, then the constraint that forced it.
+- **Measure rather than assume** — engine capabilities here contradicted folklore (legacy
+  EH gone, `try_table` on); RESEARCH.md records measured tables with dates.
+- **No Plan 9, plan9port, APE or Research Unix source is copied in.** `LICENSE` is MIT
+  *inherited* from Plan 9 (Foundation transfer, March 2021); Plan 9-derived material keeps
+  the Foundation's notice; Research Unix is a separate estate (Nokia's 2017 covenant),
+  explicitly not covered. A V12 image mixes the estates — answered before code; revisit
+  LICENSE then.
+- Prose is British-inflected (`licence`, `rasterise`), em-dashed; tables carry comparisons.
+  Guest C is Plan 9 style (tabs, `nil`, no const clutter); the build silences the
+  builtin-redeclaration warnings that style causes.
+
+## Current state (2026-08-26)
+
+Documents and PoC written today; eight acceptance tests pass (`bash poc/run.sh`). `main`
+has **no commits yet**. Next lifts, in value order (plan §The proof of concept): wire 9P at
+a mount boundary, pipes and a shell, the asyncify path for bare `rfork`, the browser port,
+ramfs writes — then the uid model design.

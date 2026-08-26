@@ -1,0 +1,51 @@
+MIT License
+
+Copyright (c) 2026 Christine Tham
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+---
+
+Why MIT: this licence is inherited, not chosen
+
+ipnx-v12 is a derivative work of Plan 9. Its kernel is Plan 9's, modified, and
+its userland derives from Plan 9's own — so the licence comes from upstream.
+
+Nokia Bell Labs transferred the Plan 9 copyright to the Plan 9 Foundation on
+23 March 2021, and the Foundation relicensed all previous editions under the
+MIT licence. plan9port carries the same terms, and APE ships with Plan 9 and so
+falls under the same transfer.
+
+Plan 9-derived material remains the copyright of the Plan 9 Foundation and
+carries its own notice. MIT requires that notice be reproduced with any copy or
+substantial portion, so it travels with the code rather than being replaced by
+the grant above. The copyright line above claims only this repository's own
+content — at present the documentation, and the kernel modifications, file
+servers and host application as they are added.
+
+Research Unix is a separate estate and is NOT covered here
+
+The Tenth Edition personality is designed against Research Unix, which is
+subject to Nokia's 2017 covenant rather than to a licence. No Research Unix
+source is copied into this repository; the V10 measurements in RESEARCH.md are
+recorded as data, taken in the parent repository
+(https://github.com/ChristineTham/ipnx), where that estate is reasoned about.
+
+A V12 image mixes the two estates. Per docs/v12-plan.md that is answered before
+code, not after, and this file will need revisiting when it is.

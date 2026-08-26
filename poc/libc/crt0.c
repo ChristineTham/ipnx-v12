@@ -1,0 +1,22 @@
+/* crt0: fetch argv from the kernel, run main, exits.
+ * Deviation from Plan 9 (recorded in the plan): args arrive via a boot syscall
+ * rather than pre-placed on the stack by exec. */
+#include "lib9.h"
+extern int main(int, char**);
+extern int _sys(int, int, int, int, int, int);
+#define SYSARGS 200
+
+__attribute__((export_name("_start")))
+void _start(void){
+	static char buf[4096];
+	static char *argv[64];
+	int n, argc;
+	char *p;
+
+	n = _sys(SYSARGS, (int)buf, sizeof buf, 0, 0, 0);
+	argc = 0;
+	for(p = buf; p < buf+n && argc < 63; p += strlen(p)+1)
+		argv[argc++] = p;
+	argv[argc] = nil;
+	exits(main(argc, argv) == 0 ? nil : "main");
+}
