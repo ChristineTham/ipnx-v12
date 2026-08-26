@@ -7,6 +7,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { makeRamfs, makeCons, makePipeDev } from "./devs.mjs";
+import { makeMntDev, mountConn } from "./mnt9p.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const rootdir = process.argv[2] ?? join(here, "..", "rootfs");
@@ -15,7 +16,7 @@ const interactive = process.argv.includes("-i");
 // ---- traps (Plan 9 numbering) ----
 const T = { BIND: 2, CHDIR: 3, CLOSE: 4, DUP: 5, EXEC: 7, EXITS: 8, OPEN: 14,
   SLEEP: 17, RFORK: 19, PIPE: 21, CREATE: 22, REMOVE: 25, SEEK: 39, ERRSTR: 41,
-  STAT: 42, FSTAT: 43, AWAIT: 47, PREAD: 50, PWRITE: 51, ARGS: 200 };
+  STAT: 42, FSTAT: 43, MOUNT: 46, AWAIT: 47, PREAD: 50, PWRITE: 51, ARGS: 200 };
 const RF = { NAMEG: 1, FDG: 4, PROC: 16, MEM: 32 };
 const OTRUNC = 16, DMDIR = 0x80000000;
 // mailbox: [0]=state(0 idle,1 req,2 done) [1]=trap [2..7]=args [8]=ret [9]=aux
@@ -26,7 +27,13 @@ const R_EXECSELF   = -1001;  // throw to worker top level; new image follows
 const TXSIZE = 65536;
 
 const cons = makeCons();
-const devs = { M: makeRamfs(rootdir), c: cons, "|": makePipeDev() };
+const devs = { M: makeRamfs(rootdir), c: cons, "|": makePipeDev(), m: makeMntDev() };
+
+// read a channel from kernel context, parking-aware, as a promise
+const readChan = (chan, n) => new Promise((res) => {
+  const r = chan.dev.read(chan.node, n, -1, { done: res });
+  if (r !== undefined) res(r);
+});
 const procs = new Map();
 let nextpid = 1;
 
@@ -52,7 +59,7 @@ function attach(spec) {  // '#c' etc.
   if (!dev) throw err(`unknown device #${spec[1]}`);
   return { dev, node: dev.attach() };
 }
-function walk(proc, path) {
+async function walk(proc, path) {
   path = canon(path, proc.cwd);
   if (path.startsWith("#")) return attach(path);
   let best = "", start = { dev: devs.M, node: devs.M.attach() };
@@ -62,17 +69,29 @@ function walk(proc, path) {
   let { dev, node } = start;
   const rest = path.slice(best.length).split("/").filter(Boolean);
   for (const name of rest) {
-    node = dev.walk(node, name);
+    node = await dev.walk(node, name);
     if (!node) throw err(`'${path}' does not exist`);
   }
   return { dev, node };
 }
-function walkParent(proc, path) {                  // for create/remove
+async function walkParent(proc, path) {            // for create/remove
   path = canon(path, proc.cwd);
   const i = path.lastIndexOf("/");
   const base = path.slice(i + 1);
   if (!base || path.startsWith("#")) throw err(`bad path '${path}'`);
-  return { parent: walk(proc, path.slice(0, i) || "/"), base };
+  return { parent: await walk(proc, path.slice(0, i) || "/"), base };
+}
+async function readAll(c) {                        // exec's image read; open if the dev needs it
+  if (c.dev.open) await c.dev.open(c.node, 0 /*OREAD*/);
+  const parts = [];
+  for (let off = 0; ;) {
+    const chunk = await c.dev.read(c.node, 8192, off);
+    if (chunk.length === 0) break;
+    parts.push(Buffer.from(chunk));
+    off += chunk.length;
+  }
+  c.dev.discard?.(c.node);
+  return Buffer.concat(parts);
 }
 const err = (msg) => Object.assign(new Error(msg), { guest: true });
 
@@ -134,23 +153,23 @@ function reply(proc, ret, aux = 0) {
 }
 
 // ---- the dispatcher ----
-function onSyscall(proc) {
+async function onSyscall(proc) {
   if (!procs.has(proc.pid) && !proc.borrower) return;
   // While a lazy-fork child borrows the parent's Worker, syscalls arriving on
   // the parent's mailbox belong to the child — its own fds, its own namespace.
   const self = proc.borrower ?? proc;
   const [, trap, a0, a1, a2, a3, a4] = proc.mb;
   try {
-    const r = dispatch(proc, self, trap, a0, a1, a2, a3, a4);
+    const r = await dispatch(proc, self, trap, a0, a1, a2, a3, a4);
     if (r !== undefined) reply(proc, r.ret ?? r, r.aux ?? 0);
   } catch (e) {
-    if (!e.guest) throw e;
+    if (!e.guest) { console.error(e); return shutdown(1); }
     self.errstr = e.message;
     reply(proc, -1);
   }
 }
 
-function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
+async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
   switch (trap) {
   case T.ARGS: {
     const block = Buffer.from(self.argv.map((s) => s + "\0").join(""), "utf8");
@@ -159,30 +178,45 @@ function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
   }
   case T.BIND: {
     const name = txstr(host), old = txstr(host, name.length + 1);
-    self.ns.set(canon(old, self.cwd), walk(self, name));   // resolved now, per bind(2)
+    self.ns.set(canon(old, self.cwd), await walk(self, name));   // resolved now, per bind(2)
     return 0;
   }
   case T.CHDIR: {
     const path = canon(txstr(host), self.cwd);
-    walk(self, path);
+    const c = await walk(self, path);
+    c.dev.discard?.(c.node);
     self.cwd = path;
     return 0;
   }
   case T.OPEN: {
-    const c = walk(self, txstr(host));
-    if ((a1 & OTRUNC) && c.dev.truncate) c.dev.truncate(c.node);
+    let c = await walk(self, txstr(host));
+    if (c.dev.clone && !c.node.ephemeral)          // never open a mount-table fid:
+      c = { dev: c.dev, node: await c.dev.clone(c.node) };   // clone first, per Plan 9
+    if (c.dev.open) await c.dev.open(c.node, a1);
+    else if ((a1 & OTRUNC) && c.dev.truncate) c.dev.truncate(c.node);
     return fdAlloc(self, newChan(c, a1));
   }
   case T.CREATE: {
-    const { parent, base } = walkParent(self, txstr(host));
+    let { parent, base } = await walkParent(self, txstr(host));
     if (!parent.dev.create) throw err("create not supported on this device");
-    const node = parent.dev.create(parent.node, base, a2 >>> 0, !!((a2 >>> 0) & DMDIR));
+    if (parent.dev.clone && !parent.node.ephemeral)          // Tcreate consumes the fid
+      parent = { dev: parent.dev, node: await parent.dev.clone(parent.node) };
+    const node = await parent.dev.create(parent.node, base, a2 >>> 0,
+      !!((a2 >>> 0) & DMDIR), a1);
     return fdAlloc(self, newChan({ dev: parent.dev, node }, a1));
   }
   case T.REMOVE: {
-    const { parent, base } = walkParent(self, txstr(host));
+    const { parent, base } = await walkParent(self, txstr(host));
     if (!parent.dev.remove) throw err("remove not supported on this device");
-    parent.dev.remove(parent.node, base);
+    await parent.dev.remove(parent.node, base);
+    parent.dev.discard?.(parent.node);
+    return 0;
+  }
+  case T.MOUNT: {
+    const old = txstr(host), aname = txstr(host, old.length + 1);
+    const c = incref(fdchk(self, a0));             // the kernel holds its own reference
+    const node = await mountConn(c, readChan, aname);
+    self.ns.set(canon(old, self.cwd), { dev: devs.m, node });
     return 0;
   }
   case T.PIPE: {
@@ -206,7 +240,7 @@ function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     const cur = (a3 >>> 0) === 0xffffffff && (a4 >>> 0) === 0xffffffff;
     const off = cur ? c.offset : (a4 * 0x100000000 + (a3 >>> 0));
     const ctx = { done: (data) => { if (cur) c.offset += data.length; host.tx.set(data); reply(host, data.length); } };
-    const data = c.dev.read(c.node, n, off, ctx);
+    const data = await c.dev.read(c.node, n, off, ctx);
     if (data === undefined) return undefined;      // parked in the device
     if (cur) c.offset += data.length;
     host.tx.set(data);
@@ -217,7 +251,7 @@ function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     const n = Math.min(a2, TXSIZE);
     const cur = (a3 >>> 0) === 0xffffffff && (a4 >>> 0) === 0xffffffff;
     const off = cur ? c.offset : (a4 * 0x100000000 + (a3 >>> 0));
-    const wrote = c.dev.write(c.node, host.tx.subarray(0, n), off);
+    const wrote = await c.dev.write(c.node, host.tx.subarray(0, n), off);
     if (cur) c.offset += wrote;
     return wrote;
   }
@@ -228,15 +262,16 @@ function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     return c.offset;
   }
   case T.STAT: {
-    const c = walk(self, txstr(host));
-    const rec = c.dev.stat(c.node);
+    const c = await walk(self, txstr(host));
+    const rec = await c.dev.stat(c.node);
+    c.dev.discard?.(c.node);
     if (rec.length > a2) throw err("stat buffer too small");
     host.tx.set(rec);
     return rec.length;
   }
   case T.FSTAT: {
     const c = fdchk(self, a0);
-    const rec = c.dev.stat(c.node);
+    const rec = await c.dev.stat(c.node);
     host.tx.set(rec);
     return rec.length;
   }
@@ -269,13 +304,13 @@ function rfork(host, self, flags, guarded) {
   host.borrower = child;   // child borrows the parent's Worker and stack
   return { ret: 0, aux: child.pid };  // worker saves [0,sp) on seeing aux!=0
 }
-function exec(host, self) {
+async function exec(host, self) {
   const path = txstr(host);
   const argv = [];
   for (let o = path.length + 1; host.tx[o];) { const s = txstr(host, o); argv.push(s); o += s.length + 1; }
-  const c = walk(self, path);
-  const bytes = c.dev.read(c.node, c.dev.len(c.node), 0);
-  new WebAssembly.Module(Buffer.from(bytes));          // validate before committing
+  const c = await walk(self, path);
+  const bytes = await readAll(c);
+  new WebAssembly.Module(bytes);                       // validate before committing
   self.argv = argv.length ? argv : [path];
   if (host.borrower === self) {
     // Lazy-fork child leaves the borrowed stack for its own instance; the

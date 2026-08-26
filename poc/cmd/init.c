@@ -47,6 +47,32 @@ rcchild(void *v)
 	exits("exec");
 }
 
+static int srvfds[2];
+
+static void
+srvchild(void *v)
+{
+	char *av[] = { "hellofs", nil };
+
+	USED(v);
+	dup(srvfds[1], 0);
+	close(srvfds[0]);
+	close(srvfds[1]);
+	exec("/bin/hellofs", av);
+	fprint(2, "init: exec /bin/hellofs: %r\n");
+	exits("exec");
+}
+
+static void
+catchild(void *v)
+{
+	char *av[] = { "cat", "/n/hello/motd", nil };
+
+	USED(v);
+	exec("/bin/cat", av);
+	exits("exec");
+}
+
 static void
 rcinteractive(void)
 {
@@ -62,8 +88,8 @@ int
 main(int argc, char *argv[])
 {
 	char buf[256], name[64];
-	uchar edir[512];
-	int fd, n, pid;
+	uchar edir[512], *p;
+	int fd, n, i, pid;
 	volatile int canary;
 
 	/* The namespace starts with only the root. Assemble /dev ourselves,
@@ -122,6 +148,51 @@ main(int argc, char *argv[])
 	buf[n > 0 ? n : 0] = 0;
 	close(fd);
 	ok(strstr(buf, "hello") != nil, "init's namespace survived rc's binds");
+
+	/* Wire 9P at the mount boundary: a guest process serves 9P2000 on a
+	 * pipe; mount(2) speaks Tversion/Tattach to it; every file operation
+	 * below /n/hello is a wire message to that process. */
+	pipe(srvfds);
+	procrfork(RFFDG, srvchild, nil);
+	close(srvfds[1]);
+	n = mount(srvfds[0], -1, "/n/hello", MREPL, "");
+	ok(n >= 0, "mount(fd): Tversion and Tattach negotiated with a guest server");
+	close(srvfds[0]);			/* the kernel holds its own reference */
+
+	fd = open("/n/hello/motd", OREAD);
+	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
+	buf[n > 0 ? n : 0] = 0;
+	close(fd);
+	ok(strstr(buf, "wire 9P") != nil, "Twalk/Topen/Tread through the mount");
+
+	n = stat("/n/hello/motd", edir, sizeof edir);
+	ok(n > 0 && statlen(edir) > 0 &&
+	   strcmp(statname(edir, name, sizeof name), "motd") == 0,
+	   "Tstat through the mount");
+
+	fd = open("/n/hello", OREAD);
+	n = fd >= 0 ? read(fd, (char*)edir, sizeof edir) : -1;
+	close(fd);
+	i = 0;
+	for(p = edir; p < edir+n; p += (p[0] | p[1]<<8) + 2)
+		i++;
+	ok(n > 0 && i == 2, "directory read over 9P: two integral stat records");
+
+	fd = open("/n/hello/note", OWRITE);
+	n = fd >= 0 ? write(fd, "hi over the wire", 16) : -1;
+	close(fd);
+	ok(n == 16, "Twrite through the mount");
+	fd = open("/n/hello/note", OREAD);
+	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
+	buf[n > 0 ? n : 0] = 0;
+	close(fd);
+	ok(strcmp(buf, "hi over the wire") == 0, "written bytes read back over 9P");
+
+	ok(open("/n/hello/nope", OREAD) < 0, "the server's Rerror arrives as errstr");
+
+	pid = procrfork(RFFDG, catchild, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && atoi(buf) == pid, "a second process reads through the same mount");
 
 	USED(pid);
 	if(nfail == 0)

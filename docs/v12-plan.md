@@ -415,13 +415,17 @@ Evidence for each is in RESEARCH.md at the cited section.
 [poc/](../poc/) is the architecture's working slice: the supervisor in Node, guests in
 freestanding C compiled with wasi-sdk's clang (RESEARCH §9.4), one Worker per process,
 per-process namespaces, Plan 9 trap numbers, 9P2000 stat records — booting to **a minimal
-`rc`** with pipes, a writable ramfs, and nine commands (`cat` `echo` `ls` `wc` `cp`
-`mkdir` `rm` `bind`, plus `init`). Twenty-three acceptance tests pass end-to-end: the
-kernel ten (lazy-fork resume, namespace isolation through `exec`, stat records, bare-rfork
-refusal) and the shell thirteen (pipelines, `` `{...} `` substitution via rc re-execing
-itself, glob over dirread, redirections onto ramfs writes, `$status`, `for`/`if`, and
-`bind` as an ordinary command landing in the shell's shared namespace while rc's own
-namespace copy stays invisible to init).
+`rc`** with pipes, a writable ramfs, nine commands (`cat` `echo` `ls` `wc` `cp` `mkdir`
+`rm` `bind`, plus `init`), and **wire 9P at a mount boundary**: `hellofs`, a 9P2000
+server in a guest process serving on a pipe, is attached with `mount(2)`
+(Tversion/Tattach), and every operation below the mount point is one tagged wire message
+through the mount driver — the only place the kernel marshals 9P, exactly the
+Dev-table-inside decision. Thirty-two acceptance tests pass end-to-end: eighteen kernel
+and mount tests (lazy-fork resume, namespace isolation through `exec`, bare-rfork
+refusal, Twalk/Topen/Tread/Tstat/Twrite over the wire, integral directory reads, `Rerror`
+arriving as `errstr`, two processes sharing one connection) and fourteen shell tests
+(pipelines, `` `{...} `` substitution via rc re-execing itself, glob over dirread,
+redirections onto ramfs writes, `$status`, `for`/`if`, `bind` as an ordinary command).
 
 ```sh
 bash poc/mk.sh && bash poc/run.sh     # the tests
@@ -429,12 +433,11 @@ bash poc/run.sh -i                    # boot to an interactive rc
 ```
 
 What it deliberately does not do is listed in [poc/README.md](../poc/README.md); the next
-lifts, in value order: **wire 9P at a mount boundary** (a real `mount(fd)` to an
-out-of-process server — the Dev table already has the interface), **the asyncify path**
-for bare `rfork` and rc's subshells (binaryen's pass, per-binary), **the browser port of
-the supervisor** (same design; needs COOP/COEP and `WebAssembly.compile`
-off-main-thread), and **union directories** for `bind -a` and a real `/bin`. After those,
-the uid model is the next design item (Open questions).
+lifts, in value order: **the asyncify path** for bare `rfork` and rc's subshells
+(binaryen's pass, per-binary), **the browser port of the supervisor** (same design; needs
+COOP/COEP and `WebAssembly.compile` off-main-thread), **union directories** for `bind -a`
+and a real `/bin`, and **exportfs** (the other direction: a guest serving its namespace
+back over 9P). After those, the uid model is the next design item (Open questions).
 
 ## Sources
 

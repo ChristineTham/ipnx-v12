@@ -61,6 +61,11 @@ function sys(trap, a0, a1, a2, a3, a4) {
     if (trap === 2) o = cstr(a1, o);        // bind: name then old
     tx[o] = 0;
   }
+  if (trap === 46) {                        // mount: old at a2, aname at a4
+    let o = cstr(a2, 0);
+    o = cstr(a4, o);
+    tx[o] = 0;
+  }
   if (trap === 51) tx.set(memU8.subarray(a1, a1 + Math.min(a2, tx.length)));  // pwrite buf
   mb[1] = trap; mb[2] = a0; mb[3] = a1; mb[4] = a2; mb[5] = a3; mb[6] = a4;
   Atomics.store(mb, 0, ST.REQ);

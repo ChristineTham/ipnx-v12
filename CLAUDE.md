@@ -14,10 +14,11 @@ semantics, and it was a choice rather than an oversight — "Compatibility was n
 requirement for the system" — which is what makes it undoable.* With V10 rather than POSIX,
 because every limitation APE confesses is a POSIX.1-1990 feature V10 does not have.
 
-The architecture runs and boots to a shell: `poc/` is a working slice (hosted kernel in
-Node, freestanding-C wasm guests, per-process namespaces, the lazy-fork resume, pipes, a
-writable ramfs, a minimal `rc` with nine commands, twenty-three acceptance tests).
-Everything else is design documents.
+The architecture runs, boots to a shell, and speaks its protocol: `poc/` is a working
+slice (hosted kernel in Node, freestanding-C wasm guests, per-process namespaces, the
+lazy-fork resume, pipes, a writable ramfs, a minimal `rc` with nine commands, and wire 9P
+at a mount boundary — a guest 9P2000 server mounted over a pipe; thirty-two acceptance
+tests). Everything else is design documents.
 
 ## Commands
 
@@ -28,8 +29,8 @@ Apple's clang has no wasm backend):
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints twenty-three PASS lines
-(ten kernel, thirteen from `/rc/tests.rc`), exits 0:
+Boot the kernel — init (pid 1) runs the acceptance tests, prints thirty-two PASS lines
+(eighteen kernel and mount, fourteen from `/rc/tests.rc`), exits 0:
 
 ```bash
 bash poc/run.sh
@@ -138,7 +139,12 @@ child's proc record (`borrower`) — that is how a child's `bind` lands in the c
 namespace while sharing the parent's stack. `cmd/rc.c` is the shell: every fork is
 `procrfork(RFFDG, fn, arg)` (pipeline stages, `` `{...} `` captures — the latter exec
 `/bin/rc -c` so nothing ever forks without exec'ing), and subshells/functions are refused
-with an error naming the asyncify path.
+with an error naming the asyncify path. `supervisor/mnt9p.mjs` is devmnt — the only place
+the kernel marshals wire 9P: `mount(fd)` negotiates Tversion/Tattach, operations become
+tagged messages demultiplexed per connection, and a chan is **cloned (`Twalk`, no names)
+before open** so the attach fid is never consumed. `cmd/hellofs.c` is the proof server:
+9P2000 on fd 0, mounted over a pipe. The kernel dispatcher is async throughout; devices
+may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Conventions
 
@@ -158,8 +164,8 @@ with an error naming the asyncify path.
 
 ## Current state (2026-08-26)
 
-Documents and PoC written today; twenty-three acceptance tests pass (`bash poc/run.sh`)
-and `bash poc/run.sh -i` boots to an interactive `rc`. Initial commit `aea6aba` is pushed;
-the rc milestone follows it. Next lifts, in value order (plan §The proof of concept): wire
-9P at a mount boundary, the asyncify path for bare `rfork` and rc's subshells, the browser
-port, union directories — then the uid model design.
+Documents and PoC written today; thirty-two acceptance tests pass (`bash poc/run.sh`)
+and `bash poc/run.sh -i` boots to an interactive `rc`. Milestones on `main`: initial
+commit, the rc milestone, wire 9P at a mount boundary. Next lifts, in value order (plan
+§The proof of concept): the asyncify path for bare `rfork` and rc's subshells, the
+browser port, union directories, exportfs — then the uid model design.

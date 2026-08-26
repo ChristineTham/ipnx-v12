@@ -425,8 +425,8 @@ The one-shot restriction is never violated: nothing is resumed twice. One contin
 *returned into* twice, with two different values — which is what `vfork` always was.
 
 Measured on this machine with hand-encoded modules, then end-to-end in the PoC
-([poc/](poc/), twenty-three acceptance tests passing 2026-08-26 — the shell milestone
-forks every pipeline stage and every command substitution this way):
+([poc/](poc/), whose acceptance suite forks every rc pipeline stage and every command
+substitution this way):
 
 | Engine | legacy `try`/`catch_all` | `try_table` + `catch_all` | JS throw from an import |
 |---|---|---|---|

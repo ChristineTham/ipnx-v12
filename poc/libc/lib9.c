@@ -23,7 +23,7 @@ void __forkshim(int fn, int arg){
 
 enum { BIND=2, CHDIR=3, CLOSE=4, DUP=5, EXEC=7, EXITS=8, OPEN=14, SLEEP=17,
        RFORK=19, PIPE=21, CREATE=22, REMOVE=25, SEEK=39, ERRSTR=41,
-       STAT=42, FSTAT=43, AWAIT=47, PREAD=50, PWRITE=51 };
+       STAT=42, FSTAT=43, MOUNT=46, AWAIT=47, PREAD=50, PWRITE=51 };
 
 int open(char *p, int m)          { return _sys(OPEN,(int)p,m,0,0,0); }
 int close(int fd)                 { return _sys(CLOSE,fd,0,0,0,0); }
@@ -46,6 +46,8 @@ int fstat(int fd, uchar *e, int n){ return _sys(FSTAT,fd,(int)e,n,0,0); }
 int sleep(long ms)                { return _sys(SLEEP,ms,0,0,0,0); }
 int errstr(char *b, int n)        { return _sys(ERRSTR,(int)b,n,0,0,0); }
 int pipe(int fd[2])               { return _sys(PIPE,(int)fd,0,0,0,0); }
+int mount(int fd, int afd, char *old, int flag, char *aname){
+	return _sys(MOUNT,fd,afd,(int)old,flag,(int)aname); }
 int create(char *p, int m, ulong perm){ return _sys(CREATE,(int)p,m,(int)perm,0,0); }
 int remove(char *p)               { return _sys(REMOVE,(int)p,0,0,0,0); }
 

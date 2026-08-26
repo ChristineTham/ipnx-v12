@@ -56,6 +56,7 @@ int   fstat(int fd, uchar *edir, int n);
 int   sleep(long ms);
 int   errstr(char *buf, int n);
 int   pipe(int fd[2]);
+int   mount(int fd, int afd, char *old, int flag, char *aname);
 int   create(char *path, int omode, ulong perm);
 int   remove(char *path);
 

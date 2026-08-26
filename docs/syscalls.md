@@ -89,7 +89,7 @@ slots are dropped entirely.
 | 43 | `fstat` | 9P | `Tstat` | ✓ | |
 | 44 | `wstat` | 9P | `Twstat` | — | the call class B collapses into |
 | 45 | `fwstat` | 9P | `Twstat` | — | |
-| 46 | `mount` | ns | `Tversion`+`Tattach` | — | takes an fd to a server; the wire-9P boundary |
+| 46 | `mount` | ns | `Tversion`+`Tattach` | ✓ | takes an fd to a server; the wire-9P boundary |
 | 47 | `await` | proc | — | ✓ | |
 | 50 | `pread` | 9P | `Tread` | ✓ | offset −1 = Chan offset |
 | 51 | `pwrite` | 9P | `Twrite` | ✓ | |
