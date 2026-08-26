@@ -448,10 +448,12 @@ Chrome 148, and `?i` boots the page to an interactive rc in a console window
 (RESEARCH §5.3, §7 for the Wanix/Apptron precedent that shapes where the GUI goes next).
 
 What it deliberately does not do is listed in [poc/README.md](../poc/README.md). The
-engineering lifts the plan named are done, and the uid model — the question that decided
-whether this project's answer is yes — is designed ([docs/uid.md](uid.md)) and running
-in the PoC. Next: `/dev/draw` and the rio-shaped window server (§The GUI, with RESEARCH
-§7's Wanix/Apptron precedent), the native host over WasmKit, and the link/symlink
+engineering lifts the plan named are done, the uid model is designed
+([docs/uid.md](uid.md)) and running, and **the window server exists in v0 subset**
+(RESEARCH §7): `#w` mints windows, `bind '#w/N' /dev` makes a namespace a window,
+`/dev/draw` is an actual per-window file speaking draw(3)'s `b d f L e E v`, and
+`win rc` is a shell in a browser window. Next: **text in draw** (fonts, the `s`/`x`
+messages — what `sam` waits on), the native host over WasmKit, and the link/symlink
 protocol decision.
 
 ## Sources

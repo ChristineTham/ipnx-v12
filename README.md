@@ -96,10 +96,12 @@ pipes, a writable ramfs, a minimal `rc` with nine commands, and wire 9P at a rea
 boundary in both directions: a guest process serving 9P2000 on a pipe, mounted and read
 by clients that cannot tell it from a kernel device, and exportfs handing a whole
 namespace — private binds included — to another process, union directories completing
-the algebra. The uid model — the one item APE called impossible, and the thing this project exists to
-prove undoable — is designed and running: kernel credentials, `/proc` transitions, the
-setuid bit, V10 enforcement. Fifty-five acceptance tests passing, **on Node and in the
-browser from one platform-neutral kernel**. The documents:
+the algebra. The uid model — the one item APE called impossible — is designed and running: kernel
+credentials, `/proc` transitions, the setuid bit, V10 enforcement. And the claim this
+architecture staked against plan9port is demonstrated: **`/dev/draw` is an actual file,
+per window, per namespace** — `win rc` opens a shell in a browser window whose namespace
+*is* the window. Sixty-five acceptance tests passing, **on Node and in the browser from
+one platform-neutral kernel**. The documents:
 
 - **[RESEARCH.md](RESEARCH.md)** — the living evidence base: Plan 9's complete system call
   list, the `rfork` flags verbatim, APE's confessed limits, the `/dev/draw` message set,

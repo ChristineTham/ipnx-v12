@@ -25,6 +25,18 @@
   input { flex: 1; background: none; border: none; outline: none;
           color: inherit; font: inherit; }
   .err { color: #e0707a; }
+  .gwin { position: fixed; background: #101116; border: 1px solid #3a3e49;
+          border-radius: 6px; box-shadow: 0 14px 40px rgba(0,0,0,.55);
+          display: flex; flex-direction: column; overflow: hidden; }
+  .gwin.focused { border-color: #5b8af0; }
+  .gtitle { display: flex; justify-content: space-between; gap: 12px;
+            padding: 4px 10px; background: #232631; color: #9aa0ad;
+            font-size: 12px; cursor: grab; user-select: none; }
+  .gwin canvas { display: block; }
+  .gtext { margin: 0; max-height: 130px; overflow-y: auto; padding: 4px 8px;
+           font: 12px/1.4 ui-monospace, monospace; color: #cfd3db;
+           white-space: pre-wrap; word-break: break-word; border-top: 1px solid #2c2f3a; }
+  .gtext:empty { display: none; }
   .echo { color: #8b93a3; }
   .okline { color: #7fd487; }
 </style>

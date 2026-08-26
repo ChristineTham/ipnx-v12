@@ -21,9 +21,10 @@ hosts it in a page — the console is a window in the DOM, and `serve.mjs` exist
 set the COOP/COEP headers SharedArrayBuffer requires. The same forty tests pass in both
 (measured in Chrome 148).
 
-The test boot prints fifty-five `PASS` lines — thirty-one from init (kernel, mount,
-exportfs, uid, and the forktest harness), four from forktest itself, twenty from
-`/rc/tests.rc` (the shell tests) — and exits 0, identically on Node and in the browser.
+The test boot prints sixty-five `PASS` lines — thirty-two from init (kernel, mount,
+exportfs, uid, and the harnesses), nine from dtest (the window server), four from
+forktest, twenty from `/rc/tests.rc` — and exits 0, identically on Node and in the
+browser.
 
 ## What it proves
 
@@ -51,6 +52,15 @@ exportfs, uid, and the forktest harness), four from forktest itself, twenty from
   namespace copy (`RFNAMEG`) and its binds never reach init; *within* rc, `bind` works as
   an ordinary command — the child shares rc's namespace, so its bind lands there. Both
   directions are tested.
+- **`/dev/draw` is an actual file, per window, per namespace — the plan9port claim,
+  demonstrated.** `#w` is the window server's kernel half (rio's *interface*, not rio):
+  reading `clone` mints a window; `bind '#w/N' /dev` in a namespace copy makes that
+  namespace *be* the window — its own `cons`, `mouse`, `wctl`, `winid`, `label`, and a
+  real `draw/` tree speaking draw(3)'s message subset (`b d f L e E v`, low-order byte
+  first). `win cmd` is rio's spawn as a forty-line command; `win rc` is a shell in a
+  window. dtest asserts pixels headless through the v0 `rgb` file; in the browser,
+  windows are draggable DOM elements (canvas + text layer), `bounce` animates, `scribble`
+  inks where the pointer drags, and typing lands in the focused window's cons.
 - **The uid model runs — the thing APE called impossible** ([docs/uid.md](../docs/uid.md)).
   Credentials are mutable per-process kernel state: `/dev/user` names the caller,
   `/proc/self/ctl` accepts `user <name>` under the transition rule (the host owner may
@@ -90,6 +100,8 @@ exportfs, uid, and the forktest harness), four from forktest itself, twenty from
 | `supervisor/main.mjs`, `supervisor/worker.mjs` | the Node host and its worker shim |
 | `browser/`, `serve.mjs` | the browser host: console-window page, worker shim, COOP/COEP static server |
 | `supervisor/bytes.mjs` | Uint8Array vocabulary shared by both hosts |
+| `supervisor/devwsys.mjs`, `supervisor/draw.mjs` | the window server's kernel half and its raster engine |
+| `libc/draw9.[ch]` | guest libdraw-lite over /dev/draw |
 | `supervisor/devs.mjs` | ramfs (writable), the console (host stdin/stdout), the pipe device |
 | `supervisor/mnt9p.mjs` | devmnt: the mount driver — the one place the kernel marshals wire 9P |
 | `supervisor/stat9.mjs` | 9P2000 `stat(5)` marshalling |
@@ -100,6 +112,7 @@ exportfs, uid, and the forktest harness), four from forktest itself, twenty from
 | `cmd/exportfs.c` | serves this process's namespace over 9P — binds and all |
 | `cmd/forktest.c` | the bare dual-return fork, exercised |
 | `cmd/` | `init` (pid 1 + kernel tests), `cat`, `echo`, `ls`, `wc`, `cp`, `mkdir`, `rm`, `bind`, `id` |
+| `cmd/win.c`, `cmd/dtest.c`, `cmd/bounce.c`, `cmd/scribble.c` | rio's spawn; the window tests; the demos |
 | `rootfs/` | the boot filesystem; `rc/tests.rc` is the shell test suite; `bin/` is generated |
 
 ## The rc subset
@@ -122,7 +135,9 @@ persist rather than scope to the command.
 argv arrives via a boot syscall rather than pre-placed on the stack; `brk` is guest-local
 (`memory.grow`); no `..`; `remove` inside a union picks no element (error); `errstr`
 reads but does not exchange; pipe writers never block (unbounded queue); gid/groups and
-the D1–D4 measurements are deferred per docs/uid.md; proc files have no stat; nested
-lazy fork within one Worker refused. On the wire: no `Tauth` (afid is always NOFID), no `Tflush`,
+the D1–D4 measurements are deferred per docs/uid.md; proc and wsys files have no stat or
+directory reads; draw speaks only `b d f L e E v` (no text — cons output is
+host-rendered, fonts are the next GUI lift), masks are opaque, `rgb` is a v0 test file;
+windows persist until `wctl delete`; nested lazy fork within one Worker refused. On the wire: no `Tauth` (afid is always NOFID), no `Tflush`,
 walks are one name per `Twalk`, msize is fixed at 8216, `unmount` is absent, and a failed
 mid-walk leaks its intermediate fid. Each is a lifted restriction away, not a redesign.

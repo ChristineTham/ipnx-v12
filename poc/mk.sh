@@ -14,10 +14,11 @@ mkdir -p build rootfs/bin
 $CC -c libc/crt0.c -o build/crt0.o
 $CC -c libc/lib9.c -o build/lib9.o
 $CC -c libc/lib9p.c -o build/lib9p.o
+$CC -c libc/draw9.c -o build/draw9.o
 for c in cmd/*.c; do
   b=$(basename "$c" .c)
   $CC -c "$c" -o "build/$b.o"
-  $LD build/crt0.o build/lib9.o build/lib9p.o "build/$b.o" -o "rootfs/bin/$b"
+  $LD build/crt0.o build/lib9.o build/lib9p.o build/draw9.o "build/$b.o" -o "rootfs/bin/$b"
   case " $ASYNCIFY " in *" $b "*)
     "$BINARYEN/bin/wasm-opt" "rootfs/bin/$b" \
       --asyncify --pass-arg=asyncify-imports@env.forka -O2 \

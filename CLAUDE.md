@@ -19,8 +19,10 @@ both directions: `poc/` is a working slice (hosted kernel in Node and the browse
 one neutral core, freestanding-C wasm guests, per-process namespaces with union
 directories, the lazy-fork resume *and* the asyncify bare fork, pipes, a writable ramfs
 with V10 permission enforcement, the uid model running (docs/uid.md), a minimal `rc`
-with subshells, wire 9P at the mount boundary, and exportfs serving a guest's namespace
-back out — fifty-five acceptance tests). Everything else is design documents.
+with subshells, wire 9P at the mount boundary, exportfs serving a guest's namespace
+back out, and the window server: `#w` mints windows, `bind '#w/N' /dev` makes a
+namespace a window, `/dev/draw` is a real per-window file, `win rc` is a shell in a
+browser window — sixty-five acceptance tests). Everything else is design documents.
 
 ## Commands
 
@@ -32,7 +34,7 @@ has no wasm backend). `mk.sh`'s `ASYNCIFY` list names the binaries that may bare
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints fifty-five PASS lines,
+Boot the kernel — init (pid 1) runs the acceptance tests, prints sixty-five PASS lines,
 exits 0:
 
 ```bash
@@ -128,9 +130,11 @@ evidence, not a fresh opinion.
   9front consulted** (both MIT). **`/dev/tty` does not exist** — `/dev/cons`, aliased in
   the personality's libc.
 - **`/dev/draw` stays an actual file, per window, per namespace** — the one place this
-  system can out-Plan 9 plan9port. The GUI target is rio's *interface*; `sam` first,
-  `acme` the real test. **Self-hosting is not a goal** (`/cc` as file server makes
-  compilation a capability).
+  system can out-Plan 9 plan9port, **now demonstrated**: `supervisor/devwsys.mjs` is the
+  window server's kernel half (rio's *interface*), `draw.mjs` its raster engine
+  (draw(3)'s `b d f L e E v`), `cmd/win.c` rio's spawn. Text/fonts are the next GUI
+  lift; then `sam`, with `acme` the real test. **Self-hosting is not a goal** (`/cc` as
+  file server makes compilation a capability).
 
 - **The uid model is decided and running** (`docs/uid.md`): mutable per-process
   credentials in the kernel, names canonical (numbers are the personality's, via
@@ -192,11 +196,11 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (2026-08-26)
 
-Documents and PoC written today; fifty-five acceptance tests pass on Node
+Documents and PoC written today; sixty-five acceptance tests pass on Node
 (`bash poc/run.sh`) **and in the browser** (`node poc/serve.mjs` → `/browser/`, measured
-in Chrome 148); `-i`/`?i` boot to an interactive `rc` with working subshells. Milestones
-on `main`: initial commit, rc, wire 9P at a mount boundary, the asyncify path, the
-browser port, union directories + exportfs, the uid model. Next: `/dev/draw` and the
-window server (RESEARCH §7 records the Wanix/Apptron precedent — windows as elements
-backed by per-window namespaces), the native WasmKit host, and the link/symlink
+in Chrome 148); `?i` boots to an interactive `rc` where `win bounce &`, `win scribble &`
+and `win rc &` open live windows (drag by title bar; click to focus; typing lands in the
+focused window's cons). Milestones on `main`: initial commit, rc, wire 9P, asyncify, the
+browser port, unions + exportfs, the uid model, the window server. Next: text in draw
+(fonts — what `sam` waits on), the native WasmKit host, and the link/symlink
 protocol-room choice.

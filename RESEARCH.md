@@ -599,6 +599,18 @@ Wanix's wasm tasks are WASI/Go-shaped with no fork story, and Apptron's Unix is 
 emulated x86 Linux — the two places this project's substrate decisions (Plan 9 calls,
 the fork mechanisms of §5.2) do the work instead.
 
+**Realised in the PoC (2026-08-26), as a subset.** `#w` mints windows from `clone`;
+`bind '#w/N' /dev` in a namespace copy gives a process its own `cons`, `mouse`, `wctl`,
+`label` — and a real `draw/` tree: `new` answers the twelve 11-character fields of
+draw(3), `data` accepts `b d f L e E v` (low-order byte first), and the engine rasterises
+into a per-window RGBA image the host presents (a canvas element in the browser; a
+headless buffer on Node, where the acceptance tests assert pixels through the namespace).
+`win cmd` reproduces rio's spawn in forty lines, and `win rc` is a working shell in a
+window — typed at through focus, its output through its own `/dev/cons`. Verified in
+Chrome by synthesising pointer events against `scribble` and reading the inked pixels
+back off its canvas. Text in draw (fonts, the `s`/`x` messages) is the next GUI lift,
+and what `sam` waits on.
+
 ### The thing plan9port could not do
 
 plan9port abandoned this: `devdraw` is a separate binary with X11 and Cocoa backends (now

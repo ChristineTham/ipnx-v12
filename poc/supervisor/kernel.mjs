@@ -13,6 +13,7 @@
 import { makeRamfs, makeCons, makePipeDev } from "./devs.mjs";
 import { makeMntDev, mountConn } from "./mnt9p.mjs";
 import { parseStat, DMSETUID } from "./stat9.mjs";
+import { makeWsys } from "./devwsys.mjs";
 import { sbytes, bstr, concat } from "./bytes.mjs";
 
 const EVE = "glenda";                 // the host owner; the kernel knows no "root"
@@ -167,7 +168,16 @@ function attach(spec, proc) {  // '#c' etc.
 }
 async function walk(proc, path) {
   path = canon(path, proc.cwd);
-  if (path.startsWith("#")) return attach(path, proc);
+  if (path.startsWith("#")) {
+    const slash = path.indexOf("/");
+    let { dev, node } = attach(slash < 0 ? path : path.slice(0, slash), proc);
+    if (slash >= 0)
+      for (const name of path.slice(slash + 1).split("/").filter(Boolean)) {
+        node = await dev.walk(node, name, proc);
+        if (!node) throw err(`'${path}' does not exist`);
+      }
+    return { dev, node };
+  }
   let best = "", list = null;
   for (const [pfx, l] of proc.ns)
     if ((path === pfx || path.startsWith(pfx === "/" ? "/" : pfx + "/")) && pfx.length > best.length)
@@ -540,11 +550,13 @@ function shutdown(code) {
 export async function boot(theHost, { rootSeed, interactive }) {
   host = theHost;
   cons = makeCons(host.consWrite);
+  const hostRef = { host };
+  const wsys = makeWsys(hostRef);
   devs = { M: makeRamfs(rootSeed, EVE), c: cons, "|": makePipeDev(), m: makeMntDev(),
-    p: makeProcDev() };
+    p: makeProcDev(), w: wsys };
   const init = newProc(0, { ns: new Map(), fdt: newFdt(), cwd: "/",
     cred: { euid: EVE, ruid: EVE } });
   const image = await readAll(await walk(init, "/bin/init"));
   spawn(init, await WebAssembly.compile(image), interactive ? ["init", "-i"] : ["init"]);
-  return { cons };
+  return { cons, wsys: { mouse: wsys.mouse, key: wsys.key } };
 }

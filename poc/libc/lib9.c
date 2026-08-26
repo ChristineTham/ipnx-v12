@@ -129,7 +129,9 @@ void *memcpy(void *d, void *s, ulong n){
 	uchar *dp=d, *sp=s; while(n--) *dp++=*sp++; return d; }
 void *memset(void *d, int c, ulong n){
 	uchar *p=d; while(n--) *p++=c; return d; }
-int atoi(char *s){ int v=0,neg=0; if(*s=='-'){neg=1;s++;}
+int atoi(char *s){ int v=0,neg=0;
+	while(*s==' '||*s=='\t') s++;
+	if(*s=='-'){neg=1;s++;}
 	while(*s>='0'&&*s<='9') v=v*10+*s++-'0'; return neg?-v:v; }
 int strncmp(char *a, char *b, ulong n){
 	for(; n && *a && *a==*b; a++, b++, n--)

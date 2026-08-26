@@ -160,6 +160,16 @@ setidchild(void *v)
 }
 
 static void
+dtestchild(void *v)
+{
+	char *av[] = { "dtest", nil };
+
+	USED(v);
+	exec("/bin/dtest", av);
+	exits("exec");
+}
+
+static void
 forkchild(void *v)
 {
 	char *av[] = { "forktest", nil };
@@ -372,6 +382,12 @@ main(int argc, char *argv[])
 	await(name, sizeof name);
 	ok(strstr(buf, "tms none") != nil,
 	   "uid: DMSETUID elevates euid to the image's owner; ruid stays");
+
+	/* The window server: dtest mints a window from #w, paints through its
+	 * /dev/draw, and asserts pixels — headless, the same on every host. */
+	pid = procrfork(RFFDG|RFNAMEG, dtestchild, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && strstr(buf, "''") != nil, "wsys: dtest suite ran clean");
 
 	/* The asyncify path: forktest is a transformed binary whose bare
 	 * rfork(RFPROC) genuinely returns twice — its four checks print
