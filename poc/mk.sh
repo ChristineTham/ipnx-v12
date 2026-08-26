@@ -16,6 +16,20 @@ $CC -c libc/crt9.c -o build/crt9.o
 $CC -c libc/lib9.c -o build/lib9.o
 $CC -c libc/lib9p.c -o build/lib9p.o
 $CC -c libc/draw9.c -o build/draw9.o
+# libv10 + real V10 sources (poc/v10/NOTICE): K&R C, compiled unmodified
+# against the personality's own headers, into /v10/bin — side by side
+V10CC="$SDK/bin/clang --target=wasm32 -nostdlib -O1 -std=c89 -fno-builtin -Wno-implicit-function-declaration -Wno-implicit-int -Wno-deprecated-non-prototype"
+mkdir -p rootfs/v10/bin
+$V10CC -Ilibc -c v10/lib/stdio.c -o build/v10-stdio.o
+$V10CC -Iv10/include -c v10/lib/stat.c -o build/v10-stat.o
+$V10CC -Ilibc -c v10/lib/crt.c -o build/v10-crt.o
+for c in v10/usr/src/cmd/*.c; do
+  b=$(basename "$c" .c)
+  $V10CC -Iv10/include -c "$c" -o "build/v10-$b.o"
+  $LD build/v10-crt.o build/v10-stdio.o build/v10-stat.o build/lib9.o build/lib9p.o "build/v10-$b.o" -o "rootfs/v10/bin/$b"
+  echo "  v10/bin/$b  $(wc -c < "rootfs/v10/bin/$b" | tr -d ' ') bytes (V10 source)"
+done
+
 # real Plan 9 sources (poc/plan9/NOTICE): compiled unmodified, void main,
 # through the shim headers — these SUPERSEDE any same-named PoC command
 for c in plan9/sys/src/cmd/*.c; do

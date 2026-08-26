@@ -726,6 +726,14 @@ shadow-stack pointer (65472, one frame below a 64 KB stack top), which is what l
 fork guard receive `sp` as an ordinary argument instead of exporting the `__stack_pointer`
 global. The WASI sysroot is present and deliberately unused.
 
+The kencc-vs-clang question now has measured data at both ends of the timeline: real
+**4th-edition** sources (`cat.c`, `echo.c`) compile **unmodified** against two shim
+headers, and real **V10** sources — K&R definitions, implicit ints, implicit function
+declarations — compile with `-std=c89 -fno-builtin` plus three warning suppressions
+(`-fno-builtin` matters: the libcall optimiser rewrote a bare `fprintf` into `fwrite`).
+`-fms-extensions` is the reserve for kencc's anonymous members when libdraw's structures
+arrive. Neither tree needed a source change.
+
 ---
 
 ## 10. Licensing

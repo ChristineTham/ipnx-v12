@@ -78,6 +78,7 @@ char* strchr(char *s, int c);
 char* strstr(char *s, char *sub);
 void* memcpy(void *dst, void *src, ulong n);
 void* memset(void *dst, int c, ulong n);
+int   vfmt9(char *buf, int nbuf, char *fmt, __builtin_va_list a);
 int   fprint(int fd, char *fmt, ...);
 int   print(char *fmt, ...);
 int   atoi(char *s);

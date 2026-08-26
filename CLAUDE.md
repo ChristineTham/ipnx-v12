@@ -23,8 +23,10 @@ with subshells, wire 9P at the mount boundary, exportfs serving a guest's namesp
 back out, and the window server: `#w` mints windows, `bind '#w/N' /dev` makes a
 namespace a window, `/dev/draw` is a real per-window file with text (`y i l s` and an
 8×8 font of our own authorship), `win rc` is a shell in a browser window, and the
-link/symlink family lands as the V12 additions — seventy-eight acceptance tests).
-Everything else is design documents.
+link/symlink family lands as the V12 additions, and **both real userspaces have their
+first citizens**: 4th-edition `cat`/`echo` compiled unmodified, TUHS-tape V10
+`cat`/`echo` in K&R C at `/v10/bin`, each on its own rewritten libc.a (`lib9`,
+`libv10`) — eighty-three acceptance tests). Everything else is design documents.
 
 ## Commands
 
@@ -36,7 +38,7 @@ has no wasm backend). `mk.sh`'s `ASYNCIFY` list names the binaries that may bare
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints seventy-eight PASS
+Boot the kernel — init (pid 1) runs the acceptance tests, prints eighty-three PASS
 lines, exits 0:
 
 ```bash
@@ -153,6 +155,16 @@ evidence, not a fresh opinion.
 
 ## The PoC's shape (poc/)
 
+**The userspace objective**: real Plan 9 and real V10 userspace, compiled to wasm from
+their own trees, side by side — each on its own libc.a rewritten over the kernel
+(`libc/` is lib9; `v10/lib` + `v10/include` is libv10). Vendored sources under
+`poc/plan9/sys/` and `poc/v10/usr/` are **verbatim — never edit them**; each batch
+carries a NOTICE with provenance (Foundation MIT for Plan 9; Nokia's covenant for V10,
+with LICENSE's scope note kept in step). The shim headers beside them are ours. V10
+compiles want `-std=c89 -fno-builtin` (the libcall optimiser rewrites bare fprintf into
+fwrite) with K&R implicitness left authentic; growing both userspaces command by command
+is the standing work.
+
 One platform-neutral kernel, two hosts: `supervisor/kernel.mjs` runs unmodified on Node
 (`supervisor/main.mjs` + `worker.mjs` shims) and in the browser (`browser/main.mjs` +
 `browser/worker.mjs`, served by `serve.mjs`, whose only job is COOP/COEP). Everything in
@@ -213,6 +225,7 @@ in Chrome 148); `?i` boots to an interactive `rc` where `win bounce &`, `win scr
 and `win rc &` open live windows (drag by title bar; click to focus; typing lands in the
 focused window's cons). Milestones on `main`: initial commit, rc, wire 9P, asyncify, the
 browser port, unions + exportfs, the uid model, the window server, text in draw, the
-link/symlink family. Next: the `sam` port (libframe over the existing draw messages —
-note this means bringing plan9port source in, a licensing/convention decision for the
-user), the native WasmKit host, and uid.md's D1–D4 measurements in `../ipnx`.
+link/symlink family, D1–D4 measured, and the first real citizens of both userspaces.
+Next: grow both trees command by command (Plan 9: toward `sam` via the real libdraw/
+libframe with `-fms-extensions`; V10: toward `sh` via libv10's stdio), and the native
+WasmKit host.

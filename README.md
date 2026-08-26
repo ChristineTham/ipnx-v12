@@ -100,8 +100,11 @@ the algebra. The uid model — the one item APE called impossible — is designe
 credentials, `/proc` transitions, the setuid bit, V10 enforcement. And the claim this
 architecture staked against plan9port is demonstrated: **`/dev/draw` is an actual file,
 per window, per namespace** — `win rc` opens a shell in a browser window whose namespace
-*is* the window. Seventy-eight acceptance tests passing, **on Node and in the browser from
-one platform-neutral kernel**. The documents:
+*is* the window. And the objective is now on screen: **real Plan 9 userspace and real
+V10 userspace, compiled to wasm from their own trees** — 4th-edition `cat` and `echo`
+unmodified, TUHS-tape V10 `cat` and `echo` in K&R C — side by side in one namespace,
+each on its own rewritten libc. Eighty-three acceptance tests passing, **on Node and in
+the browser from one platform-neutral kernel**. The documents:
 
 - **[RESEARCH.md](RESEARCH.md)** — the living evidence base: Plan 9's complete system call
   list, the `rfork` flags verbatim, APE's confessed limits, the `/dev/draw` message set,

@@ -1,0 +1,13 @@
+The files under usr/ are Research Unix, Tenth Edition — verbatim, unmodified,
+copied from the parent repository's distribution tree
+(https://github.com/ChristineTham/ipnx, v10/usr/src/…, itself built from the
+TUHS tapes). Research Unix is subject to Nokia's 2017 covenant rather than a
+licence; the estate reasoning lives in the parent repository, and this
+repository's LICENSE names the boundary. Provenance (copied 2026-08-26):
+  usr/src/cmd/cat.c   sha256 recorded in the commit introducing it
+  usr/src/cmd/echo.c  sha256 recorded in the commit introducing it
+
+The include/ and lib/ directories beside this notice are NOT Research Unix
+source: they are this project's V10 personality shim — V10's headers and
+stdio, reimplemented over the Plan 9-shaped kernel interface, so the sources
+above compile without modification.

@@ -42,12 +42,12 @@ int chdir(char *p)                { return _sys(CHDIR,(int)p,0,0,0,0); }
 int exec(char *p, char *argv[])   { return _sys(EXEC,(int)p,(int)argv,0,0,0); }
 void exits(char *msg)             { _sys(EXITS,(int)msg,0,0,0,0); for(;;); }
 int await(char *s, int n)         { return _sys(AWAIT,(int)s,n,0,0,0); }
-int stat(char *p, uchar *e, int n){ return _sys(STAT,(int)p,(int)e,n,0,0); }
+__attribute__((weak)) int stat(char *p, uchar *e, int n){ return _sys(STAT,(int)p,(int)e,n,0,0); }
 int lstat(char *p, uchar *e, int n){ return _sys(STAT,(int)p,(int)e,n,1,0); }
 int link9(char *old, char *new){ return _sys(LINK,(int)old,(int)new,0,0,0); }
 int symlink9(char *t, char *new){ return _sys(SYMLINK,(int)t,(int)new,0,0,0); }
 int readlink9(char *p, char *b, int n){ return _sys(READLINK,(int)p,(int)b,n,0,0); }
-int fstat(int fd, uchar *e, int n){ return _sys(FSTAT,fd,(int)e,n,0,0); }
+__attribute__((weak)) int fstat(int fd, uchar *e, int n){ return _sys(FSTAT,fd,(int)e,n,0,0); }
 int sleep(long ms)                { return _sys(SLEEP,ms,0,0,0,0); }
 int errstr(char *b, int n)        { return _sys(ERRSTR,(int)b,n,0,0,0); }
 int pipe(int fd[2])               { return _sys(PIPE,(int)fd,0,0,0,0); }
@@ -178,7 +178,7 @@ static char *fmtnum(char *p, unsigned v, int base, int neg){
 	while(i) *p++=t[--i];
 	return p;
 }
-static int vfmt(char *buf, int nbuf, char *fmt, __builtin_va_list a){
+int vfmt9(char *buf, int nbuf, char *fmt, __builtin_va_list a){
 	char *p=buf, *e=buf+nbuf-1, *s;
 	for(; *fmt && p<e; fmt++){
 		if(*fmt!='%'){ *p++=*fmt; continue; }
@@ -203,7 +203,7 @@ char *argv0;
 void sysfatal(char *fmt, ...){
 	char buf[256];
 	__builtin_va_list a; __builtin_va_start(a,fmt);
-	vfmt(buf,sizeof buf,fmt,a); __builtin_va_end(a);
+	vfmt9(buf,sizeof buf,fmt,a); __builtin_va_end(a);
 	fprint(2, "%s: %s\n", argv0 ? argv0 : "sysfatal", buf);
 	exits(buf);
 }
@@ -211,13 +211,13 @@ void sysfatal(char *fmt, ...){
 int fprint(int fd, char *fmt, ...){
 	char buf[512]; int n;
 	__builtin_va_list a; __builtin_va_start(a,fmt);
-	n=vfmt(buf,sizeof buf,fmt,a); __builtin_va_end(a);
+	n=vfmt9(buf,sizeof buf,fmt,a); __builtin_va_end(a);
 	return write(fd,buf,n);
 }
 int print(char *fmt, ...){
 	char buf[512]; int n;
 	__builtin_va_list a; __builtin_va_start(a,fmt);
-	n=vfmt(buf,sizeof buf,fmt,a); __builtin_va_end(a);
+	n=vfmt9(buf,sizeof buf,fmt,a); __builtin_va_end(a);
 	return write(1,buf,n);
 }
 

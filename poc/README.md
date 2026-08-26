@@ -21,7 +21,7 @@ hosts it in a page — the console is a window in the DOM, and `serve.mjs` exist
 set the COOP/COEP headers SharedArrayBuffer requires. The same forty tests pass in both
 (measured in Chrome 148).
 
-The test boot prints seventy-eight `PASS` lines — forty-two from init (kernel, mount,
+The test boot prints eighty-three `PASS` lines — forty-two from init (kernel, mount,
 exportfs, uid, links, and the harnesses), twelve from dtest (the window server and text), four from
 forktest, twenty from `/rc/tests.rc` — and exits 0, identically on Node and in the
 browser.
@@ -65,6 +65,15 @@ browser.
   in the browser, windows are draggable DOM elements (canvas + text layer), `bounce`
   animates, `scribble` inks where the pointer drags, and typing lands in the focused
   window's cons.
+- **Real userspaces, both of them.** `plan9/sys/src/cmd/` holds verbatim 4th-edition
+  sources (NOTICE: Foundation MIT, per-file sha256) compiled **unmodified** — the
+  suite's every `cat` and `echo` is genuine Plan 9, fingerprinted by `echo -n`.
+  `v10/usr/src/cmd/` holds verbatim TUHS-tape V10 sources (NOTICE: Nokia's covenant,
+  via the parent repository) — K&R C compiled with `-std=c89 -fno-builtin`, implicit
+  declarations left authentic — in `/v10/bin`, fingerprinted by `echo -e`, piping into
+  Plan 9 `cat` side by side. Each userspace links its own libc.a rewritten over the
+  kernel: `lib9` (`libc/`) and `libv10` (`v10/lib/`: V7-lineage stdio, `struct stat`
+  decoded from stat(5) records, a flushing crt).
 - **Hard links and symlinks, V10's way.** `link`/`symlink`/`readlink` are the V12 kernel
   additions (traps 60–62; `lstat` is a stat flag); on the wire they are minted types
   128/130/132, and a server without them answers `Rerror` — degradation, not a wedge.
@@ -124,6 +133,8 @@ browser.
 | `cmd/forktest.c` | the bare dual-return fork, exercised |
 | `cmd/` | `init` (pid 1 + kernel tests), `cat`, `echo`, `ls`, `wc`, `cp`, `mkdir`, `rm`, `bind`, `id`, `ln` |
 | `cmd/win.c`, `cmd/dtest.c`, `cmd/bounce.c`, `cmd/scribble.c` | rio's spawn; the window tests; the demos |
+| `plan9/` | verbatim 4th-edition sources + NOTICE; `include/` is our shim (u.h, libc.h) |
+| `v10/` | verbatim V10 sources + NOTICE; `include/` and `lib/` are libv10, our personality libc |
 | `rootfs/` | the boot filesystem; `rc/tests.rc` is the shell test suite; `bin/` is generated |
 
 ## The rc subset

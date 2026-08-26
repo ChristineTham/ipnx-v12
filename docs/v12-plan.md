@@ -457,6 +457,15 @@ Chrome 148, and `?i` boots the page to an interactive rc in a console window
 (RESEARCH §5.3, §7 for the Wanix/Apptron precedent that shapes where the GUI goes next).
 
 What it deliberately does not do is listed in [poc/README.md](../poc/README.md). The
+**The userspace objective, stated once**: real Plan 9 userspace and real Research Unix
+V10 userspace, compiled to wasm from their own trees, running side by side on this
+kernel — each against its own libc.a rewritten over the kernel interface (`lib9` for
+Plan 9, `libv10` for V10; both this project's code, in poc/). The first citizens of each
+are in: 4th-edition `cat` and `echo` compiled **unmodified** through shim headers and now
+doing all the suite's work, and TUHS-tape V10 `cat` and `echo` — K&R C, `-std=c89
+-fno-builtin`, implicit declarations left authentic — living in `/v10/bin`, fingerprinted
+by `echo -e`, and piping into Plan 9 `cat` in a single pipeline. Growing both userspaces
+command by command is now the PoC's standing work. The
 engineering lifts the plan named are done, the uid model is designed
 ([docs/uid.md](uid.md)) and running, and **the window server exists in v0 subset**
 (RESEARCH §7): `#w` mints windows, `bind '#w/N' /dev` makes a namespace a window,

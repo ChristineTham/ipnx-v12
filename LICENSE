@@ -39,13 +39,13 @@ the grant above. The copyright line above claims only this repository's own
 content — at present the documentation, and the kernel modifications, file
 servers and host application as they are added.
 
-Research Unix is a separate estate and is NOT covered here
+Research Unix is a separate estate and is NOT covered by the grant above
 
-The Tenth Edition personality is designed against Research Unix, which is
-subject to Nokia's 2017 covenant rather than to a licence. No Research Unix
-source is copied into this repository; the V10 measurements in RESEARCH.md are
-recorded as data, taken in the parent repository
-(https://github.com/ChristineTham/ipnx), where that estate is reasoned about.
-
-A V12 image mixes the two estates. Per docs/v12-plan.md that is answered before
-code, not after, and this file will need revisiting when it is.
+Research Unix is subject to Nokia's 2017 covenant rather than to a licence;
+the estate reasoning lives in the parent repository
+(https://github.com/ChristineTham/ipnx). Tenth Edition sources are vendored
+verbatim under poc/v10/usr/ with per-file provenance in poc/v10/NOTICE, and
+remain governed by that covenant — the MIT grant above does not extend to
+them. The V10 measurements in RESEARCH.md are recorded as data, taken in the
+parent repository. Plan 9 sources are vendored verbatim under poc/plan9/sys/
+under the Foundation's MIT licence per poc/plan9/NOTICE.
