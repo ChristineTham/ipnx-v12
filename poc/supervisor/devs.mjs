@@ -1,28 +1,28 @@
 // Devices: each presents attach/walk/open/read/write/stat over its tree —
-// Plan 9's kernel-device shape (intro(3)); wire 9P would slot in as one more
-// dev (the mount driver) speaking the same interface.
+// Plan 9's kernel-device shape (intro(3)); only the mount driver (mnt9p.mjs)
+// marshals wire 9P.
 //
 // A device read may PARK: return undefined and complete later via ctx.done(buf)
 // — that is how pipe reads and console reads block their caller without
-// blocking the kernel.
-import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join } from "node:path";
+// blocking the kernel. Platform-neutral: no Node APIs, no Buffer.
 import { marshalStat, QTDIR, QTFILE, DMDIR } from "./stat9.mjs";
+import { concat } from "./bytes.mjs";
 
 let qgen = 1;
+const empty = new Uint8Array(0);
 
-// ---- ramfs: an in-memory tree, seeded from a host directory at boot ----
-export function makeRamfs(hostdir) {
-  function load(dir, name) {
-    const st = statSync(dir);
-    if (st.isDirectory()) {
+// ---- ramfs: an in-memory tree, seeded from a host-supplied structure ----
+// seed: { name, dir, kids: [seed...], data: Uint8Array }
+export function makeRamfs(seed) {
+  function load(s, name) {
+    if (s.dir) {
       const node = { name, qpath: qgen++, dir: true, kids: new Map() };
-      for (const e of readdirSync(dir)) node.kids.set(e, load(join(dir, e), e));
+      for (const k of s.kids) node.kids.set(k.name, load(k, k.name));
       return node;
     }
-    return { name, qpath: qgen++, dir: false, data: new Uint8Array(readFileSync(dir)) };
+    return { name, qpath: qgen++, dir: false, data: s.data };
   }
-  const root = load(hostdir, "/");
+  const root = load(seed, "/");
   if (!root.kids.has("tmp"))                      // a writable corner, always
     root.kids.set("tmp", { name: "tmp", qpath: qgen++, dir: true, kids: new Map() });
   const statNode = (k) => marshalStat({
@@ -36,14 +36,17 @@ export function makeRamfs(hostdir) {
     read: (node, n, off) => {
       if (node.dir) {
         // read(5): "an integral number of directory entries" — never split one
-        let skip = Number(off), out = [];
+        let skip = Number(off);
+        const out = [];
+        let total = 0;
         for (const k of node.kids.values()) {
           const rec = statNode(k);
           if (skip >= rec.length) { skip -= rec.length; continue; }
-          if (out.reduce((a, r) => a + r.length, 0) + rec.length > n) break;
+          if (total + rec.length > n) break;
           out.push(rec);
+          total += rec.length;
         }
-        return Buffer.concat(out);
+        return concat(out);
       }
       const end = Math.min(Number(off) + n, node.data.length);
       return node.data.subarray(Math.min(Number(off), node.data.length), end);
@@ -64,12 +67,12 @@ export function makeRamfs(hostdir) {
       const old = parent.kids.get(name);
       if (old) {                                   // create(2): existing file truncates
         if (old.dir || isdir) throw new Error(`'${name}' already exists`);
-        old.data = new Uint8Array(0);
+        old.data = empty;
         return old;
       }
       const node = isdir
         ? { name, qpath: qgen++, dir: true, kids: new Map() }
-        : { name, qpath: qgen++, dir: false, data: new Uint8Array(0) };
+        : { name, qpath: qgen++, dir: false, data: empty };
       parent.kids.set(name, node);
       return node;
     },
@@ -79,17 +82,17 @@ export function makeRamfs(hostdir) {
       if (node.dir && node.kids.size) throw new Error("directory not empty");
       parent.kids.delete(name);
     },
-    truncate: (node) => { if (!node.dir) node.data = new Uint8Array(0); },
+    truncate: (node) => { if (!node.dir) node.data = empty; },
     stat: statNode,
     len: (node) => (node.dir ? 0 : node.data.length),
   };
 }
 
-// ---- cons: '#c' — console; write to host stdout, read from host stdin ----
-export function makeCons(out = process.stdout) {
+// ---- cons: '#c' — console; write to the host's output, read what it feeds ----
+export function makeCons(out) {
   const root = { name: "/", qpath: qgen++, dir: true };
   const cons = { name: "cons", qpath: qgen++, dir: false };
-  let buf = Buffer.alloc(0), eof = false;
+  let buf = empty, eof = false;
   const parked = [];
   const serve = () => {
     while (parked.length && (buf.length || eof)) {
@@ -99,12 +102,12 @@ export function makeCons(out = process.stdout) {
       ctx.done(give);                              // empty at eof: read returns 0
     }
   };
-  const dev = {
+  return {
     name: "cons",
     attach: () => root,
     walk: (node, name) => (node === root && name === "cons" ? cons : null),
     read: (node, n, off, ctx) => {
-      if (node !== cons) return Buffer.alloc(0);
+      if (node !== cons) return empty;
       if (buf.length || eof) {
         const give = buf.subarray(0, Math.min(n, buf.length));
         buf = buf.subarray(give.length);
@@ -113,16 +116,15 @@ export function makeCons(out = process.stdout) {
       parked.push({ n, ctx });
       return undefined;                            // parked
     },
-    write: (node, data) => { out.write(Buffer.from(data)); return data.length; },
+    write: (node, data) => { out(new Uint8Array(data)); return data.length; },
     stat: (node) => marshalStat({
       name: node.name, qtype: node.dir ? QTDIR : QTFILE, qpath: node.qpath,
       mode: node.dir ? DMDIR | 0o555 : 0o666, length: 0,
     }),
     len: () => 0,
-    feed: (chunk) => { buf = Buffer.concat([buf, chunk]); serve(); },
+    feed: (chunk) => { buf = concat([buf, chunk]); serve(); },
     end: () => { eof = true; serve(); },
   };
-  return dev;
 }
 
 // ---- pipe: '#|' — Plan 9 pipes are bidirectional; two queues, two ends ----
@@ -135,14 +137,14 @@ export function makePipeDev() {
     read: (node, n, off, ctx) => {
       const { p, end } = node, d = 1 ^ end;
       if (p.nbytes[d] > 0) return drain(p, d, n);
-      if (p.refs[d] === 0) return Buffer.alloc(0); // EOF
+      if (p.refs[d] === 0) return empty;           // EOF
       p.parked[d].push({ n, ctx });
       return undefined;
     },
     write: (node, data) => {
       const { p, end } = node;
       if (p.refs[1 ^ end] === 0) throw new Error("write on closed pipe");
-      p.q[end].push(Buffer.from(data));            // copy: tx is reused
+      p.q[end].push(new Uint8Array(data));         // copy: tx is reused
       p.nbytes[end] += data.length;
       serve(p, end);
       return data.length;
@@ -166,12 +168,12 @@ export function makePipeDev() {
       else p.q[d][0] = head.subarray(take);
     }
     p.nbytes[d] -= got;
-    return Buffer.concat(out);
+    return concat(out);
   }
   function serve(p, d) {
     while (p.parked[d].length && (p.nbytes[d] > 0 || p.refs[d] === 0)) {
       const { n, ctx } = p.parked[d].shift();
-      ctx.done(p.nbytes[d] > 0 ? drain(p, d, n) : Buffer.alloc(0));
+      ctx.done(p.nbytes[d] > 0 ? drain(p, d, n) : empty);
     }
   }
   return dev;

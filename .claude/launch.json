@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "poc-browser",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["poc/serve.mjs", "8095"],
+      "port": 8095
+    }
+  ]
+}

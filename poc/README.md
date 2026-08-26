@@ -10,9 +10,16 @@ carry all of it.
 
 ```sh
 bash mk.sh       # build guests — needs wasi-sdk and binaryen at ~/.local/opt/
-bash run.sh      # boot; init (pid 1) runs the acceptance tests and shuts down
-bash run.sh -i   # boot to an interactive rc on the console (EOF to shut down)
+bash run.sh      # boot on Node; init (pid 1) runs the acceptance tests
+bash run.sh -i   # boot on Node to an interactive rc (EOF to shut down)
+node serve.mjs   # serve the browser port: http://localhost:8095/browser/ (?i = interactive)
 ```
+
+The kernel is one platform-neutral module (`supervisor/kernel.mjs`, with `guestcore.mjs`
+for the guest runner); `supervisor/main.mjs` hosts it on Node and `browser/main.mjs`
+hosts it in a page — the console is a window in the DOM, and `serve.mjs` exists only to
+set the COOP/COEP headers SharedArrayBuffer requires. The same forty tests pass in both
+(measured in Chrome 148).
 
 The test boot prints forty `PASS` lines — nineteen from init (kernel, mount, and the
 forktest harness), four from forktest itself, seventeen from `/rc/tests.rc` (the shell
@@ -60,8 +67,11 @@ tests) — and exits 0.
 
 | | |
 |---|---|
-| `supervisor/main.mjs` | the kernel: proc table, namespaces, channels and fd tables (refcounted), dispatch, rfork/exec/exits/await |
-| `supervisor/worker.mjs` | guest runner: mailbox protocol, the fork guard (the only hand-written wasm), save/restore |
+| `supervisor/kernel.mjs` | the kernel, platform-neutral: proc table, namespaces, channels and fd tables (refcounted), dispatch, rfork/exec/exits/await |
+| `supervisor/guestcore.mjs` | guest runner, platform-neutral: mailbox protocol, the fork guard (the only hand-written wasm), save/restore, the asyncify dance |
+| `supervisor/main.mjs`, `supervisor/worker.mjs` | the Node host and its worker shim |
+| `browser/`, `serve.mjs` | the browser host: console-window page, worker shim, COOP/COEP static server |
+| `supervisor/bytes.mjs` | Uint8Array vocabulary shared by both hosts |
 | `supervisor/devs.mjs` | ramfs (writable), the console (host stdin/stdout), the pipe device |
 | `supervisor/mnt9p.mjs` | devmnt: the mount driver — the one place the kernel marshals wire 9P |
 | `supervisor/stat9.mjs` | 9P2000 `stat(5)` marshalling |

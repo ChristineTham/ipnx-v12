@@ -94,7 +94,8 @@ guests in per-process namespaces, with the lazy fork's parent resume *and* the a
 path for bare dual-return `rfork` (rc's subshells are forked copies of the interpreter),
 pipes, a writable ramfs, a minimal `rc` with nine commands, and wire 9P at a real mount
 boundary: a guest process serving 9P2000 on a pipe, mounted and read by clients that
-cannot tell it from a kernel device — forty acceptance tests passing. The documents:
+cannot tell it from a kernel device — forty acceptance tests passing, **on Node and in
+the browser from one platform-neutral kernel**. The documents:
 
 - **[RESEARCH.md](RESEARCH.md)** — the living evidence base: Plan 9's complete system call
   list, the `rfork` flags verbatim, APE's confessed limits, the `/dev/draw` message set,

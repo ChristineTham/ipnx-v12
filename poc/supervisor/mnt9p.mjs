@@ -5,6 +5,8 @@
 // v0 deviations: no Tauth (afid is always NOFID), no Tflush, walks are one
 // name per Twalk (the kernel resolves component-wise), msize fixed at 8216.
 
+import { sbytes, bstr, concat } from "./bytes.mjs";
+
 const MSIZE = 8216;                // 8192 data + IOHDRSZ(24)
 const NOFID = 0xffffffff;
 const Tv = { version: 100, attach: 104, walk: 110, open: 112, create: 114,
@@ -14,28 +16,35 @@ const Rerror = 107;
 // ---- marshal helpers ----
 class W {
   constructor() { this.parts = []; }
-  u8(v) { this.parts.push(Buffer.from([v & 0xff])); return this; }
-  u16(v) { const b = Buffer.alloc(2); b.writeUInt16LE(v); this.parts.push(b); return this; }
-  u32(v) { const b = Buffer.alloc(4); b.writeUInt32LE(v >>> 0); this.parts.push(b); return this; }
-  u64(v) { const b = Buffer.alloc(8); b.writeBigUInt64LE(BigInt(v)); this.parts.push(b); return this; }
-  s(str) { const d = Buffer.from(str, "utf8"); this.u16(d.length); this.parts.push(d); return this; }
+  n(bytes, v) { const b = new Uint8Array(bytes); const dv = new DataView(b.buffer);
+    if (bytes === 1) dv.setUint8(0, v);
+    else if (bytes === 2) dv.setUint16(0, v, true);
+    else if (bytes === 4) dv.setUint32(0, v >>> 0, true);
+    else dv.setBigUint64(0, BigInt(v), true);
+    this.parts.push(b); return this; }
+  u8(v) { return this.n(1, v); }
+  u16(v) { return this.n(2, v); }
+  u32(v) { return this.n(4, v); }
+  u64(v) { return this.n(8, v); }
+  s(str) { const d = sbytes(str); this.u16(d.length); this.parts.push(d); return this; }
   raw(b) { this.parts.push(b); return this; }
   frame(type, tag) {
-    const body = Buffer.concat(this.parts);
-    const hdr = Buffer.alloc(7);
-    hdr.writeUInt32LE(7 + body.length, 0);
-    hdr.writeUInt8(type, 4);
-    hdr.writeUInt16LE(tag, 5);
-    return Buffer.concat([hdr, body]);
+    const body = concat(this.parts);
+    const hdr = new Uint8Array(7);
+    const dv = new DataView(hdr.buffer);
+    dv.setUint32(0, 7 + body.length, true);
+    dv.setUint8(4, type);
+    dv.setUint16(5, tag, true);
+    return concat([hdr, body]);
   }
 }
 class R {
-  constructor(buf) { this.b = buf; this.o = 0; }
-  u8() { return this.b.readUInt8(this.o++); }
-  u16() { const v = this.b.readUInt16LE(this.o); this.o += 2; return v; }
-  u32() { const v = this.b.readUInt32LE(this.o); this.o += 4; return v; }
-  u64() { const v = this.b.readBigUInt64LE(this.o); this.o += 8; return v; }
-  s() { const n = this.u16(); const v = this.b.toString("utf8", this.o, this.o + n); this.o += n; return v; }
+  constructor(buf) { this.b = buf; this.v = new DataView(buf.buffer, buf.byteOffset, buf.byteLength); this.o = 0; }
+  u8() { return this.v.getUint8(this.o++); }
+  u16() { const x = this.v.getUint16(this.o, true); this.o += 2; return x; }
+  u32() { const x = this.v.getUint32(this.o, true); this.o += 4; return x; }
+  u64() { const x = this.v.getBigUint64(this.o, true); this.o += 8; return x; }
+  s() { const n = this.u16(); const x = bstr(this.b.subarray(this.o, this.o + n)); this.o += n; return x; }
   qid() { return { type: this.u8(), vers: this.u32(), path: this.u64() }; }
   rest() { return this.b.subarray(this.o); }
 }
@@ -46,11 +55,11 @@ const err = (msg) => Object.assign(new Error(msg), { guest: true });
 class Conn {
   constructor(chan, readChan) {
     this.chan = chan;              // kernel chan to the transport (incref'd by mount)
-    this.readChan = readChan;      // (chan, n) -> Promise<Buffer>
+    this.readChan = readChan;      // (chan, n) -> Promise<Uint8Array>
     this.tags = new Map();
     this.nexttag = 1;
     this.nextfid = 1;
-    this.rbuf = Buffer.alloc(0);
+    this.rbuf = new Uint8Array(0);
     this.dead = null;
     this.reader();
   }
@@ -58,11 +67,12 @@ class Conn {
     try {
       for (;;) {
         while (this.rbuf.length < 4) await this.fill();
-        const size = this.rbuf.readUInt32LE(0);
+        const size = new DataView(this.rbuf.buffer, this.rbuf.byteOffset).getUint32(0, true);
         while (this.rbuf.length < size) await this.fill();
         const msg = this.rbuf.subarray(0, size);
         this.rbuf = this.rbuf.subarray(size);
-        const type = msg.readUInt8(4), tag = msg.readUInt16LE(5);
+        const mv = new DataView(msg.buffer, msg.byteOffset);
+        const type = mv.getUint8(4), tag = mv.getUint16(5, true);
         const pend = this.tags.get(tag);
         this.tags.delete(tag);
         if (!pend) continue;                       // stray tag: drop
@@ -79,7 +89,7 @@ class Conn {
   async fill() {
     const chunk = await this.readChan(this.chan, MSIZE);
     if (chunk.length === 0) throw new Error("eof");
-    this.rbuf = Buffer.concat([this.rbuf, chunk]);
+    this.rbuf = concat([this.rbuf, chunk]);
   }
   rpc(type, w) {
     if (this.dead) return Promise.reject(this.dead);
@@ -151,7 +161,7 @@ export function makeMntDev() {
     write: async (node, data, off) => {
       const d = data.subarray(0, Math.min(data.length, MSIZE - 24));
       const r = await node.conn.rpc(Tv.write,
-        new W().u32(node.fid).u64(off < 0 ? 0 : off).u32(d.length).raw(Buffer.from(d)));
+        new W().u32(node.fid).u64(off < 0 ? 0 : off).u32(d.length).raw(new Uint8Array(d)));
       return r.u32();
     },
     stat: async (node) => {

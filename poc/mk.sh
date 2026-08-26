@@ -28,3 +28,17 @@ for c in cmd/*.c; do
     echo "  bin/$b  $(wc -c < "rootfs/bin/$b" | tr -d ' ') bytes" ;;
   esac
 done
+# pack the rootfs for the browser host (fetched by browser/main.mjs)
+node -e '
+const fs = require("fs"), p = require("path");
+const out = {};
+(function walk(d, pre){
+  for (const e of fs.readdirSync(d)) {
+    const f = p.join(d, e), s = fs.statSync(f);
+    if (s.isDirectory()) walk(f, pre + e + "/");
+    else out[pre + e] = fs.readFileSync(f).toString("base64");
+  }
+})("rootfs", "/");
+fs.writeFileSync("build/rootfs.json", JSON.stringify(out));
+'
+echo "  build/rootfs.json  $(wc -c < build/rootfs.json | tr -d " ") bytes"

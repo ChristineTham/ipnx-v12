@@ -44,6 +44,13 @@ Boot to an interactive `rc` on the console (EOF shuts down):
 bash poc/run.sh -i
 ```
 
+Serve the browser port — the same kernel in a page (the server only supplies the
+COOP/COEP headers SharedArrayBuffer needs; `?i` boots interactive):
+
+```bash
+node poc/serve.mjs
+```
+
 Node ≥ 22 (`worker_threads`, SAB, wasm `try_table` exception handling — the legacy EH
 encoding is *rejected* by these engines, so any new wasm emission must use `try_table`).
 `poc/build/` and `poc/rootfs/bin/` are generated and gitignored. Guest binaries carry no
@@ -129,9 +136,15 @@ family rides on the same protocol decision (9P2000.L proves the extension expres
 
 ## The PoC's shape (poc/)
 
-`supervisor/main.mjs` is the kernel (proc table, namespaces as per-proc mount maps with
+One platform-neutral kernel, two hosts: `supervisor/kernel.mjs` runs unmodified on Node
+(`supervisor/main.mjs` + `worker.mjs` shims) and in the browser (`browser/main.mjs` +
+`browser/worker.mjs`, served by `serve.mjs`, whose only job is COOP/COEP). Everything in
+the supervisor speaks `Uint8Array` (`bytes.mjs`), never Buffer — a browser `TextDecoder`
+refuses SAB-backed views, so `bstr` copies them (measured, RESEARCH §5.3).
+
+`supervisor/kernel.mjs` is the kernel (proc table, namespaces as per-proc mount maps with
 longest-prefix walk, refcounted channels and fd tables closed at exit, dispatch,
-rfork/exec/exits/await). `supervisor/worker.mjs` is the guest runner: the mailbox
+rfork/exec/exits/await). `supervisor/guestcore.mjs` is the guest runner: the mailbox
 protocol, and the fork guard — **the only hand-written wasm in the system**, emitted as
 bytes with computed section sizes. `supervisor/devs.mjs` holds the devices (writable
 ramfs, cons wired to host stdio, bidirectional pipes); a device read may **park** (return
@@ -169,8 +182,10 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (2026-08-26)
 
-Documents and PoC written today; forty acceptance tests pass (`bash poc/run.sh`) and
-`bash poc/run.sh -i` boots to an interactive `rc` with working subshells. Milestones on
-`main`: initial commit, the rc milestone, wire 9P at a mount boundary, the asyncify path.
-Next lifts, in value order (plan §The proof of concept): the browser port, union
-directories, exportfs — then the uid model design.
+Documents and PoC written today; forty acceptance tests pass on Node (`bash poc/run.sh`)
+**and in the browser** (`node poc/serve.mjs` → `/browser/`, measured in Chrome 148);
+`-i`/`?i` boot to an interactive `rc` with working subshells. Milestones on `main`:
+initial commit, rc, wire 9P at a mount boundary, the asyncify path, the browser port.
+Next lifts, in value order (plan §The proof of concept): union directories, exportfs —
+then the uid model design. RESEARCH §7 records the Wanix/Apptron precedent shaping the
+GUI direction (windows as elements backed by per-window namespaces).

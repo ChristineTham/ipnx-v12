@@ -496,6 +496,15 @@ linear memory need not be shared for any of this. The mailbox is a plain SAB and
 owns its instance, so guest binaries need neither atomics nor shared-memory flags; sharing
 guest memory with the supervisor is an optimisation, not a requirement.
 
+**Measured in the browser (2026-08-26, Chrome 148).** The PoC's kernel runs unmodified in
+a page — one platform-neutral `kernel.mjs`, thin Node and browser hosts — and the full
+acceptance suite passes there: lazy fork, asyncify fork, wire-9P mounts, rc with
+subshells, all forty. Two divergences Node hides, found by running: a browser
+`TextDecoder` **refuses views over a `SharedArrayBuffer`** ("The provided ArrayBufferView
+value must not be shared") where Node's decodes them — copy shared views before decoding —
+and `new WebAssembly.Module` is size-restricted on the browser main thread, so the kernel
+compiles with `await WebAssembly.compile` everywhere, which costs Node nothing.
+
 ---
 
 ## 6. WASI is a shim, not the system interface
@@ -567,6 +576,28 @@ byte first**:
 | `e` / `E` | ellipse / arc | geometry, or rasterise |
 | `s` / `x` | cached-font text | glyph atlas |
 | `y` / `Y` | replace pixels, uncompressed / compressed | texture upload |
+
+### The browser precedent: Wanix, and Apptron on top of it
+
+The nearest living relative arrived while this was being designed. Wanix is "an
+embeddable runtime that brings a Unix-like environment to the browser", and its own
+description is this project's §2 restated: "Everything is a file. Processes, terminals,
+VMs, browser APIs, and storage are exposed through a unified namespace you compose with
+binds. The same idea as Plan 9, with improvements, in the browser." Its devices are
+`#`-named (`#task`, `#term`, `#ramfs`, `#web` — the last exposing OPFS, DOM, workers and
+caches *through the filesystem*), "each task gets its own namespace", and namespaces
+federate across origins — "import a remote Wanix namespace via WebSocket (ws:// / wss://)
+or iframe + 9P". Apptron, built on it, is the desktop: terminals are custom elements
+("render an xterm.js terminal connected to a Wanix terminal device"), whole environments
+embed as elements, and Alpine Linux runs in v86 when x86 compatibility is wanted.
+
+What it corroborates: per-task namespaces, `#device` naming, binds, and 9P at the
+boundary all *work in a page*, and windows-as-elements-backed-by-namespaces is a
+practical shape for the rio-interface window server — each window an element whose
+`cons`, `mouse` and `draw` are files in that window's namespace. What it does not carry:
+Wanix's wasm tasks are WASI/Go-shaped with no fork story, and Apptron's Unix is an
+emulated x86 Linux — the two places this project's substrate decisions (Plan 9 calls,
+the fork mechanisms of §5.2) do the work instead.
 
 ### The thing plan9port could not do
 
@@ -808,4 +839,7 @@ before code, not after.
 [lld's WebAssembly port](https://lld.llvm.org/WebAssembly.html) ·
 [wasi-sdk releases](https://github.com/WebAssembly/wasi-sdk/releases) ·
 [`version(5)`](https://9p.io/magic/man2html/5/version) ·
-[9front FQA](https://fqa.9front.org/)
+[9front FQA](https://fqa.9front.org/) ·
+[Wanix](https://github.com/tractordev/wanix) ·
+[Apptron](https://github.com/tractordev/apptron) ·
+[Apptron announcement](https://progrium.medium.com/announcing-apptron-cross-platform-native-apis-made-accessible-da661f492541)
