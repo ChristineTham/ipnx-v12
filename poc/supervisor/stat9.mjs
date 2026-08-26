@@ -2,9 +2,10 @@
 // qid.path[8] mode[4] atime[4] mtime[4] length[8] name[s] uid[s] gid[s] muid[s]
 import { sbytes, bstr, concat } from "./bytes.mjs";
 
-export const QTDIR = 0x80, QTFILE = 0x00;
+export const QTDIR = 0x80, QTFILE = 0x00, QTSYMLINK = 0x02;  // qid bit: 9P2000.u's
 export const DMDIR = 0x80000000;
 export const DMSETUID = 0x00080000;   // 9P2000.u's bit position, adopted (docs/uid.md)
+export const DMSYMLINK = 0x02000000;  // 9P2000.u's bit position
 
 export function marshalStat(d) {
   const s = (x) => {

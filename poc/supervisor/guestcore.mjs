@@ -7,7 +7,7 @@
 let port, mb, tx;
 const ST = { IDLE: 0, REQ: 1, DONE: 2 };
 const R_FORKRESUME = -1000, R_EXECSELF = -1001;
-const T_STR = new Set([2, 3, 7, 8, 14, 22, 25, 42, 44]);   // traps whose a0 is a path/string
+const T_STR = new Set([2, 3, 7, 8, 14, 22, 25, 42, 44, 60, 61, 62]);   // traps whose a0 is a path/string
 class ForkResume { constructor(pid) { this.pid = pid; } }
 class ExecReplace {}
 
@@ -78,7 +78,8 @@ function sys(trap, a0, a1, a2, a3, a4) {
       }
       a2 = argc;                            // empty argv strings must survive
     }
-    if (trap === 2) o = cstr(a1, o);        // bind: name then old
+    if (trap === 2 || trap === 60 || trap === 61)
+      o = cstr(a1, o);                      // bind/link/symlink: two strings
     if (trap === 44) tx.set(memU8.subarray(a1, a1 + a2), o);  // wstat: the raw record
     else tx[o] = 0;
   }
@@ -105,6 +106,7 @@ function sys(trap, a0, a1, a2, a3, a4) {
     else if (trap === 42 || trap === 43) memU8.set(tx.subarray(0, ret), a1); // stat/fstat -> edir
     else if (trap === 41 || trap === 47 || trap === 200)
       memU8.set(tx.subarray(0, ret + 1), a0);        // errstr/await/args -> buf (NUL incl.)
+    else if (trap === 62) memU8.set(tx.subarray(0, ret + 1), a1);            // readlink -> buf
   }
   if (trap === 21 && ret === 0) memU8.set(tx.subarray(0, 8), a0);            // pipe -> fd[2]
   return ret;

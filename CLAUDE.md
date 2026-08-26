@@ -22,8 +22,9 @@ with V10 permission enforcement, the uid model running (docs/uid.md), a minimal 
 with subshells, wire 9P at the mount boundary, exportfs serving a guest's namespace
 back out, and the window server: `#w` mints windows, `bind '#w/N' /dev` makes a
 namespace a window, `/dev/draw` is a real per-window file with text (`y i l s` and an
-8×8 font of our own authorship), `win rc` is a shell in a browser window — sixty-eight
-acceptance tests). Everything else is design documents.
+8×8 font of our own authorship), `win rc` is a shell in a browser window, and the
+link/symlink family lands as the V12 additions — seventy-eight acceptance tests).
+Everything else is design documents.
 
 ## Commands
 
@@ -35,7 +36,7 @@ has no wasm backend). `mk.sh`'s `ASYNCIFY` list names the binaries that may bare
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints sixty-eight PASS
+Boot the kernel — init (pid 1) runs the acceptance tests, prints seventy-eight PASS
 lines, exits 0:
 
 ```bash
@@ -142,8 +143,13 @@ evidence, not a fresh opinion.
   credentials in the kernel, names canonical (numbers are the personality's, via
   `/etc/passwd`), transitions through `/proc/<pid>/ctl` under the eve/ruid rule — no new
   syscalls — 9P2000.u's `DMSETUID` bit at exec, V10 enforcement in in-process devices,
-  per-attach identity stamped on wire mounts. Open: the `link`/`symlink`/`lstat`
-  protocol-room choice, and uid.md's D1–D4 measurements in `../ipnx`.
+  per-attach identity stamped on wire mounts. Open: uid.md's D1–D4 measurements in
+  `../ipnx`.
+- **Links landed as the V12 additions**: kernel traps 60–62 (`lstat` is a stat flag),
+  minted wire types 128/130/132 above every dialect's range (strangers `Rerror`,
+  clients degrade), 9P2000.u's `QTSYMLINK`/`DMSYMLINK` bits, and V10's rule — **the
+  kernel resolves symlinks in the walking process's namespace**, since no server knows
+  the client's namespace.
 
 ## The PoC's shape (poc/)
 
@@ -203,6 +209,7 @@ Documents and PoC written today; sixty-five acceptance tests pass on Node
 in Chrome 148); `?i` boots to an interactive `rc` where `win bounce &`, `win scribble &`
 and `win rc &` open live windows (drag by title bar; click to focus; typing lands in the
 focused window's cons). Milestones on `main`: initial commit, rc, wire 9P, asyncify, the
-browser port, unions + exportfs, the uid model, the window server, text in draw. Next:
-the `sam` port (libframe over the existing messages), the native WasmKit host, and the
-link/symlink protocol-room choice.
+browser port, unions + exportfs, the uid model, the window server, text in draw, the
+link/symlink family. Next: the `sam` port (libframe over the existing draw messages —
+note this means bringing plan9port source in, a licensing/convention decision for the
+user), the native WasmKit host, and uid.md's D1–D4 measurements in `../ipnx`.

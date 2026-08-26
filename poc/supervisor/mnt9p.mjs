@@ -10,7 +10,9 @@ import { sbytes, bstr, concat } from "./bytes.mjs";
 const MSIZE = 8216;                // 8192 data + IOHDRSZ(24)
 const NOFID = 0xffffffff;
 const Tv = { version: 100, attach: 104, walk: 110, open: 112, create: 114,
-  read: 116, write: 118, clunk: 120, remove: 122, stat: 124, wstat: 126 };
+  read: 116, write: 118, clunk: 120, remove: 122, stat: 124, wstat: 126,
+  // V12 extension messages, minted in the unused >127 range (docs/syscalls.md)
+  link: 128, symlink: 130, readlink: 132 };
 const Rerror = 107;
 
 // ---- marshal helpers ----
@@ -168,6 +170,17 @@ export function makeMntDev() {
       const r = await node.conn.rpc(Tv.stat, new W().u32(node.fid));
       r.u16();                                       // outer size, per stat(5)'s double count
       return r.rest();                               // the record, self-sized
+    },
+    link: async (parent, name, old) => {
+      if (old.conn !== parent.conn) throw err("cross-device link");
+      await parent.conn.rpc(Tv.link, new W().u32(parent.fid).u32(old.fid).s(name));
+    },
+    symlink: async (parent, name, target) => {
+      await parent.conn.rpc(Tv.symlink, new W().u32(parent.fid).s(name).s(target));
+    },
+    readlink: async (node) => {
+      const r = await node.conn.rpc(Tv.readlink, new W().u32(node.fid));
+      return r.s();
     },
     wstat: async (node, ch, cred, rawRec) => {
       if (!rawRec) throw err("wstat over a mount needs the raw record");

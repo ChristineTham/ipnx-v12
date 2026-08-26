@@ -401,8 +401,17 @@ Evidence for each is in RESEARCH.md at the cited section.
   credentials in the kernel, `/proc/<pid>/ctl` transitions with no new syscalls,
   9P2000.u's `DMSETUID` at exec, V10 enforcement in-process and per-attach identity on
   the wire. The answer to "is V10 compatibility real?" is yes.
-- **Hard links and the `symlink`/`readlink`/`lstat` family** — the protocol-room choice
-  (adopt 9P2000.L's messages or mint), no longer gated by the uid question.
+- ~~Hard links and the symlink family~~ — **decided and running**. The choice was
+  *mint*: `Tlink`/`Tsymlink`/`Treadlink` live at types 128/130/132, a range no 9P
+  dialect uses, so the base version stays plain `9P2000` and a server without the
+  extension answers `Rerror` — the client degrades gracefully (tested against one).
+  Symlink identity rides 9P2000.u's `QTSYMLINK`/`DMSYMLINK` bit positions, like
+  `DMSETUID` before it. Three kernel calls join the interface (traps 60–62; `lstat` is
+  `stat` with a nofollow flag, not a call), and resolution follows **V10's rule: the
+  kernel resolves symlinks in the walking process's own namespace** — no server knows
+  the client's namespace, which is why this cannot be delegated. A symlink created
+  through a mount into an exporter's tree, read back through the mount, resolves to the
+  *client's* `/etc/motd` — the acceptance test that settles it.
 - kencc or clang for the *ported* userspace, given `extern register` and anonymous struct
   members? Fresh code is clang (§9.4 is the measured recipe).
 - Does the `d` message's alpha compositing map cleanly onto canvas and Metal, or does the

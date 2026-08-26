@@ -761,11 +761,14 @@ before code, not after.
   0600 denial, no privilege climb, chown/chmod as pure-libc `wstat`, and a setuid image
   elevating euid while ruid stays.
 
+- **Hard links and the symlink family are decided and running** — minted wire types
+  128/130/132 (above every dialect's range; strangers answer `Rerror` and the client
+  degrades, tested), 9P2000.u's `QTSYMLINK`/`DMSYMLINK` bits, kernel traps 60–62, and
+  V10's resolution rule: symlinks resolve in the walking process's namespace, in the
+  kernel, because no server knows the client's namespace. The plan records the decision.
+
 **Still open:**
 
-- **Hard links and `symlink`/`readlink`/`lstat`** — the protocol-room decision the uid
-  model no longer gates (9P2000.L's `Tlink`/`Tsymlink` prove the extension is
-  expressible; adopt or mint is the remaining choice).
 - **kencc or clang for the ported userspace**, given `extern register` and anonymous struct
   members. Fresh code is clang (§9.4 is the measured recipe); the question is Plan 9's own
   source.

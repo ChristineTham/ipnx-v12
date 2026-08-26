@@ -117,7 +117,7 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `close` | A | `close` | |
 | `wait` | A | `await` | status string parsed |
 | `creat` | A | `create` | falls back to `open(OTRUNC)` when it exists |
-| `link` | C | **design** | needs protocol room; cf. 9P2000.L `Tlink` |
+| `link` | C | kernel: trap 60, wire type 128 | cross-device refused (EXDEV) |
 | `unlink` | A | `remove` | |
 | `lseek` | A | `seek` | |
 | `chdir` | A | `chdir` | |
@@ -147,7 +147,7 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `kill` | C | write `/proc/n/note` | |
 | `select` | C | personality helper | over multiple procs or a mux server |
 | `setpgrp` | B | `rfork(RFNOTEG)` | |
-| `lstat` | C | **design** | meaningless until `symlink` exists |
+| `lstat` | C | `stat` with a nofollow flag | not a new call |
 | `dup` | A | `dup` | |
 | `pipe` | A | `pipe` | |
 | `times` | B | read `/proc/n/status` | |
@@ -162,8 +162,8 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `ioctl` | C | `ctl` files | libc translation per device class |
 | `sysboot` | D | drop | |
 | `setruid` | C | libc: write `/proc/n/ctl` (uid.md D1) | |
-| `symlink` | C | **design** | cf. 9P2000.L `Tsymlink` |
-| `readlink` | C | **design** | |
+| `symlink` | C | kernel: trap 61, wire type 130 | qid carries 9P2000.u's QTSYMLINK |
+| `readlink` | C | kernel: trap 62, wire type 132 | |
 | `exece` | A | `exec` | |
 | `umask` | C | per-proc field, applied at `create` | in the PoC kernel |
 | `chroot` | B | `rfork(RFCNAMEG)` + `bind` | |
@@ -182,5 +182,7 @@ part of the uid-model design task; "drop" means no expression in V12.
 **Landing census over the 68: 28 direct onto live calls (A) · 12 libc/namespace idioms (B)
 · 17 split as — the seven uid calls landed by [uid.md](uid.md), `umask` in the kernel,
 4 libc translations (`ioctl`, `select`, `kill`, `ssig`), `mknod` deliberately not
-restored, and the `link`/`symlink`/`lstat`/`readlink` four awaiting the protocol-room
-choice — · 11 dropped (D).**
+restored, and the `link`/`symlink`/`lstat`/`readlink` four landed as the V12 additions
+(kernel traps 60–62 plus a stat flag; wire types 128/130/132, minted above every
+dialect's range; symlinks resolved by the kernel in the walking process's namespace,
+V10's rule) — · 11 dropped (D).**

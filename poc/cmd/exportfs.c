@@ -125,7 +125,7 @@ main(int argc, char *argv[])
 				if(strcmp(path, "/") != 0)
 					strcpy(path+strlen(path), "/");
 				strcpy(path+strlen(path), name);
-				if(stat(path, edir, sizeof edir) < 0){ rerr(tag); break; }
+				if(lstat(path, edir, sizeof edir) < 0){ rerr(tag); break; }
 			}
 			nf = findfid(newfid, 1);
 			if(nf == nil){ send9err(1, tag, "out of fids", out); break; }
@@ -203,6 +203,53 @@ main(int argc, char *argv[])
 				clunkfid(f);
 			send9msg(1, type+1, tag, out, p);
 			break;
+		case Tlink9: {			/* dfid[4] oldfid[4] name[s] */
+			Fid *of = findfid(get32(b+4), 0);
+			uint ln = get16(b+8);
+
+			f = findfid(get32(b), 0);
+			if(f == nil || of == nil){ send9err(1, tag, "unknown fid", out); break; }
+			memcpy(name, b+10, ln);
+			name[ln] = 0;
+			strcpy(path, f->path);
+			if(strcmp(path, "/") != 0)
+				strcpy(path+strlen(path), "/");
+			strcpy(path+strlen(path), name);
+			if(link9(of->path, path) < 0){ rerr(tag); break; }
+			send9msg(1, type+1, tag, out, p);
+			break;
+		}
+		case Tsymlink9: {		/* dfid[4] name[s] target[s] */
+			uint ln = get16(b+4), tn;
+			char target[256];
+
+			f = findfid(get32(b), 0);
+			if(f == nil){ send9err(1, tag, "unknown fid", out); break; }
+			memcpy(name, b+6, ln);
+			name[ln] = 0;
+			tn = get16(b+6+ln);
+			memcpy(target, b+8+ln, tn);
+			target[tn] = 0;
+			strcpy(path, f->path);
+			if(strcmp(path, "/") != 0)
+				strcpy(path+strlen(path), "/");
+			strcpy(path+strlen(path), name);
+			if(symlink9(target, path) < 0){ rerr(tag); break; }
+			p = putqid(p, 0x02, 0);
+			send9msg(1, type+1, tag, out, p);
+			break;
+		}
+		case Treadlink9: {		/* fid[4] */
+			char target[256];
+
+			f = findfid(get32(b), 0);
+			if(f == nil){ send9err(1, tag, "unknown fid", out); break; }
+			n = readlink9(f->path, target, sizeof target);
+			if(n < 0){ rerr(tag); break; }
+			p = putstr(p, target);
+			send9msg(1, type+1, tag, out, p);
+			break;
+		}
 		case Tstat:
 			f = findfid(get32(b), 0);
 			if(f == nil){ send9err(1, tag, "unknown fid", out); break; }

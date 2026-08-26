@@ -21,8 +21,8 @@ hosts it in a page — the console is a window in the DOM, and `serve.mjs` exist
 set the COOP/COEP headers SharedArrayBuffer requires. The same forty tests pass in both
 (measured in Chrome 148).
 
-The test boot prints sixty-eight `PASS` lines — thirty-two from init (kernel, mount,
-exportfs, uid, and the harnesses), twelve from dtest (the window server and text), four from
+The test boot prints seventy-eight `PASS` lines — forty-two from init (kernel, mount,
+exportfs, uid, links, and the harnesses), twelve from dtest (the window server and text), four from
 forktest, twenty from `/rc/tests.rc` — and exits 0, identically on Node and in the
 browser.
 
@@ -65,6 +65,13 @@ browser.
   in the browser, windows are draggable DOM elements (canvas + text layer), `bounce`
   animates, `scribble` inks where the pointer drags, and typing lands in the focused
   window's cons.
+- **Hard links and symlinks, V10's way.** `link`/`symlink`/`readlink` are the V12 kernel
+  additions (traps 60–62; `lstat` is a stat flag); on the wire they are minted types
+  128/130/132, and a server without them answers `Rerror` — degradation, not a wedge.
+  The kernel resolves symlinks **in the walking process's namespace** (V10's rule): a
+  symlink created through a mount into an exporter's tree reads back through the mount as
+  the *client's* `/etc/motd`, not the exporter's. Hard links are two directory entries,
+  one node; writes through either name land in the one file.
 - **The uid model runs — the thing APE called impossible** ([docs/uid.md](../docs/uid.md)).
   Credentials are mutable per-process kernel state: `/dev/user` names the caller,
   `/proc/self/ctl` accepts `user <name>` under the transition rule (the host owner may
@@ -115,7 +122,7 @@ browser.
 | `cmd/hellofs.c` | a 9P2000 file server in a guest process, serving on fd 0 |
 | `cmd/exportfs.c` | serves this process's namespace over 9P — binds and all |
 | `cmd/forktest.c` | the bare dual-return fork, exercised |
-| `cmd/` | `init` (pid 1 + kernel tests), `cat`, `echo`, `ls`, `wc`, `cp`, `mkdir`, `rm`, `bind`, `id` |
+| `cmd/` | `init` (pid 1 + kernel tests), `cat`, `echo`, `ls`, `wc`, `cp`, `mkdir`, `rm`, `bind`, `id`, `ln` |
 | `cmd/win.c`, `cmd/dtest.c`, `cmd/bounce.c`, `cmd/scribble.c` | rio's spawn; the window tests; the demos |
 | `rootfs/` | the boot filesystem; `rc/tests.rc` is the shell test suite; `bin/` is generated |
 

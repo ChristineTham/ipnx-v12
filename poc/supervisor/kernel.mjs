@@ -21,7 +21,9 @@ const EVE = "glenda";                 // the host owner; the kernel knows no "ro
 // ---- traps (Plan 9 numbering) ----
 const T = { BIND: 2, CHDIR: 3, CLOSE: 4, DUP: 5, EXEC: 7, EXITS: 8, OPEN: 14,
   SLEEP: 17, RFORK: 19, PIPE: 21, CREATE: 22, REMOVE: 25, SEEK: 39, ERRSTR: 41,
-  STAT: 42, FSTAT: 43, WSTAT: 44, MOUNT: 46, AWAIT: 47, PREAD: 50, PWRITE: 51, ARGS: 200 };
+  STAT: 42, FSTAT: 43, WSTAT: 44, MOUNT: 46, AWAIT: 47, PREAD: 50, PWRITE: 51,
+  LINK: 60, SYMLINK: 61, READLINK: 62,   // the V12 additions (docs/syscalls.md)
+  ARGS: 200 };
 const RF = { NAMEG: 1, FDG: 4, PROC: 16, MEM: 32 };
 const OTRUNC = 16, DMDIR = 0x80000000;
 // mailbox: [0]=state(0 idle,1 req,2 done) [1]=trap [2..7]=args [8]=ret [9]=aux
@@ -166,8 +168,25 @@ function attach(spec, proc) {  // '#c' etc.
   if (!dev) throw err(`unknown device #${spec[1]}`);
   return { dev, node: dev.attach(spec, proc) };
 }
-async function walk(proc, path) {
-  path = canon(path, proc.cwd);
+// Symlinks resolve HERE, in the walking process's namespace — V10's rule,
+// and the reason the kernel interprets them: no server knows the client's
+// namespace. Absolute targets restart from the client's root; relative ones
+// from the link's own directory.
+async function walk(proc, path, nofollowLast = false) {
+  let full = canon(path, proc.cwd);
+  for (let depth = 0; ; depth++) {
+    if (depth > 8) throw err("too many levels of symlinks");
+    const r = await walkOnce(proc, full, nofollowLast);
+    if (r.redirect === undefined) return r;
+    full = r.redirect;
+  }
+}
+async function symtarget(dev, node) {
+  if (node.symlink !== undefined) return node.symlink;
+  if (node.qid && (node.qid.type & 0x02) && dev.readlink) return await dev.readlink(node);
+  return null;
+}
+async function walkOnce(proc, path, nofollowLast) {
   if (path.startsWith("#")) {
     const slash = path.indexOf("/");
     let { dev, node } = attach(slash < 0 ? path : path.slice(0, slash), proc);
@@ -189,12 +208,23 @@ async function walk(proc, path) {
   } else {
     dev = devs.M; node = devs.M.attach();
   }
+  const fullComps = path.split("/").filter(Boolean);
   const rest = path.slice(best.length).split("/").filter(Boolean);
-  for (const name of rest) {
-    let next = await dev.walk(node, name, proc);
+  for (let i = 0; i < rest.length; i++) {
+    let next = await dev.walk(node, rest[i], proc);
     if (next && next.union) { dev = next.union.c.dev; next = next.node; }  // left a union
     if (!next) throw err(`'${path}' does not exist`);
     node = next;
+    if (i === rest.length - 1 && nofollowLast) break;
+    const target = await symtarget(dev, node);
+    if (target !== null) {
+      const here = fullComps.length - rest.length + i;      // this component's index
+      const base = target.startsWith("/")
+        ? target
+        : "/" + [...fullComps.slice(0, here), target].join("/");
+      const rem = rest.slice(i + 1).join("/");
+      return { redirect: canon(rem ? base + "/" + rem : base, proc.cwd) };
+    }
   }
   return { dev, node };
 }
@@ -421,8 +451,35 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     c.offset = a3 === 0 ? off : a3 === 1 ? c.offset + off : c.dev.len(c.node) + off;
     return c.offset;
   }
+  case T.LINK: {                                   // old, new: two names, one file
+    const old = txstr(host), nu = txstr(host, old.length + 1);
+    const o = await walk(self, old, true);         // link the name given, not its target
+    const { parent, base } = await walkParent(self, nu);
+    if (parent.dev !== o.dev) throw err("cross-device link");
+    if (!parent.dev.link) throw err("link not supported on this device");
+    await parent.dev.link(parent.node, base, o.node, self.cred);
+    o.dev.discard?.(o.node);
+    parent.dev.discard?.(parent.node);
+    return 0;
+  }
+  case T.SYMLINK: {                                // target, new
+    const target = txstr(host), nu = txstr(host, target.length + 1);
+    const { parent, base } = await walkParent(self, nu);
+    if (!parent.dev.symlink) throw err("symlink not supported on this device");
+    await parent.dev.symlink(parent.node, base, target, self.cred);
+    parent.dev.discard?.(parent.node);
+    return 0;
+  }
+  case T.READLINK: {
+    const c = await walk(self, txstr(host), true);
+    if (!c.dev.readlink) throw err("readlink not supported on this device");
+    const t = sbytes(await c.dev.readlink(c.node) + "\0");
+    c.dev.discard?.(c.node);
+    host.tx.set(t);
+    return t.length - 1;
+  }
   case T.STAT: {
-    const c = await walk(self, txstr(host));
+    const c = await walk(self, txstr(host), a3 === 1);   // a3: lstat's nofollow
     const rec = await c.dev.stat(c.node);
     c.dev.discard?.(c.node);
     if (rec.length > a2) throw err("stat buffer too small");

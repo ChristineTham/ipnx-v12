@@ -23,7 +23,8 @@ void __forkshim(int fn, int arg){
 
 enum { BIND=2, CHDIR=3, CLOSE=4, DUP=5, EXEC=7, EXITS=8, OPEN=14, SLEEP=17,
        RFORK=19, PIPE=21, CREATE=22, REMOVE=25, SEEK=39, ERRSTR=41,
-       STAT=42, FSTAT=43, WSTAT=44, MOUNT=46, AWAIT=47, PREAD=50, PWRITE=51 };
+       STAT=42, FSTAT=43, WSTAT=44, MOUNT=46, AWAIT=47, PREAD=50, PWRITE=51,
+       LINK=60, SYMLINK=61, READLINK=62 };
 
 int open(char *p, int m)          { return _sys(OPEN,(int)p,m,0,0,0); }
 int close(int fd)                 { return _sys(CLOSE,fd,0,0,0,0); }
@@ -42,6 +43,10 @@ int exec(char *p, char *argv[])   { return _sys(EXEC,(int)p,(int)argv,0,0,0); }
 void exits(char *msg)             { _sys(EXITS,(int)msg,0,0,0,0); for(;;); }
 int await(char *s, int n)         { return _sys(AWAIT,(int)s,n,0,0,0); }
 int stat(char *p, uchar *e, int n){ return _sys(STAT,(int)p,(int)e,n,0,0); }
+int lstat(char *p, uchar *e, int n){ return _sys(STAT,(int)p,(int)e,n,1,0); }
+int link9(char *old, char *new){ return _sys(LINK,(int)old,(int)new,0,0,0); }
+int symlink9(char *t, char *new){ return _sys(SYMLINK,(int)t,(int)new,0,0,0); }
+int readlink9(char *p, char *b, int n){ return _sys(READLINK,(int)p,(int)b,n,0,0); }
 int fstat(int fd, uchar *e, int n){ return _sys(FSTAT,fd,(int)e,n,0,0); }
 int sleep(long ms)                { return _sys(SLEEP,ms,0,0,0,0); }
 int errstr(char *b, int n)        { return _sys(ERRSTR,(int)b,n,0,0,0); }

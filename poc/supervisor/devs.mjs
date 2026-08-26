@@ -5,7 +5,7 @@
 // A device read may PARK: return undefined and complete later via ctx.done(buf)
 // — that is how pipe reads and console reads block their caller without
 // blocking the kernel. Platform-neutral: no Node APIs, no Buffer.
-import { marshalStat, QTDIR, QTFILE, DMDIR } from "./stat9.mjs";
+import { marshalStat, QTDIR, QTFILE, QTSYMLINK, DMDIR, DMSYMLINK } from "./stat9.mjs";
 import { concat } from "./bytes.mjs";
 
 let qgen = 1;
@@ -29,8 +29,10 @@ export function makeRamfs(seed, eve = "glenda") {
   if (!root.kids.has("tmp"))                      // a writable corner, always
     root.kids.set("tmp", { name: "tmp", qpath: qgen++, dir: true, kids: new Map(), uid: eve, mode: 0o777 });
   const statNode = (k) => marshalStat({
-    name: k.name, qtype: k.dir ? QTDIR : QTFILE, qpath: k.qpath, uid: k.uid,
-    mode: ((k.dir ? DMDIR : 0) | k.mode) >>> 0, length: k.dir ? 0 : k.data.length,
+    name: k.name, uid: k.uid, qpath: k.qpath,
+    qtype: k.dir ? QTDIR : k.symlink !== undefined ? QTSYMLINK : QTFILE,
+    mode: ((k.dir ? DMDIR : k.symlink !== undefined ? DMSYMLINK : 0) | k.mode) >>> 0,
+    length: k.dir ? 0 : k.symlink !== undefined ? k.symlink.length : k.data.length,
   });
   const access = (node, cred, want) => {          // want: 4 read, 2 write
     if (!cred || cred.euid === eve) return;
@@ -102,6 +104,24 @@ export function makeRamfs(seed, eve = "glenda") {
       access(parent, cred, 2);
       if (node.dir && node.kids.size) throw derr("directory not empty");
       parent.kids.delete(name);
+    },
+    link: (parent, name, node, cred) => {        // two names, one node — a hard link
+      if (!parent.dir) throw derr("link into a non-directory");
+      access(parent, cred, 2);
+      if (parent.kids.has(name)) throw derr(`'${name}' already exists`);
+      if (node.dir) throw derr("cannot hard-link a directory");
+      parent.kids.set(name, node);
+    },
+    symlink: (parent, name, target, cred) => {
+      if (!parent.dir) throw derr("symlink into a non-directory");
+      access(parent, cred, 2);
+      if (parent.kids.has(name)) throw derr(`'${name}' already exists`);
+      parent.kids.set(name, { name, qpath: qgen++, dir: false, symlink: target,
+        uid: cred?.euid ?? eve, mode: 0o777 });
+    },
+    readlink: (node) => {
+      if (node.symlink === undefined) throw derr("not a symlink");
+      return node.symlink;
     },
     wstat: (node, ch, cred) => {                   // chmod: owner or eve; chown: eve (D3)
       if (ch.mode !== undefined) {
