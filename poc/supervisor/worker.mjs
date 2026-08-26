@@ -7,7 +7,7 @@ import { workerData, parentPort } from "node:worker_threads";
 const { mb, tx } = workerData;
 const ST = { IDLE: 0, REQ: 1, DONE: 2 };
 const R_FORKRESUME = -1000, R_EXECSELF = -1001;
-const T_STR = new Set([2, 3, 7, 8, 14, 42]);   // traps whose a0 is a path/string
+const T_STR = new Set([2, 3, 7, 8, 14, 22, 25, 42]);   // traps whose a0 is a path/string
 class ForkResume { constructor(pid) { this.pid = pid; } }
 class ExecReplace {}
 
@@ -80,6 +80,7 @@ function sys(trap, a0, a1, a2, a3, a4) {
     else if (trap === 41 || trap === 47 || trap === 200)
       memU8.set(tx.subarray(0, ret + 1), a0);        // errstr/await/args -> buf (NUL incl.)
   }
+  if (trap === 21 && ret === 0) memU8.set(tx.subarray(0, 8), a0);            // pipe -> fd[2]
   return ret;
 }
 function cstr(ptr, o) {

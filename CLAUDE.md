@@ -14,8 +14,9 @@ semantics, and it was a choice rather than an oversight — "Compatibility was n
 requirement for the system" — which is what makes it undoable.* With V10 rather than POSIX,
 because every limitation APE confesses is a POSIX.1-1990 feature V10 does not have.
 
-The architecture runs: `poc/` is a working slice (hosted kernel in Node, freestanding-C
-wasm guests, per-process namespaces, the lazy-fork resume, eight acceptance tests).
+The architecture runs and boots to a shell: `poc/` is a working slice (hosted kernel in
+Node, freestanding-C wasm guests, per-process namespaces, the lazy-fork resume, pipes, a
+writable ramfs, a minimal `rc` with nine commands, twenty-three acceptance tests).
 Everything else is design documents.
 
 ## Commands
@@ -27,10 +28,17 @@ Apple's clang has no wasm backend):
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints eight PASS lines, exits 0:
+Boot the kernel — init (pid 1) runs the acceptance tests, prints twenty-three PASS lines
+(ten kernel, thirteen from `/rc/tests.rc`), exits 0:
 
 ```bash
 bash poc/run.sh
+```
+
+Boot to an interactive `rc` on the console (EOF shuts down):
+
+```bash
+bash poc/run.sh -i
 ```
 
 Node ≥ 22 (`worker_threads`, SAB, wasm `try_table` exception handling — the legacy EH
@@ -116,14 +124,21 @@ family rides on the same protocol decision (9P2000.L proves the extension expres
 ## The PoC's shape (poc/)
 
 `supervisor/main.mjs` is the kernel (proc table, namespaces as per-proc mount maps with
-longest-prefix walk, dispatch, rfork/exec/exits/await). `supervisor/worker.mjs` is the
-guest runner: the mailbox protocol, and the fork guard — **the only hand-written wasm in
-the system**, emitted as bytes with computed section sizes. `libc/` is Plan 9-shaped
-freestanding C (Plan 9's own trap numbers; `read`/`write` are `pread`/`pwrite` at offset
-−1). Syscalls carrying strings/buffers copy through a per-proc transfer SAB. A lazy-fork
-child *borrows the parent's Worker*: the supervisor routes syscalls arriving on the
-parent's mailbox to the child's proc record (`borrower`) — that is how a child's `bind`
-lands in the child's namespace while sharing the parent's stack.
+longest-prefix walk, refcounted channels and fd tables closed at exit, dispatch,
+rfork/exec/exits/await). `supervisor/worker.mjs` is the guest runner: the mailbox
+protocol, and the fork guard — **the only hand-written wasm in the system**, emitted as
+bytes with computed section sizes. `supervisor/devs.mjs` holds the devices (writable
+ramfs, cons wired to host stdio, bidirectional pipes); a device read may **park** (return
+undefined, complete later via `ctx.done`) — that is how pipe and console reads block their
+caller without blocking the kernel. `libc/` is Plan 9-shaped freestanding C (Plan 9's own
+trap numbers; `read`/`write` are `pread`/`pwrite` at offset −1). Syscalls carrying
+strings/buffers copy through a per-proc transfer SAB. A lazy-fork child *borrows the
+parent's Worker*: the supervisor routes syscalls arriving on the parent's mailbox to the
+child's proc record (`borrower`) — that is how a child's `bind` lands in the child's
+namespace while sharing the parent's stack. `cmd/rc.c` is the shell: every fork is
+`procrfork(RFFDG, fn, arg)` (pipeline stages, `` `{...} `` captures — the latter exec
+`/bin/rc -c` so nothing ever forks without exec'ing), and subshells/functions are refused
+with an error naming the asyncify path.
 
 ## Conventions
 
@@ -143,7 +158,8 @@ lands in the child's namespace while sharing the parent's stack.
 
 ## Current state (2026-08-26)
 
-Documents and PoC written today; eight acceptance tests pass (`bash poc/run.sh`). `main`
-has **no commits yet**. Next lifts, in value order (plan §The proof of concept): wire 9P at
-a mount boundary, pipes and a shell, the asyncify path for bare `rfork`, the browser port,
-ramfs writes — then the uid model design.
+Documents and PoC written today; twenty-three acceptance tests pass (`bash poc/run.sh`)
+and `bash poc/run.sh -i` boots to an interactive `rc`. Initial commit `aea6aba` is pushed;
+the rc milestone follows it. Next lifts, in value order (plan §The proof of concept): wire
+9P at a mount boundary, the asyncify path for bare `rfork` and rc's subshells, the browser
+port, union directories — then the uid model design.

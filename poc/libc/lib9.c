@@ -22,8 +22,8 @@ void __forkshim(int fn, int arg){
 }
 
 enum { BIND=2, CHDIR=3, CLOSE=4, DUP=5, EXEC=7, EXITS=8, OPEN=14, SLEEP=17,
-       RFORK=19, SEEK=39, ERRSTR=41, STAT=42, FSTAT=43, AWAIT=47,
-       PREAD=50, PWRITE=51 };
+       RFORK=19, PIPE=21, CREATE=22, REMOVE=25, SEEK=39, ERRSTR=41,
+       STAT=42, FSTAT=43, AWAIT=47, PREAD=50, PWRITE=51 };
 
 int open(char *p, int m)          { return _sys(OPEN,(int)p,m,0,0,0); }
 int close(int fd)                 { return _sys(CLOSE,fd,0,0,0,0); }
@@ -45,6 +45,9 @@ int stat(char *p, uchar *e, int n){ return _sys(STAT,(int)p,(int)e,n,0,0); }
 int fstat(int fd, uchar *e, int n){ return _sys(FSTAT,fd,(int)e,n,0,0); }
 int sleep(long ms)                { return _sys(SLEEP,ms,0,0,0,0); }
 int errstr(char *b, int n)        { return _sys(ERRSTR,(int)b,n,0,0,0); }
+int pipe(int fd[2])               { return _sys(PIPE,(int)fd,0,0,0,0); }
+int create(char *p, int m, ulong perm){ return _sys(CREATE,(int)p,m,(int)perm,0,0); }
+int remove(char *p)               { return _sys(REMOVE,(int)p,0,0,0,0); }
 
 int rfork(int flags){
 	return _sys(RFORK, flags, 0, 0, 0, 0);   /* bare RFPROC: the kernel says why not */
@@ -72,6 +75,37 @@ void *memset(void *d, int c, ulong n){
 	uchar *p=d; while(n--) *p++=c; return d; }
 int atoi(char *s){ int v=0,neg=0; if(*s=='-'){neg=1;s++;}
 	while(*s>='0'&&*s<='9') v=v*10+*s++-'0'; return neg?-v:v; }
+int strncmp(char *a, char *b, ulong n){
+	for(; n && *a && *a==*b; a++, b++, n--)
+		;
+	return n ? (uchar)*a - (uchar)*b : 0; }
+char *strcpy(char *d, char *s){ char *r=d; while((*d++=*s++))
+		; return r; }
+
+/* bump allocator; nothing is ever freed (v0 — documented) */
+extern char __heap_base;
+void *malloc(ulong n){
+	static char *hp;
+	char *r;
+
+	if(hp == nil)
+		hp = &__heap_base;
+	n = (n+7)&~7UL;
+	while(hp+n > (char*)(__builtin_wasm_memory_size(0)*65536UL))
+		if(__builtin_wasm_memory_grow(0, 16) == (ulong)-1)
+			exits("out of memory");
+	r = hp;
+	hp += n;
+	return r;
+}
+char *strdup(char *s){ char *r=malloc(strlen(s)+1); strcpy(r,s); return r; }
+/* clang -O2 rewrites malloc+memset pairs into calloc; satisfy it (byte loop
+ * rather than memset so the pattern cannot reappear inside) */
+void *calloc(ulong n, ulong m){
+	char *p = malloc(n*m); ulong i;
+	for(i = 0; i < n*m; i++) p[i] = 0;
+	return p;
+}
 
 /* fprint: %s %d %x %c %r and %% — all the tests need */
 static char *fmtnum(char *p, unsigned v, int base, int neg){
@@ -119,6 +153,7 @@ int print(char *fmt, ...){
 static uvlong gle(uchar *p, int n){
 	uvlong v=0; int i; for(i=n-1;i>=0;i--) v=(v<<8)|p[i]; return v; }
 uvlong statlen(uchar *e){ return gle(e+2+2+4+13+4+4+4, 8); }
+ulong statmode(uchar *e){ return (ulong)gle(e+2+2+4+13, 4); }
 char *statname(uchar *e, char *buf, int n){
 	uchar *p=e+2+2+4+13+4+4+4+8; int m=(int)gle(p,2);
 	if(m>n-1) m=n-1;

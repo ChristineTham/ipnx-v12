@@ -64,11 +64,11 @@ slots are dropped entirely.
 | 18 | `_stat` | drop | — | — | |
 | 19 | `rfork` | proc | — | ✓ | v0: the lazy path, `RFPROC` implies `RFMEM` |
 | 20 | `_write` | drop | — | — | |
-| 21 | `pipe` | 9P | — | — | the pipe device `#\|` |
-| 22 | `create` | 9P | `Tcreate` | — | |
+| 21 | `pipe` | 9P | — | ✓ | the pipe device `#\|`; bidirectional |
+| 22 | `create` | 9P | `Tcreate` | ✓ | |
 | 23 | `fd2path` | fd | — | — | |
 | 24 | `brk_` | mem | — | (guest) | v0 deviation: heap is guest-local `memory.grow`, see plan |
-| 25 | `remove` | 9P | `Tremove` | — | |
+| 25 | `remove` | 9P | `Tremove` | ✓ | |
 | 26 | `_wstat` | drop | — | — | |
 | 27 | `_fwstat` | drop | — | — | |
 | 28 | `notify` | proc | — | — | notes; the personality's signal substrate |

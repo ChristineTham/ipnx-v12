@@ -88,9 +88,10 @@ namespace. That is what Plan 9 does and what every Plan 9 port has had to give u
 
 ## Status
 
-**The architecture runs.** [poc/](poc/) is a working slice — a hosted kernel in Node
-executing freestanding-C wasm guests in per-process namespaces, with the lazy fork's
-parent resume and Plan 9's trap numbers — eight acceptance tests passing. The documents:
+**The architecture runs, and boots to a shell.** [poc/](poc/) is a working slice — a
+hosted kernel in Node executing freestanding-C wasm guests in per-process namespaces,
+with the lazy fork's parent resume, pipes, a writable ramfs, and a minimal `rc` with nine
+commands — twenty-three acceptance tests passing. The documents:
 
 - **[RESEARCH.md](RESEARCH.md)** — the living evidence base: Plan 9's complete system call
   list, the `rfork` flags verbatim, APE's confessed limits, the `/dev/draw` message set,

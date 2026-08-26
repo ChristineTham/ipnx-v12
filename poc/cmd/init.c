@@ -36,6 +36,28 @@ child2(void *v)
 	exits("exec");
 }
 
+static void
+rcchild(void *v)
+{
+	char *av[] = { "rc", "/rc/tests.rc", nil };
+
+	USED(v);
+	exec("/bin/rc", av);
+	fprint(2, "init: exec /bin/rc: %r\n");
+	exits("exec");
+}
+
+static void
+rcinteractive(void)
+{
+	char *av[] = { "rc", nil };
+
+	print("ipnx-v12: interactive rc (EOF to shut down)\n");
+	exec("/bin/rc", av);
+	fprint(2, "init: exec /bin/rc: %r\n");
+	exits("exec");
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -44,14 +66,16 @@ main(int argc, char *argv[])
 	int fd, n, pid;
 	volatile int canary;
 
-	USED(argc); USED(argv);
-
 	/* The namespace starts with only the root. Assemble /dev ourselves,
 	 * the way a Plan 9 init does: bind the console device into place. */
 	bind("#c", "/dev", MREPL);
-	fd = open("/dev/cons", OWRITE);
+	fd = open("/dev/cons", ORDWR);
+	dup(fd, 0);
 	dup(fd, 1);
 	dup(fd, 2);
+
+	if(argc > 1 && strcmp(argv[1], "-i") == 0)
+		rcinteractive();	/* replaces this image; rc's exit shuts down */
 
 	print("ipnx-v12 poc: hosted kernel up, init is pid 1\n");
 	ok(fd >= 0, "bind #c /dev and open /dev/cons");
@@ -87,6 +111,17 @@ main(int argc, char *argv[])
 	close(fd);
 	ok(strstr(buf, "hello") != nil,
 	   "parent namespace untouched by child's bind over /etc");
+
+	/* The shell: run the rc test script in a namespace copy; its binds
+	 * must stay its own, and its exit status folds into ours. */
+	pid = procrfork(RFFDG|RFNAMEG, rcchild, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && strstr(buf, "''") != nil, "rc ran the test script and exited clean");
+	fd = open("/etc/motd", OREAD);
+	n = read(fd, buf, sizeof buf - 1);
+	buf[n > 0 ? n : 0] = 0;
+	close(fd);
+	ok(strstr(buf, "hello") != nil, "init's namespace survived rc's binds");
 
 	USED(pid);
 	if(nfail == 0)

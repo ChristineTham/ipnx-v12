@@ -1,20 +1,23 @@
 // ipnx-v12 poc supervisor: the hosted kernel.
 // One Worker per process; syscalls arrive on a per-process SAB mailbox
-// (RESEARCH.md §5.3); the kernel thread never blocks.
+// (RESEARCH.md §5.3); the kernel thread never blocks — reads that must wait
+// (pipes, the console) park in the device and complete later.
 import { Worker } from "node:worker_threads";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
-import { makeRamfs, makeCons } from "./devs.mjs";
+import { makeRamfs, makeCons, makePipeDev } from "./devs.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const rootdir = process.argv[2] ?? join(here, "..", "rootfs");
+const interactive = process.argv.includes("-i");
 
 // ---- traps (Plan 9 numbering) ----
 const T = { BIND: 2, CHDIR: 3, CLOSE: 4, DUP: 5, EXEC: 7, EXITS: 8, OPEN: 14,
-  SLEEP: 17, RFORK: 19, SEEK: 39, ERRSTR: 41, STAT: 42, FSTAT: 43, AWAIT: 47,
-  PREAD: 50, PWRITE: 51, ARGS: 200 };
+  SLEEP: 17, RFORK: 19, PIPE: 21, CREATE: 22, REMOVE: 25, SEEK: 39, ERRSTR: 41,
+  STAT: 42, FSTAT: 43, AWAIT: 47, PREAD: 50, PWRITE: 51, ARGS: 200 };
 const RF = { NAMEG: 1, FDG: 4, PROC: 16, MEM: 32 };
+const OTRUNC = 16, DMDIR = 0x80000000;
 // mailbox: [0]=state(0 idle,1 req,2 done) [1]=trap [2..7]=args [8]=ret [9]=aux
 const ST = { IDLE: 0, REQ: 1, DONE: 2 };
 // special replies the worker interprets (out of band of ordinary returns)
@@ -22,9 +25,15 @@ const R_FORKRESUME = -1000;  // restore stack, throw; guard catches, returns aux
 const R_EXECSELF   = -1001;  // throw to worker top level; new image follows
 const TXSIZE = 65536;
 
-const devs = { M: makeRamfs(rootdir), c: makeCons() };
+const cons = makeCons();
+const devs = { M: makeRamfs(rootdir), c: cons, "|": makePipeDev() };
 const procs = new Map();
 let nextpid = 1;
+
+if (interactive) {
+  process.stdin.on("data", (c) => cons.feed(c));
+  process.stdin.on("end", () => cons.end());
+}
 
 // ---- namespace ----
 const canon = (path, cwd) => {
@@ -46,7 +55,6 @@ function attach(spec) {  // '#c' etc.
 function walk(proc, path) {
   path = canon(path, proc.cwd);
   if (path.startsWith("#")) return attach(path);
-  // longest-prefix match in the per-process mount table
   let best = "", start = { dev: devs.M, node: devs.M.attach() };
   for (const [pfx, chan] of proc.ns)
     if ((path === pfx || path.startsWith(pfx === "/" ? "/" : pfx + "/")) && pfx.length > best.length)
@@ -59,17 +67,48 @@ function walk(proc, path) {
   }
   return { dev, node };
 }
+function walkParent(proc, path) {                  // for create/remove
+  path = canon(path, proc.cwd);
+  const i = path.lastIndexOf("/");
+  const base = path.slice(i + 1);
+  if (!base || path.startsWith("#")) throw err(`bad path '${path}'`);
+  return { parent: walk(proc, path.slice(0, i) || "/"), base };
+}
 const err = (msg) => Object.assign(new Error(msg), { guest: true });
 
-// ---- processes ----
-function newProc(ppid, { ns, fds, cwd }) {
+// ---- processes, channels, descriptor tables ----
+function newProc(ppid, { ns, fdt, cwd }) {
   const pid = nextpid++;
-  const p = { pid, ppid, ns, fds, cwd, errstr: "", zombies: [], awaitPending: false,
+  const p = { pid, ppid, ns, fdt, cwd, errstr: "", zombies: [], awaitPending: false,
     borrower: null, worker: null, mb: null, tx: null, argv: [] };
   procs.set(pid, p);
   return p;
 }
-const newChan = (c, mode) => ({ dev: c.dev, node: c.node, mode, offset: 0 });
+const newChan = (c, mode) => ({ dev: c.dev, node: c.node, mode, offset: 0, refs: 1 });
+const incref = (c) => { c.refs++; return c; };
+const decref = (c) => { if (--c.refs === 0) c.dev.clunk?.(c.node); };
+const newFdt = () => ({ refs: 1, fds: [] });
+function fdtCopy(fdt) {
+  const t = { refs: 1, fds: [...fdt.fds] };
+  for (const c of t.fds) if (c) incref(c);
+  return t;
+}
+function fdtClose(fdt) {
+  if (--fdt.refs === 0) { for (const c of fdt.fds) if (c) decref(c); fdt.fds = []; }
+}
+function fdAlloc(self, chan, at = -1) {
+  const fds = self.fdt.fds;
+  if (at >= 0) { if (fds[at]) decref(fds[at]); fds[at] = chan; return at; }
+  const fd = fds.findIndex((f) => !f);
+  if (fd < 0) { fds.push(chan); return fds.length - 1; }
+  fds[fd] = chan;
+  return fd;
+}
+function fdchk(self, fd) {
+  const c = self.fdt.fds[fd];
+  if (!c) throw err(`fd ${fd} not open`);
+  return c;
+}
 
 function spawn(proc, modBytes, argv) {
   proc.mb = new Int32Array(new SharedArrayBuffer(64));
@@ -79,7 +118,7 @@ function spawn(proc, modBytes, argv) {
     workerData: { mb: proc.mb, tx: proc.tx, modBytes },
   });
   proc.worker = w;
-  w.on("message", (m) => { if (m.t === "sc") onSyscall(procs.get(proc.pid) ? proc : null); });
+  w.on("message", (m) => { if (m.t === "sc") onSyscall(proc); });
   w.on("error", (e) => { console.error(`worker pid ${proc.pid}:`, e); shutdown(1); });
   return w;
 }
@@ -96,7 +135,7 @@ function reply(proc, ret, aux = 0) {
 
 // ---- the dispatcher ----
 function onSyscall(proc) {
-  if (!proc) return;
+  if (!procs.has(proc.pid) && !proc.borrower) return;
   // While a lazy-fork child borrows the parent's Worker, syscalls arriving on
   // the parent's mailbox belong to the child — its own fds, its own namespace.
   const self = proc.borrower ?? proc;
@@ -131,26 +170,44 @@ function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
   }
   case T.OPEN: {
     const c = walk(self, txstr(host));
-    const fd = self.fds.findIndex((f) => !f);
-    const chan = newChan(c, a1);
-    if (fd < 0) { self.fds.push(chan); return self.fds.length - 1; }
-    self.fds[fd] = chan;
-    return fd;
+    if ((a1 & OTRUNC) && c.dev.truncate) c.dev.truncate(c.node);
+    return fdAlloc(self, newChan(c, a1));
   }
-  case T.CLOSE: { fdchk(self, a0); self.fds[a0] = null; return 0; }
+  case T.CREATE: {
+    const { parent, base } = walkParent(self, txstr(host));
+    if (!parent.dev.create) throw err("create not supported on this device");
+    const node = parent.dev.create(parent.node, base, a2 >>> 0, !!((a2 >>> 0) & DMDIR));
+    return fdAlloc(self, newChan({ dev: parent.dev, node }, a1));
+  }
+  case T.REMOVE: {
+    const { parent, base } = walkParent(self, txstr(host));
+    if (!parent.dev.remove) throw err("remove not supported on this device");
+    parent.dev.remove(parent.node, base);
+    return 0;
+  }
+  case T.PIPE: {
+    const pdev = devs["|"];
+    const p = pdev.newPipe();
+    const fd0 = fdAlloc(self, { dev: pdev, node: { p, end: 0 }, mode: 2, offset: 0, refs: 1 });
+    const fd1 = fdAlloc(self, { dev: pdev, node: { p, end: 1 }, mode: 2, offset: 0, refs: 1 });
+    const out = Buffer.alloc(8);
+    out.writeInt32LE(fd0, 0); out.writeInt32LE(fd1, 4);
+    host.tx.set(out);
+    return 0;
+  }
+  case T.CLOSE: { decref(fdchk(self, a0)); self.fdt.fds[a0] = null; return 0; }
   case T.DUP: {
-    const c = fdchk(self, a0);
-    if (a1 >= 0) { self.fds[a1] = c; return a1; }        // shared chan — dup(2) semantics
-    const fd = self.fds.findIndex((f) => !f);
-    if (fd < 0) { self.fds.push(c); return self.fds.length - 1; }
-    self.fds[fd] = c; return fd;
+    const c = incref(fdchk(self, a0));
+    return fdAlloc(self, c, a1 >= 0 ? a1 : -1);
   }
   case T.PREAD: {
-    const c = fdchk(self, a0);                       // a1=buf (guest side), a2=n, a3/a4=offset
+    const c = fdchk(self, a0);                     // a1=buf (guest side), a2=n, a3/a4=offset
     const n = Math.min(a2, TXSIZE);
     const cur = (a3 >>> 0) === 0xffffffff && (a4 >>> 0) === 0xffffffff;
     const off = cur ? c.offset : (a4 * 0x100000000 + (a3 >>> 0));
-    const data = c.dev.read(c.node, n, off);
+    const ctx = { done: (data) => { if (cur) c.offset += data.length; host.tx.set(data); reply(host, data.length); } };
+    const data = c.dev.read(c.node, n, off, ctx);
+    if (data === undefined) return undefined;      // parked in the device
     if (cur) c.offset += data.length;
     host.tx.set(data);
     return data.length;
@@ -158,7 +215,11 @@ function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
   case T.PWRITE: {
     const c = fdchk(self, a0);
     const n = Math.min(a2, TXSIZE);
-    return c.dev.write(c.node, host.tx.subarray(0, n));
+    const cur = (a3 >>> 0) === 0xffffffff && (a4 >>> 0) === 0xffffffff;
+    const off = cur ? c.offset : (a4 * 0x100000000 + (a3 >>> 0));
+    const wrote = c.dev.write(c.node, host.tx.subarray(0, n), off);
+    if (cur) c.offset += wrote;
+    return wrote;
   }
   case T.SEEK: {
     const c = fdchk(self, a0);
@@ -192,11 +253,6 @@ function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
   default: throw err(`bad syscall ${trap} (v0)`);
   }
 }
-function fdchk(self, fd) {
-  const c = self.fds[fd];
-  if (!c) throw err(`fd ${fd} not open`);
-  return c;
-}
 
 // ---- rfork / exec / exits / await ----
 function rfork(host, self, flags, guarded) {
@@ -207,7 +263,7 @@ function rfork(host, self, flags, guarded) {
   if (host.borrower) throw err("nested lazy fork unsupported in v0");
   const child = newProc(self.pid, {
     ns: flags & RF.NAMEG ? new Map(self.ns) : self.ns,
-    fds: flags & RF.FDG ? [...self.fds] : self.fds,
+    fdt: flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
     cwd: self.cwd,
   });
   host.borrower = child;   // child borrows the parent's Worker and stack
@@ -235,6 +291,7 @@ function exits(host, self) {
   const msg = txstr(host);
   const parent = procs.get(self.ppid);
   procs.delete(self.pid);
+  fdtClose(self.fdt);                                  // pipes learn their EOF here
   if (host.borrower === self) {                        // exited without exec: vfork's other exit
     host.borrower = null;
     zombie(parent, self.pid, msg);
@@ -252,23 +309,25 @@ function zombie(parent, pid, msg) {
 }
 function doAwait(host, self, max) {
   self.awaitmax = max;
+  self.awaithost = host;
   if (self.zombies.length) return sendWait(self, true);
   self.awaitPending = true;
   return undefined;                                    // blocked until a child dies
 }
 function sendWait(self, inline = false) {
   const s = Buffer.from(self.zombies.shift().slice(0, self.awaitmax - 1) + "\0");
-  self.tx.set(s);
+  const host = self.awaithost;
+  host.tx.set(s);
   if (inline) return s.length - 1;
-  reply(self, s.length - 1);
+  reply(host, s.length - 1);
 }
 function shutdown(code) {
   for (const p of procs.values()) p.worker?.terminate();
-  // let stdout drain
   setTimeout(() => process.exit(typeof code === "number" ? code : 1), 20);
   return undefined;
 }
 
 // ---- boot: pid 1 ----
-const init = newProc(0, { ns: new Map(), fds: [], cwd: "/" });
-spawn(init, readFileSync(join(rootdir, "bin", "init")), ["init"]);
+const init = newProc(0, { ns: new Map(), fdt: newFdt(), cwd: "/" });
+spawn(init, readFileSync(join(rootdir, "bin", "init")),
+  interactive ? ["init", "-i"] : ["init"]);

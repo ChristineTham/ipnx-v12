@@ -1,0 +1,35 @@
+# rc acceptance tests: each check is one if(...) line; failures flip $fails.
+# Runs in a namespace copy (init rforked with RFNAMEG), so the bind test
+# below must not leak into init's view — init verifies that afterwards.
+fails=ok
+echo rc: up, running tests
+
+if(~ `{echo hello | cat} hello) echo PASS 'pipeline: echo hello | cat'; if not fails=bad
+if(~ `{echo a && echo b} a b) echo PASS 'lists: && runs both'; if not fails=bad
+greeting=hi; if(~ $greeting hi) echo PASS 'variables: x=v and $x'; if not fails=bad
+x=; for(i in 1 2 3) x=$x$i
+if(~ $x 123) echo PASS 'for loop with concatenation'; if not fails=bad
+if(~ `{echo /bin/c*} /bin/cat /bin/cp) echo PASS 'glob: /bin/c*'; if not fails=bad
+echo written > /tmp/t1
+if(~ `{cat /tmp/t1} written) echo PASS 'redirection > and ramfs write'; if not fails=bad
+echo more >> /tmp/t1
+if(~ `{wc /tmp/t1} 2) echo PASS 'append >> (wc counts 2 lines)'; if not fails=bad
+if(~ `{cat < /etc/motd | wc} 1) echo PASS 'input redirection <'; if not fails=bad
+if(~ `{ls /lib} alt) echo PASS 'ls reads directories'; if not fails=bad
+mkdir /tmp/d; cp /etc/motd /tmp/d/m
+if(~ `{wc /tmp/d/m} 1) echo PASS 'mkdir and cp'; if not fails=bad
+rm /tmp/d/m /tmp/d
+if(~ `{ls /tmp} t1) echo PASS 'rm removes'; if not fails=bad
+echo expect one error next:
+cat /nonexistent
+if(~ $status '') fails=bad; if not echo PASS 'errors set $status'
+bind /lib/alt /etc
+if(~ `{cat /etc/motd} the*) echo PASS 'bind is a command; lands in the rc namespace'; if not fails=bad
+cd /lib
+if(~ `{ls alt} motd) echo PASS 'cd builtin, relative walks'; if not fails=bad
+cd /
+
+if(~ $fails ok) echo rc: tests done
+if not echo rc: TESTS FAILED
+if(~ $fails ok) exit ''
+exit failed

@@ -55,6 +55,12 @@ int   stat(char *path, uchar *edir, int n);
 int   fstat(int fd, uchar *edir, int n);
 int   sleep(long ms);
 int   errstr(char *buf, int n);
+int   pipe(int fd[2]);
+int   create(char *path, int omode, ulong perm);
+int   remove(char *path);
+
+/* file modes for create */
+#define DMDIR 0x80000000
 
 /* library */
 long  strlen(char *s);
@@ -66,6 +72,11 @@ void* memset(void *dst, int c, ulong n);
 int   fprint(int fd, char *fmt, ...);
 int   print(char *fmt, ...);
 int   atoi(char *s);
-/* 9P2000 stat record: extract length and name (convM2D, abridged) */
+void* malloc(ulong n);
+char* strdup(char *s);
+int   strncmp(char *a, char *b, ulong n);
+char* strcpy(char *dst, char *src);
+/* 9P2000 stat record: extract length, mode and name (convM2D, abridged) */
 uvlong statlen(uchar *edir);
+ulong  statmode(uchar *edir);
 char*  statname(uchar *edir, char *buf, int n);
