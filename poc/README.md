@@ -21,8 +21,8 @@ hosts it in a page — the console is a window in the DOM, and `serve.mjs` exist
 set the COOP/COEP headers SharedArrayBuffer requires. The same forty tests pass in both
 (measured in Chrome 148).
 
-The test boot prints forty-seven `PASS` lines — twenty-three from init (kernel, mount,
-exportfs, and the forktest harness), four from forktest itself, twenty from
+The test boot prints fifty-five `PASS` lines — thirty-one from init (kernel, mount,
+exportfs, uid, and the forktest harness), four from forktest itself, twenty from
 `/rc/tests.rc` (the shell tests) — and exits 0, identically on Node and in the browser.
 
 ## What it proves
@@ -51,6 +51,14 @@ exportfs, and the forktest harness), four from forktest itself, twenty from
   namespace copy (`RFNAMEG`) and its binds never reach init; *within* rc, `bind` works as
   an ordinary command — the child shares rc's namespace, so its bind lands there. Both
   directions are tested.
+- **The uid model runs — the thing APE called impossible** ([docs/uid.md](../docs/uid.md)).
+  Credentials are mutable per-process kernel state: `/dev/user` names the caller,
+  `/proc/self/ctl` accepts `user <name>` under the transition rule (the host owner may
+  become anyone; anyone may fall back to their real uid), ramfs enforces V10 rwx against
+  per-node owners, `chown`/`chmod` are forty lines of libc over `wstat`, and an image
+  carrying 9P2000.u's `DMSETUID` bit elevates euid at `exec` while ruid stays. The tests
+  drop to `none`, get denied a 0600 file, fail to climb back, and elevate through a
+  setuid `id`. No new system calls anywhere.
 - **Union directories are the namespace's algebra.** A mount point is a list: `bind -a`
   and `-b` append and prepend, walks try elements in order, directory reads concatenate
   (still an integral number of stat records), and creates land in the first element bound
@@ -91,7 +99,7 @@ exportfs, and the forktest harness), four from forktest itself, twenty from
 | `cmd/hellofs.c` | a 9P2000 file server in a guest process, serving on fd 0 |
 | `cmd/exportfs.c` | serves this process's namespace over 9P — binds and all |
 | `cmd/forktest.c` | the bare dual-return fork, exercised |
-| `cmd/` | `init` (pid 1 + kernel tests), `cat`, `echo`, `ls`, `wc`, `cp`, `mkdir`, `rm`, `bind` |
+| `cmd/` | `init` (pid 1 + kernel tests), `cat`, `echo`, `ls`, `wc`, `cp`, `mkdir`, `rm`, `bind`, `id` |
 | `rootfs/` | the boot filesystem; `rc/tests.rc` is the shell test suite; `bin/` is generated |
 
 ## The rc subset
@@ -113,7 +121,8 @@ persist rather than scope to the command.
 
 argv arrives via a boot syscall rather than pre-placed on the stack; `brk` is guest-local
 (`memory.grow`); no `..`; `remove` inside a union picks no element (error); `errstr`
-reads but does not exchange; pipe writers never block (unbounded queue); one user; nested
+reads but does not exchange; pipe writers never block (unbounded queue); gid/groups and
+the D1–D4 measurements are deferred per docs/uid.md; proc files have no stat; nested
 lazy fork within one Worker refused. On the wire: no `Tauth` (afid is always NOFID), no `Tflush`,
 walks are one name per `Twalk`, msize is fixed at 8216, `unmount` is absent, and a failed
 mid-walk leaks its intermediate fid. Each is a lifted restriction away, not a redesign.

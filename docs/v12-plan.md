@@ -397,12 +397,12 @@ Evidence for each is in RESEARCH.md at the cited section.
 
 ## Open questions
 
-- **The uid model.** APE called it impossible. It is the single item that decides whether
-  V10 compatibility is real or approximate, and it is now the front of the queue: design
-  work, not research. The hosted kernel can own per-process credentials and stamp every
-  attach — the mechanism kernel devices already use — and the link/symlink family rides on
-  the same protocol decision (9P2000.L's `Tlink`/`Tsymlink` prove the extension is
-  expressible; adopt or mint is part of the task).
+- ~~The uid model~~ — **decided and running**: [docs/uid.md](uid.md). Per-process
+  credentials in the kernel, `/proc/<pid>/ctl` transitions with no new syscalls,
+  9P2000.u's `DMSETUID` at exec, V10 enforcement in-process and per-attach identity on
+  the wire. The answer to "is V10 compatibility real?" is yes.
+- **Hard links and the `symlink`/`readlink`/`lstat` family** — the protocol-room choice
+  (adopt 9P2000.L's messages or mint), no longer gated by the uid question.
 - kencc or clang for the *ported* userspace, given `extern register` and anonymous struct
   members? Fresh code is clang (§9.4 is the measured recipe).
 - Does the `d` message's alpha compositing map cleanly onto canvas and Metal, or does the
@@ -448,10 +448,11 @@ Chrome 148, and `?i` boots the page to an interactive rc in a console window
 (RESEARCH §5.3, §7 for the Wanix/Apptron precedent that shapes where the GUI goes next).
 
 What it deliberately does not do is listed in [poc/README.md](../poc/README.md). The
-engineering lifts the plan named are done; what remains is design first: **the uid
-model** (Open questions — front of the queue), then `/dev/draw` and the rio-shaped
-window server (§The GUI, with RESEARCH §7's Wanix/Apptron precedent), and the native
-host over WasmKit.
+engineering lifts the plan named are done, and the uid model — the question that decided
+whether this project's answer is yes — is designed ([docs/uid.md](uid.md)) and running
+in the PoC. Next: `/dev/draw` and the rio-shaped window server (§The GUI, with RESEARCH
+§7's Wanix/Apptron precedent), the native host over WasmKit, and the link/symlink
+protocol decision.
 
 ## Sources
 

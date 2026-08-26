@@ -17,10 +17,10 @@ because every limitation APE confesses is a POSIX.1-1990 feature V10 does not ha
 The architecture runs, boots to a shell, forks both ways, and speaks its protocol in
 both directions: `poc/` is a working slice (hosted kernel in Node and the browser from
 one neutral core, freestanding-C wasm guests, per-process namespaces with union
-directories, the lazy-fork resume *and* the asyncify bare fork, pipes, a writable ramfs,
-a minimal `rc` with subshells, wire 9P at the mount boundary, and exportfs serving a
-guest's namespace back out — forty-seven acceptance tests). Everything else is design
-documents.
+directories, the lazy-fork resume *and* the asyncify bare fork, pipes, a writable ramfs
+with V10 permission enforcement, the uid model running (docs/uid.md), a minimal `rc`
+with subshells, wire 9P at the mount boundary, and exportfs serving a guest's namespace
+back out — fifty-five acceptance tests). Everything else is design documents.
 
 ## Commands
 
@@ -32,8 +32,8 @@ has no wasm backend). `mk.sh`'s `ASYNCIFY` list names the binaries that may bare
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints forty-seven PASS
-lines, exits 0:
+Boot the kernel — init (pid 1) runs the acceptance tests, prints fifty-five PASS lines,
+exits 0:
 
 ```bash
 bash poc/run.sh
@@ -66,6 +66,7 @@ is indistinguishable from a shipped one.
 | `RESEARCH.md` | **living evidence base** — every finding with provenance: Plan 9's call list, `rfork` flags verbatim, APE's limits, the fork-resume mechanism and its measurements, WASI phases, the toolchain recipe (§9.4), V10 measurements |
 | `docs/v12-plan.md` | **the spec** — scope, decisions taken (with dates), open questions, PoC status |
 | `docs/syscalls.md` | **the derived call list** — Plan 9's 40 live calls dispositioned for V12; V10's 68 routines mapped onto them |
+| `docs/uid.md` | **the uid model** — the item APE called impossible, decided and running: kernel credentials, `/proc` ctl transitions, `DMSETUID`, the two enforcement regimes |
 | `poc/README.md` | what the PoC proves, its layout, its deliberate v0 deviations |
 
 Findings go in RESEARCH.md with provenance; decisions go in the plan; both are living.
@@ -131,9 +132,12 @@ evidence, not a fresh opinion.
   `acme` the real test. **Self-hosting is not a goal** (`/cc` as file server makes
   compilation a capability).
 
-**The open design item is the uid model** — APE called it impossible; the hosted kernel
-can own per-process credentials and stamp every attach, and the `link`/`symlink`/`lstat`
-family rides on the same protocol decision (9P2000.L proves the extension expressible).
+- **The uid model is decided and running** (`docs/uid.md`): mutable per-process
+  credentials in the kernel, names canonical (numbers are the personality's, via
+  `/etc/passwd`), transitions through `/proc/<pid>/ctl` under the eve/ruid rule — no new
+  syscalls — 9P2000.u's `DMSETUID` bit at exec, V10 enforcement in in-process devices,
+  per-attach identity stamped on wire mounts. Open: the `link`/`symlink`/`lstat`
+  protocol-room choice, and uid.md's D1–D4 measurements in `../ipnx`.
 
 ## The PoC's shape (poc/)
 
@@ -188,11 +192,11 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (2026-08-26)
 
-Documents and PoC written today; forty-seven acceptance tests pass on Node
+Documents and PoC written today; fifty-five acceptance tests pass on Node
 (`bash poc/run.sh`) **and in the browser** (`node poc/serve.mjs` → `/browser/`, measured
 in Chrome 148); `-i`/`?i` boot to an interactive `rc` with working subshells. Milestones
 on `main`: initial commit, rc, wire 9P at a mount boundary, the asyncify path, the
-browser port, union directories + exportfs. The named engineering lifts are done; next
-is design: the uid model first (plan §Open questions), then `/dev/draw` and the window
-server (RESEARCH §7 records the Wanix/Apptron precedent — windows as elements backed by
-per-window namespaces), then the native WasmKit host.
+browser port, union directories + exportfs, the uid model. Next: `/dev/draw` and the
+window server (RESEARCH §7 records the Wanix/Apptron precedent — windows as elements
+backed by per-window namespaces), the native WasmKit host, and the link/symlink
+protocol-room choice.

@@ -169,14 +169,19 @@ export function makeMntDev() {
       r.u16();                                       // outer size, per stat(5)'s double count
       return r.rest();                               // the record, self-sized
     },
+    wstat: async (node, ch, cred, rawRec) => {
+      if (!rawRec) throw err("wstat over a mount needs the raw record");
+      const body = new W().u32(node.fid).u16(rawRec.length).raw(new Uint8Array(rawRec));
+      await node.conn.rpc(Tv.wstat, body);
+    },
     clunk: (node) => node.conn.clunk(node.fid),
     discard: (node) => { if (node.ephemeral) node.conn.clunk(node.fid); },
     len: () => 0,
   };
 }
 
-export async function mountConn(chan, readChan, aname) {
+export async function mountConn(chan, readChan, aname, uname) {
   const conn = new Conn(chan, readChan);
   await conn.version();
-  return await conn.attach(aname);
+  return await conn.attach(aname, uname);
 }

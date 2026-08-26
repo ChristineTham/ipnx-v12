@@ -96,8 +96,10 @@ pipes, a writable ramfs, a minimal `rc` with nine commands, and wire 9P at a rea
 boundary in both directions: a guest process serving 9P2000 on a pipe, mounted and read
 by clients that cannot tell it from a kernel device, and exportfs handing a whole
 namespace — private binds included — to another process, union directories completing
-the algebra. Forty-seven acceptance tests passing, **on Node and in the browser from one
-platform-neutral kernel**. The documents:
+the algebra. The uid model — the one item APE called impossible, and the thing this project exists to
+prove undoable — is designed and running: kernel credentials, `/proc` transitions, the
+setuid bit, V10 enforcement. Fifty-five acceptance tests passing, **on Node and in the
+browser from one platform-neutral kernel**. The documents:
 
 - **[RESEARCH.md](RESEARCH.md)** — the living evidence base: Plan 9's complete system call
   list, the `rfork` flags verbatim, APE's confessed limits, the `/dev/draw` message set,
@@ -110,6 +112,8 @@ platform-neutral kernel**. The documents:
 - **[docs/syscalls.md](docs/syscalls.md)** — the first task, done: call by call, which
   system calls survive as kernel calls and which become 9P messages — Plan 9's 40 live
   calls dispositioned, V10's 68 routines mapped onto them.
+- **[docs/uid.md](docs/uid.md)** — the uid model: why APE could not and this kernel can,
+  and where every identity call lands.
 
 Work starts from Plan 9. The V10 personality is designed later — its mapping is recorded in
 RESEARCH.md §3 so it does not have to be worked out twice. The next design item is the uid

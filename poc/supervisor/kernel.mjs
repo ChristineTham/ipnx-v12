@@ -12,12 +12,15 @@
 // feed console input into.
 import { makeRamfs, makeCons, makePipeDev } from "./devs.mjs";
 import { makeMntDev, mountConn } from "./mnt9p.mjs";
+import { parseStat, DMSETUID } from "./stat9.mjs";
 import { sbytes, bstr, concat } from "./bytes.mjs";
+
+const EVE = "glenda";                 // the host owner; the kernel knows no "root"
 
 // ---- traps (Plan 9 numbering) ----
 const T = { BIND: 2, CHDIR: 3, CLOSE: 4, DUP: 5, EXEC: 7, EXITS: 8, OPEN: 14,
   SLEEP: 17, RFORK: 19, PIPE: 21, CREATE: 22, REMOVE: 25, SEEK: 39, ERRSTR: 41,
-  STAT: 42, FSTAT: 43, MOUNT: 46, AWAIT: 47, PREAD: 50, PWRITE: 51, ARGS: 200 };
+  STAT: 42, FSTAT: 43, WSTAT: 44, MOUNT: 46, AWAIT: 47, PREAD: 50, PWRITE: 51, ARGS: 200 };
 const RF = { NAMEG: 1, FDG: 4, PROC: 16, MEM: 32 };
 const OTRUNC = 16, DMDIR = 0x80000000;
 // mailbox: [0]=state(0 idle,1 req,2 done) [1]=trap [2..7]=args [8]=ret [9]=aux
@@ -35,10 +38,10 @@ let host, cons, devs;
 // chan on UNION; creates go to the first element bound with MCREATE (-c).
 const UNION = {
   name: "union",
-  walk: async (node, name) => {
+  walk: async (node, name, proc) => {
     for (const el of node.list) {
       try {
-        const n2 = await el.c.dev.walk(el.c.node, name);
+        const n2 = await el.c.dev.walk(el.c.node, name, proc);
         if (n2) return { union: el, node: n2 };   // unwrapped by kernel walk
       } catch { /* try the next element */ }
     }
@@ -97,6 +100,46 @@ async function nsInsert(self, old, chan, flag) {
   else list.unshift(el);                                      // MBEFORE
 }
 
+// ---- devproc: '#p' — <pid>/{ctl,status} and self; the identity transition
+// rule of docs/uid.md is the ctl write ----
+function makeProcDev() {
+  const err9 = (m) => Object.assign(new Error(m), { guest: true });
+  const node = (kind, proc) => ({ kind, proc, qpath: proc ? proc.pid * 4 + (kind === "ctl" ? 1 : 2) : 0, dir: kind === "dir" || kind === "root" });
+  return {
+    name: "proc",
+    attach: () => node("root", null),
+    walk: (n, name, walker) => {
+      if (n.kind === "root") {
+        if (name === "self") return node("dir", walker);  // the WALKER, never the binder
+        const p = procs.get(Number(name));
+        return p ? node("dir", p) : null;
+      }
+      if (n.kind === "dir" && (name === "ctl" || name === "status"))
+        return node(name, n.proc);
+      return null;
+    },
+    read: (n, count, off) => {
+      if (n.kind !== "status" || Number(off) > 0) return new Uint8Array(0);
+      const p = n.proc;
+      return sbytes(`${p.pid} ${p.cred.euid} ${p.cred.ruid} ${p.ppid}\n`);
+    },
+    write: (n, data, off, cred) => {
+      if (n.kind !== "ctl") throw err9("not writable");
+      if (cred && cred.euid !== EVE && cred.euid !== n.proc.cred.euid)
+        throw err9("not your process");
+      const [verb, arg] = bstr(data).trim().split(/\s+/);
+      if (verb !== "user" || !arg) throw err9(`bad ctl message '${bstr(data).trim()}'`);
+      const c = n.proc.cred;
+      if (cred.euid === EVE) { c.euid = arg; c.ruid = arg; }        // rule 1: eve → anyone
+      else if (arg === c.ruid) c.euid = arg;                        // rule 2: back to ruid
+      else throw err9(`'${cred.euid}' may not become '${arg}'`);
+      return data.length;
+    },
+    stat: (n) => { throw err9("no stat on proc files (v0)"); },
+    len: () => 0,
+  };
+}
+
 // read a channel from kernel context, parking-aware, as a promise
 const readChan = (chan, n) => new Promise((res) => {
   const r = chan.dev.read(chan.node, n, -1, { done: res });
@@ -117,14 +160,14 @@ const canon = (path, cwd) => {
   }
   return "/" + out.join("/");
 };
-function attach(spec) {  // '#c' etc.
+function attach(spec, proc) {  // '#c' etc.
   const dev = devs[spec[1]];
   if (!dev) throw err(`unknown device #${spec[1]}`);
-  return { dev, node: dev.attach() };
+  return { dev, node: dev.attach(spec, proc) };
 }
 async function walk(proc, path) {
   path = canon(path, proc.cwd);
-  if (path.startsWith("#")) return attach(path);
+  if (path.startsWith("#")) return attach(path, proc);
   let best = "", list = null;
   for (const [pfx, l] of proc.ns)
     if ((path === pfx || path.startsWith(pfx === "/" ? "/" : pfx + "/")) && pfx.length > best.length)
@@ -138,7 +181,7 @@ async function walk(proc, path) {
   }
   const rest = path.slice(best.length).split("/").filter(Boolean);
   for (const name of rest) {
-    let next = await dev.walk(node, name);
+    let next = await dev.walk(node, name, proc);
     if (next && next.union) { dev = next.union.c.dev; next = next.node; }  // left a union
     if (!next) throw err(`'${path}' does not exist`);
     node = next;
@@ -167,9 +210,10 @@ async function readAll(c) {                        // exec's image read; open if
 const err = (msg) => Object.assign(new Error(msg), { guest: true });
 
 // ---- processes, channels, descriptor tables ----
-function newProc(ppid, { ns, fdt, cwd }) {
+function newProc(ppid, { ns, fdt, cwd, cred }) {
   const pid = nextpid++;
-  const p = { pid, ppid, ns, fdt, cwd, errstr: "", zombies: [], awaitPending: false,
+  const p = { pid, ppid, ns, fdt, cwd, cred, umask: 0o22, errstr: "",
+    zombies: [], awaitPending: false,
     borrower: null, worker: null, mb: null, tx: null, argv: [] };
   procs.set(pid, p);
   return p;
@@ -278,7 +322,7 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     let c = await walk(self, txstr(host));
     if (c.dev.clone && !c.node.ephemeral)          // never open a mount-table fid:
       c = { dev: c.dev, node: await c.dev.clone(c.node) };   // clone first, per Plan 9
-    if (c.dev.open) await c.dev.open(c.node, a1);
+    if (c.dev.open) await c.dev.open(c.node, a1, self.cred);
     else if ((a1 & OTRUNC) && c.dev.truncate) c.dev.truncate(c.node);
     return fdAlloc(self, newChan(c, a1));
   }
@@ -292,21 +336,35 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     if (!parent.dev.create) throw err("create not supported on this device");
     if (parent.dev.clone && !parent.node.ephemeral)          // Tcreate consumes the fid
       parent = { dev: parent.dev, node: await parent.dev.clone(parent.node) };
-    const node = await parent.dev.create(parent.node, base, a2 >>> 0,
-      !!((a2 >>> 0) & DMDIR), a1);
+    const perm = (a2 >>> 0) & ~self.umask;
+    const node = await parent.dev.create(parent.node, base, perm,
+      !!((a2 >>> 0) & DMDIR), a1, self.cred);
     return fdAlloc(self, newChan({ dev: parent.dev, node }, a1));
   }
   case T.REMOVE: {
     const { parent, base } = await walkParent(self, txstr(host));
     if (!parent.dev.remove) throw err("remove not supported on this device");
-    await parent.dev.remove(parent.node, base);
+    await parent.dev.remove(parent.node, base, self.cred);
     parent.dev.discard?.(parent.node);
+    return 0;
+  }
+  case T.WSTAT: {
+    const path = txstr(host);
+    const rec = host.tx.subarray(path.length + 1, path.length + 1 + a2);
+    const st = parseStat(rec);
+    const ch = {};
+    if ((st.mode >>> 0) !== 0xffffffff) ch.mode = st.mode >>> 0;
+    if (st.uid !== "") ch.uid = st.uid;
+    const c = await walk(self, path);
+    if (!c.dev.wstat) throw err("wstat not supported on this device");
+    await c.dev.wstat(c.node, ch, self.cred, rec);
+    c.dev.discard?.(c.node);
     return 0;
   }
   case T.MOUNT: {
     const old = txstr(host), aname = txstr(host, old.length + 1);
     const c = incref(fdchk(self, a0));             // the kernel holds its own reference
-    const node = await mountConn(c, readChan, aname);
+    const node = await mountConn(c, readChan, aname, self.cred.euid);
     await nsInsert(self, canon(old, self.cwd), { dev: devs.m, node }, a3);
     return 0;
   }
@@ -331,7 +389,7 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     const n = Math.min(a2, TXSIZE);
     const cur = (a3 >>> 0) === 0xffffffff && (a4 >>> 0) === 0xffffffff;
     const off = cur ? c.offset : (a4 * 0x100000000 + (a3 >>> 0));
-    const ctx = { done: (data) => { if (cur) c.offset += data.length; host.tx.set(data); reply(host, data.length); } };
+    const ctx = { cred: self.cred, done: (data) => { if (cur) c.offset += data.length; host.tx.set(data); reply(host, data.length); } };
     const data = await c.dev.read(c.node, n, off, ctx);
     if (data === undefined) return undefined;      // parked in the device
     if (cur) c.offset += data.length;
@@ -343,7 +401,7 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     const n = Math.min(a2, TXSIZE);
     const cur = (a3 >>> 0) === 0xffffffff && (a4 >>> 0) === 0xffffffff;
     const off = cur ? c.offset : (a4 * 0x100000000 + (a3 >>> 0));
-    const wrote = await c.dev.write(c.node, host.tx.subarray(0, n), off);
+    const wrote = await c.dev.write(c.node, host.tx.subarray(0, n), off, self.cred);
     if (cur) c.offset += wrote;
     return wrote;
   }
@@ -393,6 +451,7 @@ function rfork(host, self, flags, marker) {
       ns: flags & RF.NAMEG ? nsCopy(self.ns) : self.ns,
       fdt: flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
       cwd: self.cwd,
+    cred: { ...self.cred },
     });
     child.module = self.module;
     child.asyncified = true;
@@ -405,6 +464,7 @@ function rfork(host, self, flags, marker) {
     ns: flags & RF.NAMEG ? nsCopy(self.ns) : self.ns,
     fdt: flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
     cwd: self.cwd,
+    cred: { ...self.cred },
   });
   host.borrower = child;   // child borrows the parent's Worker and stack
   return { ret: 0, aux: child.pid };  // worker saves [0,sp) on seeing aux!=0
@@ -418,8 +478,12 @@ async function exec(host, self, argc) {
     o += s.length + 1;
   }
   const c = await walk(self, path);
+  let st = null;
+  try { st = parseStat(await c.dev.stat(c.node)); } catch { /* dev without stat */ }
   const mod = await WebAssembly.compile(await readAll(c));
   self.argv = argv.length ? argv : [path];
+  if (st && (st.mode & DMSETUID))
+    self.cred = { ...self.cred, euid: st.uid };    // the setuid bit (docs/uid.md)
   if (host.borrower === self) {
     // Lazy-fork child leaves the borrowed stack for its own instance; the
     // parent's Worker restores [0,sp) and unwinds to the rfork guard (§5.2).
@@ -476,8 +540,10 @@ function shutdown(code) {
 export async function boot(theHost, { rootSeed, interactive }) {
   host = theHost;
   cons = makeCons(host.consWrite);
-  devs = { M: makeRamfs(rootSeed), c: cons, "|": makePipeDev(), m: makeMntDev() };
-  const init = newProc(0, { ns: new Map(), fdt: newFdt(), cwd: "/" });
+  devs = { M: makeRamfs(rootSeed, EVE), c: cons, "|": makePipeDev(), m: makeMntDev(),
+    p: makeProcDev() };
+  const init = newProc(0, { ns: new Map(), fdt: newFdt(), cwd: "/",
+    cred: { euid: EVE, ruid: EVE } });
   const image = await readAll(await walk(init, "/bin/init"));
   spawn(init, await WebAssembly.compile(image), interactive ? ["init", "-i"] : ["init"]);
   return { cons };

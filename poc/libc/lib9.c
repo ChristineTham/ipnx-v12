@@ -23,7 +23,7 @@ void __forkshim(int fn, int arg){
 
 enum { BIND=2, CHDIR=3, CLOSE=4, DUP=5, EXEC=7, EXITS=8, OPEN=14, SLEEP=17,
        RFORK=19, PIPE=21, CREATE=22, REMOVE=25, SEEK=39, ERRSTR=41,
-       STAT=42, FSTAT=43, MOUNT=46, AWAIT=47, PREAD=50, PWRITE=51 };
+       STAT=42, FSTAT=43, WSTAT=44, MOUNT=46, AWAIT=47, PREAD=50, PWRITE=51 };
 
 int open(char *p, int m)          { return _sys(OPEN,(int)p,m,0,0,0); }
 int close(int fd)                 { return _sys(CLOSE,fd,0,0,0,0); }
@@ -48,6 +48,46 @@ int errstr(char *b, int n)        { return _sys(ERRSTR,(int)b,n,0,0,0); }
 int pipe(int fd[2])               { return _sys(PIPE,(int)fd,0,0,0,0); }
 int mount(int fd, int afd, char *old, int flag, char *aname){
 	return _sys(MOUNT,fd,afd,(int)old,flag,(int)aname); }
+
+/* chmod/chown: one wstat(5) record with don't-touch values everywhere else —
+ * the class-B shape, forty lines for the family, no syscalls added. */
+static uchar *wput(uchar *p, int nb, uvlong v){
+	int i;
+	for(i = 0; i < nb; i++)
+		*p++ = (uchar)(v >> (8*i));
+	return p;
+}
+static int
+wstat9(char *path, ulong mode, char *uid)
+{
+	uchar rec[128], *p, *sz;
+	int i;
+
+	sz = rec;
+	p = wput(rec, 2, 0);			/* size, patched */
+	p = wput(p, 2, 0xFFFF);			/* type: don't touch */
+	p = wput(p, 4, 0xFFFFFFFFUL);		/* dev */
+	for(i = 0; i < 13; i++)			/* qid */
+		*p++ = 0xFF;
+	p = wput(p, 4, mode);
+	p = wput(p, 4, 0xFFFFFFFFUL);		/* atime */
+	p = wput(p, 4, 0xFFFFFFFFUL);		/* mtime */
+	p = wput(p, 8, ~(uvlong)0);		/* length */
+	p = wput(p, 2, 0);			/* name: don't touch */
+	if(uid == nil)
+		p = wput(p, 2, 0);
+	else{
+		p = wput(p, 2, strlen(uid));
+		memcpy(p, uid, strlen(uid));
+		p += strlen(uid);
+	}
+	p = wput(p, 2, 0);			/* gid */
+	p = wput(p, 2, 0);			/* muid */
+	wput(sz, 2, (p - rec) - 2);
+	return _sys(WSTAT, (int)path, (int)rec, p - rec, 0, 0);
+}
+int chmod(char *path, ulong mode){ return wstat9(path, mode, nil); }
+int chown(char *path, char *uid){ return wstat9(path, 0xFFFFFFFFUL, uid); }
 int create(char *p, int m, ulong perm){ return _sys(CREATE,(int)p,m,(int)perm,0,0); }
 int remove(char *p)               { return _sys(REMOVE,(int)p,0,0,0,0); }
 

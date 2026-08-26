@@ -59,9 +59,12 @@ int   pipe(int fd[2]);
 int   mount(int fd, int afd, char *old, int flag, char *aname);
 int   create(char *path, int omode, ulong perm);
 int   remove(char *path);
+int   chmod(char *path, ulong mode);	/* class B: libc over wstat, never a syscall */
+int   chown(char *path, char *uid);
 
-/* file modes for create */
-#define DMDIR 0x80000000
+/* file modes */
+#define DMDIR    0x80000000
+#define DMSETUID 0x00080000	/* 9P2000.u's bit position (docs/uid.md) */
 
 /* library */
 long  strlen(char *s);

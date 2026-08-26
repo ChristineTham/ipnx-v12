@@ -1,9 +1,10 @@
 // 9P2000 stat(5) marshalling: size[2] type[2] dev[4] qid.type[1] qid.vers[4]
 // qid.path[8] mode[4] atime[4] mtime[4] length[8] name[s] uid[s] gid[s] muid[s]
-import { sbytes, concat } from "./bytes.mjs";
+import { sbytes, bstr, concat } from "./bytes.mjs";
 
 export const QTDIR = 0x80, QTFILE = 0x00;
 export const DMDIR = 0x80000000;
+export const DMSETUID = 0x00080000;   // 9P2000.u's bit position, adopted (docs/uid.md)
 
 export function marshalStat(d) {
   const s = (x) => {
@@ -29,4 +30,21 @@ export function marshalStat(d) {
   const all = concat([fixed, name, uid, gid, muid]);
   new DataView(all.buffer).setUint16(0, all.length - 2, true);  // size excludes itself
   return all;
+}
+
+// Read one stat(5) record. For wstat, "don't touch" is ~0 for integers and
+// the zero-length string for names, per stat(5) — the caller checks.
+export function parseStat(b) {
+  const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  const str = (o) => {
+    const n = v.getUint16(o, true);
+    return { s: bstr(b.subarray(o + 2, o + 2 + n)), next: o + 2 + n };
+  };
+  const mode = v.getUint32(21, true);
+  const length = v.getBigUint64(33, true);
+  let o = 41;
+  const name = str(o); o = name.next;
+  const uid = str(o); o = uid.next;
+  const gid = str(o);
+  return { mode, length, name: name.s, uid: uid.s, gid: gid.s };
 }

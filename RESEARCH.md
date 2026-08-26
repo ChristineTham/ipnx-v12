@@ -737,15 +737,19 @@ before code, not after.
   personality's libc aliases `/dev/tty` to it, and the fd-3 accident stays in the parent
   repository's notebook as history, not design.
 
+- **The uid model is designed and running** — [docs/uid.md](docs/uid.md), the item APE
+  called impossible: mutable per-process credentials in the kernel (names canonical,
+  numbers the personality's), transitions through `/proc/<pid>/ctl` with no new system
+  calls, 9P2000.u's `DMSETUID` bit position at exec, V10 enforcement in the in-process
+  devices and per-attach identity on the wire. The PoC exercises all of it: setuid down,
+  0600 denial, no privilege climb, chown/chmod as pure-libc `wstat`, and a setuid image
+  elevating euid while ruid stays.
+
 **Still open:**
 
-- **The uid model.** APE called it impossible to simulate. It is the single item that
-  decides whether V10 compatibility is real or approximate, and it is design work, not
-  research: the hosted kernel *can* own per-process credentials and stamp them on every
-  attach, which is exactly what Plan 9's kernel devices do with `up->user` — the question
-  is the model, not the mechanism. Hard links and `symlink`/`readlink`/`lstat` sit in the
-  same design because all of them need protocol room (9P2000.L's `Tlink`/`Tsymlink` prove
-  the extension is expressible; whether to adopt or mint is part of the task).
+- **Hard links and `symlink`/`readlink`/`lstat`** — the protocol-room decision the uid
+  model no longer gates (9P2000.L's `Tlink`/`Tsymlink` prove the extension is
+  expressible; adopt or mint is the remaining choice).
 - **kencc or clang for the ported userspace**, given `extern register` and anonymous struct
   members. Fresh code is clang (§9.4 is the measured recipe); the question is Plan 9's own
   source.

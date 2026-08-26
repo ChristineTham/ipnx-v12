@@ -87,7 +87,7 @@ slots are dropped entirely.
 | 41 | `errstr` | proc | — | ✓ | per-proc error string, exchanged |
 | 42 | `stat` | 9P | `Twalk`+`Tstat` | ✓ | |
 | 43 | `fstat` | 9P | `Tstat` | ✓ | |
-| 44 | `wstat` | 9P | `Twstat` | — | the call class B collapses into |
+| 44 | `wstat` | 9P | `Twstat` | ✓ | the call class B collapses into; carries `chmod`/`chown` and the setuid bit |
 | 45 | `fwstat` | 9P | `Twstat` | — | |
 | 46 | `mount` | ns | `Tversion`+`Tattach` | ✓ | takes an fd to a server; the wire-9P boundary |
 | 47 | `await` | proc | — | ✓ | |
@@ -130,8 +130,8 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `seek` | A | `seek` | |
 | `getpid` | A | libc | no trap in Plan 9 either |
 | `dirread` | A | `pread` on the directory | stat records, converted |
-| `setuid` | C | **design** | the item APE called impossible |
-| `getuid` | C | **design** | |
+| `setuid` | C | libc: write `/proc/n/ctl` | the item APE called impossible — [uid.md](uid.md) |
+| `getuid` | C | libc: read `/dev/user`, map via passwd | |
 | `stime` | D | drop | the host owns the clock |
 | `fmount` | A | `mount` | |
 | `alarm` | A | `alarm` | |
@@ -152,8 +152,8 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `pipe` | A | `pipe` | |
 | `times` | B | read `/proc/n/status` | |
 | `profil` | D | drop | |
-| `setgid` | C | **design** | |
-| `getgid` | C | **design** | |
+| `setgid` | C | as `setuid` (uid.md D2) | |
+| `getgid` | C | as `getuid` (uid.md D2) | |
 | `ssig` | C | `notify`/`noted` | V7-style signals over notes; libc table |
 | `funmount` | A | `unmount` | |
 | `sysacct` | D | drop | |
@@ -161,26 +161,26 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `syslock` | D | drop | |
 | `ioctl` | C | `ctl` files | libc translation per device class |
 | `sysboot` | D | drop | |
-| `setruid` | C | **design** | |
+| `setruid` | C | libc: write `/proc/n/ctl` (uid.md D1) | |
 | `symlink` | C | **design** | cf. 9P2000.L `Tsymlink` |
 | `readlink` | C | **design** | |
 | `exece` | A | `exec` | |
-| `umask` | C | per-proc field, applied at `create` | small kernel addition |
+| `umask` | C | per-proc field, applied at `create` | in the PoC kernel |
 | `chroot` | B | `rfork(RFCNAMEG)` + `bind` | |
 | `rmdir` | A | `remove` | |
 | `mkdir` | A | `create(DMDIR)` | |
 | `vfork` (slot 66 = `fork`) | A | `rfork(RFPROC\|RFMEM)` | the lazy path — vfork *is* the design, §5.2 |
 | `getlogname` | B | read `/dev/user` | |
 | `vadvise` | D | drop | |
-| `setgroups` | C | **design** | |
-| `getgroups` | C | **design** | |
+| `setgroups` | C | as `setuid` (uid.md D2) | |
+| `getgroups` | C | as `getuid` (uid.md D2) | |
 | `vlimit` | D | drop | |
 | `vswapon` | D | drop | |
 | `nap` | D | drop | `sleep` exists if ever wanted |
 | `vtimes` | D | drop | |
 
 **Landing census over the 68: 28 direct onto live calls (A) · 12 libc/namespace idioms (B)
-· 17 split as — 10 uid/link/symlink design items, 4 libc translations (`ioctl`, `select`,
-`kill`, `ssig`), `umask` a small kernel addition, `mknod` deliberately not restored, and
-`lstat` waiting on `symlink` — · 11 dropped (D).** The design items are one design: the uid
-model with the link family riding on its protocol decision.
+· 17 split as — the seven uid calls landed by [uid.md](uid.md), `umask` in the kernel,
+4 libc translations (`ioctl`, `select`, `kill`, `ssig`), `mknod` deliberately not
+restored, and the `link`/`symlink`/`lstat`/`readlink` four awaiting the protocol-room
+choice — · 11 dropped (D).**

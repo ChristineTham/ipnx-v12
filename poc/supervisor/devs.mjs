@@ -10,29 +10,45 @@ import { concat } from "./bytes.mjs";
 
 let qgen = 1;
 const empty = new Uint8Array(0);
+const derr = (m) => Object.assign(new Error(m), { guest: true });
 
 // ---- ramfs: an in-memory tree, seeded from a host-supplied structure ----
 // seed: { name, dir, kids: [seed...], data: Uint8Array }
-export function makeRamfs(seed) {
+// Enforcement here is V10's regime (docs/uid.md): every node carries uid and
+// mode, checked against the caller's credential; eve bypasses as root does.
+export function makeRamfs(seed, eve = "glenda") {
   function load(s, name) {
     if (s.dir) {
-      const node = { name, qpath: qgen++, dir: true, kids: new Map() };
+      const node = { name, qpath: qgen++, dir: true, kids: new Map(), uid: eve, mode: 0o755 };
       for (const k of s.kids) node.kids.set(k.name, load(k, k.name));
       return node;
     }
-    return { name, qpath: qgen++, dir: false, data: s.data };
+    return { name, qpath: qgen++, dir: false, data: s.data, uid: eve, mode: 0o644 };
   }
   const root = load(seed, "/");
   if (!root.kids.has("tmp"))                      // a writable corner, always
-    root.kids.set("tmp", { name: "tmp", qpath: qgen++, dir: true, kids: new Map() });
+    root.kids.set("tmp", { name: "tmp", qpath: qgen++, dir: true, kids: new Map(), uid: eve, mode: 0o777 });
   const statNode = (k) => marshalStat({
-    name: k.name, qtype: k.dir ? QTDIR : QTFILE, qpath: k.qpath,
-    mode: (k.dir ? DMDIR | 0o755 : 0o644), length: k.dir ? 0 : k.data.length,
+    name: k.name, qtype: k.dir ? QTDIR : QTFILE, qpath: k.qpath, uid: k.uid,
+    mode: ((k.dir ? DMDIR : 0) | k.mode) >>> 0, length: k.dir ? 0 : k.data.length,
   });
+  const access = (node, cred, want) => {          // want: 4 read, 2 write
+    if (!cred || cred.euid === eve) return;
+    const bits = node.uid === cred.euid ? (node.mode >> 6) : node.mode;
+    if ((bits & want) !== want)
+      throw derr(`permission denied ('${node.name}' is ${node.uid}'s, mode ${(node.mode & 0o777).toString(8)})`);
+  };
   return {
     name: "ramfs",
     attach: () => root,
     walk: (node, name) => (node.dir ? node.kids.get(name) ?? null : null),
+    open: (node, mode, cred) => {
+      const rw = mode & 3;                        // OREAD 0, OWRITE 1, ORDWR 2, OEXEC 3
+      let want = rw === 1 ? 2 : rw === 2 ? 6 : 4;
+      if (mode & 16) want |= 2;                   // OTRUNC
+      access(node, cred, want);
+      if ((mode & 16) && !node.dir) node.data = empty;
+    },
     read: (node, n, off) => {
       if (node.dir) {
         // read(5): "an integral number of directory entries" — never split one
@@ -52,7 +68,7 @@ export function makeRamfs(seed) {
       return node.data.subarray(Math.min(Number(off), node.data.length), end);
     },
     write: (node, data, off) => {
-      if (node.dir) throw new Error("write on directory");
+      if (node.dir) throw derr("write on directory");
       const o = Number(off), end = o + data.length;
       if (end > node.data.length) {
         const grown = new Uint8Array(end);
@@ -62,25 +78,42 @@ export function makeRamfs(seed) {
       node.data.set(data, o);
       return data.length;
     },
-    create: (parent, name, perm, isdir) => {
-      if (!parent.dir) throw new Error("create in non-directory");
+    create: (parent, name, perm, isdir, omode, cred) => {
+      if (!parent.dir) throw derr("create in non-directory");
+      access(parent, cred, 2);
       const old = parent.kids.get(name);
       if (old) {                                   // create(2): existing file truncates
-        if (old.dir || isdir) throw new Error(`'${name}' already exists`);
+        if (old.dir || isdir) throw derr(`'${name}' already exists`);
+        access(old, cred, 2);
         old.data = empty;
         return old;
       }
       const node = isdir
         ? { name, qpath: qgen++, dir: true, kids: new Map() }
         : { name, qpath: qgen++, dir: false, data: empty };
+      node.uid = cred?.euid ?? eve;
+      node.mode = perm & 0o7777;
       parent.kids.set(name, node);
       return node;
     },
-    remove: (parent, name) => {
+    remove: (parent, name, cred) => {
       const node = parent.kids.get(name);
-      if (!node) throw new Error(`'${name}' does not exist`);
-      if (node.dir && node.kids.size) throw new Error("directory not empty");
+      if (!node) throw derr(`'${name}' does not exist`);
+      access(parent, cred, 2);
+      if (node.dir && node.kids.size) throw derr("directory not empty");
       parent.kids.delete(name);
+    },
+    wstat: (node, ch, cred) => {                   // chmod: owner or eve; chown: eve (D3)
+      if (ch.mode !== undefined) {
+        if (cred && cred.euid !== eve && cred.euid !== node.uid)
+          throw derr(`not owner of '${node.name}'`);
+        node.mode = ch.mode & (0o7777 | 0x000C0000); // permission + DMSETUID/DMSETGID
+      }
+      if (ch.uid !== undefined) {
+        if (cred && cred.euid !== eve)
+          throw derr("only the host owner may chown (docs/uid.md D3)");
+        node.uid = ch.uid;
+      }
     },
     truncate: (node) => { if (!node.dir) node.data = empty; },
     stat: statNode,
@@ -92,6 +125,7 @@ export function makeRamfs(seed) {
 export function makeCons(out) {
   const root = { name: "/", qpath: qgen++, dir: true };
   const cons = { name: "cons", qpath: qgen++, dir: false };
+  const userf = { name: "user", qpath: qgen++, dir: false };
   let buf = empty, eof = false;
   const parked = [];
   const serve = () => {
@@ -105,8 +139,11 @@ export function makeCons(out) {
   return {
     name: "cons",
     attach: () => root,
-    walk: (node, name) => (node === root && name === "cons" ? cons : null),
+    walk: (node, name) =>
+      node === root ? (name === "cons" ? cons : name === "user" ? userf : null) : null,
     read: (node, n, off, ctx) => {
+      if (node === userf)                          // /dev/user: the caller's euid
+        return Number(off) === 0 ? new TextEncoder().encode(ctx?.cred?.euid ?? "") : empty;
       if (node !== cons) return empty;
       if (buf.length || eof) {
         const give = buf.subarray(0, Math.min(n, buf.length));
@@ -143,7 +180,7 @@ export function makePipeDev() {
     },
     write: (node, data) => {
       const { p, end } = node;
-      if (p.refs[1 ^ end] === 0) throw new Error("write on closed pipe");
+      if (p.refs[1 ^ end] === 0) throw derr("write on closed pipe");
       p.q[end].push(new Uint8Array(data));         // copy: tx is reused
       p.nbytes[end] += data.length;
       serve(p, end);

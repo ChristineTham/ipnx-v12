@@ -7,7 +7,7 @@
 let port, mb, tx;
 const ST = { IDLE: 0, REQ: 1, DONE: 2 };
 const R_FORKRESUME = -1000, R_EXECSELF = -1001;
-const T_STR = new Set([2, 3, 7, 8, 14, 22, 25, 42]);   // traps whose a0 is a path/string
+const T_STR = new Set([2, 3, 7, 8, 14, 22, 25, 42, 44]);   // traps whose a0 is a path/string
 class ForkResume { constructor(pid) { this.pid = pid; } }
 class ExecReplace {}
 
@@ -79,7 +79,8 @@ function sys(trap, a0, a1, a2, a3, a4) {
       a2 = argc;                            // empty argv strings must survive
     }
     if (trap === 2) o = cstr(a1, o);        // bind: name then old
-    tx[o] = 0;
+    if (trap === 44) tx.set(memU8.subarray(a1, a1 + a2), o);  // wstat: the raw record
+    else tx[o] = 0;
   }
   if (trap === 46) {                        // mount: old at a2, aname at a4
     let o = cstr(a2, 0);
