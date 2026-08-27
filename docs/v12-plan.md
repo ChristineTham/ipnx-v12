@@ -839,8 +839,19 @@ and sleep on `poll_oneoff`, on both hosts — and **REAL CPython 3.14.7** (the
 wasi build, 30.5MB) boots by landmark, imports its stdlib from a 21-file
 measured subset (`wasi/pylib.txt` — everything else is frozen into the
 binary), runs a script out of the namespace and round-trips json — **130
-tests**. Two of the three benchmark runtimes speak to the kernel; git's
-`libunix` port is the third.
+tests**. Two of the three benchmark runtimes speak to the kernel. **git is
+deferred, deliberately (2026-08-27)**: porting it to wasi now would measure
+the wrong surface — git is the modern personality's benchmark, so it gets
+*built under that personality* once `libunix` exists (compilation as a
+capability, per the `/cc` decision), not hand-carried around it. The Rust
+kernel core is under way (same day): `native/` holds the kernel crate (the
+core as a pure state machine — syscalls in, effects out, the per-platform
+seam) and the macOS host shim (wasmtime 37, a thread per guest, the guard as
+a plain host function — RESEARCH §9.6). **75 of the 130 conformance tests
+pass at first light**: the real rc's whole script, sam -d, forktest, links,
+unions, wstat, unmount. Still red: wire 9P, devproc/uid, the window server,
+notes/AREAD — and the WASI shim. `kernel.mjs` is the reference
+implementation; the suite is the spec.
 
 ## Sources
 

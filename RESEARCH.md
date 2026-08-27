@@ -984,6 +984,48 @@ namespace by landmark, imports json (through `re`, compiled by the real
 `_compiler` chain), round-trips a file, and writes `__pycache__` pycs whose
 finalisation exercises `path_rename` — V10's link+remove — in passing.
 
+### 9.6 What the Rust kernel core measured (2026-08-27)
+
+The native milestone opened the same day the WASI ABI closed: `native/` is a
+cargo workspace — `kernel` (the core, 1,900 lines, a structural port of
+kernel.mjs) and `host` (the macOS shim: wasmtime 37, one OS thread per guest,
+mpsc mailboxes). First findings, all measured against the 130-test suite:
+
+- **The native guard needs no hand-written wasm.** The JS host must throw a
+  JS exception through wasm so `try_table`/`catch_all` can catch the lazy
+  fork child's unwind. On wasmtime the host-function frame boundary of the
+  nested `__forkshim` call plays catch_all's role: a typed host error unwinds
+  the child's wasm frames and stops exactly at the Rust frame that made the
+  call, which restores `[0,sp)` and returns the pid. `guard.rfork` is an
+  ordinary host function; the byte-emitted guard module stays a JS-host
+  artefact.
+- **The asyncify machinery ports intact**: bare fork (memory snapshot into a
+  fresh store on a new thread, both sides rewound), real setjmp/longjmp, and
+  the thread contexts all run — the real rc's pipelines, subshells and
+  captures pass, and `sam -d` runs its structural-regexp suite over native
+  wasmtime on the first attempt.
+- **The bind command is WHY fork shares the namespace.** The port initially
+  copied the namespace on flagless forks ("harmless: every such fork execs
+  immediately") — and three rc tests failed within the hour: `/bin/bind`
+  mutates the PARENT's view, which only works because rfork(RFPROC) without
+  RFNAMEG shares the mount table by reference. The deviation was measured
+  wrong and removed; the namespace is now a shared handle, copied only under
+  RFNAMEG. (One of the three "failures" had been passing falsely on a glob:
+  `*hello*` matched `hellofs`.)
+- **The kernel stayed a pure state machine.** Syscalls arrive with their
+  strings pre-marshalled (the tx SAB's exact shape), replies leave through
+  per-call senders, parking is a stored sender, and everything platform-bound
+  — spawn a guest, write the console, arm a timer, shut down — leaves as an
+  `Effect` the embedding shim drains. That contract is the per-platform
+  seam the decision log promised.
+
+Conformance at first light: **75 of 130** — init's lifecycle tranche, the
+whole rc script (35 lines), forktest, sam -d, links/symlinks, wstat, unmount,
+unions, RFNOMNT/RFNOWAIT. The 55 still red sit in four unported subsystems:
+wire 9P (devmnt/exportfs), devproc + the uid ctl, the window server with the
+draw engine, and notes/AREAD/IOWAIT (threadtest, samterm, acme) — plus the
+WASI shim. `kernel.mjs` remains the reference; the suite is the spec.
+
 ---
 
 ## 10. Licensing

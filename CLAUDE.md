@@ -103,6 +103,13 @@ COOP/COEP headers SharedArrayBuffer needs; `?i` boots interactive):
 node poc/serve.mjs
 ```
 
+The native host (the Rust core, RESEARCH §9.6; 75/130 conformance and
+growing) builds and runs with cargo:
+
+```bash
+cargo run --release --manifest-path native/Cargo.toml -p host -- poc/rootfs
+```
+
 Node ≥ 22 (`worker_threads`, SAB, wasm `try_table` exception handling — the legacy EH
 encoding is *rejected* by these engines, so any new wasm emission must use `try_table`).
 `poc/build/` and `poc/rootfs/bin/` are generated and gitignored. Guest binaries carry no
@@ -318,6 +325,11 @@ stat, imports through a measured 21-file stdlib subset (wasi/pylib.txt; the
 rest is frozen in-binary), and its pyc writes exercise path_rename live. The
 carried lesson: preview1's fd_readdir ends the directory at bufused <
 buflen, so the final dirent must ship truncated (the 118-of-185 listing that
-convinced importlib the stdlib had no `re`). Next: git via libunix, then the
-native host — **macOS first, then iPad** (the user's platform order) — as
-the Rust core with per-platform shims (decisions of 2026-08-27, below).
+convinced importlib the stdlib had no `re`). git is deferred to the
+modern personality (it gets built under it, not ported around it — decision
+log). The native host has begun: `native/` is the Rust kernel core (a pure
+state machine: syscalls in, effects out) plus the macOS wasmtime shim — the
+real rc, sam -d and forktest already pass there (75/130; §9.6 records why
+the native guard needs no hand-written wasm, and why fork must SHARE the
+namespace — /bin/bind is the proof). Remaining tranches: wire 9P, devproc,
+the window server, notes/AREAD, the WASI shim on wasmtime.
