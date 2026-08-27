@@ -1,131 +1,136 @@
 <h1 align="center">ipnx-v12</h1>
 
-<p align="center"><em>Unix, written afresh.<br>
-Plan 9's kernel. Unix's interface. Today's conventions. None of the accretions.</em></p>
+<p align="center"><em>An operating system you can read in an afternoon,<br>
+boot in a browser tab, and hand to an AI one folder at a time.</em></p>
 
-**ipnx-v12 is a reimagining of Unix** — the system Research Unix would have become if its
-authors had kept walking: their own next kernel underneath, Unix's interface restored on
-top, and the modern world's settled conventions adopted without ceremony. It is not a
-restoration, not a distribution, and not POSIX. It is a clean, fresh Unix on a modern
-substrate:
+## Open a tab
 
-- **a modified Plan 9 kernel, hosted as an ordinary userspace process** — in the browser,
-  on macOS and iPadOS, in an OCI container, and eventually directly on a hypervisor;
-- **WebAssembly as the executable format** — every program, every personality, one
-  substrate;
-- **9P as the only IPC**, and **per-process namespaces** as both the addressing scheme and
-  the security model;
-- **personalities as libc dialects** over that one kernel — Plan 9's own, a WASI ABI, and
-  a modern Unix surface — so the kernel cannot bloat, ever, by construction.
+There is a whole operating system in this repository, and it runs in a browser tab.
 
-Three refusals define the edges: **no POSIX** (the standard, with its accreted
-bureaucracy — the useful fifth of it is derived by measurement instead), **no systemd**
-(boot is an rc script and a namespace file; there is no service-manager-shaped hole to
-fill badly), and **no Linux/BSD sediment** (there is no `ioctl` swamp to grow — the
-kernel's entire interface is a file protocol). Three adoptions define the present:
-**sockets won** (the BSD API rides `/net` files underneath), **UTF-8 won** (Plan 9's
-authors invented it; this system is rune-native end to end), and **modern software must
-run** — git, Python, Go are the acceptance tests, not aspirations.
+Not a demo of one. A kernel with processes, pipes, windows and a permission model. A
+shell — the real `rc`, compiled from Bell Labs' own source, every fork genuinely
+returning twice. An editor — the real `sam`, the one Rob Pike wrote, drawing itself
+into a window that is literally a file. Type `win sam &` and 1980s Bell Labs software
+paints glyphs in Chrome through `/dev/draw`, and nobody had to port anything: the
+source is verbatim, the system underneath is simply shaped the way software always
+wished it was.
 
-## The lineage
+The kernel is about 2,700 lines. You can read *all of it* before lunch. It carries
+46,000 lines of untouched Bell Labs userspace today, and it is built to carry your Go
+binaries, your Python, and your git repositories tomorrow — through the same nine
+operations on names. A hundred and twenty tests boot it, exercise everything from fork
+to fonts, and shut it down clean, identically on Node and in Chrome.
 
-[ipnx](https://github.com/ChristineTham/ipnx) resurrected Research Unix — real V8/V10
-kernels on an emulated VAX, the tape as the source of truth. The resurrection succeeded,
-and proved that resurrection is a dead end: the hardware is gone, the world moved, and a
-museum is not an operating system. **v12 is the counterfactual next edition instead** —
-the question "what would the Research line have shipped next?" answered with the benefit
-of knowing what its authors actually did next. They wrote Plan 9. From their own paper:
+This is not a museum piece, and it is not another Linux. It is what Unix was supposed
+to become.
 
-> "Compatibility was not a requirement for the system. Where the old commands or notation
-> seemed good enough, we kept them. When they didn't, we replaced them."
+## The sediment
 
-That was the pivot: a better kernel, and a break with Unix that kept it from mattering.
-**This project takes the kernel and undoes the break.** Everything they carried through
-the pivot is kept — their `/bin` is treated as the definitive curation of Unix, refusals
-included (`sed 10q` remains the answer to `head`). Everything the break discarded that
-the world still runs on is restored as a personality above the kernel, never surgery
-inside it. Starting from Plan 9 is not a compromise: it is paying respect to Unix's
-creators by starting from where they finished.
+You know the feeling. A fresh server is fifteen hundred packages you never chose. Boot
+is a dependency graph only systemd could love. Your app is a container running a distro
+running a runtime, and hello-world ships by the gigabyte. Configuration is archaeology.
+POSIX is thousands of pages, and the part anyone uses fits on a napkin.
 
-## The design
+Under all of it is the idea you fell for in the first place — small tools, plain text,
+everything a file, everything composable. That idea didn't fail. **It was buried.**
 
-| | |
-|---|---|
-| **Kernel** | Plan 9's semantics, reimplemented hosted — ~2,700 lines carrying 46,000+ lines of verbatim 4th-edition userspace |
-| **Executables** | WebAssembly, no exceptions |
-| **IPC** | 9P. The only one. |
-| **Namespace** | Per-process; unions, binds, and `exportfs` hand whole worlds between processes — and, in containers, between machines |
-| **Devices** | File servers. There is no hardware to have a driver for. |
-| **GUI** | `/dev/draw` as an actual per-window, per-namespace file — the thing every Plan 9 port had to give up — with the real `sam`, `samterm`, and (next) `acme` drawing on it |
-| **Personalities** | Plan 9 native (running now) · WASI (Go `wasip1`, CPython's wasi builds) · a measured modern-Unix libc for source ports, git first |
-| **Platforms** | Browser and Node today; then a Rust kernel core with per-platform shims — macOS, iPadOS, `FROM scratch` OCI, and a hypervisor-direct microVM |
+The people who invented it watched it happen, and wrote their answer: Plan 9 — one
+protocol for everything, namespaces per process, the network as a mount point. The
+best kernel design ever shipped. And in the same motion they broke compatibility with
+Unix — *"Compatibility was not a requirement for the system"* — so the world couldn't
+follow, and the sediment won.
+
+**ipnx-v12 takes their kernel and undoes the break.** Their curation of Unix preserved
+above it, Unix's interface restored beside it, and the modern world welcomed in:
+sockets won, UTF-8 won (they invented it), and git, Python and Go are acceptance
+tests, not aspirations. No POSIX. No systemd. No sediment. The counterfactual next
+edition — what the Research line would have shipped if it had kept walking.
+
+## The tricks are the architecture
+
+None of these are features. All of them fall out of two decisions — everything is a
+file, and every process composes its own world:
+
+- **Your window is a file.** `bind '#w/1' /dev` and a namespace *is* a window; the
+  editor draws by writing to it. Every Plan 9 port in history had to give this up. A
+  browser tab turns out to be the place it finally works.
+- **Hand someone a world.** `exportfs` serves your namespace — private binds included —
+  to another process, another container, another machine. Not a copy: the thing itself,
+  over one protocol.
+- **Give an AI a namespace, not an allowlist.** An agent's visible universe is
+  assembled from binds: exactly the folders, tools and services you mounted, nothing
+  else *reachable by construction*, with the audit log for free. This is the sandbox
+  the agent ecosystem is currently faking with permission prompts.
+- **The kernel cannot bloat.** Plan 9 native, WASI, and a modern Unix surface are all
+  just libc dialects over the same file protocol. Personalities multiply; the kernel
+  stays readable in an afternoon. There is no ioctl swamp because there is nowhere to
+  dig one.
+- **A computer as a function call.** The same kernel is headed for a microVM that boots
+  in ~100 milliseconds, holds nothing it can't remount, and dies without ceremony —
+  which is to say: the architecture Lambda runs on, with an actual operating system's
+  manners.
 
 ## The principles
 
-- **Curation over completeness.** Plan 9's command set is the designers' own testimony
-  about what Unix was worth; it is taken entire — small filters, `cron`, the games — and
-  its deliberate absences are honored too.
-- **Measurement over standards.** The modern personality is not POSIX adopted but a
-  surface *derived*: port git, CPython, and Go's runtime expectations, record every
-  interface they actually demand, and that list is the specification. (APE chased the
-  whole standard and confessed its failures; the lesson is kept, re-aimed.)
-- **Refusal and sequencing are different acts.** Software with Research ancestry is never
-  refused, only sequenced behind its dependencies — the float door, `/net`, a device not
-  yet offered. The only true exclusions have neither ancestry nor necessity: the web-era
-  period pieces, and the pivot's own infrastructure (fossil, factotum), whose roles the
-  host layer fills.
-- **The kernel cannot bloat.** Every personality is a libc dialect over the same nine-ish
-  file operations. Growth happens in userspace, behind 9P, where it composes and can be
-  unmounted.
+- **Curation over completeness.** Plan 9's `/bin` is its designers' own testimony about
+  which parts of Unix were worth keeping. It is taken entire — the filters, `cron`,
+  the games — absences included: `sed 10q` remains the answer to `head`.
+- **Measurement over standards.** The modern personality is derived, not adopted: port
+  git, CPython and Go, record every interface they actually demand, and that list is
+  the specification. The useful fifth of POSIX, earned line by line.
+- **Refusal and sequencing are different acts.** Anything with Unix ancestry is never
+  refused, only sequenced behind its dependencies. The only true exclusions have
+  neither ancestry nor necessity.
+- **Personalities live in userspace, behind 9P,** where they compose and can be
+  unmounted. Growth happens where it can't hurt anyone.
 
 ## What runs today
 
-**The whole editor, on the whole stack, in a browser tab.** `poc/` boots a hosted kernel
-(Node and browser from one neutral core) running the **real Plan 9 userspace compiled
-from its own 4th-edition source**: the real `rc` (bison over its own grammar, every fork
-genuinely returning twice through the asyncify machinery), the real `sam` — terminal
-mode and windowed, `win sam &` opening samterm over the real libframe/libdraw — real
-`grep sed sort ls wc` and twenty more, real `setjmp/longjmp`, a wasm `libthread` whose
-blocked reads park a thread while the process keeps scheduling, wire 9P in both
-directions with `exportfs` handing private namespaces across processes, the uid model
-(the item APE called impossible) enforcing V10 permissions, and hard links and symlinks
-minted as this edition's own wire types. **120 acceptance tests pass identically on Node
-and in Chrome.** Beside it all, TUHS-tape V10 `cat` and `echo` run unmodified in
-`/v10/bin` — the exhibit that started the journey, kept in the room.
+The whole editor, on the whole stack, in a browser tab: the real `rc` (pipelines,
+subshells, functions — every fork through the asyncify machinery), the real `sam` in
+terminal mode and in a window over the real libframe/libdraw, real `grep sed sort ls
+wc` and twenty more, real `setjmp/longjmp`, a wasm `libthread` whose blocked reads
+park a thread while the process keeps scheduling, wire 9P in both directions, a uid
+model enforcing real permissions — the one item Plan 9's own compatibility layer
+called impossible — and hard links and symlinks minted as this edition's own wire
+types. **120 acceptance tests, green on Node and in Chrome.** Beside it all, TUHS-tape
+V10 `cat` and `echo` run unmodified in `/v10/bin`: the exhibit that started the
+journey, kept in the room.
 
-Next: `acme` closes the proof of concept; then the Rust kernel core and its shims; then
-the personalities in benchmark order — a Go binary, a Python interpreter, and `git
-status` on a real repository, each through its own dialect of the same kernel. Beyond,
-stated as aspiration: cloud-, AI-, and Kubernetes-native by the same move that absorbed
-everything else — S3 buckets, lambda functions, language models and pods as file trees
-in a namespace, and a per-agent namespace as the capability model the AI world is still
-groping toward.
+Next: `acme` closes the proof of concept. Then a Rust kernel core with per-platform
+shims — macOS, iPadOS, a `FROM scratch` OCI container, the microVM. Then the
+personalities, in benchmark order: a Go binary under the WASI shim, a Python
+interpreter that can actually `fork`, and `git status` on a real repository. Beyond,
+stated as aspiration and admitted by one test — *does it become a file tree in a
+namespace?* — the cloud and the cluster: your S3 bucket is a directory, the model is a
+file you write prompts into, the pod is a namespace, and the function is this machine,
+booted for one request and gone.
 
 ## Standing on
 
-Three prior systems built pieces of this architecture: **plan9port** (the userspace,
-minus the kernel — which is why its `devdraw` had to abandon the file interface),
-**9vx** (the kernel, on a sandbox that died with x86), and **Inferno's `emu`** (the
-right architecture, on a VM that never got an ecosystem). This project is `emu`'s
-architecture with WebAssembly where Dis was — the VM with the toolchains — and a kernel
-small enough (~2,700 lines) that reimplementing it per-substrate is a milestone, not a
-lifetime.
+Three systems built pieces of this: **plan9port** (the userspace without the kernel —
+which is why its graphics had to abandon the file interface), **9vx** (the kernel on a
+sandbox that died with x86), **Inferno's `emu`** (the right architecture on a VM that
+never got an ecosystem). This is `emu`'s architecture with WebAssembly where Dis was —
+the VM the whole world builds toolchains for — and a kernel small enough that
+reimplementing it per-substrate is a milestone, not a lifetime.
 
 ## The documents
 
 - **[RESEARCH.md](RESEARCH.md)** — the living evidence base: every finding with
   provenance, from Plan 9's call table to the wasm toolchain's measured behaviors.
 - **[docs/v12-plan.md](docs/v12-plan.md)** — the living spec: scope, decisions with
-  dates, the open questions.
+  dates, open questions.
 - **[docs/syscalls.md](docs/syscalls.md)** — the derived call list: Plan 9's 40 live
   calls dispositioned, V10's 68 routines mapped onto them.
-- **[docs/uid.md](docs/uid.md)** — the uid model: why APE could not and this kernel can.
+- **[docs/uid.md](docs/uid.md)** — the uid model: why the compatibility layer could
+  not, and this kernel can.
 
 ## Licence and estate
 
-[LICENSE](LICENSE) is **MIT, inherited rather than chosen** — this is a derivative work
-of Plan 9, whose copyright passed to the Plan 9 Foundation in March 2021 under MIT, and
-Plan 9-derived material keeps the Foundation's notice. Research Unix material appears
-under Nokia's 2017 covenant, each vendored batch carrying its own NOTICE with
-provenance; the V10 measurement tree itself stays in the parent repository so every
-quoted number keeps file-and-line provenance.
+[LICENSE](LICENSE) is **MIT, inherited rather than chosen** — this is a derivative
+work of Plan 9, whose copyright passed to the Plan 9 Foundation in March 2021 under
+MIT; Plan 9-derived material keeps the Foundation's notice. Research Unix material
+appears under Nokia's 2017 covenant, each vendored batch carrying its own NOTICE with
+provenance; the V10 measurement tree stays in the parent repository so every quoted
+number keeps file-and-line provenance.
