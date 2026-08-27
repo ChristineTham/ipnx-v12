@@ -10,7 +10,7 @@ LD="$SDK/bin/wasm-ld --no-entry --import-memory --stack-first -z stack-size=2621
 # The per-binary flag (never system-wide): programs whose fork sites do not
 # all exec. Instrumentation is confined to call paths reaching env.forka.
 ASYNCIFY="forktest forkind forkvm"   # bare forkers; the real rc rule asyncifies itself
-mkdir -p build rootfs/bin
+mkdir -p build rootfs/bin rootfs/srv rootfs/mnt rootfs/tmp
 $CC -c libc/crt0.c -o build/crt0.o
 $CC -c libc/crt9.c -o build/crt9.o
 $CC -c libc/lib9.c -o build/lib9.o
@@ -21,7 +21,7 @@ $CC -c libc/draw9.c -o build/draw9.o
 # for now (fltfmt/strtod need libm); -fms-extensions carries kencc's
 # anonymous struct members (Biobufhdr in Biobuf).
 P9CC="$SDK/bin/clang --target=wasm32 -nostdlib -O1 -fno-builtin -fms-extensions -Wno-incompatible-pointer-types -Wno-int-conversion -Iplan9/include -Iplan9/sys/include -Wno-unknown-pragmas -Wno-unused-variable -Wno-unused-parameter -Wno-parentheses -Wno-empty-body -Wno-comment -Wno-deprecated-non-prototype -Wno-implicit-int -Wno-return-type -Wno-main-return-type"
-P9EXCLUDE="fltfmt strtod charstod pow10 frexp nan64 atof execl"   # execl: &f+1 assumes stack varargs; lib9 has a va_arg one
+P9EXCLUDE="execl"   # execl: &f+1 assumes stack varargs; lib9 has a va_arg one. The float door is open: wasm has native f64.
 : > build/p9lib.list
 for c in plan9/sys/src/libc/port/*.c plan9/sys/src/libc/fmt/*.c plan9/sys/src/libc/9sys/*.c plan9/sys/src/libbio/*.c plan9/sys/src/libregexp/*.c plan9/sys/src/libString/*.c; do
   b=$(basename "$c" .c)
@@ -196,6 +196,84 @@ $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/p9-samterm-*.o b
   -o rootfs/bin/aux/samterm.tmp && mv rootfs/bin/aux/samterm.tmp rootfs/bin/aux/samterm
 echo "  bin/aux/samterm  $(wc -c < rootfs/bin/aux/samterm | tr -d ' ') bytes (REAL samterm, asyncified)"
 
+# acme: the real one — every column, tag and 9P file of it; threaded,
+# forking, self-mounting. Asyncified like everything that forks bare.
+# kencc's named access to unnamed members, reconciled per file into build/
+# (the same derivation shape as bison over the grammars)
+mkdir -p build/acme-src
+# kencc converts a pointer-to-struct into a pointer to its unnamed member at
+# call sites; clang does not, so acme's pervasive frinsert(t, ...) — Text* for
+# Frame* — would make libframe write its fields over Text's head (measured:
+# t->file became the font pointer; Buffer.cnc read Font.height|ascent<<16).
+# Frame's first member is font, and with -fms-extensions x->font resolves to
+# the embedded Frame's font for any embedder — so (Frame*)&(x)->font is the
+# adjusted pointer whether x is a Frame* (+0) or a Text* (+offset).
+cat > build/acme-src/frameadjust.h <<'FRADJEOF'
+#define FRADJ(x) ((Frame*)&(x)->font)
+#define frcharofpt(f, a)          (frcharofpt)(FRADJ(f), a)
+#define frptofchar(f, a)          (frptofchar)(FRADJ(f), a)
+#define frdelete(f, a, b)         (frdelete)(FRADJ(f), a, b)
+#define frinsert(f, a, b, c)      (frinsert)(FRADJ(f), a, b, c)
+#define frselect(f, a)            (frselect)(FRADJ(f), a)
+#define frselectpaint(f, a, b, c) (frselectpaint)(FRADJ(f), a, b, c)
+#define frdrawsel(f, a, b, c, d)  (frdrawsel)(FRADJ(f), a, b, c, d)
+#define frdrawsel0(f, a, b, c, d, e) (frdrawsel0)(FRADJ(f), a, b, c, d, e)
+#define frinit(f, a, b, c, d)     (frinit)(FRADJ(f), a, b, c, d)
+#define frsetrects(f, a, b)       (frsetrects)(FRADJ(f), a, b)
+#define frclear(f, a)             (frclear)(FRADJ(f), a)
+#define frtick(f, a, b)           (frtick)(FRADJ(f), a, b)
+#define frinittick(f)             (frinittick)(FRADJ(f))
+#define frredraw(f)               (frredraw)(FRADJ(f))
+FRADJEOF
+for c in plan9/sys/src/cmd/acme/*.c; do
+  sed -e 's/&mousectl->Mouse/(Mouse*)mousectl/' \
+      -e 's/mousectl->Mouse/*(Mouse*)mousectl/' \
+      -e 's/&x->Fcall/(Fcall*)\&x->type/' \
+      -e 's/->Frame\./->/g' \
+      -e 's/&\([a-zA-Z_]*\)->Frame/(Frame*)\&\1->font/g' \
+      -e 's|#include <frame.h>|#include <frame.h>\n#include "frameadjust.h"|' \
+      -e 's/xselect(t, mousectl/xselect((Frame*)\&t->font, mousectl/' \
+      "$c" > "build/acme-src/$(basename "$c")"
+done
+for c in build/acme-src/*.c; do
+  b=$(basename "$c" .c)
+  $P9CC -fshort-wchar -Iplan9/sys/src/cmd/acme -c "$c" -o "build/p9-acme-$b.o"
+done
+# dat.h carries pre-ANSI tentative definitions in every TU (rc's disease,
+# rc's cure): weaken every duplicated symbol except its initializing owner
+acme_owner() {
+  case "$1" in
+    boxcursor) echo build/p9-acme-acme.o;;
+    display|font|screen) echo libdraw;;   # the library owns them; every acme copy yields
+    *) echo "";;
+  esac
+}
+ACMEOBJS="$(echo build/p9-acme-*.o)"
+for o in $ACMEOBJS; do
+  "$SDK/bin/llvm-nm" --defined-only --extern-only "$o" | awk -v o="$o" '{print o, $3}'
+done > build/acme-defs.txt
+awk '{n[$2]++} END{for(s in n) if(n[s]>1) print s}' build/acme-defs.txt > build/acme-dups.txt
+printf 'display\nfont\nscreen\n' >> build/acme-dups.txt
+for o in $ACMEOBJS; do
+  weak=""
+  while read -r sym; do
+    grep -q "^$o $sym\$" build/acme-defs.txt || continue
+    own=$(acme_owner "$sym")
+    [ -z "$own" ] && own=$(awk -v s="$sym" '$2==s{print $1; exit}' build/acme-defs.txt)
+    [ "$o" = "$own" ] && continue
+    weak="$weak $sym"
+  done < build/acme-dups.txt
+  [ -n "$weak" ] && node weaken.mjs "$o" $weak
+done
+$P9CC -c plan9/sys/src/libcomplete/complete.c -o build/p9-complete.o
+$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/p9-acme-*.o build/libthread.o build/mousekbd.o build/p9-plumb-mesg.o build/p9-plumb-sendtext.o build/p9-complete.o build/libdraw.a build/libp9.a -o rootfs/bin/acme
+"$BINARYEN/bin/wasm-opt" rootfs/bin/acme \
+  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj,env.tsave,env.tjump -O2 \
+  --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
+  --enable-nontrapping-float-to-int \
+  -o rootfs/bin/acme.tmp && mv rootfs/bin/acme.tmp rootfs/bin/acme
+echo "  bin/acme  $(wc -c < rootfs/bin/acme | tr -d ' ') bytes (REAL acme, asyncified)"
+
 # real Plan 9 sources (poc/plan9/NOTICE): compiled unmodified, void main,
 # through the shim headers — these SUPERSEDE any same-named PoC command
 for c in plan9/sys/src/cmd/*.c; do
@@ -225,7 +303,9 @@ node -e '
 const fs = require("fs"), p = require("path");
 const out = {};
 (function walk(d, pre){
-  for (const e of fs.readdirSync(d)) {
+  const es = fs.readdirSync(d);
+  if (es.length === 0) { out[pre] = null; return; }   // empty dir: a marker, so /srv survives
+  for (const e of es) {
     const f = p.join(d, e), s = fs.statSync(f);
     if (s.isDirectory()) walk(f, pre + e + "/");
     else out[pre + e] = fs.readFileSync(f).toString("base64");

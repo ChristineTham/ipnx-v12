@@ -767,10 +767,18 @@ designed ([docs/uid.md](uid.md)) and running, the window server speaks the real 
 device protocol (screens, window views, clipping, channel-correct uploads,
 `b d f L e E y i l s x c A F t O v`), and **the whole editor runs**: the real `sam`
 over the real `samterm`, libframe over libdraw over the wasm libthread, typed at in a
-browser window and headlessly under samtest. Next, closing the PoC: **`acme`** — the
-GUI decision's declared real test — with the interaction layer it needs (mouse sweep,
-chords, menus through the browser host); then the PoC is done and the native work
-begins.
+browser window and headlessly under samtest. And **the PoC is closed** (2026-08-27):
+**the real `acme`** — the GUI decision's declared real test — boots in a browser
+window and under acmetest, all twenty of its source files verbatim through the
+derivation layer (the load-bearing find: kencc adjusts pointers to unnamed
+substructures at call sites and clang does not — RESEARCH §9.5's `frameadjust.h`
+shape), its own 9P file server armed over a pipe, the mouse crossing wctl with
+button-2 execute and button-3 look verified in the raster, the float door opened
+(`strtod`/`fltfmt` verbatim over the real `FPdbleword`), and the kernel grown its
+last two PoC devices: `#s` (srv — a posted fd's channel kept alive by name, which
+is what makes acme's error pipe park instead of EOF-spinning) and `#d` bound at
+`/fd`. **124 acceptance tests, green on Node and in Chrome.** The PoC has nothing
+left to prove; the native work begins.
 
 ## Sources
 

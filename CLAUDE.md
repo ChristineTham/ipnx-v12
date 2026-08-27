@@ -48,7 +48,14 @@ channels delivering through off-stack slots, blocking reads that park a thread w
 the process keeps scheduling) — and **the real sam EDITS IN A WINDOW**: `win sam &`
 boots sam over samterm, libframe renders the command window through the device's
 `x` (string-with-background), typed text crosses the mesg protocol and sam's answer
-renders back — 120 acceptance tests). Everything else is design documents.
+renders back — and **the real `acme` closes the proof of concept**: all twenty
+source files verbatim through the derivation layer (kencc adjusts pointers to
+unnamed substructures at call sites; clang does not — `frameadjust.h`), its own
+9P server mounted over a pipe, procexec on the wasm libthread, button-2 execute
+and button-3 look driven through `wctl` and verified in the raster, the float
+door opened (`strtod`/`fltfmt` verbatim), and `#s` — srv(3), a posted fd's
+channel kept alive by name — as the kernel's last PoC device — 124 acceptance
+tests). Everything else is design documents.
 
 ## Commands
 
@@ -69,7 +76,7 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints 120 PASS lines,
+Boot the kernel — init (pid 1) runs the acceptance tests, prints 124 PASS lines,
 exits 0:
 
 ```bash
@@ -168,12 +175,12 @@ evidence, not a fresh opinion.
   9front consulted** (both MIT). **`/dev/tty` does not exist** — `/dev/cons`, aliased in
   the personality's libc.
 - **`/dev/draw` stays an actual file, per window, per namespace** — the one place this
-  system can out-Plan 9 plan9port, **now demonstrated twice over**:
+  system can out-Plan 9 plan9port, **now demonstrated by both editors**:
   `supervisor/devwsys.mjs` is the window server's kernel half (rio's *interface*),
   `draw.mjs` its raster engine — screens, window views on one backing store,
   clipping, per-channel uploads, draw(3)'s `b d f L e E y i l s x c A F t O v` —
-  and **the real samterm draws on it** through the real libdraw/libframe, on the
-  wasm libthread. Next: `acme`, the real test, then the native host.
+  and **the real samterm and acme draw on it** through the real libdraw/libframe,
+  on the wasm libthread — acme, the declared real test, passed.
   **Self-hosting is not a goal** (`/cc` as
   file server makes compilation a capability).
 
@@ -261,7 +268,7 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (2026-08-27)
 
-120 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
+124 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
 (`node poc/serve.mjs` → `/browser/`, measured in Chrome 148); `?i` boots to **the real
 Plan 9 rc** — pipelines, subshells, `` `{...} `` captures, `fn`, `while`, `switch` — and
 `win rc &` opens a shell window that prompts because rc's own `Isatty` finds
@@ -283,8 +290,16 @@ AREAD/IOWAIT letting a read park one thread while the scheduler runs the rest. T
 load-bearing rule, learned the hard way: a suspended coroutine's stack is dead
 storage, so channels register, stash send values, and deliver through off-stack
 per-thread slots (the V10 exhibit stays; its growth is no longer a goal).
-And on all of it, **the whole editor**: `win sam &` in the browser, samtest
-headlessly — sam forking samterm, initdraw finding the window, libframe's `x`
-strings, the reply's glyphs read back out of the raster. Next: `acme` via the same
-stack, then the native host — **macOS first, then iPad** (the user's platform
-order).
+And on all of it, **both whole editors**: `win sam &` and `win acme &` in the
+browser, samtest and acmetest headlessly. Acme — the GUI decision's declared real
+test — runs from twenty verbatim sources over a derivation layer whose load-bearing
+find is that kencc adjusts pointers to unnamed substructures at call sites and
+clang does not (`frameadjust.h`, RESEARCH §9.5); it serves its own 9P over a pipe,
+executes by button 2 and looks by button 3 through wctl-injected mouse chords, and
+posts its error pipe to `#s`, the srv device, whose held reference is what lets a
+pipe reader park instead of EOF-spinning. The float door is open (`strtod`/`fltfmt`
+verbatim over the real `FPdbleword`), `#d` is bound at `/fd`, and the browser
+rootfs carries empty directories as explicit markers. **The PoC is complete.**
+Next: the native host — **macOS first, then iPad** (the user's platform order) —
+as the Rust core with per-platform shims, the WASI shim jumping the queue
+(decisions of 2026-08-27, below).

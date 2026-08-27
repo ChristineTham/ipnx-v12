@@ -859,6 +859,61 @@ And samterm (same day, the stack's top) measured four more:
   stats fails `initdraw`'s probe and libdraw falls back to binding `#i`. The window
   server now answers stat for every node it serves.
 
+And acme (same day, the proof of concept's close) measured five that generalise:
+
+- **kencc converts a pointer-to-struct into a pointer to its unnamed member at
+  call sites; clang passes it unadjusted** — a warning, not an error, and the
+  worst kind of wrong. Acme's pervasive `frinsert(t, …)` hands a `Text*` to
+  libframe's `Frame*`: libframe then wrote its fields over Text's head, and
+  `t->file` *became the font pointer*. The corruption announced itself as one
+  integer: `ntosize n=851983` = `(13<<16)|15` = `Font.ascent`/`height` read as
+  a rune count through `Buffer.cnc` at offset 8. The fix is 15 lines of
+  derivation header (`frameadjust.h`): `(Frame*)&(x)->font` is the adjusted
+  pointer whether `x` is a `Frame*` (font is Frame's first member, +0) or any
+  embedder (`-fms-extensions` resolves `x->font` to the embedded Frame's), so
+  each libframe entry point becomes a function-like macro over it. Acme's own
+  `xselect(t, mousectl, …)` — the same idiom, one internal function — is one
+  sed. The finding generalises: every kencc program embedding structs will
+  need its call sites audited, and the macro shape handles them without
+  touching vendored text.
+- **The float door is open** (the standing exclusion resolved): `atof`,
+  `strtod`, `charstod`, `fltfmt`, `nan`, `pow10`, `frexp`, `ctype`, `toupper`
+  compile verbatim once `u.h` defines the real little-endian `FPdbleword`
+  union — wasm has native f64; the exclusion had only ever been about that
+  union. `umuldiv` alone is ours (upstream it is per-arch assembler).
+- **`/srv` must be a device, not a directory** — acme posts its error pipe's
+  fd and reopens it via `/fd/N`; with `/srv` as ramfs the pipe's peer died at
+  `close()` and `acmeerrorproc`'s `while(read() >= 0)` spun on EOF: 2,867
+  empty warnings before the measurement. `#s` now captures the posted fd's
+  **channel** under the name — the name holds a reference, the reference is
+  the "potential writer" that makes a pipe reader park instead of seeing EOF,
+  which is precisely srv(3)'s semantic content. The kernel's OPEN shares a
+  posted channel the way `#d/N` does.
+- **The default font can back a font(6) file**: acme dies without its named
+  font (`openfont` failure is fatal in `geninitdraw`), so the rootfs carries
+  `/lib/font/bit/lucidasans/euro.8.font` = `15 13␤0x0000 0x00FF *default*` —
+  a legitimate font file whose one range resolves to the compiled-in default
+  subfont. The metrics are measured from `defont.c`'s own data (256 glyphs,
+  height 15, ascent 13), not assumed.
+- **A browser rootfs must carry its empty directories** — the packer emitted
+  files only, so `/srv` and `/mnt` existed on Node (directory seeding) and
+  vanished in Chrome. Empty dirs travel as explicit `null` markers in
+  `rootfs.json`.
+
+The wasm libthread finished growing to acme's needs the same day: `procexec`
+as fork-plus-exec with the runproc's self-`rfork` intercepted (`_threadrfork`
+stashes fds 0–19 at 100–119 and **defers** `RFNAMEG|RFNOTEG|RFENVG` onto the
+fork itself — the child gets the isolation the runproc meant for it, the
+shared instance stays untouched; acme's *startup* `rfork(RFENVG|RFNAMEG)`
+defers harmlessly because `win` already isolates the window namespace — the
+recorded deviation), `threadwaitchan` as a nohang-await poller,
+`threadnotify` as a handler chain over the note machinery, thread-aware
+`sleep` via a `wakeat` field and the scheduler passing its nearest deadline
+as the kernel `IOWAIT` timeout, and `Ref` as plain arithmetic (cooperative
+scheduling is the lock). Mouse events cross the same boundary keyboard ones
+do: wctl accepts `mouse x y buttons` with a really-advancing msec, because
+double-click detection is msec arithmetic.
+
 ---
 
 ## 10. Licensing

@@ -86,18 +86,20 @@ file, and every process composes its own world:
 
 ## What runs today
 
-The whole editor, on the whole stack, in a browser tab: the real `rc` (pipelines,
+Both whole editors, on the whole stack, in a browser tab: the real `rc` (pipelines,
 subshells, functions — every fork through the asyncify machinery), the real `sam` in
-terminal mode and in a window over the real libframe/libdraw, real `grep sed sort ls
-wc` and twenty more, real `setjmp/longjmp`, a wasm `libthread` whose blocked reads
-park a thread while the process keeps scheduling, wire 9P in both directions, a uid
-model enforcing real permissions — the one item Plan 9's own compatibility layer
-called impossible — and hard links and symlinks minted as this edition's own wire
-types. **120 acceptance tests, green on Node and in Chrome.** Beside it all, TUHS-tape
-V10 `cat` and `echo` run unmodified in `/v10/bin`: the exhibit that started the
-journey, kept in the room.
+terminal mode and in a window over the real libframe/libdraw, **the real `acme`** —
+itself a 9P file server, mounted over a pipe, executing commands under button 2 and
+opening files under button 3 — real `grep sed sort ls wc` and twenty more, real
+`setjmp/longjmp`, a wasm `libthread` whose blocked reads park a thread while the
+process keeps scheduling, wire 9P in both directions, a uid model enforcing real
+permissions — the one item Plan 9's own compatibility layer called impossible — and
+hard links and symlinks minted as this edition's own wire types. **124 acceptance
+tests, green on Node and in Chrome. The proof of concept is complete.** Beside it
+all, TUHS-tape V10 `cat` and `echo` run unmodified in `/v10/bin`: the exhibit that
+started the journey, kept in the room.
 
-Next: `acme` closes the proof of concept. Then a Rust kernel core with per-platform
+Next: a Rust kernel core with per-platform
 shims — macOS, iPadOS, a `FROM scratch` OCI container, the microVM. Then the
 personalities, in benchmark order: a Go binary under the WASI shim, a Python
 interpreter that can actually `fork`, and `git status` on a real repository. Beyond,

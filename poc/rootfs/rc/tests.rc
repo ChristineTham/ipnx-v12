@@ -16,7 +16,7 @@ if(~ `{cat /tmp/t1} written) echo PASS 'redirection > and ramfs write'; if not f
 echo more >> /tmp/t1
 if(~ `{wc /tmp/t1} 2' '*) echo PASS 'append >> (wc counts 2 lines)'; if not fails=bad
 if(~ `{cat < /etc/motd | wc} 1' '*) echo PASS 'input redirection <'; if not fails=bad
-if(~ `{ls /lib} /lib/alt) echo PASS 'ls reads directories'; if not fails=bad
+if(~ `{ls /lib} '/lib/alt /lib/font') echo PASS 'ls reads directories'; if not fails=bad
 mkdir /tmp/d; cp /etc/motd /tmp/d/m
 if(~ `{wc /tmp/d/m} 1' '*) echo PASS 'mkdir and cp'; if not fails=bad
 rm /tmp/d/m /tmp/d

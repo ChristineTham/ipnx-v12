@@ -143,6 +143,7 @@ export function makeWsys(hostRef) {
         const t = raw.trim().split(/\s+/);
         if (t[0] === "move" && t.length === 3) { win.x = +t[1]; win.y = +t[2]; }
         else if (t[0] === "resize" && t.length === 3) resize(win, +t[1], +t[2]);
+        else if (t[0] === "mouse" && t.length === 4) { injectMouse(win, +t[1], +t[2], +t[3]); return data.length; }
         else if (t[0] === "delete") del(win);
         else throw derr(`wctl: bad message '${raw.trim()}'`);
         hostRef.host.winGeom?.(win.wid, win.x, win.y, win.w, win.h);
@@ -173,9 +174,7 @@ export function makeWsys(hostRef) {
     mouse: (wid, x, y, buttons) => {
       const win = wins.get(wid);
       if (!win) return;
-      win.mousebuf.push(sbytes("m" + pad11(x) + pad11(y) + pad11(buttons) + pad11(0)));
-      if (win.mousebuf.length > 256) win.mousebuf.shift();
-      serveMouse(win);
+      injectMouse(win, x, y, buttons);
     },
     key: (wid, byte) => {
       const win = wins.get(wid);
@@ -184,6 +183,14 @@ export function makeWsys(hostRef) {
       serveCons(win);
     },
   };
+
+  // one injector for both halves (host events and wctl 'mouse x y b'):
+  // msec really advances, because double-click detection is msec arithmetic
+  function injectMouse(win, x, y, buttons) {
+    win.mousebuf.push(sbytes("m" + pad11(x) + pad11(y) + pad11(buttons) + pad11(Date.now() & 0x3fffffff)));
+    if (win.mousebuf.length > 256) win.mousebuf.shift();
+    serveMouse(win);
+  }
 
   function resize(win, w, h) {
     win.w = w; win.h = h;

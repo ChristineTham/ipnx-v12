@@ -12,7 +12,7 @@
 // feed console input into.
 import { makeRamfs, makeCons, makePipeDev } from "./devs.mjs";
 import { makeMntDev, mountConn } from "./mnt9p.mjs";
-import { parseStat, marshalStat, DMSETUID } from "./stat9.mjs";
+import { parseStat, marshalStat, DMSETUID, QTDIR } from "./stat9.mjs";
 import { makeWsys } from "./devwsys.mjs";
 import { sbytes, bstr, concat } from "./bytes.mjs";
 
@@ -220,6 +220,68 @@ function makeDupDev() {
     },
     read: () => new Uint8Array(0),
     stat: () => { throw err9("no stat on dup files (v0)"); },
+    len: () => 0,
+  };
+}
+
+// ---- devsrv: '#s' — a posted channel, kept alive by name (srv(3)).
+// create /srv/name, write the fd number: the fd's channel is captured and
+// the name holds a reference. Opening the name later shares the channel
+// itself. The reference is what keeps acme's error pipe owning a potential
+// writer, so its reader parks instead of spinning on EOF.
+function makeSrvDev() {
+  const err9 = (m) => Object.assign(new Error(m), { guest: true });
+  const posts = new Map();               // name → {kind:"srv", ...}
+  let qgen = 1;
+  const statOf = (node) => marshalStat({
+    name: node.name, qtype: 0, qpath: node.qpath, mode: 0o600,
+    length: 0, uid: node.uid, gid: node.uid });
+  return {
+    name: "srv",
+    attach: () => ({ kind: "root", qpath: 0 }),
+    walk: (n, name) => (n.kind === "root" ? posts.get(name) ?? null : null),
+    create: (n, name, perm, isdir, mode, cred) => {
+      if (n.kind !== "root" || isdir) throw err9("srv: create a file at the root");
+      if (posts.has(name)) throw err9(`'${name}' in use`);
+      const node = { kind: "srv", name, qpath: qgen++, chan: null, uid: cred.euid };
+      posts.set(name, node);
+      return node;
+    },
+    open: (node, mode) => {
+      if (node.kind === "srv" && node.chan) throw err9(`'${node.name}' already posted`);
+    },
+    write: (node, data, off, cred, pid) => {
+      if (node.kind !== "srv") throw err9("srv: write a posted name");
+      if (node.chan) throw err9("already posted");
+      const fd = parseInt(bstr(data).trim(), 10);
+      const c = procs.get(pid)?.fdt.fds[fd];
+      if (!Number.isInteger(fd) || !c) throw err9("srv: write the fd number");
+      node.chan = incref(c);
+      return data.length;
+    },
+    read: (node, n, off) => {
+      if (node.kind !== "root") return new Uint8Array(0);
+      let skip = Number(off);
+      const out = [];
+      let total = 0;
+      for (const k of posts.values()) {
+        const rec = statOf(k);
+        if (skip >= rec.length) { skip -= rec.length; continue; }
+        if (total + rec.length > n) break;
+        out.push(rec);
+        total += rec.length;
+      }
+      return concat(out);
+    },
+    remove: (n, name) => {
+      const node = posts.get(name);
+      if (!node) throw err9(`'${name}' does not exist`);
+      posts.delete(name);
+      if (node.chan) decref(node.chan);
+    },
+    stat: (node) => node.kind === "root"
+      ? marshalStat({ name: "srv", qtype: QTDIR, qpath: 0, mode: DMDIR | 0o777, length: 0 })
+      : statOf(node),
     len: () => 0,
   };
 }
@@ -506,8 +568,8 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
   }
   case T.OPEN: {
     let c = await walk(self, txstr(host));
-    if (c.node && c.node.kind === "fd" && c.node.chan)   // '#d/N': share the chan itself
-      return fdAlloc(self, incref(c.node.chan));
+    if (c.node && (c.node.kind === "fd" || c.node.kind === "srv") && c.node.chan)
+      return fdAlloc(self, incref(c.node.chan));   // '#d/N' and posted '#s' names: share the chan itself
     if (c.dev.clone && !c.node.ephemeral)          // never open a mount-table fid:
       c = { dev: c.dev, node: await c.dev.clone(c.node) };   // clone first, per Plan 9
     if (c.dev.open) await c.dev.open(c.node, a1, self.cred);
@@ -722,6 +784,7 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
       if (self.iowaiting) {
         self.iowaiting = false;
         self.inflight = null;
+        if (self.iotimer) { clearTimeout(self.iotimer); self.iotimer = null; }
         reply(host, iodeliver(host, self));
       }
     };
@@ -730,12 +793,23 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
       () => fin(new Uint8Array(0)));
     return 0;
   }
-  case T.IOWAIT:
+  case T.IOWAIT: {
     if (self.ioq.length) return iodeliver(host, self);
     self.iowaiting = true;
+    let timer = null;
+    if (a2 > 0)
+      timer = setTimeout(() => {
+        if (!self.iowaiting) return;
+        self.iowaiting = false;
+        self.inflight = null;
+        reply(host, 0);                              // timed out: no completion
+      }, a0);
+    self.iotimer = timer;
     self.inflight = () => { self.iowaiting = false;
+      if (timer) clearTimeout(timer);
       self.errstr = "interrupted"; reply(host, -1); };
     return undefined;
+  }
   case T.NOTIFY: self.hasHandler = a0 !== 0; return 0;
   case T.NOTEGET: {
     if (self.notes.length === 0) return 0;
@@ -787,7 +861,9 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
   case T.RFORK: return rfork(host, self, a0, a2);
   case T.EXEC: return exec(host, self, a2);
   case T.EXITS: return exits(host, self);
-  case T.AWAIT: return doAwait(host, self, a1);
+  case T.AWAIT:
+    if (a2 === 1 && self.zombies.length === 0) return 0;   // nohang, nothing yet
+    return doAwait(host, self, a1);
   default: throw err(`bad syscall ${trap} (v0)`);
   }
 }
@@ -936,7 +1012,7 @@ export async function boot(theHost, { rootSeed, interactive }) {
   const hostRef = { host };
   const wsys = makeWsys(hostRef);
   devs = { M: makeRamfs(rootSeed, EVE), c: cons, "|": makePipeDev(), m: makeMntDev(),
-    p: makeProcDev(), e: makeEnvDev(), w: wsys, d: makeDupDev() };
+    p: makeProcDev(), e: makeEnvDev(), w: wsys, d: makeDupDev(), s: makeSrvDev() };
   const init = newProc(0, { ns: new Map(), fdt: newFdt(), cwd: "/",
     cred: { euid: EVE, ruid: EVE } });
   const image = await readAll(await walk(init, "/bin/init"));

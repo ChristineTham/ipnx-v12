@@ -31,6 +31,13 @@ typedef __builtin_va_list va_list;
 #define USED(...)
 #define SET(x)		((x) = 0)
 
-typedef struct FPdbleword FPdbleword;	/* referenced, unused on this port */
-struct FPdbleword { double x; };
+typedef union FPdbleword FPdbleword;	/* wasm is little-endian, like 386 */
+union FPdbleword
+{
+	double	x;
+	struct {	/* little endian */
+		ulong	lo;
+		ulong	hi;
+	};
+};
 typedef long jmp_buf[10];		/* declared in libc.h; no setjmp here */

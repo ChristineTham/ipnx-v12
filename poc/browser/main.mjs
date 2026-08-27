@@ -35,6 +35,7 @@ function seedFromJson(files) {
     return node;
   };
   for (const [path, b64] of Object.entries(files)) {
+    if (b64 === null) { ensure(path.replace(/^\//, "").replace(/\/$/, "")); continue; }  // empty-dir marker
     const i = path.lastIndexOf("/");
     const raw = atob(b64);
     const data = new Uint8Array(raw.length);

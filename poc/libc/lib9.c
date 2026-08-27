@@ -36,7 +36,7 @@ long pread(int fd, void *b, long n, vlong off){
 long _rawpread(int fd, void *b, long n, vlong off){
 	return _sys(PREAD,fd,(int)b,n,(int)(off&0xffffffff),(int)(off>>32)); }
 int _aread(int tag, int fd, int n){ return _sys(210, tag, fd, n, 0, 0); }
-int _iowait(void *buf, int n){ return _sys(211, (int)buf, n, 0, 0, 0); }
+int _iowait(void *buf, int n, int ms){ return _sys(211, (int)buf, n, ms, 0, 0); }
 long pwrite(int fd, void *b, long n, vlong off){
 	return _sys(PWRITE,fd,(int)b,n,(int)(off&0xffffffff),(int)(off>>32)); }
 long read(int fd, void *b, long n) { return pread(fd,b,n,-1LL); }
@@ -48,14 +48,25 @@ int bind(char *nm, char *old, int f){ return _sys(BIND,(int)nm,(int)old,f,0,0); 
 int chdir(char *p)                { return _sys(CHDIR,(int)p,0,0,0,0); }
 int exec(char *p, char *argv[])   { return _sys(EXEC,(int)p,(int)argv,0,0,0); }
 void _exits(char *msg)            { _sys(EXITS,(int)msg,0,0,0,0); for(;;); }
-int await(char *s, int n)         { return _sys(AWAIT,(int)s,n,0,0,0); }
+int (*_threadawait)(char*, int);	/* libthread's polling await */
+int await(char *s, int n){
+	if(_threadawait)
+		return (*_threadawait)(s, n);
+	return _sys(AWAIT,(int)s,n,0,0,0);
+}
+int _rawawait(char *s, int n, int nohang){ return _sys(AWAIT,(int)s,n,nohang,0,0); }
 __attribute__((weak)) int stat(char *p, uchar *e, int n){ return _sys(STAT,(int)p,(int)e,n,0,0); }
 int lstat(char *p, uchar *e, int n){ return _sys(STAT,(int)p,(int)e,n,1,0); }
 int link9(char *old, char *new){ return _sys(LINK,(int)old,(int)new,0,0,0); }
 int symlink9(char *t, char *new){ return _sys(SYMLINK,(int)t,(int)new,0,0,0); }
 int readlink9(char *p, char *b, int n){ return _sys(READLINK,(int)p,(int)b,n,0,0); }
 __attribute__((weak)) int fstat(int fd, uchar *e, int n){ return _sys(FSTAT,fd,(int)e,n,0,0); }
-int sleep(long ms)                { return _sys(SLEEP,ms,0,0,0,0); }
+int (*_threadsleep)(long);	/* libthread parks the thread, not the process */
+int sleep(long ms){
+	if(_threadsleep)
+		return (*_threadsleep)(ms);
+	return _sys(SLEEP,ms,0,0,0,0);
+}
 int errstr(char *b, int n)        { return _sys(ERRSTR,(int)b,n,0,0,0); }
 int pipe(int fd[2])               { return _sys(PIPE,(int)fd,0,0,0,0); }
 int mount(int fd, int afd, char *old, int flag, char *aname){
@@ -128,12 +139,15 @@ extern void _tdrop(int id);
 
 static uchar _asydata[8 + 32768];
 
+int (*_threadrfork)(int);	/* libthread intercepts self-directed rfork */
 int rfork(int flags){
 	if(flags & RFPROC){
 		*(uint*)_asydata = (uint)(_asydata + 8);
 		*((uint*)_asydata + 1) = (uint)(_asydata + sizeof _asydata);
 		return _forka(flags, (int)_asydata);
 	}
+	if(_threadrfork)
+		return (*_threadrfork)(flags);
 	return _sys(RFORK, flags, 0, 0, 0, 0);
 }
 
@@ -362,3 +376,10 @@ char *statname(uchar *e, char *buf, int n){
 	uchar *p=e+2+2+4+13+4+4+4+8; int m=(int)gle(p,2);
 	if(m>n-1) m=n-1;
 	memcpy(buf,p+2,m); buf[m]=0; return buf; }
+
+/* umuldiv is per-arch assembler upstream; wasm has 64-bit integers */
+ulong
+umuldiv(ulong a, ulong b, ulong c)
+{
+	return ((uvlong)a * b) / c;
+}

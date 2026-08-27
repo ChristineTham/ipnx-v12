@@ -209,6 +209,16 @@ samtestchild(void *v)
 	exits("exec");
 }
 
+static void
+acmetestchild(void *v)
+{
+	char *av[] = { "acmetest", nil };
+
+	USED(v);
+	exec("/bin/acmetest", av);
+	exits("exec");
+}
+
 /* ---- the kernel work for rc: rfork honesty and notes ---- */
 
 static void
@@ -284,6 +294,8 @@ main(int argc, char *argv[])
 	 * the way a Plan 9 init does: bind the console device into place. */
 	bind("#c", "/dev", MREPL);
 	bind("#e", "/env", MREPL);
+	bind("#d", "/fd", MREPL);
+	bind("#s", "/srv", MREPL);
 	fd = open("/dev/cons", ORDWR);
 	dup(fd, 0);
 	dup(fd, 1);
@@ -538,6 +550,13 @@ main(int argc, char *argv[])
 	pid = procrfork(RFFDG|RFNAMEG, samtestchild, nil);
 	n = await(buf, sizeof buf);
 	ok(n > 0 && strstr(buf, "''") != nil, "sam+samterm: the editor round trip ran clean");
+
+	/* And acme entire: its own 9P server mounted over a pipe, procexec,
+	 * the mouse channel, columns and windows — driven by injected mouse
+	 * chords, verified in the raster. */
+	pid = procrfork(RFFDG|RFNAMEG, acmetestchild, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && strstr(buf, "''") != nil, "acme: boots, serves, and opens a window by mouse");
 
 	/* The asyncify path: forktest is a transformed binary whose bare
 	 * rfork(RFPROC) genuinely returns twice — its four checks print

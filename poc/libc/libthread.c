@@ -16,9 +16,13 @@ extern int	_tsavec(int);
 extern void	_tjumpc(int, int);
 extern void	_tdropc(int);
 extern long	(*_threadpread)(int, void*, long, vlong);
+extern int	(*_threadrfork)(int);
+extern int	(*_threadawait)(char*, int);
+extern int	(*_threadsleep)(long);
 extern long	_rawpread(int, void*, long, vlong);
 extern int	_aread(int, int, int);
-extern int	_iowait(void*, int);
+extern int	_iowait(void*, int, int);
+extern int	_rawawait(char*, int, int);
 
 enum {
 	MAXTHREAD = 64,
@@ -29,6 +33,7 @@ enum {
 	Ready,
 	Blocked,		/* on a channel, via alt */
 	Ioblocked,		/* on _aread; tag = thread id */
+	Sleeping,		/* until wakeat (thread-aware sleep) */
 	Dead,
 };
 
@@ -62,6 +67,7 @@ struct Thr {
 	long	ion;		/* while Ioblocked */
 	long	ioret;
 	uchar	iodata[8192];	/* async read lands here, never on a stack */
+	vlong	wakeat;		/* while Sleeping: nsec() deadline */
 	char	name[64];
 };
 
@@ -416,15 +422,53 @@ threadpread(int fd, void *buf, long n, vlong off)
 	return t->ioret;
 }
 
+static int
+threadsleep(long ms)
+{
+	Thr *t = &thr[curid];
+
+	if(ms <= 0){
+		yield();
+		return 0;
+	}
+	t->wakeat = nsec() + (vlong)ms * 1000000LL;
+	t->state = Sleeping;
+	sleepyield();
+	return 0;
+}
+
+/* wake sleepers whose time has come; return ms to the nearest deadline */
+static int
+wakesleepers(void)
+{
+	vlong now, nearest;
+	int i, ms;
+
+	nearest = 0;
+	now = nsec();
+	for(i = 0; i < nthreads; i++){
+		if(thr[i].state != Sleeping)
+			continue;
+		if(thr[i].wakeat <= now)
+			thr[i].state = Ready;
+		else if(nearest == 0 || thr[i].wakeat < nearest)
+			nearest = thr[i].wakeat;
+	}
+	if(nearest == 0)
+		return 0;
+	ms = (nearest - now) / 1000000LL + 1;
+	return ms < 1 ? 1 : ms;
+}
+
 static uchar iobuf[IOBUF + 4];
 
 static void
-iopump(void)
+iopump(int ms)
 {
 	int n, tag, i;
 	Thr *t;
 
-	n = _iowait(iobuf, sizeof iobuf);
+	n = _iowait(iobuf, sizeof iobuf, ms);
 	if(n < 4)
 		return;
 	tag = iobuf[0] | (iobuf[1]<<8) | (iobuf[2]<<16) | (iobuf[3]<<24);
@@ -451,6 +495,9 @@ schedule(void)
 	 * scheduler frame (its birth iteration travelled in its context), so
 	 * every decision re-reads the global tables and loops back here. */
 	for(;;){
+		int naptime;
+
+		naptime = wakesleepers();
 		some = 0;
 		io = 0;
 		for(i = 0; i < nthreads; i++){
@@ -461,8 +508,8 @@ schedule(void)
 		}
 		if(!some){
 			int blocked = 0;
-			if(io){
-				iopump();
+			if(io || naptime > 0){
+				iopump(naptime);
 				continue;
 			}
 			for(i = 0; i < nthreads; i++)
@@ -490,6 +537,202 @@ schedule(void)
 	}
 }
 
+/* ---- procexec: in a one-instance world, a proc that "becomes" a command
+ * is a bare fork plus exec. A runproc's self-directed rfork is intercepted
+ * (lib9's _threadrfork hook): RFFDG stashes fds 0..19 high so the parent
+ * can restore them after the fork, and RFNAMEG/RFENVG/RFNOTEG are DEFERRED
+ * onto the fork itself — the child gets the isolation the runproc meant
+ * for it, and the shared instance stays untouched. ---- */
+
+enum { STASHBASE = 100, NSTASH = 20 };
+static int deferredflags;
+static int stashed;
+static ulong stashhad;
+
+static int
+threadrfork(int flags)
+{
+	int i;
+
+	deferredflags |= flags & (RFNAMEG|RFCNAMEG|RFENVG|RFCENVG|RFNOTEG|RFNOMNT);
+	if(flags & RFFDG){
+		if(stashed)
+			sysfatal("procexec: concurrent fd stash");
+		stashed = 1;
+		stashhad = 0;
+		for(i = 0; i < NSTASH; i++)
+			if(dup(i, STASHBASE + i) >= 0)
+				stashhad |= 1UL << i;
+	}
+	return 0;
+}
+
+static void
+fdrestore(void)
+{
+	int i;
+
+	if(!stashed)
+		return;
+	for(i = 0; i < NSTASH; i++){
+		if(stashhad & (1UL << i))
+			dup(STASHBASE + i, i);
+		else
+			close(i);
+		close(STASHBASE + i);
+	}
+	stashed = 0;
+}
+
+void
+procexec(Channel *pidc, char *prog, char *args[])
+{
+	int pid, i, flags;
+
+	flags = RFFDG|RFREND|RFPROC|deferredflags;
+	deferredflags = 0;
+	pid = rfork(flags);
+	if(pid == 0){
+		for(i = 0; i < NSTASH; i++)		/* the command must not see the stash */
+			close(STASHBASE + i);
+		exec(prog, args);
+		_exits("exec failed");
+	}
+	fdrestore();
+	if(pidc)
+		sendul(pidc, pid < 0 ? ~0 : pid);
+	threadexits(nil);				/* this proc became the command */
+}
+
+void
+procexecl(Channel *pidc, char *prog, ...)
+{
+	char *args[64];
+	int n;
+	__builtin_va_list a;
+
+	args[0] = prog;
+	__builtin_va_start(a, prog);
+	for(n = 1; n < 63 && (args[n] = __builtin_va_arg(a, char*)) != nil; n++)
+		;
+	__builtin_va_end(a);
+	args[n] = nil;
+	procexec(pidc, prog, args);
+}
+
+/* ---- threadwaitchan: Waitmsg* per exited command, via nohang polling ---- */
+
+static Channel *waitchan;
+
+static void
+waitproc(void *v)
+{
+	char buf[512], *fld[5];
+	int n, l;
+	Waitmsg *w;
+
+	USED(v);
+	for(;;){
+		n = _rawawait(buf, sizeof buf - 1, 1);
+		if(n <= 0){
+			threadsleep(50);
+			continue;
+		}
+		buf[n] = 0;
+		if(tokenize(buf, fld, nelem(fld)) != 5)
+			continue;
+		l = strlen(fld[4]) + 1;
+		w = malloc(sizeof(Waitmsg) + l);
+		if(w == nil)
+			continue;
+		w->pid = atoi(fld[0]);
+		w->time[0] = atoi(fld[1]);
+		w->time[1] = atoi(fld[2]);
+		w->time[2] = atoi(fld[3]);
+		w->msg = (char*)&w[1];
+		memmove(w->msg, fld[4], l);
+		sendp(waitchan, w);
+	}
+}
+
+Channel*
+threadwaitchan(void)
+{
+	if(waitchan == nil){
+		waitchan = chancreate(sizeof(Waitmsg*), 4);
+		threadcreate(waitproc, nil, 8192);
+	}
+	return waitchan;
+}
+
+static int
+threadawait(char *s, int n)
+{
+	int r;
+
+	for(;;){
+		r = _rawawait(s, n, 1);
+		if(r != 0)
+			return r;
+		threadsleep(50);
+	}
+}
+
+/* ---- threadnotify: a chain of handlers over the note machinery ---- */
+
+static int (*onnote[8])(void*, char*);
+
+static void
+notechain(void *v, char *msg)
+{
+	int i;
+
+	for(i = 0; i < nelem(onnote); i++)
+		if(onnote[i] != nil && (*onnote[i])(v, msg)){
+			noted(NCONT);
+			return;
+		}
+	noted(NDFLT);
+}
+
+int
+threadnotify(int (*f)(void*, char*), int in)
+{
+	int i;
+	static int registered;
+
+	if(!registered){
+		registered = 1;
+		notify(notechain);
+	}
+	if(in){
+		for(i = 0; i < nelem(onnote); i++)
+			if(onnote[i] == nil || onnote[i] == f){
+				onnote[i] = f;
+				return 1;
+			}
+		return 0;
+	}
+	for(i = 0; i < nelem(onnote); i++)
+		if(onnote[i] == f)
+			onnote[i] = nil;
+	return 1;
+}
+
+/* ---- Ref: trivially exclusive on a cooperative scheduler ---- */
+
+void
+incref(Ref *r)
+{
+	r->ref++;
+}
+
+long
+decref(Ref *r)
+{
+	return --r->ref;
+}
+
 static void
 tmain(void *v)
 {
@@ -506,6 +749,9 @@ main(int argc, char *argv[])
 {
 	USED(argc);
 	_threadpread = threadpread;
+	_threadrfork = threadrfork;
+	_threadawait = threadawait;
+	_threadsleep = threadsleep;
 	threadcreate(tmain, argv, mainstacksize ? mainstacksize : 8192);
 	schedule();
 	exits(exitsstatus);
