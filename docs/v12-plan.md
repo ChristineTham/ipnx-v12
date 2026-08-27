@@ -381,10 +381,62 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   JS for the browser, threads plus the runtime embedding natively — which is Plan 9's
   own `port/`-vs-`pc/` split with the browser as just another machine. This
   supersedes the WasmKit-in-Swift candidate (kept in the table above as history);
-  WasmKit remains an option for the shim's app shell, not the kernel. The 120-test
+  WasmKit remains an option for the shim's app shell, not the kernel. The 124-test
   suite is guest-side and language-blind: it is the conformance spec any second
-  kernel must pass. Until the PoC closes, `kernel.mjs` stays the reference
-  implementation.
+  kernel must pass. With the PoC closed (same day), `kernel.mjs` is the reference
+  implementation the Rust core is measured against.
+
+- **(2026-08-27) The engine matrix: wasmtime everywhere, mode per shim; WasmKit
+  stays superseded.** iOS forbids *two* things, not one: JIT (the
+  `dynamic-codesigning` entitlement is Apple-only) **and runtime-loaded AOT** —
+  every executable page must come from a signed binary in the bundle, so
+  `wasmtime compile` artifacts mapped at runtime are just as illegal as
+  Cranelift. Wasmtime's answer is **Pulley**, its portable-bytecode
+  interpreter, with `Config::signals_based_traps(false)` so traps are explicit
+  rather than guard-page signals: in that mode wasmtime executes no unsigned
+  native code at all. The matrix: **macOS — Cranelift JIT** (legal even in the
+  Mac App Store under the `allow-jit` entitlement); **Linux/OCI/microVM —
+  Cranelift, or AOT `.cwasm` for cold-start**; **iOS/iPadOS — Pulley, signals
+  off**. Caveats recorded: `aarch64-apple-ios` is a tier-3 wasmtime target, and
+  Pulley is an interpreter — several times slower than Cranelift; fine for rc
+  and the editors, *measured* before it is trusted for CPython and Go. The
+  engine sits behind one trait in the Rust core, and the like-for-like fallback
+  is **wasmi** (which deliberately mirrors the wasmtime API), not WasmKit — the
+  Swift candidate would only return if the Rust core itself were abandoned.
+  None of the load-bearing machinery cares which engine runs: the fork guard,
+  `setjmp/longjmp` and libthread are asyncify — instrumentation inside the
+  modules, engine-blind — and fuel/epoch preemption (the OCI entry's need)
+  exists in both wasmtime-with-Pulley and wasmi. App Store precedent for the
+  interpreter shape is settled practice (iSH ships a usermode x86 Linux
+  emulator; UTM SE an interpreter-only VM); wasm binaries shipped in the bundle
+  are unambiguous, and user-loaded programs are the standard interpreted-code
+  gray zone (guideline 2.5.2 / agreement 3.3.1B) every scriptable app lives in
+  — a policy risk, not a technical one.
+
+- **(2026-08-27) iOS local files: always a file server over user-granted
+  subtrees — and the browser sandbox is not the barrier it looks like.** iOS
+  has no full-disk access for any app, ever: an app sees its own container
+  (Documents, surfaceable in the Files app) plus exactly the subtrees the user
+  picks through the document picker, persisted as security-scoped bookmarks —
+  iCloud Drive, USB drives and file-provider shares included. That consent
+  model *is* the ipnx worldview: **a security-scoped bookmark is a capability
+  to a subtree, and a granted folder enters the system as a bind** (`bind
+  /host/ProjectX /usr/work`) — the platform enforces what the namespace design
+  argues for. It composes with the storage invariant: the grant arrives as a
+  host-backed file server; ipnx never learns an on-disk format. The three
+  deployment forms differ only in plumbing: **plain Safari** — OPFS-only
+  private world plus one-shot imports (WebKit never implemented the
+  File System Access API), fine for the synthetic rootfs, no real user files;
+  **WKWebView shell (the iPad stopgap)** — web content sandboxed as in Safari,
+  but the app's native half serves granted files across the bridge
+  (`WKURLSchemeHandler`, already needed for COOP/COEP, plus the script-message
+  channel), i.e. the native half is literally a file server the kernel mounts —
+  the cost is serialization per byte, measured before `git status` meets a big
+  repository; **native app (the real milestone)** — the same consent model with
+  no web layer. The WKWebView shell also carries a performance irony worth
+  keeping: WebKit's content process holds the JIT entitlement, so the
+  already-green browser port runs on iPad *with full JIT today* — faster
+  execution than the native Pulley build it is a stopgap for.
 
 - **(2026-08-27) OCI is two targets, taken at two different weights.**
   *The scratch container is a stated target of the Rust milestone, for free*: the
@@ -805,6 +857,9 @@ left to prove; the native work begins.
   [WASI roadmap](https://wasi.dev/roadmap) · [WASI 0.3 launched](https://bytecodealliance.org/articles/WASI-0.3) ·
   [wasi-filesystem README](https://github.com/WebAssembly/wasi-filesystem)
 - [WasmKit](https://github.com/swiftwasm/WasmKit) ·
+  [Pulley — wasmtime's portable interpreter](https://docs.wasmtime.dev/examples-pulley.html) ·
+  [wasmtime tiers of support](https://docs.wasmtime.dev/stability-tiers.html) ·
+  [wasmi](https://github.com/wasmi-labs/wasmi) ·
   [wasm3 performance](https://github.com/wasm3/wasm3/blob/main/docs/Performance.md) ·
   [LLVM D46141 — `--stack-first`](https://reviews.llvm.org/D46141) ·
   [goken9cc](https://github.com/aryx/goken9cc) · [Wanix](https://github.com/tractordev/wanix)
