@@ -23,8 +23,8 @@ with V10 permission enforcement, the uid model running (docs/uid.md), **the REAL
 wire 9P at the mount boundary, exportfs serving a guest's namespace
 back out, and the window server: `#w` mints windows, `bind '#w/N' /dev` makes a
 namespace a window, `/dev/draw` is a real per-window file with text (`y i l s` and an
-8×8 font of our own authorship), `win rc` is a shell in a browser window, and the
-link/symlink family lands as the V12 additions, and **both real userspaces have their
+8×8 font of our own authorship), `win rc` is a shell and `win sam` THE EDITOR in a
+browser window, and the link/symlink family lands as the V12 additions, and **both real userspaces have their
 real libraries**: `libp9.a` is ~150 files of genuine 4th-edition libc/libbio/libregexp
 over one platform shim (`u.h`), twenty-four real commands and the real `rc` ride it,
 V10 `cat`/`echo` sit in `/v10/bin` on `libv10`, and the kernel carries what rc needs:
