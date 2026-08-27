@@ -367,7 +367,7 @@ answers, not exclusive:
 Taking asyncify on both buys uniformity at ~2× on binaries that natively would not need it.
 Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it belongs.
 
-## Decisions (2026-08-26; native-host, OCI, storage and toolchain decisions added 2026-08-27)
+## Decisions (2026-08-26; native-host, OCI, storage, toolchain and userland-curation decisions added 2026-08-27)
 
 - **(2026-08-27) The native host is a Rust kernel core plus per-platform embedding
   shims — after the PoC completes.** The kernel never executes guest code, so the
@@ -470,6 +470,50 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   macros and terminal output first — `man(1)` readable in a win — then eqn and
   tbl, pic and grap behind the float door they need, dpost when paper matters;
   font and device tables ship in the rootfs seed.
+
+- **(2026-08-27) The curation principle: the Plan 9 command set is in scope
+  entire, because it is the designers' own testimony about Unix.** The earlier
+  capped-workbench framing is superseded. Plan 9's `/bin` was assembled by
+  Unix's own authors at the one moment compatibility no longer protected the
+  accidents — it is what they chose to carry, and this project undoes their
+  kernel pivot while preserving their curation. So every Plan 9 utility with
+  Unix ancestry replaces the equivalently named Unix tool in `/bin`, including
+  the small filters (`join`, `comm`, `look`, `fmt`, `fold`, `freq`, `split`,
+  `strings`, `sum`, `cal`, `factor`, `primes`, `units` and kin), `cron` in its
+  local-execution slice (the dial-out half waits for `/net`), and **the games**
+  — Unix's humanity, kept by the designers, and incidentally the draw stack's
+  best free stress tests, being interactive libdraw clients of a kind samterm
+  is not. The principle cuts both ways: **the absences are curation too** —
+  `/bin` inherits the refusals (no `head`: the Research line's answer was
+  `sed 10q`; no `find`: `du -a` piped to `grep` is the curated idiom), and the
+  namespace reconciles philosophy without argument, since V10's own `find`
+  will live in `/v10/bin` and bind order chooses. The boundary: the principle
+  covers the utility set — things a person types — not the pivot's
+  infrastructure, which stays dispositioned at the mach layer (fossil/venti,
+  factotum, ndb/cs, the compilers on self-hosting grounds); `upas` parks on
+  the line with a note that mail could someday arrive as a lib9p mailfs.
+  **The detailed edge set is accepted with it**: `ed` (by the troff reasoning —
+  Research ed's own later life, rune-aware; V10's ed will sit beside it as cat
+  and echo already do), the real **lib9p** (newly portable on this week's
+  libthread and bare fork; brings iostats — 9P tracing for this project's own
+  development — ramfs(1), srvfs with a ~50-line `#s` device, mntgen; our
+  lib9p.[ch] retires; Tflush stays a kernel-side deviation servers simply
+  never see), **tar + libflate + gzip** paired with the storage decision's
+  host-ingress Dev as the door in and out, the **observability pair** (`ps`
+  over a devproc brought up to the real status format — the kernel conforms,
+  vendored code does not bend — and `ns` over a new `/proc/n/ns` file whose
+  hard half, recorded source paths on union elements, unmount already built),
+  the **float door** (un-exclude fltfmt/strtod, vendor port's own Cody-Waite
+  era math C; opens awk, dc, bc, hoc, seq, units, pic, grap), the **digest
+  slice** of libsec (md5/sha1 only; TLS stays mach-side), real **font files**
+  in the rootfs seed, `xd`, `p`, `dd`, `time` (await's times vector gains real
+  wall-clock deltas). Flagged for the Rust milestone, not decided now:
+  adopting the real **libmemdraw/libmemlayer** as the kernel's compositor in
+  place of a draw-engine transliteration — verbatim-beats-reimplementation
+  reaching into the kernel, with the suite's pixel tests making engines
+  swappable. Port-time rule as ever: verify contents against the 4e tree and
+  measure before claiming (the games list, cron's exact shape, tarfs's
+  provenance).
 
 Evidence for each is in RESEARCH.md at the cited section.
 
