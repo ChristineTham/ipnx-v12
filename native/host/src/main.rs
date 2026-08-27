@@ -8,6 +8,8 @@
 // nested __forkshim call plays catch_all's role (a host error unwinds the
 // nested wasm frames and stops exactly at our Rust frame).
 
+mod wasi;
+
 use kernel::{AsySnap, Effect, KAction, KReply, Kernel, Pid, Seed, TXSIZE};
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -15,7 +17,7 @@ use std::sync::Arc;
 use wasmtime::{Caller, Config, Engine, Extern, Func, Instance, Linker, Memory, MemoryType, Module, Store, Val};
 
 // ---- events into the kernel loop ----
-enum Ev {
+pub enum Ev {
     Sys { worker_pid: Pid, trap: i32, a: [i32; 5], tx: Vec<u8>, reply: Sender<KReply> },
     Started { pid: Pid, asyncified: bool },
     AsyFork { parent: Pid, child: Pid, snap: Vec<u8>, data_ptr: u32, sp: u32 },
@@ -27,7 +29,7 @@ enum Ev {
 
 // ---- how a guest run ends (carried through wasmtime host errors) ----
 #[derive(Debug)]
-enum GuestExit {
+pub enum GuestExit {
     ForkResume(i32),
     Exec(Arc<Vec<u8>>, Vec<String>),
     Retire,
@@ -352,6 +354,54 @@ enum RunEnd {
     Crash(String),
 }
 
+// a wasip1 command: exports its memory, forks never, one preopen — the
+// namespace root. The shim is wasi.rs; syscalls cross the same channel.
+fn run_wasi(engine: &Arc<Engine>, ev: &Sender<Ev>, pid: Pid, module: &Module) -> RunEnd {
+    let _ = ev.send(Ev::Started { pid, asyncified: false });
+    let mut store = Store::new(engine, wasi::WasiState::new(pid, ev.clone()));
+    let mut linker: Linker<wasi::WasiState> = Linker::new(engine);
+    if let Err(e) = wasi::link_wasi(&mut linker) {
+        return RunEnd::Crash(format!("wasi link: {}", e));
+    }
+    let instance = match linker.instantiate(&mut store, module) {
+        Ok(i) => i,
+        Err(e) => return RunEnd::Crash(format!("wasi instantiate: {}", e)),
+    };
+    let memory = match instance.get_memory(&mut store, "memory") {
+        Some(m) => m,
+        None => return RunEnd::Crash("wasi module exports no memory".into()),
+    };
+    store.data_mut().memory = Some(memory);
+    let start = match instance.get_typed_func::<(), ()>(&mut store, "_start") {
+        Ok(f) => f,
+        Err(e) => return RunEnd::Crash(format!("no _start: {}", e)),
+    };
+    match start.call(&mut store, ()) {
+        Ok(()) => {
+            // fell off main: exit 0
+            let (rtx, _rrx) = channel();
+            let _ = ev.send(Ev::Sys {
+                worker_pid: pid, trap: 8, a: [0; 5], tx: vec![0], reply: rtx,
+            });
+            RunEnd::Done
+        }
+        Err(e) => match e.downcast::<GuestExit>() {
+            Ok(GuestExit::Retire) | Ok(GuestExit::Die) => RunEnd::Done,
+            Ok(other) => RunEnd::Crash(format!("wasi guest: {}", other)),
+            Err(e) => {
+                // a runtime trap: report and exit unclean
+                let (rtx, _rrx) = channel();
+                let mut tx = b"trap".to_vec();
+                tx.push(0);
+                let _ = ev.send(Ev::Sys {
+                    worker_pid: pid, trap: 8, a: [0; 5], tx, reply: rtx,
+                });
+                RunEnd::Crash(format!("wasi trap: {}", e))
+            }
+        },
+    }
+}
+
 fn run_one(engine: &Arc<Engine>, ev: &Sender<Ev>, pid: Pid, image: &Arc<Vec<u8>>,
            asy: Option<AsySnap>) -> RunEnd {
     let module = match Module::new(engine, image.as_slice()) {
@@ -359,7 +409,7 @@ fn run_one(engine: &Arc<Engine>, ev: &Sender<Ev>, pid: Pid, image: &Arc<Vec<u8>>
         Err(e) => return RunEnd::Crash(format!("exec format error: {}", e)),
     };
     if module.imports().any(|i| i.module() == "wasi_snapshot_preview1") {
-        return RunEnd::Crash("wasi binaries are the JS hosts' for now (native tranche)".into());
+        return run_wasi(engine, ev, pid, &module);
     }
     let asyncified = module.exports().any(|e| e.name() == "asyncify_start_unwind");
     let _ = ev.send(Ev::Started { pid, asyncified });
