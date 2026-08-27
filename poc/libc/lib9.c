@@ -282,6 +282,11 @@ void __notedispatch(void){
 	}
 }
 long alarm(ulong ms)              { return _sys(6, (int)ms, 0, 0, 0, 0); }
+/* qlocks: guests are single-threaded until libthread lands, so holding is
+ * trivially exclusive — but the calls must exist for the real libraries */
+void qlock(void *q)               { USED(q); }
+void qunlock(void *q)             { USED(q); }
+int canqlock(void *q)             { USED(q); return 1; }
 /* port/execl.c reads &f+1 — a stack-varargs assumption wasm cannot honour
  * (variadic args travel in a separate buffer), so this one is ours */
 int execl(char *f, ...){

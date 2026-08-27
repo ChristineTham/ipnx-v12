@@ -66,11 +66,12 @@ drawcolor(Draw *d, int r, int g, int b, int a)
 	p = put32(p, id);
 	p = put32(p, 0);		/* screenid */
 	p = put8(p, 0);			/* refresh */
-	p = put32(p, 0);		/* chan (r8g8b8a8 implied, v0) */
+	p = put32(p, 0x08182848);	/* chan: r8g8b8a8 */
 	p = put8(p, 1);			/* repl */
 	p = put32(p, 0); p = put32(p, 0); p = put32(p, 1); p = put32(p, 1);
 	p = put32(p, 0); p = put32(p, 0); p = put32(p, 1); p = put32(p, 1);
-	p = put8(p, r); p = put8(p, g); p = put8(p, b); p = put8(p, a);
+	/* colour is RGBA32, low-order byte first on the wire: a b g r */
+	p = put8(p, a); p = put8(p, b); p = put8(p, g); p = put8(p, r);
 	write(d->fd, buf, p - buf);
 	return id;
 }
@@ -157,7 +158,7 @@ drawfontinit(Draw *d)
 	p = put32(p, id);
 	p = put32(p, 0);
 	p = put8(p, 0);
-	p = put32(p, 0);
+	p = put32(p, 0x08182848);	/* chan: r8g8b8a8 */
 	p = put8(p, 0);
 	p = put32(p, 0); p = put32(p, 0); p = put32(p, NGLYPH*GW); p = put32(p, GH);
 	p = put32(p, 0); p = put32(p, 0); p = put32(p, NGLYPH*GW); p = put32(p, GH);

@@ -170,6 +170,16 @@ dtestchild(void *v)
 }
 
 static void
+drtestchild(void *v)
+{
+	char *av[] = { "drtest", nil };
+
+	USED(v);
+	exec("/bin/drtest", av);
+	exits("exec");
+}
+
+static void
 forkchild(void *v)
 {
 	char *av[] = { "forktest", nil };
@@ -487,6 +497,12 @@ main(int argc, char *argv[])
 	pid = procrfork(RFFDG|RFNAMEG, dtestchild, nil);
 	n = await(buf, sizeof buf);
 	ok(n > 0 && strstr(buf, "''") != nil, "wsys: dtest suite ran clean");
+
+	/* The REAL libdraw: geninitdraw against a #w window, the default
+	 * font included — rio's client library over our window server. */
+	pid = procrfork(RFFDG|RFNAMEG, drtestchild, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && strstr(buf, "''") != nil, "real libdraw: drtest suite ran clean");
 
 	/* The asyncify path: forktest is a transformed binary whose bare
 	 * rfork(RFPROC) genuinely returns twice — its four checks print

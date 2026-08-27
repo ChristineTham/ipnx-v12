@@ -3,6 +3,7 @@
  * split Plan 9 itself uses: u.h is per-platform, libc.h is the system.
  * This platform is wasm32 under clang; Rune is 16-bit, the 4th edition's. */
 typedef unsigned char	uchar;
+typedef signed char	schar;
 typedef unsigned short	ushort;
 typedef unsigned int	uint;
 typedef unsigned long	ulong;

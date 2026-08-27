@@ -31,8 +31,10 @@ V10 `cat`/`echo` sit in `/v10/bin` on `libv10`, and the kernel carries what rc n
 notes at the syscall boundary, `unmount`, honest rfork flags, `#d`, and real
 `setjmp/longjmp` over the asyncify machinery — which is what lets **the real `sam`**
 run in terminal mode (`sam -d`): structural regexps, the `x/c/s/i` loop, and the
-buffer piped through real commands — 103 acceptance tests). Everything else is design
-documents.
+buffer piped through real commands — and **the real libdraw draws**: `geninitdraw`
+speaks `/dev/draw/new` against `#w`, `getwindow` allocates a screen and window view,
+and the real default font lands glyphs through `y/i/l/s` — 111 acceptance tests).
+Everything else is design documents.
 
 ## Commands
 
@@ -53,7 +55,7 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints 103 PASS lines,
+Boot the kernel — init (pid 1) runs the acceptance tests, prints 111 PASS lines,
 exits 0:
 
 ```bash
@@ -241,7 +243,7 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (2026-08-27)
 
-103 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
+111 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
 (`node poc/serve.mjs` → `/browser/`, measured in Chrome 148); `?i` boots to **the real
 Plan 9 rc** — pipelines, subshells, `` `{...} `` captures, `fn`, `while`, `switch` — and
 `win rc &` opens a shell window that prompts because rc's own `Isatty` finds
@@ -250,8 +252,11 @@ the browser port, unions + exportfs, the uid model, the window server, text in d
 the link/symlink family, D1–D4 measured, the real Plan 9 userspace grown to a system,
 the real rc running the whole suite over a kernel readied for it (notes with
 V7-boundary delivery, `alarm`, `unmount`, honest rfork flags, `#d`, `..` in walks),
-and **the real sam in terminal mode** — `sam -d` with structural regexps and `|`
+**the real sam in terminal mode** — `sam -d` with structural regexps and `|`
 filters through real commands, carried by real `setjmp/longjmp` built on the asyncify
-machinery (V10 growth waits for the parent project's ANSI conversion). Next: samterm
-via the real libdraw/libframe, then the native host — **macOS first, then iPad**
-(the user's platform order).
+machinery — and **the real libdraw** (with libframe compiled beside it) drawing
+through `#w`: the device grew screens (`A`), window views (`b` on a screen, one
+backing store), clipping (`c`), and channel-correct uploads (`y` decodes GREY1
+fonts per draw(6)), verified by drtest's seven pixel checks (V10 growth waits for
+the parent project's ANSI conversion). Next: libthread over asyncify, then samterm,
+then the native host — **macOS first, then iPad** (the user's platform order).

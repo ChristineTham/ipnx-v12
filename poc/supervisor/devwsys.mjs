@@ -24,7 +24,7 @@ export function makeWsys(hostRef) {
     const w = 400, h = 300;
     const win = {
       wid, x: 40 + (wid * 24) % 200, y: 40 + (wid * 24) % 140, w, h,
-      label: `window ${wid}`, img: D.newImage(0, 0, w, h, 0, [255, 255, 255, 255]),
+      label: `window ${wid}`, img: D.newImage([0, 0, w, h], { color: [255, 255, 255, 255] }),
       conns: new Map(), nextconn: 1,
       consbuf: new Uint8Array(0), consparked: [],
       mousebuf: [], mouseparked: [],
@@ -70,14 +70,14 @@ export function makeWsys(hostRef) {
         const conn = n.win.conns.get(Number(name));
         return conn ? { kind: "conndir", win: n.win, conn } : null;
       }
-      if (n.kind === "conndir" && (name === "ctl" || name === "data"))
+      if (n.kind === "conndir" && (name === "ctl" || name === "data" || name === "refresh"))
         return { kind: "draw" + name, win: n.win, conn: n.conn };
       return null;
     },
     open: (n) => {
       if (n.kind === "drawnew") {          // a fresh connection; image 0 is the window
         const { win } = n;
-        n.conn = { id: win.nextconn++, images: new Map([[0, win.img]]) };
+        n.conn = { id: win.nextconn++, images: new Map([[0, win.img]]), screens: new Map() };
         win.conns.set(n.conn.id, n.conn);
       }
     },
@@ -98,7 +98,7 @@ export function makeWsys(hostRef) {
           pad11(0) + pad11(0) + pad11(win.w) + pad11(win.h) + "\n");
       }
       case "rgb": {
-        const d = win.img.data;
+        const d = win.img.back.data;
         const end = Math.min(Number(off) + count, d.length);
         return d.subarray(Math.min(Number(off), d.length), end);
       }
@@ -114,6 +114,8 @@ export function makeWsys(hostRef) {
         if (win.mousebuf.length) return win.mousebuf.shift();
         if (win.dead) return new Uint8Array(0);
         win.mouseparked.push({ ctx });
+        return undefined;
+      case "drawrefresh":                 // refresh events: none in v0; readers wait
         return undefined;
       default: throw derr(`no read on ${n.kind}`);
       }
@@ -143,7 +145,7 @@ export function makeWsys(hostRef) {
     },
     clunk: () => {},
     stat: () => { throw derr("no stat on wsys files (v0)"); },
-    len: (n) => (n.kind === "rgb" ? n.win.img.data.length : 0),
+    len: (n) => (n.kind === "rgb" ? n.win.img.back.data.length : 0),
     // the host half calls in through these:
     mouse: (wid, x, y, buttons) => {
       const win = wins.get(wid);
@@ -162,7 +164,7 @@ export function makeWsys(hostRef) {
 
   function resize(win, w, h) {
     win.w = w; win.h = h;
-    win.img = D.newImage(0, 0, w, h, 0, [255, 255, 255, 255]);
+    win.img = D.newImage([0, 0, w, h], { color: [255, 255, 255, 255] });
     for (const c of win.conns.values()) c.images.set(0, win.img);
   }
   function del(win) {
@@ -187,13 +189,36 @@ export function makeWsys(hostRef) {
       const op = String.fromCharCode(b[o]);
       switch (op) {
       case "b": {                          // id[4] screen[4] refresh[1] chan[4] repl[1] r[16] clipr[16] color[4]
-        const id = u32(o + 1), repl = b[o + 14];
+        const id = u32(o + 1), screenid = u32(o + 5);
+        const chan = u32(o + 10), repl = b[o + 14];
         const r = [s32(o + 15), s32(o + 19), s32(o + 23), s32(o + 27)];
-        const color = [b[o + 47], b[o + 48], b[o + 49], b[o + 50]];
-        conn.images.set(id, D.newImage(r[0], r[1], r[2], r[3], repl, color));
+        const clipr = [s32(o + 31), s32(o + 35), s32(o + 39), s32(o + 43)];
+        const color = D.rgba32(u32(o + 47));
+        if (screenid !== 0) {
+          const scr = conn.screens.get(screenid);
+          if (!scr) throw derr(`draw: no screen ${screenid}`);
+          // a window on a screen: a view sharing the screen image's backing
+          conn.images.set(id, D.newImage(r, { repl, chan: scr.image.chan, clipr,
+            color, back: scr.image.back }));
+        } else
+          conn.images.set(id, D.newImage(r, { repl, chan, clipr, color }));
         o += 51;
         break;
       }
+      case "A": {                          // allocscreen: id[4] image[4] fill[4] public[1]
+        conn.screens.set(u32(o + 1), { image: img(u32(o + 5)) });
+        o += 14;
+        break;
+      }
+      case "F": conn.screens.delete(u32(o + 1)); o += 5; break;
+      case "c": {                          // replclipr: id[4] repl[1] clipr[16]
+        const im = img(u32(o + 1));
+        im.repl = b[o + 5];
+        im.clipr = [s32(o + 6), s32(o + 10), s32(o + 14), s32(o + 18)];
+        o += 22;
+        break;
+      }
+      case "t": o += 4 + 4 * v.getUint16(o + 2, true); break;  // top/bottom: one window per screen
       case "d": {                          // dst[4] src[4] mask[4] dstr[16] srcpt[8] maskpt[8]
         const dst = img(u32(o + 1)), src = img(u32(o + 5));
         const dstr = [s32(o + 13), s32(o + 17), s32(o + 21), s32(o + 25)];
@@ -216,11 +241,10 @@ export function makeWsys(hostRef) {
         o += 37;
         break;
       }
-      case "y": {                          // id[4] r[16] data (RGBA, row-major)
+      case "y": {                          // id[4] r[16] data in the image's chan (draw(6))
         const im = img(u32(o + 1));
         const r = [s32(o + 5), s32(o + 9), s32(o + 13), s32(o + 17)];
-        const nb = (r[2] - r[0]) * (r[3] - r[1]) * 4;
-        D.loadPixels(im, r, b.subarray(o + 21, o + 21 + nb));
+        const nb = D.loadRows(im, r, b.subarray(o + 21));
         o += 21 + nb;
         break;
       }
@@ -258,10 +282,10 @@ export function makeWsys(hostRef) {
         break;
       }
       case "v":
-        hostRef.host.winPresent?.(win.wid, win.w, win.h, win.img.data);
+        hostRef.host.winPresent?.(win.wid, win.w, win.h, win.img.back.data);
         o += 1;
         break;
-      default: throw derr(`draw: message '${op}' not in the v0 subset (b d f L e E y i l s v)`);
+      default: throw derr(`draw: message '${op}' not implemented (have b d f L e E y i l s v c A F t)`);
       }
     }
     return b.length;

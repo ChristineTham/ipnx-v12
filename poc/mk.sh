@@ -119,6 +119,21 @@ $LD build/crt9.o build/lib9-rc.o build/lib9p.o build/draw9.o \
   -o rootfs/bin/rc.tmp && mv rootfs/bin/rc.tmp rootfs/bin/rc
 echo "  bin/rc  $(wc -c < rootfs/bin/rc | tr -d ' ') bytes (REAL rc, asyncified)"
 
+# the real libdraw and libframe, as archives; draw clients link them
+: > build/p9draw.list
+for c in plan9/sys/src/libdraw/*.c plan9/sys/src/libframe/*.c; do
+  b=$(basename "$c" .c)
+  $P9CC -c "$c" -o "build/p9-draw-$b.o"
+  echo "build/p9-draw-$b.o" >> build/p9draw.list
+done
+"$SDK/bin/llvm-ar" crs build/libdraw.a $(cat build/p9draw.list)
+echo "  libdraw.a  $(wc -c < build/libdraw.a | tr -d ' ') bytes (libdraw + libframe)"
+
+# drtest: OUR test, but against the REAL draw.h and libdraw
+$P9CC -c cmd/drtest.c -o build/drtest.o
+$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/drtest.o build/libdraw.a build/libp9.a -o rootfs/bin/drtest
+echo "  bin/drtest  $(wc -c < rootfs/bin/drtest | tr -d ' ') bytes (REAL libdraw client)"
+
 # sam: the real editor's backend — `sam -d` is ed-with-structural-regexps
 # on the console; the samterm protocol (mesg.c) compiles along, quiet until
 # a terminal exists. L"..." literals are 16-bit Runes, hence -fshort-wchar;
@@ -152,6 +167,7 @@ for c in plan9/sys/src/cmd/*.c; do
 done
 for c in cmd/*.c; do
   b=$(basename "$c" .c)
+  case "$b" in drtest) continue;; esac   # built above, against the real draw.h
   $CC -c "$c" -o "build/$b.o"
   $LD build/crt0.o build/lib9.o build/lib9p.o build/draw9.o "build/$b.o" build/libp9.a -o "rootfs/bin/$b"
   case " $ASYNCIFY " in *" $b "*)
