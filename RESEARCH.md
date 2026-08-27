@@ -1019,6 +1019,21 @@ mpsc mailboxes). First findings, all measured against the 130-test suite:
   `Effect` the embedding shim drains. That contract is the per-platform
   seam the decision log promised.
 
+Tranche two (same day) brought notes (V7 timing, postnote interrupting
+blocked calls through per-call reply channels — a late device completion
+dies in a dropped receiver instead of poisoning the next syscall), devproc
+with the uid ctl rules, and AREAD/IOWAIT (the wasm libthread runs natively:
+threadtest passes on wasmtime). **80 of 130.** And the wire-9P port measured
+the next structural fact before writing itself: **devmnt is irreducibly
+async** — every mount operation awaits an R-message that arrives through a
+parked transport read, and the reference kernel's `async/await` is
+load-bearing there ("the kernel dispatcher is async throughout" was a
+design sentence, not a convenience). The Rust core's synchronous dispatch
+cannot express a suspension in the middle of a walk, so the mount driver
+forces the core async — a single-threaded executor of the kernel's own
+(no tokio; the effect seam unchanged) is the recorded next step, ahead of
+devmnt, the window server, and the wasi shim.
+
 Conformance at first light: **75 of 130** — init's lifecycle tranche, the
 whole rc script (35 lines), forktest, sam -d, links/symlinks, wstat, unmount,
 unions, RFNOMNT/RFNOWAIT. The 55 still red sit in four unported subsystems:

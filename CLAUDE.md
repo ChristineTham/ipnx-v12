@@ -103,7 +103,7 @@ COOP/COEP headers SharedArrayBuffer needs; `?i` boots interactive):
 node poc/serve.mjs
 ```
 
-The native host (the Rust core, RESEARCH §9.6; 75/130 conformance and
+The native host (the Rust core, RESEARCH §9.6; 80/130 conformance and
 growing) builds and runs with cargo:
 
 ```bash
@@ -329,7 +329,8 @@ convinced importlib the stdlib had no `re`). git is deferred to the
 modern personality (it gets built under it, not ported around it — decision
 log). The native host has begun: `native/` is the Rust kernel core (a pure
 state machine: syscalls in, effects out) plus the macOS wasmtime shim — the
-real rc, sam -d and forktest already pass there (75/130; §9.6 records why
-the native guard needs no hand-written wasm, and why fork must SHARE the
-namespace — /bin/bind is the proof). Remaining tranches: wire 9P, devproc,
-the window server, notes/AREAD, the WASI shim on wasmtime.
+real rc, sam -d and forktest already pass there (80/130; §9.6 records why
+the native guard needs no hand-written wasm, why fork must SHARE the
+namespace — /bin/bind is the proof — and why devmnt forces the core
+async). Remaining tranches: the async-executor refactor, then wire 9P,
+the window server + draw, the WASI shim on wasmtime.
