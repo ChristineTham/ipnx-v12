@@ -21,12 +21,13 @@ hosts it in a page — the console is a window in the DOM, and `serve.mjs` exist
 set the COOP/COEP headers SharedArrayBuffer requires. The same 102 tests pass in both
 (measured in Chrome 148).
 
-The test boot prints 111 `PASS` lines — fifty-two from init (kernel, mount, exportfs,
+The test boot prints 117 `PASS` lines — fifty-three from init (kernel, mount, exportfs,
 uid, links, notes, unmount, rfork flags, and the harnesses), twelve from dtest (the
 window server and text), seven from drtest (the REAL libdraw: geninitdraw, getwindow,
-allocimage, the default font), four from forktest, thirty-six from `/rc/tests.rc` run
-by the REAL rc, the real sam included — and exits 0, identically on Node and in the
-browser.
+allocimage, the default font), five from threadtest (libthread: channels, alt, reads
+that park a thread, not the process), four from forktest, thirty-six from
+`/rc/tests.rc` run by the REAL rc, the real sam included — and exits 0, identically
+on Node and in the browser.
 
 ## What it proves
 
@@ -146,6 +147,8 @@ browser.
 | `plan9/sys/src/cmd/sam/` | the real sam — `sam -d` runs it today; samterm waits on libthread |
 | `plan9/sys/src/libdraw/`, `libframe/` | the real draw libraries — `libdraw.a`, exercised by drtest |
 | `cmd/drtest.c` | REAL-libdraw client: geninitdraw over `#w`, pixels verified |
+| `libc/libthread.c` | thread.h's API as the wasm platform layer (coroutines, channels, alt) |
+| `cmd/threadtest.c` | libthread exercised: rendezvous, alt, thread-parking reads |
 | `weaken.mjs` | restores common-symbol semantics in rc's objects (RESEARCH §9.5) |
 | `libc/lib9p.h`, `libc/lib9p.c` | the guest side of wire 9P: marshal vocabulary, message framing |
 | `cmd/hellofs.c` | a 9P2000 file server in a guest process, serving on fd 0 |

@@ -189,6 +189,16 @@ forkchild(void *v)
 	exits("exec");
 }
 
+static void
+threadtestchild(void *v)
+{
+	char *av[] = { "threadtest", nil };
+
+	USED(v);
+	exec("/bin/threadtest", av);
+	exits("exec");
+}
+
 /* ---- the kernel work for rc: rfork honesty and notes ---- */
 
 static void
@@ -503,6 +513,14 @@ main(int argc, char *argv[])
 	pid = procrfork(RFFDG|RFNAMEG, drtestchild, nil);
 	n = await(buf, sizeof buf);
 	ok(n > 0 && strstr(buf, "''") != nil, "real libdraw: drtest suite ran clean");
+
+	/* libthread, the wasm platform layer: coroutines over saved contexts,
+	 * channels delivering through off-stack slots, and reads that park a
+	 * thread while the process keeps scheduling (AREAD/IOWAIT). */
+	pid = procrfork(RFFDG, threadtestchild, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && atoi(buf) == pid && strstr(buf, "''") != nil,
+	   "libthread: threadtest suite ran clean");
 
 	/* The asyncify path: forktest is a transformed binary whose bare
 	 * rfork(RFPROC) genuinely returns twice — its four checks print

@@ -33,8 +33,11 @@ notes at the syscall boundary, `unmount`, honest rfork flags, `#d`, and real
 run in terminal mode (`sam -d`): structural regexps, the `x/c/s/i` loop, and the
 buffer piped through real commands — and **the real libdraw draws**: `geninitdraw`
 speaks `/dev/draw/new` against `#w`, `getwindow` allocates a screen and window view,
-and the real default font lands glyphs through `y/i/l/s` — 111 acceptance tests).
-Everything else is design documents.
+and the real default font lands glyphs through `y/i/l/s` — and **libthread runs**, the
+real thread.h API as a wasm platform layer: coroutines over saved asyncify contexts,
+channels delivering through off-stack slots, blocking reads that park a thread while
+the process keeps scheduling — 117 acceptance tests). Everything else is design
+documents.
 
 ## Commands
 
@@ -55,7 +58,7 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints 111 PASS lines,
+Boot the kernel — init (pid 1) runs the acceptance tests, prints 117 PASS lines,
 exits 0:
 
 ```bash
@@ -243,7 +246,7 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (2026-08-27)
 
-111 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
+117 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
 (`node poc/serve.mjs` → `/browser/`, measured in Chrome 148); `?i` boots to **the real
 Plan 9 rc** — pipelines, subshells, `` `{...} `` captures, `fn`, `while`, `switch` — and
 `win rc &` opens a shell window that prompts because rc's own `Isatty` finds
@@ -257,6 +260,13 @@ filters through real commands, carried by real `setjmp/longjmp` built on the asy
 machinery — and **the real libdraw** (with libframe compiled beside it) drawing
 through `#w`: the device grew screens (`A`), window views (`b` on a screen, one
 backing store), clipping (`c`), and channel-correct uploads (`y` decodes GREY1
-fonts per draw(6)), verified by drtest's seven pixel checks (V10 growth waits for
-the parent project's ANSI conversion). Next: libthread over asyncify, then samterm,
-then the native host — **macOS first, then iPad** (the user's platform order).
+fonts per draw(6)), verified by drtest's seven pixel checks — and **libthread**:
+thread.h's API implemented as this platform's layer (its real core is per-arch
+scheduler assembly), coroutines as saved asyncify contexts (frames + stack pointer +
+shadow-stack region), `proccreate` collapsing to `threadcreate`, and the kernel's
+AREAD/IOWAIT letting a read park one thread while the scheduler runs the rest. The
+load-bearing rule, learned the hard way: a suspended coroutine's stack is dead
+storage, so channels register, stash send values, and deliver through off-stack
+per-thread slots (V10 growth waits for the parent project's ANSI conversion).
+Next: samterm — the real editor's screen — then the native host — **macOS first,
+then iPad** (the user's platform order).

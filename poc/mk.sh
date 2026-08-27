@@ -113,7 +113,7 @@ done
 $LD build/crt9.o build/lib9-rc.o build/lib9p.o build/draw9.o \
   build/p9-rc-*.o build/libp9.a -o rootfs/bin/rc
 "$BINARYEN/bin/wasm-opt" rootfs/bin/rc \
-  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj -O2 \
+  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj,env.tsave,env.tjump -O2 \
   --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
   --enable-nontrapping-float-to-int \
   -o rootfs/bin/rc.tmp && mv rootfs/bin/rc.tmp rootfs/bin/rc
@@ -151,11 +151,23 @@ $P9CC -c plan9/sys/src/libplumb/mesg.c -o build/p9-plumb-mesg.o
 $P9CC -c plan9/sys/src/libplumb/plumbsendtext.c -o build/p9-plumb-sendtext.o
 $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/p9-sam-*.o build/p9-plumb-*.o build/libp9.a -o rootfs/bin/sam
 "$BINARYEN/bin/wasm-opt" rootfs/bin/sam \
-  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj -O2 \
+  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj,env.tsave,env.tjump -O2 \
   --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
   --enable-nontrapping-float-to-int \
   -o rootfs/bin/sam.tmp && mv rootfs/bin/sam.tmp rootfs/bin/sam
 echo "  bin/sam  $(wc -c < rootfs/bin/sam | tr -d ' ') bytes (REAL sam, asyncified)"
+
+# libthread (ours: the wasm platform layer under the real thread.h) and
+# its test — threaded binaries are asyncified, their contexts demand it
+$P9CC -c libc/libthread.c -o build/libthread.o
+$P9CC -c cmd/threadtest.c -o build/threadtest.o
+$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/threadtest.o build/libthread.o build/libp9.a -o rootfs/bin/threadtest
+"$BINARYEN/bin/wasm-opt" rootfs/bin/threadtest \
+  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj,env.tsave,env.tjump -O2 \
+  --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
+  --enable-nontrapping-float-to-int \
+  -o rootfs/bin/threadtest.tmp && mv rootfs/bin/threadtest.tmp rootfs/bin/threadtest
+echo "  bin/threadtest  $(wc -c < rootfs/bin/threadtest | tr -d ' ') bytes (libthread, asyncified)"
 
 # real Plan 9 sources (poc/plan9/NOTICE): compiled unmodified, void main,
 # through the shim headers — these SUPERSEDE any same-named PoC command
@@ -167,12 +179,12 @@ for c in plan9/sys/src/cmd/*.c; do
 done
 for c in cmd/*.c; do
   b=$(basename "$c" .c)
-  case "$b" in drtest) continue;; esac   # built above, against the real draw.h
+  case "$b" in drtest|threadtest) continue;; esac   # built above, against the real headers
   $CC -c "$c" -o "build/$b.o"
   $LD build/crt0.o build/lib9.o build/lib9p.o build/draw9.o "build/$b.o" build/libp9.a -o "rootfs/bin/$b"
   case " $ASYNCIFY " in *" $b "*)
     "$BINARYEN/bin/wasm-opt" "rootfs/bin/$b" \
-      --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj -O2 \
+      --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj,env.tsave,env.tjump -O2 \
       --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
       --enable-nontrapping-float-to-int \
       -o "rootfs/bin/$b.tmp" && mv "rootfs/bin/$b.tmp" "rootfs/bin/$b"

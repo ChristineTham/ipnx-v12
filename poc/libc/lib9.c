@@ -28,8 +28,15 @@ enum { BIND=2, CHDIR=3, CLOSE=4, DUP=5, EXEC=7, EXITS=8, OPEN=14, SLEEP=17,
 
 int open(char *p, int m)          { return _sys(OPEN,(int)p,m,0,0,0); }
 int close(int fd)                 { return _sys(CLOSE,fd,0,0,0,0); }
+long (*_threadpread)(int, void*, long, vlong);	/* libthread's yielding read */
 long pread(int fd, void *b, long n, vlong off){
+	if(_threadpread)
+		return (*_threadpread)(fd, b, n, off);
 	return _sys(PREAD,fd,(int)b,n,(int)(off&0xffffffff),(int)(off>>32)); }
+long _rawpread(int fd, void *b, long n, vlong off){
+	return _sys(PREAD,fd,(int)b,n,(int)(off&0xffffffff),(int)(off>>32)); }
+int _aread(int tag, int fd, int n){ return _sys(210, tag, fd, n, 0, 0); }
+int _iowait(void *buf, int n){ return _sys(211, (int)buf, n, 0, 0, 0); }
 long pwrite(int fd, void *b, long n, vlong off){
 	return _sys(PWRITE,fd,(int)b,n,(int)(off&0xffffffff),(int)(off>>32)); }
 long read(int fd, void *b, long n) { return pread(fd,b,n,-1LL); }
@@ -112,6 +119,12 @@ __attribute__((import_module("env"), import_name("longj")))
 extern int _longj(int env, int val);
 __attribute__((import_module("env"), import_name("sjbuf")))
 extern void _sjbuf(int p);
+__attribute__((import_module("env"), import_name("tsave")))
+extern int _tsave(int id);
+__attribute__((import_module("env"), import_name("tjump")))
+extern int _tjump(int id, int val);
+__attribute__((import_module("env"), import_name("tdrop")))
+extern void _tdrop(int id);
 
 static uchar _asydata[8 + 32768];
 
@@ -303,6 +316,22 @@ int execl(char *f, ...){
 }
 int unmount(char *name, char *old){ return _sys(35, (int)name, (int)old, 0, 0, 0); }
 int fork(void)                    { return rfork(RFFDG|RFREND|RFPROC); }
+/* Thread contexts (libthread's coroutines): setjmp/longjmp plus the
+ * shadow-stack region, so coroutines can share stack addresses. */
+int _tsavec(int id){
+	*(uint*)_asydata = (uint)(_asydata + 8);
+	*((uint*)_asydata + 1) = (uint)(_asydata + sizeof _asydata);
+	_sjbuf((int)_asydata);
+	return _tsave(id);
+}
+void _tjumpc(int id, int v){
+	*(uint*)_asydata = (uint)(_asydata + 8);
+	*((uint*)_asydata + 1) = (uint)(_asydata + sizeof _asydata);
+	_sjbuf((int)_asydata);
+	_tjump(id, v);
+	for(;;);
+}
+void _tdropc(int id){ _tdrop(id); }
 void longjmp(long *env, int v){
 	*(uint*)_asydata = (uint)(_asydata + 8);
 	*((uint*)_asydata + 1) = (uint)(_asydata + sizeof _asydata);

@@ -56,6 +56,8 @@ function m8() {
 let pendingFork = null, rewinding = false, rewindReturn = 0, inNote = false;
 let pendingSj = null, sjResume = null;
 const sjmap = new Map();                             // env ptr -> {frames, sp}
+const tcmap = new Map();                             // thread ctx id -> {frames, sp, shadow}
+let stackTop = 0;                                    // __stack_pointer at instantiation
 
 // Real setjmp/longjmp, on the same asyncify machinery as the bare fork
 // (sam's error recovery needs them): setjmp unwinds, saves the frame
@@ -84,6 +86,31 @@ function longj(env, val) {
   curInst.exports.asyncify_start_unwind(lastSjBuf);
   return 0;
 }
+
+// Thread contexts, for libthread's coroutines: like setjmp/longjmp but the
+// SHADOW STACK REGION [sp, stackTop) travels too, because coroutines reuse
+// the same stack addresses. tsave(id) returns 0 now, v when resumed;
+// tjump(id, v) never returns; tdrop(id) frees a finished thread's context.
+function tsave(id) {
+  if (sjResume !== null) {
+    curInst.exports.asyncify_stop_rewind();
+    rewinding = false;
+    const v = sjResume;
+    sjResume = null;
+    if (typeof process !== "undefined" && process.env.KSJ)
+      console.error(`[sj resume->tsave id=${id} v=${v}]`);
+    return v;
+  }
+  pendingSj = { kind: "tsave", env: id, databuf: lastSjBuf };
+  curInst.exports.asyncify_start_unwind(lastSjBuf);
+  return 0;
+}
+function tjump(id, val) {
+  pendingSj = { kind: "tjump", env: id, val, databuf: lastSjBuf };
+  curInst.exports.asyncify_start_unwind(lastSjBuf);
+  return 0;
+}
+function tdrop(id) { tcmap.delete(id); }
 let lastSjBuf = 0;
 function sjbuf(p) { lastSjBuf = p; }                 // guest tells us where _asydata is
 
@@ -109,6 +136,7 @@ function forka(flags, databuf) {
 
 let postSc = null;
 function sys(trap, a0, a1, a2, a3, a4) {
+  if (typeof process !== "undefined" && process.env.KIN) console.error(`[in ${trap}]`);
   // string/buffer arguments are copied into the transfer SAB
   if (T_STR.has(trap)) {
     let o = cstr(a0, 0);
@@ -164,6 +192,7 @@ function sys(trap, a0, a1, a2, a3, a4) {
       m8().set(tx.subarray(0, ret + 1), a0);        // errstr/await/args/noteget -> buf (NUL incl.)
     else if (trap === 62 || trap === 23) m8().set(tx.subarray(0, ret + 1), a1);  // readlink/fd2path
     else if (trap === 53) m8().set(tx.subarray(0, 8), a0);                  // nsec -> vlong*
+    else if (trap === 211) m8().set(tx.subarray(0, ret), a0);               // iowait -> tag+data
   }
   if (trap === 21 && ret === 0) m8().set(tx.subarray(0, 8), a0);            // pipe -> fd[2]
   // Deliver pending notes (V7 timing). Never on the fork return: raw0's
@@ -207,9 +236,13 @@ function raw0(flags, sp, fn, arg) {                   // the guard's raw rfork
 function callStart() {
   for (;;) {
     curInst.exports._start();
+    if (typeof process !== "undefined" && process.env.KSJ)
+      console.error(`[loop ret pendingSj=${pendingSj?.kind} pendingFork=${!!pendingFork}]`);
     if (pendingSj) {                                 // setjmp/longjmp unwound
       curInst.exports.asyncify_stop_unwind();
       const { kind, env, val, databuf } = pendingSj;
+      if (typeof process !== "undefined" && process.env.KSJ)
+        console.error(`[sj ${kind} id=${env} val=${val ?? ""} sp=0x${curInst.exports.__stack_pointer.value.toString(16)}]`);
       pendingSj = null;
       const dv = new DataView(memory.buffer);
       if (kind === "set") {
@@ -217,6 +250,20 @@ function callStart() {
         sjmap.set(env, { frames: m8().slice(databuf + 8, end),
                          sp: curInst.exports.__stack_pointer.value });
         sjResume = 0;
+      } else if (kind === "tsave") {
+        const end = dv.getUint32(databuf, true);
+        const sp = curInst.exports.__stack_pointer.value;
+        tcmap.set(env, { frames: m8().slice(databuf + 8, end), sp,
+                         shadow: m8().slice(sp, stackTop) });
+        sjResume = 0;
+      } else if (kind === "tjump") {
+        const saved = tcmap.get(env);
+        if (!saved) throw new Error(`tjump: no context ${env}`);
+        m8().set(saved.frames, databuf + 8);
+        dv.setUint32(databuf, databuf + 8 + saved.frames.length, true);
+        m8().set(saved.shadow, saved.sp);
+        curInst.exports.__stack_pointer.value = saved.sp;
+        sjResume = val;
       } else {
         const saved = sjmap.get(env);
         if (!saved) throw new Error(`longjmp: no setjmp for env 0x${env.toString(16)}`);
@@ -259,11 +306,12 @@ async function run(mod, guardMod, asy) {
   const guard = new WebAssembly.Instance(guardMod, { env: { raw0, forkpd: () => forkPid } });
   curModule = mod;
   curImports = {
-    env: { memory, sys, forka, setj, longj, sjbuf },
+    env: { memory, sys, forka, setj, longj, sjbuf, tsave, tjump, tdrop },
     guard: { rfork: guard.exports.rfork },
   };
   const inst = new WebAssembly.Instance(mod, curImports);
   curInst = inst;
+  if (inst.exports.__stack_pointer) stackTop = inst.exports.__stack_pointer.value;
   if (asy) {                                          // a freshly forked child: rewind
     m8().set(new Uint8Array(asy.snap));
     rewindReturn = 0;
@@ -278,7 +326,7 @@ const guardMod = new WebAssembly.Module(guardBytes());
 let pending = Promise.resolve();
 function start(mod, asy) {
   pendingFork = null; rewinding = false; inNote = false;
-  pendingSj = null; sjResume = null; sjmap.clear();
+  pendingSj = null; sjResume = null; sjmap.clear(); tcmap.clear();
   pending = run(mod, guardMod, asy).catch((e) => {
     if (e instanceof ForkResume) return;              // parent resumed and _start returned? no: guard caught inside — reaching here means unwound past _start: only if guard missing
     if (e instanceof ExecReplace) return;             // replaced; 'load' message follows

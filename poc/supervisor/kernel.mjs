@@ -25,7 +25,7 @@ const T = { BIND: 2, CHDIR: 3, CLOSE: 4, DUP: 5, EXEC: 7, EXITS: 8, OPEN: 14,
   LINK: 60, SYMLINK: 61, READLINK: 62,   // the V12 additions (docs/syscalls.md)
   FD2PATH: 23, NSEC: 53, FWSTAT: 45,
   ALARM: 6, NOTIFY: 28, NOTED: 29, UNMOUNT: 35,
-  ARGS: 200, NOTEGET: 202 };
+  ARGS: 200, NOTEGET: 202, AREAD: 210, IOWAIT: 211 };
 const RF = { NAMEG: 1, FDG: 4, PROC: 16, MEM: 32 };
 const OTRUNC = 16, DMDIR = 0x80000000;
 // mailbox: [0]=state(0 idle,1 req,2 done) [1]=trap [2..7]=args [8]=ret [9]=aux
@@ -339,6 +339,7 @@ function newProc(ppid, { ns, fdt, cwd, cred, env, noteGroup }) {
     zombies: [], awaitPending: false,
     notes: [], hasHandler: false, noteGroup: noteGroup ?? nextNoteGroup++,
     inflight: null, alarmTimer: null, nomnt: false, nowait: false,
+    ioq: [], iowaiting: false,
     borrower: null, worker: null, mb: null, tx: null, argv: [] };
   procs.set(pid, p);
   return p;
@@ -380,6 +381,13 @@ function killProc(proc, msg) {
   if (!proc.nowait) zombie(parent, proc.pid, msg);
 }
 const newChan = (c, mode) => ({ dev: c.dev, node: c.node, path: c.path, mode, offset: 0, refs: 1 });
+function iodeliver(host, self) {
+  const { tag, data } = self.ioq.shift();
+  host.tx[0] = tag & 255; host.tx[1] = (tag >> 8) & 255;
+  host.tx[2] = (tag >> 16) & 255; host.tx[3] = (tag >> 24) & 255;
+  host.tx.set(data, 4);
+  return 4 + data.length;
+}
 const nsCopy = (ns) => new Map([...ns].map(([k, v]) => [k, v.slice()]));
 const incref = (c) => { c.refs++; return c; };
 const decref = (c) => { if (--c.refs === 0) c.dev.clunk?.(c.node); };
@@ -697,6 +705,37 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     host.tx.set(b);
     return b.length - 1;
   }
+  // Async IO, for libthread: AREAD submits a read that completes into a
+  // per-proc queue; IOWAIT delivers the oldest completion (tag[4] data...)
+  // or parks. What blocks is a THREAD, never the proc — the guest's
+  // scheduler multiplexes. Stream fds are the intended use.
+  case T.AREAD: {
+    const c = fdchk(self, a1);
+    const n = Math.min(a2, TXSIZE - 4);
+    const tag = a0 >>> 0;
+    let settled = false;
+    const fin = (data) => {
+      if (settled || !procs.has(self.pid)) return;
+      settled = true;
+      c.offset += data.length;
+      self.ioq.push({ tag, data });
+      if (self.iowaiting) {
+        self.iowaiting = false;
+        self.inflight = null;
+        reply(host, iodeliver(host, self));
+      }
+    };
+    const ctx = { cred: self.cred, pid: self.pid, done: fin };
+    Promise.resolve(c.dev.read(c.node, n, -1, ctx)).then((d) => { if (d !== undefined) fin(d); },
+      () => fin(new Uint8Array(0)));
+    return 0;
+  }
+  case T.IOWAIT:
+    if (self.ioq.length) return iodeliver(host, self);
+    self.iowaiting = true;
+    self.inflight = () => { self.iowaiting = false;
+      self.errstr = "interrupted"; reply(host, -1); };
+    return undefined;
   case T.NOTIFY: self.hasHandler = a0 !== 0; return 0;
   case T.NOTEGET: {
     if (self.notes.length === 0) return 0;
