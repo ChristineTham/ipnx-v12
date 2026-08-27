@@ -914,6 +914,39 @@ scheduling is the lock). Mouse events cross the same boundary keyboard ones
 do: wctl accepts `mouse x y buttons` with a really-advancing msec, because
 double-click detection is msec arithmetic.
 
+And the WASI second ABI, landing the same day the PoC closed, measured six:
+
+- **The preopen is the namespace root, and no kernel change was needed.**
+  `supervisor/wasi1.mjs` (484 lines) implements `wasi_snapshot_preview1`
+  entirely over the existing mailbox traps: fd 3 is `/`, paths resolve
+  shim-side (WASI is dirfd-relative and has no cwd) and walk kernel-side, so
+  a foreign binary crosses symlinks, unions and mounts identically to a
+  native one. Both citizens ran green on the FIRST full-suite run on Node —
+  the syscall surface the PoC had already grown was sufficient without
+  addition.
+- **The kernel reads string traps from the transfer SAB, not from guest
+  pointers** — so the shim's `sysTx` writes JS strings straight into tx and
+  the a0 register is dead weight for those traps. No scratch region in guest
+  memory was ever needed.
+- **`NSEC`'s reply is `clock_time_get`'s exact shape** — one u64 of
+  little-endian nanoseconds, written to a guest pointer. The wasi clock is
+  one trap with zero translation.
+- **The SAB TextDecoder rule found its second victim** (§5.3's finding
+  recurring): Node decodes SAB-backed views, Chrome refuses — the shim
+  stalled at 110/128 in the browser until every `decode(tx.subarray(…))`
+  became `decode(tx.slice(…))`. The rule is now: **no decode without a
+  copy, anywhere tx is read.**
+- **`path_rename` is V10's rule serving WASI**: rename = `link` + `remove`
+  in the shim, exactly the userland decomposition the syscall census
+  recorded (V10 has no rename syscall).
+- **The citizens**: wasitest, wasi-libc through the full `wasm32-wasip1`
+  sysroot, 278,314 bytes — stdio, argv, clock, `fopen`, `readdir`. gotest,
+  **real Go** (`GOOS=wasip1 GOARCH=wasm`, go1.25.6), 2,725,560 bytes —
+  `os.ReadFile`, `os.ReadDir`, `os.WriteFile`, and `time.Sleep` parking on
+  `poll_oneoff` → the kernel's `SLEEP`. Go's runtime wanted nothing the
+  shim didn't have: args, environ (empty), monotonic clock, `random_get`,
+  `poll_oneoff`, and the fd/path families.
+
 ---
 
 ## 10. Licensing

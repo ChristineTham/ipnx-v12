@@ -219,6 +219,49 @@ acmetestchild(void *v)
 	exits("exec");
 }
 
+/* ---- the WASI second ABI: foreign citizens through wasi1.mjs ---- */
+
+static int wasipipe[2];
+
+static void
+wasichild(void *v)
+{
+	char *av[] = { "wasitest", "frominit", nil };
+
+	USED(v);
+	dup(wasipipe[1], 1);
+	close(wasipipe[0]);
+	close(wasipipe[1]);
+	exec("/bin/wasitest", av);
+	exits("exec");
+}
+
+static void
+gochild(void *v)
+{
+	char *av[] = { "gotest", nil };
+
+	USED(v);
+	dup(wasipipe[1], 1);
+	close(wasipipe[0]);
+	close(wasipipe[1]);
+	exec("/bin/gotest", av);
+	exits("exec");
+}
+
+/* drain a pipe until the writer closes */
+static int
+readall(int fd, char *buf, int cap)
+{
+	int n, t;
+
+	t = 0;
+	while(t < cap - 1 && (n = read(fd, buf + t, cap - 1 - t)) > 0)
+		t += n;
+	buf[t] = 0;
+	return t;
+}
+
 /* ---- the kernel work for rc: rfork honesty and notes ---- */
 
 static void
@@ -557,6 +600,45 @@ main(int argc, char *argv[])
 	pid = procrfork(RFFDG|RFNAMEG, acmetestchild, nil);
 	n = await(buf, sizeof buf);
 	ok(n > 0 && strstr(buf, "''") != nil, "acme: boots, serves, and opens a window by mouse");
+
+	/* ---- the WASI second ABI: foreign citizens on the same kernel.
+	 * wasitest is wasi-libc through the full sysroot; gotest is a REAL
+	 * Go binary (GOOS=wasip1). Their one preopen is the namespace root —
+	 * the citizenship clause, live. ---- */
+	{
+		static char out[2048];
+
+		pipe(wasipipe);
+		pid = procrfork(RFFDG, wasichild, nil);
+		close(wasipipe[1]);
+		readall(wasipipe[0], out, sizeof out);
+		close(wasipipe[0]);
+		n = await(buf, sizeof buf);
+		ok(n > 0 && strstr(buf, "''") != nil &&
+		   strstr(out, "hello from wasi-libc") != nil &&
+		   strstr(out, "argv1=frominit") != nil &&
+		   strstr(out, "clock=ticking") != nil &&
+		   strstr(out, "motd: hello") != nil,
+		   "WASI ABI: a wasi-libc citizen ran — stdio, argv, clock, the motd through the preopen");
+		ok(strstr(out, "readback: written by wasi") != nil &&
+		   strstr(out, "/etc has") != nil && strstr(out, "has 0 entries") == nil,
+		   "WASI ABI: wrote, read back, and listed a directory through the namespace");
+
+		pipe(wasipipe);
+		pid = procrfork(RFFDG, gochild, nil);
+		close(wasipipe[1]);
+		readall(wasipipe[0], out, sizeof out);
+		close(wasipipe[0]);
+		n = await(buf, sizeof buf);
+		ok(n > 0 && strstr(buf, "''") != nil &&
+		   strstr(out, "hello from wasip1") != nil &&
+		   strstr(out, "motd: hello") != nil,
+		   "WASI ABI: a REAL Go binary (wasip1) ran against the kernel");
+		ok(strstr(out, "slept=true") != nil &&
+		   strstr(out, "/etc has") != nil && strstr(out, "has 0 entries") == nil &&
+		   strstr(out, "readback: written by go") != nil,
+		   "WASI ABI: Go slept on poll_oneoff, listed /etc, round-tripped a file");
+	}
 
 	/* The asyncify path: forktest is a transformed binary whose bare
 	 * rfork(RFPROC) genuinely returns twice — its four checks print

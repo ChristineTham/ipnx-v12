@@ -830,7 +830,13 @@ button-2 execute and button-3 look verified in the raster, the float door opened
 last two PoC devices: `#s` (srv — a posted fd's channel kept alive by name, which
 is what makes acme's error pipe park instead of EOF-spinning) and `#d` bound at
 `/fd`. **124 acceptance tests, green on Node and in Chrome.** The PoC has nothing
-left to prove; the native work begins.
+left to prove; the native work begins. And the post-PoC queue's first item is
+already moving (same day): **the WASI second ABI runs** — `wasi1.mjs`
+implements `wasi_snapshot_preview1` over the same mailbox with fd 3, the one
+preopen, as the namespace root; a wasi-libc citizen and a **real Go binary**
+(`GOOS=wasip1`, go1.25.6) read the motd, list directories, round-trip files
+and sleep on `poll_oneoff`, on both hosts — **128 tests**. The first
+benchmark's toolchain speaks to the kernel; CPython's wasi build is next.
 
 ## Sources
 

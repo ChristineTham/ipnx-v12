@@ -1,3 +1,4 @@
+import { makeWasi, WasiExit } from "./wasi1.mjs";
 // Guest runner core: one Worker per process, platform-neutral. Owns the
 // instance and its (unshared) linear memory; talks to the kernel through the
 // SAB mailbox. Also implements the host half of the lazy fork: save [0,sp) at
@@ -167,24 +168,7 @@ function sys(trap, a0, a1, a2, a3, a4) {
     tx[o] = 0;
   }
   if (trap === 51) tx.set(m8().subarray(a1, a1 + Math.min(a2, tx.length)));  // pwrite buf
-  mb[1] = trap; mb[2] = a0; mb[3] = a1; mb[4] = a2; mb[5] = a3; mb[6] = a4;
-  Atomics.store(mb, 0, ST.REQ);
-  port.post({ t: "sc" });
-  Atomics.wait(mb, 0, ST.REQ);                       // Workers may block
-  Atomics.store(mb, 0, ST.IDLE);
-  const ret = mb[8], aux = mb[9];
-  if (typeof process !== 'undefined' && process.env.KDBG)
-    console.error(trap === 19
-      ? `[sys19 marker=${a2} flags=${a0.toString(8)} ret=${ret} aux=${aux}]`
-      : `[sys${trap} a0=${a0} ret=${ret}]`);
-  if (ret === R_FORKRESUME) {                        // child left; resume parent
-    m8().set(savedStack); savedStack = null;
-    forkPid = aux;
-    throw new ForkResume(aux);
-  }
-  if (ret === R_EXECSELF) throw new ExecReplace();
-  if (ret === R_RETIRE) throw new ExecReplace();       // park; the next init reuses us
-  if (ret === R_DIE) throw new ExecReplace();          // killed; unwind and park
+  const ret = mbCall(trap, a0, a1, a2, a3, a4);
   if (ret > 0) {                                     // copy-outs, per trap
     if (trap === 50) m8().set(tx.subarray(0, ret), a1);                     // pread -> buf
     else if (trap === 42 || trap === 43) m8().set(tx.subarray(0, ret), a1); // stat/fstat -> edir
@@ -216,6 +200,44 @@ function sys(trap, a0, a1, a2, a3, a4) {
   }
   return ret;
 }
+// the mailbox dance itself, shared by sys() and sysTx()
+function mbCall(trap, a0, a1, a2, a3, a4) {
+  mb[1] = trap; mb[2] = a0; mb[3] = a1; mb[4] = a2; mb[5] = a3; mb[6] = a4;
+  Atomics.store(mb, 0, ST.REQ);
+  port.post({ t: "sc" });
+  Atomics.wait(mb, 0, ST.REQ);                       // Workers may block
+  Atomics.store(mb, 0, ST.IDLE);
+  const ret = mb[8], aux = mb[9];
+  if (typeof process !== 'undefined' && process.env.KDBG)
+    console.error(trap === 19
+      ? `[sys19 marker=${a2} flags=${a0.toString(8)} ret=${ret} aux=${aux}]`
+      : `[sys${trap} a0=${a0} ret=${ret}]`);
+  if (ret === R_FORKRESUME) {                        // child left; resume parent
+    m8().set(savedStack); savedStack = null;
+    forkPid = aux;
+    throw new ForkResume(aux);
+  }
+  if (ret === R_EXECSELF) throw new ExecReplace();
+  if (ret === R_RETIRE) throw new ExecReplace();       // park; the next init reuses us
+  if (ret === R_DIE) throw new ExecReplace();          // killed; unwind and park
+  return ret;
+}
+
+// sysTx: the wasi shim's entry — string arguments are JS strings written
+// straight into the transfer SAB (the kernel reads string traps from tx, so
+// a0 is dead weight there), and NO guest copy-outs run: the caller reads
+// the result out of tx itself. Numeric traps pass a0..a4 verbatim.
+const enc = new TextEncoder();
+function sysTx(trap, strs, a0, a1, a2, a3, a4) {
+  let o = 0;
+  for (const s of strs) {
+    const b = enc.encode(s);
+    tx.set(b, o); o += b.length; tx[o++] = 0;
+  }
+  return mbCall(trap, a0, a1, a2, a3, a4);
+}
+function txView() { return tx; }
+
 function cstr(ptr, o) {
   let end = m8().indexOf(0, ptr);
   tx.set(m8().subarray(ptr, end), o);
@@ -303,6 +325,26 @@ async function run(mod, guardMod, asy) {
     memory.maxPages = wantMax;
   }
   memU8 = undefined;
+  // The second ABI: a module importing wasi_snapshot_preview1 is a WASI
+  // command (Go wasip1, wasi-libc) — it EXPORTS its memory, forks never,
+  // and sees the namespace through one preopen. The shim is wasi1.mjs.
+  if (WebAssembly.Module.imports(mod).some((i) => i.module === "wasi_snapshot_preview1")) {
+    const wasi = makeWasi({ sys, sysTx, txView, m8,
+      mem: () => memory, setDbg: () => {} });
+    const inst = new WebAssembly.Instance(mod, { wasi_snapshot_preview1: wasi.imports });
+    memory = inst.exports.memory;
+    memory.maxPages = undefined;                     // never pooled for env guests
+    memU8 = undefined;
+    curInst = inst;
+    try {
+      inst.exports._start();
+      sysTx(8, [""], 0, 0, 0, 0, 0);                 // fell off main: exit 0
+    } catch (e) {
+      if (e instanceof WasiExit) { sysTx(8, [e.code ? "exit " + e.code : ""], 0, 0, 0, 0, 0); }
+      else throw e;
+    }
+    return;
+  }
   const guard = new WebAssembly.Instance(guardMod, { env: { raw0, forkpd: () => forkPid } });
   curModule = mod;
   curImports = {

@@ -18,10 +18,11 @@ node serve.mjs   # serve the browser port: http://localhost:8095/browser/ (?i = 
 The kernel is one platform-neutral module (`supervisor/kernel.mjs`, with `guestcore.mjs`
 for the guest runner); `supervisor/main.mjs` hosts it on Node and `browser/main.mjs`
 hosts it in a page — the console is a window in the DOM, and `serve.mjs` exists only to
-set the COOP/COEP headers SharedArrayBuffer requires. The same 124 tests pass in both
+set the COOP/COEP headers SharedArrayBuffer requires. The same 128 tests pass in both
 (measured in Chrome 148).
 
-The test boot prints 124 `PASS` lines — fifty-five from init (kernel, mount, exportfs,
+The test boot prints 128 `PASS` lines — fifty-nine from init (kernel, mount, exportfs,
+the WASI second ABI,
 uid, links, notes, unmount, rfork flags, and the harnesses), twelve from dtest (the
 window server and text), seven from drtest (the REAL libdraw: geninitdraw, getwindow,
 allocimage, the default font), five from threadtest (libthread: channels, alt, reads
@@ -153,6 +154,8 @@ included — and exits 0, identically on Node and in the browser.
 | `cmd/samtest.c` | the editor round trip, headless: boot, type, read the reply's glyphs |
 | `plan9/sys/src/cmd/acme/` | the real acme — its own 9P server, columns and windows by mouse |
 | `cmd/acmetest.c` | acme headless: boot paint, button-2 New, button-3 look, via wctl chords |
+| `supervisor/wasi1.mjs` | the WASI second ABI: wasi_snapshot_preview1 over the mailbox; the preopen is the namespace root |
+| `wasi/` | the foreign citizens: wasitest (wasi-libc, full sysroot) and gotest (REAL Go, wasip1) |
 | `plan9/sys/src/libdraw/`, `libframe/` | the real draw libraries — `libdraw.a`, exercised by drtest |
 | `cmd/drtest.c` | REAL-libdraw client: geninitdraw over `#w`, pixels verified |
 | `libc/libthread.c` | thread.h's API as the wasm platform layer (coroutines, channels, alt) |

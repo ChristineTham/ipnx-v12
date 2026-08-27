@@ -298,6 +298,17 @@ for c in cmd/*.c; do
     echo "  bin/$b  $(wc -c < "rootfs/bin/$b" | tr -d ' ') bytes" ;;
   esac
 done
+# ---- the WASI second ABI: real foreign citizens against the same kernel ----
+# wasitest is wasi-libc through the FULL sysroot (no -nostdlib): it imports
+# wasi_snapshot_preview1 and knows nothing of Plan 9; the shim is
+# supervisor/wasi1.mjs, and the preopen is the namespace root.
+"$SDK/bin/clang" --target=wasm32-wasip1 --sysroot="$SDK/share/wasi-sysroot" -O2 \
+  wasi/wasitest.c -o rootfs/bin/wasitest
+echo "  bin/wasitest  $(wc -c < rootfs/bin/wasitest | tr -d ' ') bytes (wasi-libc citizen)"
+# gotest is a REAL Go binary: the wasip1 target of the first benchmark's toolchain
+(cd wasi/gotest && GOOS=wasip1 GOARCH=wasm go build -trimpath -o ../../rootfs/bin/gotest .)
+echo "  bin/gotest  $(wc -c < rootfs/bin/gotest | tr -d ' ') bytes (REAL Go, wasip1)"
+
 # pack the rootfs for the browser host (fetched by browser/main.mjs)
 node -e '
 const fs = require("fs"), p = require("path");
