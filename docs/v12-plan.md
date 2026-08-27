@@ -408,6 +408,40 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   world, `exportfs` handing private namespaces between containers over wire 9P —
   namespaces as the cloud primitive the sidecar pattern keeps reinventing badly.
 
+- **(2026-08-27) Storage in containers: the invariant and the design.** First the
+  inversion that makes this easy: an OCI image is a union filesystem, a volume is a
+  bind mount, and container startup is namespace assembly performed by the runtime —
+  the container ecosystem reimplemented Plan 9's namespace operations one layer
+  down, so ipnx in a container sits above a machine that already thinks in binds
+  and unions. The invariant, held on every rung: **ipnx never learns an on-disk
+  format.** Durability is always somebody else's filesystem, reached through 9P or
+  a host Dev; virtio-blk plus a filesystem of our own is the door that stays
+  closed, and fossil goes unported even in spirit. Per rung:
+  *Scratch container* — the image carries the kernel and the rootfs seed; the seed
+  becomes the ramfs (the running root is synthesized, never mutated — the container
+  ideal, already the PoC's behaviour). Volumes enter through the Linux mach layer
+  as a host-fs Dev or a mach-side 9P server, and init's profile binds them into
+  place — Plan 9's `/lib/namespace` reborn as the container's mount configuration,
+  the YAML of volumeMounts replaced by a namespace script. Recorded honestly:
+  Plan 9 unions are not overlayfs — creates land in the MCREATE element but there
+  is no copy-up — and the resolution is Unix's own layout discipline, a read-only
+  seed (`/bin`, `/lib`, `/rc`) with the writable trees (`/usr`, `/tmp`, `/data`)
+  mounted whole from the volume, which is how V10 machines were actually laid out.
+  *Cloud machine* — no Linux below, so durability arrives as 9P over a virtio
+  transport: virtio-9p under QEMU/Kata, and under Firecracker (which has no 9p
+  device) **wire 9P over vsock** — a stream transport plus the mount driver that
+  already exists, since `devmnt` mounts any fd speaking 9P. The host agent — a
+  hundred lines against the host's real filesystem — owns ext4 or whatever lies
+  beneath. Storage therefore adds almost nothing to the cloud machine's mach-layer
+  heft; the heft stays in preemption and networking, because 9P absorbs storage.
+  *Between containers* — `exportfs` already hands a namespace, private binds
+  included, to another process; over a container network it is the same bytes on a
+  TCP or vsock stream. Persistent-volume claims, storage sidecars and CSI drivers
+  collapse into: one container exports `/data`, another mounts it — per-process
+  namespaces as the composition primitive between containers, the CPU-server model
+  in OCI clothing, needing nothing beyond a network transport the PoC does not
+  already demonstrate.
+
 Evidence for each is in RESEARCH.md at the cited section.
 
 - **The kernel call list is derived** — [docs/syscalls.md](syscalls.md), call by call.

@@ -666,6 +666,10 @@ Two hard constraints, not preferences:
    task.)
 2. **iOS Safari evicts aggressively** and `persist()` is harder to obtain there.
 
+Container and microVM backing — the no-on-disk-format invariant, volumes as
+namespace scripts, 9P over virtio-9p or vsock — is decided and specified in the
+plan's decision log (2026-08-27); this section stays the platform-backing survey.
+
 ---
 
 ## 9. The toolchain
