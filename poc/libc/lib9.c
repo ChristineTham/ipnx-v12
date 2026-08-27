@@ -103,6 +103,16 @@ int remove(char *p)               { return _sys(REMOVE,(int)p,0,0,0,0); }
 __attribute__((import_module("env"), import_name("forka")))
 extern int _forka(int flags, int databuf);
 
+/* Real setjmp/longjmp ride the same machinery (guestcore's setj/longj):
+ * only asyncified binaries can take them — sam does. The jmp_buf is only
+ * a key; the saved frames live host-side. */
+__attribute__((import_module("env"), import_name("setj")))
+extern int _setj(int env);
+__attribute__((import_module("env"), import_name("longj")))
+extern int _longj(int env, int val);
+__attribute__((import_module("env"), import_name("sjbuf")))
+extern void _sjbuf(int p);
+
 static uchar _asydata[8 + 32768];
 
 int rfork(int flags){
@@ -222,10 +232,15 @@ void unlock(void *l){ USED(l); }
 int canlock(void *l){ USED(l); return 1; }
 int _efgfmt(void *f){ USED(f); return -1; }	/* floats: not on this port yet */
 void _assert(char *s){ fprint(2, "assert failed: %s\n", s); exits("assert"); }
-/* setjmp: only libregexp uses it here, to bail on a bad pattern after
- * regerror() has spoken — so failing hard is honest until wasm SjLj
- * lowering is wired (a recorded deviation) */
-int setjmp(long *b){ USED(b); return 0; }
+/* Real setjmp: unwind via asyncify, save the frames host-side, rewind in
+ * place returning 0; longjmp restores those frames and rewinds with the
+ * value. The fork machinery's exact dance, keyed by the env pointer. */
+int setjmp(long *env){
+	*(uint*)_asydata = (uint)(_asydata + 8);
+	*((uint*)_asydata + 1) = (uint)(_asydata + sizeof _asydata);
+	_sjbuf((int)_asydata);
+	return _setj((int)env);
+}
 /* the rune-range binary search runetype.c leans on */
 unsigned short *_runebsearch(unsigned short c, unsigned short *t, int n, int ne){
 	unsigned short *p;
@@ -267,9 +282,29 @@ void __notedispatch(void){
 	}
 }
 long alarm(ulong ms)              { return _sys(6, (int)ms, 0, 0, 0, 0); }
+/* port/execl.c reads &f+1 — a stack-varargs assumption wasm cannot honour
+ * (variadic args travel in a separate buffer), so this one is ours */
+int execl(char *f, ...){
+	char *argv[64];
+	int n;
+	__builtin_va_list a;
+
+	__builtin_va_start(a, f);
+	for(n = 0; n < 63 && (argv[n] = __builtin_va_arg(a, char*)) != nil; n++)
+		;
+	__builtin_va_end(a);
+	argv[n] = nil;
+	return exec(f, argv);
+}
 int unmount(char *name, char *old){ return _sys(35, (int)name, (int)old, 0, 0, 0); }
 int fork(void)                    { return rfork(RFFDG|RFREND|RFPROC); }
-void longjmp(long *b, int v){ USED(b); USED(v); exits("longjmp"); }
+void longjmp(long *env, int v){
+	*(uint*)_asydata = (uint)(_asydata + 8);
+	*((uint*)_asydata + 1) = (uint)(_asydata + sizeof _asydata);
+	_sjbuf((int)_asydata);
+	_longj((int)env, v == 0 ? 1 : v);
+	for(;;);
+}
 void abort(void){ exits("abort"); }
 
 vlong nsec(void){

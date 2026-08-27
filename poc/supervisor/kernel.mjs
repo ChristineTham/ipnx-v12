@@ -507,7 +507,22 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     return fdAlloc(self, newChan(c, a1));
   }
   case T.CREATE: {
-    let { parent, base } = await walkParent(self, txstr(host));
+    const cpath = txstr(host);
+    // create(2): "if the file exists, it is truncated to zero length" —
+    // an existing file (not a directory create) opens in place, which is
+    // also what makes `> /dev/null` work on devices without create.
+    if (!((a2 >>> 0) & DMDIR)) {
+      let ex = null;
+      try { ex = await walk(self, cpath); } catch { /* not there: create below */ }
+      if (ex) {
+        if (ex.dev.clone && !ex.node.ephemeral)
+          ex = { dev: ex.dev, node: await ex.dev.clone(ex.node) };
+        if (ex.dev.open) await ex.dev.open(ex.node, a1, self.cred);
+        ex.dev.truncate?.(ex.node);
+        return fdAlloc(self, newChan(ex, a1));
+      }
+    }
+    let { parent, base } = await walkParent(self, cpath);
     if (parent.dev === UNION) {
       const el = parent.node.list.find((e) => e.create);
       if (!el) throw err("create in a union needs an element bound with -c (MCREATE)");

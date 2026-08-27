@@ -807,6 +807,27 @@ findings, each measured on this machine, none requiring a source change:
   kernel's byte-count return; `win rc &` prompts because rc itself concludes it is on
   a console — the same inference it makes on Plan 9.
 
+Porting the real `sam` (2026-08-27, same day) added three more:
+
+- **Real `setjmp`/`longjmp` fall out of the fork machinery.** sam's error recovery
+  longjmps to its main loop; a stub that exits is not an editor. setjmp is the fork
+  parent's exact dance — unwind through asyncify, save the frame buffer and
+  `__stack_pointer` host-side keyed by the `jmp_buf` address, rewind in place
+  returning 0; longjmp unwinds (discarding its own frames), restores the saved
+  buffer, and rewinds — the re-entered `setj` import returns the value at the
+  original setjmp site. Two more listed imports (`env.setj`, `env.longj`), ~40 lines
+  of guestcore. Uninstrumented binaries keep the old contract: their setjmp arms
+  nothing (libregexp's bad-pattern bailout in `grep` never fires it), and a longjmp
+  there is a named error.
+- **`port/execl.c` cannot work on wasm**: `exec(f, &f+1)` assumes variadic arguments
+  sit on the stack after the named one; clang's wasm ABI passes them through a
+  separate buffer. The one excluded port file with a semantic (not float) reason —
+  lib9 carries a `va_arg` execl.
+- **`create(2)` on an existing file truncates and opens it** — the words in the
+  manual carry rc's `> /dev/null`: the kernel's create now walks first and opens in
+  place (devices without a create method included), reserving true creation for the
+  missing-file and DMDIR cases.
+
 ---
 
 ## 10. Licensing

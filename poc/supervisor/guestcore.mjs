@@ -54,6 +54,38 @@ function m8() {
   return memU8;
 }
 let pendingFork = null, rewinding = false, rewindReturn = 0, inNote = false;
+let pendingSj = null, sjResume = null;
+const sjmap = new Map();                             // env ptr -> {frames, sp}
+
+// Real setjmp/longjmp, on the same asyncify machinery as the bare fork
+// (sam's error recovery needs them): setjmp unwinds, saves the frame
+// buffer and the shadow-stack pointer, rewinds in place returning 0 —
+// the fork parent's exact path. longjmp unwinds (discarding its own
+// frames), restores the saved buffer, and rewinds; the rewind re-enters
+// setj, which returns the longjmp value at the original setjmp site.
+function setj(env) {
+  if (!curInst.exports.asyncify_start_unwind)        // uninstrumented binary:
+    return 0;                                        // arm nothing (longjmp would die)
+  if (sjResume !== null) {                           // arrived via a rewind
+    curInst.exports.asyncify_stop_rewind();
+    rewinding = false;
+    const v = sjResume;
+    sjResume = null;
+    return v;
+  }
+  pendingSj = { kind: "set", env, databuf: lastSjBuf };
+  curInst.exports.asyncify_start_unwind(lastSjBuf);
+  return 0;
+}
+function longj(env, val) {
+  if (!curInst.exports.asyncify_start_unwind)
+    throw new Error("longjmp in a binary the asyncify pass never touched");
+  pendingSj = { kind: "long", env, val, databuf: lastSjBuf };
+  curInst.exports.asyncify_start_unwind(lastSjBuf);
+  return 0;
+}
+let lastSjBuf = 0;
+function sjbuf(p) { lastSjBuf = p; }                 // guest tells us where _asydata is
 
 // Bare dual-return rfork, via asyncify (RESEARCH §5.2): unwind the whole
 // stack into the guest's buffer, snapshot linear memory, rewind twice.
@@ -175,6 +207,28 @@ function raw0(flags, sp, fn, arg) {                   // the guard's raw rfork
 function callStart() {
   for (;;) {
     curInst.exports._start();
+    if (pendingSj) {                                 // setjmp/longjmp unwound
+      curInst.exports.asyncify_stop_unwind();
+      const { kind, env, val, databuf } = pendingSj;
+      pendingSj = null;
+      const dv = new DataView(memory.buffer);
+      if (kind === "set") {
+        const end = dv.getUint32(databuf, true);     // frames live at databuf+8..end
+        sjmap.set(env, { frames: m8().slice(databuf + 8, end),
+                         sp: curInst.exports.__stack_pointer.value });
+        sjResume = 0;
+      } else {
+        const saved = sjmap.get(env);
+        if (!saved) throw new Error(`longjmp: no setjmp for env 0x${env.toString(16)}`);
+        m8().set(saved.frames, databuf + 8);
+        dv.setUint32(databuf, databuf + 8 + saved.frames.length, true);
+        curInst.exports.__stack_pointer.value = saved.sp;
+        sjResume = val;
+      }
+      rewinding = true;
+      curInst.exports.asyncify_start_rewind(databuf);
+      continue;
+    }
     if (!pendingFork) break;                         // only an unwind returns here
     curInst.exports.asyncify_stop_unwind();
     const { pid, databuf, sp } = pendingFork;
@@ -205,7 +259,7 @@ async function run(mod, guardMod, asy) {
   const guard = new WebAssembly.Instance(guardMod, { env: { raw0, forkpd: () => forkPid } });
   curModule = mod;
   curImports = {
-    env: { memory, sys, forka },
+    env: { memory, sys, forka, setj, longj, sjbuf },
     guard: { rfork: guard.exports.rfork },
   };
   const inst = new WebAssembly.Instance(mod, curImports);
@@ -224,6 +278,7 @@ const guardMod = new WebAssembly.Module(guardBytes());
 let pending = Promise.resolve();
 function start(mod, asy) {
   pendingFork = null; rewinding = false; inNote = false;
+  pendingSj = null; sjResume = null; sjmap.clear();
   pending = run(mod, guardMod, asy).catch((e) => {
     if (e instanceof ForkResume) return;              // parent resumed and _start returned? no: guard caught inside — reaching here means unwound past _start: only if guard missing
     if (e instanceof ExecReplace) return;             // replaced; 'load' message follows

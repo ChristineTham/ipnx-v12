@@ -21,7 +21,7 @@ $CC -c libc/draw9.c -o build/draw9.o
 # for now (fltfmt/strtod need libm); -fms-extensions carries kencc's
 # anonymous struct members (Biobufhdr in Biobuf).
 P9CC="$SDK/bin/clang --target=wasm32 -nostdlib -O1 -fno-builtin -fms-extensions -Wno-incompatible-pointer-types -Wno-int-conversion -Iplan9/include -Iplan9/sys/include -Wno-unknown-pragmas -Wno-unused-variable -Wno-unused-parameter -Wno-parentheses -Wno-empty-body -Wno-comment -Wno-deprecated-non-prototype -Wno-implicit-int -Wno-return-type -Wno-main-return-type"
-P9EXCLUDE="fltfmt strtod charstod pow10 frexp nan64 atof"
+P9EXCLUDE="fltfmt strtod charstod pow10 frexp nan64 atof execl"   # execl: &f+1 assumes stack varargs; lib9 has a va_arg one
 : > build/p9lib.list
 for c in plan9/sys/src/libc/port/*.c plan9/sys/src/libc/fmt/*.c plan9/sys/src/libc/9sys/*.c plan9/sys/src/libbio/*.c plan9/sys/src/libregexp/*.c plan9/sys/src/libString/*.c; do
   b=$(basename "$c" .c)
@@ -113,11 +113,34 @@ done
 $LD build/crt9.o build/lib9-rc.o build/lib9p.o build/draw9.o \
   build/p9-rc-*.o build/libp9.a -o rootfs/bin/rc
 "$BINARYEN/bin/wasm-opt" rootfs/bin/rc \
-  --asyncify --pass-arg=asyncify-imports@env.forka -O2 \
+  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj -O2 \
   --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
   --enable-nontrapping-float-to-int \
   -o rootfs/bin/rc.tmp && mv rootfs/bin/rc.tmp rootfs/bin/rc
 echo "  bin/rc  $(wc -c < rootfs/bin/rc | tr -d ' ') bytes (REAL rc, asyncified)"
+
+# sam: the real editor's backend — `sam -d` is ed-with-structural-regexps
+# on the console; the samterm protocol (mesg.c) compiles along, quiet until
+# a terminal exists. L"..." literals are 16-bit Runes, hence -fshort-wchar;
+# `!` shell escapes fork bare, hence asyncify.
+for c in plan9/sys/src/cmd/sam/*.c; do
+  b=$(basename "$c" .c)
+  $P9CC -fshort-wchar -Iplan9/sys/src/cmd/sam -c "$c" -o "build/p9-sam-$b.o"
+done
+# parse.h tentatively defines cmdtab[] in every TU; cmd.c owns the real one
+for o in build/p9-sam-*.o; do
+  case "$o" in */p9-sam-cmd.o) continue;; esac
+  "$SDK/bin/llvm-nm" --defined-only --extern-only "$o" 2>/dev/null | grep -q " cmdtab\$" && node weaken.mjs "$o" cmdtab
+done
+$P9CC -c plan9/sys/src/libplumb/mesg.c -o build/p9-plumb-mesg.o
+$P9CC -c plan9/sys/src/libplumb/plumbsendtext.c -o build/p9-plumb-sendtext.o
+$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/p9-sam-*.o build/p9-plumb-*.o build/libp9.a -o rootfs/bin/sam
+"$BINARYEN/bin/wasm-opt" rootfs/bin/sam \
+  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj -O2 \
+  --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
+  --enable-nontrapping-float-to-int \
+  -o rootfs/bin/sam.tmp && mv rootfs/bin/sam.tmp rootfs/bin/sam
+echo "  bin/sam  $(wc -c < rootfs/bin/sam | tr -d ' ') bytes (REAL sam, asyncified)"
 
 # real Plan 9 sources (poc/plan9/NOTICE): compiled unmodified, void main,
 # through the shim headers — these SUPERSEDE any same-named PoC command
@@ -133,7 +156,7 @@ for c in cmd/*.c; do
   $LD build/crt0.o build/lib9.o build/lib9p.o build/draw9.o "build/$b.o" build/libp9.a -o "rootfs/bin/$b"
   case " $ASYNCIFY " in *" $b "*)
     "$BINARYEN/bin/wasm-opt" "rootfs/bin/$b" \
-      --asyncify --pass-arg=asyncify-imports@env.forka -O2 \
+      --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj -O2 \
       --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
       --enable-nontrapping-float-to-int \
       -o "rootfs/bin/$b.tmp" && mv "rootfs/bin/$b.tmp" "rootfs/bin/$b"

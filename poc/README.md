@@ -21,10 +21,11 @@ hosts it in a page — the console is a window in the DOM, and `serve.mjs` exist
 set the COOP/COEP headers SharedArrayBuffer requires. The same 102 tests pass in both
 (measured in Chrome 148).
 
-The test boot prints 102 `PASS` lines — fifty-one from init (kernel, mount, exportfs,
+The test boot prints 103 `PASS` lines — fifty-one from init (kernel, mount, exportfs,
 uid, links, notes, unmount, rfork flags, and the harnesses), twelve from dtest (the
-window server and text), four from forktest, thirty-five from `/rc/tests.rc` run by
-the REAL rc — and exits 0, identically on Node and in the browser.
+window server and text), four from forktest, thirty-six from `/rc/tests.rc` run by
+the REAL rc, the real sam included — and exits 0, identically on Node and in the
+browser.
 
 ## What it proves
 
@@ -141,6 +142,7 @@ the REAL rc — and exits 0, identically on Node and in the browser.
 | `supervisor/stat9.mjs` | 9P2000 `stat(5)` marshalling |
 | `libc/` | `lib9.h`, `crt0.c`, `lib9.c` — Plan 9-shaped freestanding libc |
 | `plan9/sys/src/cmd/rc/` | THE shell — real 4th-edition rc, compiled verbatim, asyncified |
+| `plan9/sys/src/cmd/sam/` | the real sam — `sam -d` runs it today; samterm waits on libdraw |
 | `weaken.mjs` | restores common-symbol semantics in rc's objects (RESEARCH §9.5) |
 | `libc/lib9p.h`, `libc/lib9p.c` | the guest side of wire 9P: marshal vocabulary, message framing |
 | `cmd/hellofs.c` | a 9P2000 file server in a guest process, serving on fd 0 |

@@ -58,6 +58,17 @@ if(~ `{date | wc} 1' '*) echo PASS 'real date speaks (nsec, ctime)'; if not fail
 if(test -f /etc/motd) echo PASS 'real test -f drives rc conditionals'; if not fails=bad
 if(test -d /nonexistent) fails=bad; if not echo PASS 'real test -d says no'
 
+# the real sam, terminal mode: structural regexps, and the buffer piped
+# through a real command (sam forks both pipe ends; setjmp/longjmp live)
+echo sam test line > /tmp/samf
+echo 'e /tmp/samf
+,x/test/ c/TEST/
+,| tr a-z A-Z
+w /tmp/samf
+q' > /tmp/samscript
+sam -d < /tmp/samscript > /dev/null >[2] /dev/null
+if(~ `{cat /tmp/samf} 'SAM TEST LINE') echo PASS 'the real sam: x, c, and | through real tr (sam -d)'; if not fails=bad
+
 # real-rc capabilities the mini shell refused outright
 fn twice {echo $1 $1}
 if(~ `{twice hey} 'hey hey') echo PASS 'fn: functions define and take arguments'; if not fails=bad
