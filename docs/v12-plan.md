@@ -367,7 +367,7 @@ answers, not exclusive:
 Taking asyncify on both buys uniformity at ~2× on binaries that natively would not need it.
 Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it belongs.
 
-## Decisions (2026-08-26; native-host and OCI decisions added 2026-08-27)
+## Decisions (2026-08-26; native-host, OCI, storage and toolchain decisions added 2026-08-27)
 
 - **(2026-08-27) The native host is a Rust kernel core plus per-platform embedding
   shims — after the PoC completes.** The kernel never executes guest code, so the
@@ -441,6 +441,35 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   namespaces as the composition primitive between containers, the CPU-server model
   in OCI clothing, needing nothing beyond a network transport the PoC does not
   already demonstrate.
+
+- **(2026-08-27) The dev toolchain: mk, diff, `/cc` as a capability — and the
+  document factory is Plan 9's.** `mk` joins the workbench tier: it is the one
+  tool both heritages own — Hume's, born in Research Unix (Ninth Edition) and
+  carried into Plan 9 — so building either userspace with mk inside ipnx is
+  historically correct twice over (cite mk(1) from the Tenth Edition manual via a
+  `../ipnx` measurement when it lands). Its port profile is sam-shaped: libbio, a
+  hand-written parser, recipes run through the real rc, out-of-date decisions on
+  ramfs mtimes, bare forks so it rides asyncify. `diff` joins beside it — the one
+  hole in the daily command set. Compilation stays host-side per the self-hosting
+  non-goal, exposed as **`/cc`, a mach-layer file server**: write source, poke
+  ctl, read the object or the errors back; a ten-line guest `cc` gives mkfiles
+  something to call, and a process without `/cc` in its namespace cannot compile —
+  the workflow self-hosts, the compiler does not. acid/db/prof are not ported
+  (they read Plan 9 a.out symbols; wasm has none — host tooling stands in, and
+  any future in-system debugger is a `/proc` view of guest memory, not an acid
+  port); nm/ar/strip/cpp stay llvm, host-side; yacc is optional-later for
+  in-system regeneration through `/cc`.
+  **The document factory — troff, eqn, tbl, pic, grap, dpost — is taken from
+  Plan 9, superseding the earlier V10-side disposition.** The reasoning: Plan 9
+  troff is not a rival to Research troff but its own later life — Ossanna to
+  Kernighan's device-independent rewrite to Ninth/Tenth Edition to Plan 9, the
+  same lineage, rune-aware to match a system that is UTF-8 end to end; V10's is
+  the identical machine frozen earlier, pre-Unicode, in K&R. Taking Plan 9's
+  moves the document factory OFF the parent project's ANSI-conversion dependency
+  entirely (the V10-growth rule itself is unchanged). Staging: troff with the man
+  macros and terminal output first — `man(1)` readable in a win — then eqn and
+  tbl, pic and grap behind the float door they need, dpost when paper matters;
+  font and device tables ship in the rootfs seed.
 
 Evidence for each is in RESEARCH.md at the cited section.
 
