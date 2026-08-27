@@ -159,11 +159,13 @@ evidence, not a fresh opinion.
   9front consulted** (both MIT). **`/dev/tty` does not exist** — `/dev/cons`, aliased in
   the personality's libc.
 - **`/dev/draw` stays an actual file, per window, per namespace** — the one place this
-  system can out-Plan 9 plan9port, **now demonstrated**: `supervisor/devwsys.mjs` is the
-  window server's kernel half (rio's *interface*), `draw.mjs` its raster engine
-  (draw(3)'s `b d f L e E y i l s v` — text included, via `libc/font8x8.h`, our own
-  authorship), `cmd/win.c` rio's spawn. Next: the `sam` port, with `acme` the real
-  test. **Self-hosting is not a goal** (`/cc` as
+  system can out-Plan 9 plan9port, **now demonstrated twice over**:
+  `supervisor/devwsys.mjs` is the window server's kernel half (rio's *interface*),
+  `draw.mjs` its raster engine — screens, window views on one backing store,
+  clipping, per-channel uploads, draw(3)'s `b d f L e E y i l s x c A F t O v` —
+  and **the real samterm draws on it** through the real libdraw/libframe, on the
+  wasm libthread. Next: `acme`, the real test, then the native host.
+  **Self-hosting is not a goal** (`/cc` as
   file server makes compilation a capability).
 
 - **The uid model is decided and running** (`docs/uid.md`): mutable per-process
@@ -270,5 +272,8 @@ AREAD/IOWAIT letting a read park one thread while the scheduler runs the rest. T
 load-bearing rule, learned the hard way: a suspended coroutine's stack is dead
 storage, so channels register, stash send values, and deliver through off-stack
 per-thread slots (V10 growth waits for the parent project's ANSI conversion).
-Next: samterm — the real editor's screen — then the native host — **macOS first,
-then iPad** (the user's platform order).
+And on all of it, **the whole editor**: `win sam &` in the browser, samtest
+headlessly — sam forking samterm, initdraw finding the window, libframe's `x`
+strings, the reply's glyphs read back out of the raster. Next: `acme` via the same
+stack, then the native host — **macOS first, then iPad** (the user's platform
+order).

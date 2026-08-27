@@ -828,6 +828,26 @@ Porting the real `sam` (2026-08-27, same day) added three more:
   place (devices without a create method included), reserving true creation for the
   missing-file and DMDIR cases.
 
+And samterm (same day, the stack's top) measured four more:
+
+- **libframe's entire text path is the `x` message** — string-with-background, `s`
+  plus a background image and point after the index count (`ni` stays at +45; the
+  bg fields follow, then the cache indices). A draw device without `x` renders sam
+  with a moving cursor and invisible words.
+- **kencc names unnamed members and mixes enum with int in prototypes**; GCC's
+  `-fplan9-extensions` covers the former, clang has no such flag, and clang makes
+  the latter a hard error. Both surface exactly twice in the whole tree
+  (`samterm/io.c`'s `&mousectl->Mouse`, libdraw's `stringbg.c`), and both are
+  handled as build-time derivations into `build/` — the same shape as bison over
+  the yacc grammars, the vendored files untouched. `initmouse`/`initkeyboard`
+  themselves are ours (`libc/mousekbd.c`), platform-IO like libthread.
+- **Async reads must carry the channel's real offset** — devices like `draw/ctl`
+  answer only at offset 0, so AREAD passing a stream's -1 read empty and
+  `initdisplay` died parsing nothing. The completion still advances the offset.
+- **`access(2)` is `stat` in disguise** (dirstat under AEXIST), so a device without
+  stats fails `initdraw`'s probe and libdraw falls back to binding `#i`. The window
+  server now answers stat for every node it serves.
+
 ---
 
 ## 10. Licensing
