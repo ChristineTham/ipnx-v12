@@ -1,15 +1,18 @@
 # ipnx-v12 — the design
 
-*Scope framing, 2026-08-26. Nothing here is built. This document exists to make the
-question answerable: **what is Unix if you design it today, keep Plan 9's answers, and
-put back the compatibility Plan 9 threw away?***
+*Scope framing 2026-08-26; re-founded 2026-08-27 (decision log). The question this
+document exists to answer: **what is Unix if you write it afresh today, keep Plan 9's
+answers, and put back the compatibility Plan 9 threw away?***
 
 **The statement, once.** A **modified Plan 9 kernel hosted as an ordinary userspace
-process** on macOS, iPadOS and the browser; **9P as the only IPC**; **per-process
-namespaces**; **everything exposed as a file**; **WebAssembly as the executable format**;
-and a **Research Unix Tenth Edition personality** running alongside Plan 9's own userland.
+process** — browser, macOS, iPadOS, OCI, eventually hypervisor-direct; **9P as the only
+IPC**; **per-process namespaces**; **everything exposed as a file**; **WebAssembly as
+the executable format**; and **personalities as libc dialects** above the one kernel —
+Plan 9's userland entire by the curation principle, a WASI second ABI, and a **modern
+Unix personality** derived by measurement against git, CPython and Go. The V10 exhibit
+stays as heritage; its completeness is not a goal.
 
-No VAX. No disk image. No emulator.
+No VAX. No disk image. No emulator. No POSIX, no systemd, no sediment.
 
 ## Why the kernel is Plan 9's and not V10's
 
