@@ -367,7 +367,21 @@ answers, not exclusive:
 Taking asyncify on both buys uniformity at ~2× on binaries that natively would not need it.
 Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it belongs.
 
-## Decisions (2026-08-26)
+## Decisions (2026-08-26; native-host decision added 2026-08-27)
+
+- **(2026-08-27) The native host is a Rust kernel core plus per-platform embedding
+  shims — after the PoC completes.** The kernel never executes guest code, so the
+  core (proc table, namespaces, devices, 9P, the draw engine) compiles once in Rust
+  and twice over: native for macOS/iPadOS (guests on wasmtime or wasmi — interpreter
+  paths, iOS-legal) and to wasm for the browser (guests stay on the browser's own
+  engine). Each platform keeps a thin mach layer — Workers/SharedArrayBuffer glue in
+  JS for the browser, threads plus the runtime embedding natively — which is Plan 9's
+  own `port/`-vs-`pc/` split with the browser as just another machine. This
+  supersedes the WasmKit-in-Swift candidate (kept in the table above as history);
+  WasmKit remains an option for the shim's app shell, not the kernel. The 120-test
+  suite is guest-side and language-blind: it is the conformance spec any second
+  kernel must pass. Until the PoC closes, `kernel.mjs` stays the reference
+  implementation.
 
 Evidence for each is in RESEARCH.md at the cited section.
 
@@ -475,15 +489,16 @@ kernel readied for it: notes delivered at the syscall boundary, `alarm`, `unmoun
 honest rfork flags (`RFNOMNT`/`RFCNAMEG`/`RFCFDG`/`RFNOWAIT`/`RFNOTEG`), the dup
 device `#d`, and `..` in walks. V10 growth waits, per direction, for the parent
 project's ANSI conversion of its userspace. Platform order ahead: **macOS native first,
-then iPadOS** (WasmKit carries both). The
-engineering lifts the plan named are done, the uid model is designed
-([docs/uid.md](uid.md)) and running, and **the window server exists in v0 subset**
-(RESEARCH §7): `#w` mints windows, `bind '#w/N' /dev` makes a namespace a window,
-`/dev/draw` is an actual per-window file speaking draw(3)'s `b d f L e E v`, and
-`win rc` is a shell in a browser window, and **text lands in draw**: `y`/`i`/`l` carry
-an 8×8 font of our own authorship into a cache image, `s` draws strings through it,
-glyphs asserted by pixel on both hosts. Next: **the `sam` port** (libframe over exactly
-these messages), the native host over WasmKit, and the link/symlink protocol decision.
+then iPadOS**, as a **Rust kernel core plus per-platform embedding shims** (decision
+below, 2026-08-27). The engineering lifts the plan named are done, the uid model is
+designed ([docs/uid.md](uid.md)) and running, the window server speaks the real draw
+device protocol (screens, window views, clipping, channel-correct uploads,
+`b d f L e E y i l s x c A F t O v`), and **the whole editor runs**: the real `sam`
+over the real `samterm`, libframe over libdraw over the wasm libthread, typed at in a
+browser window and headlessly under samtest. Next, closing the PoC: **`acme`** — the
+GUI decision's declared real test — with the interaction layer it needs (mouse sweep,
+chords, menus through the browser host); then the PoC is done and the native work
+begins.
 
 ## Sources
 
