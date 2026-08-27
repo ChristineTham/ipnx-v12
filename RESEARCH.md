@@ -756,6 +756,57 @@ declarations — compile with `-std=c89 -fno-builtin` plus three warning suppres
 grammar regenerates with the host's bison 2.3 at build time, which is the same door rc's
 `syn.y` will use. Neither tree needed a source change.
 
+### 9.5 What porting the real rc measured (2026-08-27)
+
+The real rc — seventeen C files plus `syn.y` through bison, compiled verbatim, linked
+against `libp9.a`, asyncified — runs the whole suite. Getting there surfaced five
+findings, each measured on this machine, none requiring a source change:
+
+- **wasm function "pointers" are small table indexes, and 1992 code assumes they are
+  addresses.** rc's `codefree` walks compiled code arrays telling ops from operands by
+  comparing `.f` slots against op function pointers, terminating at `.f == 0`
+  (`code.c`). On every real machine op addresses and small operand integers (jump
+  targets, fd numbers) occupy disjoint ranges; on wasm32 the linker numbers the
+  function table from 1, so `Xpipe` was table slot 53 and a jump target of 53 derailed
+  the walk into `efree` of a non-pointer — a heap corruption whose detonation depended
+  on which integers a compiled line happened to contain. **`--table-base=4096`**
+  restores the disjointness (operand ints stay far below 4096; string operands are heap
+  addresses far above) at the cost of ~4K unused table slots per instance. The same
+  hazard exists for any vendored code that compares function pointers against data.
+- **Pre-ANSI common blocks need hand-restored semantics.** `rc.h` tentatively defines
+  its globals in every TU while `plan9.c`, `havefork.c`, `lex.c`, `exec.c` and
+  `getflags.c` carry the initialized definitions — and the initializing TUs tentatively
+  define *each other's* symbols, so no link order satisfies first-wins. Measured:
+  clang's wasm backend refuses `-fcommon` ("common symbols are not yet implemented for
+  Wasm"); wasm-ld's `--allow-multiple-definition` keeps the **first** definition even
+  when a later one is initialized (plan9.o's zero `havefork` beat `havefork.c`'s
+  `= 1`, so `code.c` emitted forkless pipe layouts that the forking `Xpipe` then
+  misread — the layout carries a *string* where the fork layout carries a pc);
+  wasi-sdk's llvm-objcopy cannot rewrite wasm symbol tables; and tentative definitions
+  appear as `D`, not `B`, in wasm objects' llvm-nm output. `poc/weaken.mjs` therefore
+  patches the objects directly — OR-ing `WASM_SYM_BINDING_WEAK` (0x1) into the linking
+  section's symbol flags never changes a LEB's length, so the patch is in-place — with
+  an owner map keeping one strong copy per symbol. Weak-yields-to-strong then resolves
+  correctly in any order.
+- **Globals are not part of the fork snapshot.** The asyncify fork copies linear
+  memory, but `__stack_pointer` is a wasm global: a child instantiated fresh starts at
+  the stack top, and its post-rewind epilogues then walk the pointer into the data
+  segment. The fork now carries the fork-time `__stack_pointer` value (exported via
+  `--export-if-defined`) and both sides restore it before rewinding. Corollary,
+  measured the hard way: re-instantiating a module re-runs its **active data
+  segments** — a fresh instance over live memory wipes initialized globals, so the
+  child's order (instantiate, then overwrite memory with the snapshot) is the only
+  correct one.
+- **Notes must not dispatch on the fork return.** The mailbox flags pending notes on
+  every reply; guestcore then calls the guest's `__notedispatch`. On trap 19 the
+  guard's `catch_all` frame is live in the parent, and a handler dying there would feed
+  `ExecReplace` to `catch_all` as a foreign exception — the detach-bug class — so
+  delivery is deferred to the next syscall.
+- **`fd2path` returns 0 on success** (fd2path(2)), and rc's `Isatty` tests exactly
+  that before checking the path ends in `/dev/cons`. The lib9 wrapper now masks the
+  kernel's byte-count return; `win rc &` prompts because rc itself concludes it is on
+  a console — the same inference it makes on Plan 9.
+
 ---
 
 ## 10. Licensing

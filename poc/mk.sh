@@ -6,10 +6,10 @@ cd "$(dirname "$0")"
 SDK="${WASI_SDK:-$HOME/.local/opt/wasi-sdk}"
 BINARYEN="${BINARYEN:-$HOME/.local/opt/binaryen}"
 CC="$SDK/bin/clang --target=wasm32 -nostdlib -O2 -fno-builtin -Ilibc -Wno-incompatible-library-redeclaration -Wno-empty-body"
-LD="$SDK/bin/wasm-ld --no-entry --import-memory --stack-first -z stack-size=65536 --initial-memory=2097152 --export=_start"
+LD="$SDK/bin/wasm-ld --no-entry --import-memory --stack-first -z stack-size=262144 --initial-memory=2097152 --export=_start --export-if-defined=__stack_pointer --table-base=4096"
 # The per-binary flag (never system-wide): programs whose fork sites do not
 # all exec. Instrumentation is confined to call paths reaching env.forka.
-ASYNCIFY="rc forktest"
+ASYNCIFY="forktest forkind forkvm"   # bare forkers; the real rc rule asyncifies itself
 mkdir -p build rootfs/bin
 $CC -c libc/crt0.c -o build/crt0.o
 $CC -c libc/crt9.c -o build/crt9.o
@@ -57,6 +57,67 @@ for c in plan9/sys/src/cmd/grep/*.c; do
 done
 $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/p9-grep-*.o build/libp9.a -o rootfs/bin/grep
 echo "  bin/grep  $(wc -c < rootfs/bin/grep | tr -d ' ') bytes (Plan 9 source)"
+
+# rc: the REAL shell — mkfile's OFILES (code..var, havefork, plan9, y.tab)
+# minus unix.c; the host's bison regenerates the parser, and x.tab.h is Plan
+# 9 yacc's header name. rc's subshells bare-fork, so the binary is asyncified.
+bison -y -d -o build/rc-ytab.c plan9/sys/src/cmd/rc/syn.y
+cp build/rc-ytab.h build/x.tab.h
+for c in plan9/sys/src/cmd/rc/*.c; do
+  b=$(basename "$c" .c)
+  case "$b" in unix) continue;; esac
+  $P9CC -Ibuild -Iplan9/sys/src/cmd/rc -c "$c" -o "build/p9-rc-$b.o"
+done
+$P9CC -Ibuild -Iplan9/sys/src/cmd/rc -Wno-implicit-function-declaration -c build/rc-ytab.c -o build/p9-rc-ytab.o
+# rc.h carries pre-ANSI tentative definitions in every TU, and the wasm
+# backend refuses -fcommon. Restore real common-symbol semantics by hand:
+# weaken every zero-bss global, so an initialized definition (havefork=1,
+# Rcmain, doprompt...) beats the tentative copies REGARDLESS of link order —
+# ordering cannot work, the initialized TUs tentatively define each other's
+# symbols (measured: plan9.o's bss havefork beat havefork.o's =1, so code.c
+# emitted the forkless pipe layout while Xpipe executed the fork one).
+cp build/lib9.o build/lib9-rc.o
+# Each duplicated global keeps ONE strong copy — the TU whose source
+# initializes it (the measured set below) or the first TU otherwise —
+# and is weakened everywhere else, so the linker resolves initialized-
+# over-tentative REGARDLESS of order. (Ordering cannot work: plan9.c and
+# havefork.c tentatively define each other's initialized symbols.)
+rc_owner() {
+  case "$1" in
+    havefork) echo build/p9-rc-havefork.o;;
+    Rcmain|Fdprefix|Signame|syssigname|Builtin|interrupted) echo build/p9-rc-plan9.o;;
+    future|doprompt) echo build/p9-rc-lex.o;;
+    argv0) echo build/p9-rc-exec.o;;
+    flagset) echo build/p9-rc-getflags.o;;
+    nullpath) echo build/p9-rc-simple.o;;
+    pfmtnest) echo build/p9-rc-io.o;;
+    *) echo "";;
+  esac
+}
+RCOBJS="build/lib9-rc.o $(echo build/p9-rc-*.o)"
+for o in $RCOBJS; do
+  "$SDK/bin/llvm-nm" --defined-only --extern-only "$o" | awk -v o="$o" '{print o, $3}'
+done > build/rc-defs.txt
+awk '{n[$2]++} END{for(s in n) if(n[s]>1) print s}' build/rc-defs.txt > build/rc-dups.txt
+for o in $RCOBJS; do
+  weak=""
+  while read -r sym; do
+    grep -q "^$o $sym\$" build/rc-defs.txt || continue
+    own=$(rc_owner "$sym")
+    [ -z "$own" ] && own=$(awk -v s="$sym" '$2==s{print $1; exit}' build/rc-defs.txt)
+    [ "$o" = "$own" ] && continue
+    weak="$weak $sym"
+  done < build/rc-dups.txt
+  [ -n "$weak" ] && node weaken.mjs "$o" $weak
+done
+$LD build/crt9.o build/lib9-rc.o build/lib9p.o build/draw9.o \
+  build/p9-rc-*.o build/libp9.a -o rootfs/bin/rc
+"$BINARYEN/bin/wasm-opt" rootfs/bin/rc \
+  --asyncify --pass-arg=asyncify-imports@env.forka -O2 \
+  --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
+  --enable-nontrapping-float-to-int \
+  -o rootfs/bin/rc.tmp && mv rootfs/bin/rc.tmp rootfs/bin/rc
+echo "  bin/rc  $(wc -c < rootfs/bin/rc | tr -d ' ') bytes (REAL rc, asyncified)"
 
 # real Plan 9 sources (poc/plan9/NOTICE): compiled unmodified, void main,
 # through the shim headers — these SUPERSEDE any same-named PoC command

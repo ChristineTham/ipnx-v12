@@ -179,10 +179,62 @@ forkchild(void *v)
 	exits("exec");
 }
 
+/* ---- the kernel work for rc: rfork honesty and notes ---- */
+
+static void
+nomntchild(void *v)
+{
+	USED(v);
+	if(bind("#c", "/tmp", MREPL) >= 0)
+		exits("bind allowed");
+	if(open("#c/pid", OREAD) >= 0)
+		exits("hash walk allowed");
+	exits("");
+}
+
+static void
+gonechild(void *v)
+{
+	USED(v);
+	exits("gone");
+}
+
+static void
+seenchild(void *v)
+{
+	USED(v);
+	exits("seen");
+}
+
+static void
+notetestchild(void *v)
+{
+	char *av[] = { "notetest", nil };
+
+	USED(v);
+	exec("/bin/notetest", av);
+	exits("exec");
+}
+
+static int notefds[2];
+
+static void
+catblocked(void *v)
+{
+	char *av[] = { "cat", nil };
+
+	USED(v);
+	dup(notefds[0], 0);
+	close(notefds[0]);
+	close(notefds[1]);
+	exec("/bin/cat", av);
+	exits("exec");
+}
+
 static void
 rcinteractive(void)
 {
-	char *av[] = { "rc", nil };
+	char *av[] = { "rc", "-i", nil };
 
 	print("ipnx-v12: interactive rc (EOF to shut down)\n");
 	exec("/bin/rc", av);
@@ -201,6 +253,7 @@ main(int argc, char *argv[])
 	/* The namespace starts with only the root. Assemble /dev ourselves,
 	 * the way a Plan 9 init does: bind the console device into place. */
 	bind("#c", "/dev", MREPL);
+	bind("#e", "/env", MREPL);
 	fd = open("/dev/cons", ORDWR);
 	dup(fd, 0);
 	dup(fd, 1);
@@ -442,6 +495,69 @@ main(int argc, char *argv[])
 	n = await(buf, sizeof buf);
 	ok(n > 0 && atoi(buf) == pid && strstr(buf, "''") != nil,
 	   "asyncify: forktest suite ran clean");
+
+	/* ---- the kernel readied for rc: '..', unmount, honest rfork
+	 * flags, and the note machinery (delivery at the syscall boundary,
+	 * V7's timing — RESEARCH records the deviation) ---- */
+	ok(chdir("/tmp") == 0 && open("../etc/motd", OREAD) >= 0,
+	   "walk: '..' pops a component (cleanname's rule)");
+	chdir("/");
+
+	i = create("/tmp/a", OREAD, DMDIR|0755);
+	if(i >= 0)
+		close(i);
+	i = create("/tmp/b", OREAD, DMDIR|0755);
+	if(i >= 0)
+		close(i);
+	i = create("/tmp/a/onlya", OWRITE, 0644);
+	if(i >= 0)
+		close(i);
+	i = create("/tmp/b/onlyb", OWRITE, 0644);
+	if(i >= 0)
+		close(i);
+	bind("/tmp/a", "/n/u", MREPL);
+	bind("/tmp/b", "/n/u", MAFTER);
+	ok(open("/n/u/onlyb", OREAD) >= 0,
+	   "union: the after-element answers for /n/u");
+	ok(unmount("/tmp/b", "/n/u") == 0 && open("/n/u/onlyb", OREAD) < 0
+	   && open("/n/u/onlya", OREAD) >= 0,
+	   "unmount(name, old) removes one element; the rest stand");
+	ok(unmount(nil, "/n/u") == 0 && open("/n/u/onlya", OREAD) < 0,
+	   "unmount(nil, old) clears the mount point");
+
+	pid = procrfork(RFFDG|RFNOMNT, nomntchild, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && strstr(buf, "''") != nil,
+	   "RFNOMNT: bind and '#' walks refused in the child");
+
+	pid = procrfork(RFFDG|RFNOWAIT, gonechild, nil);
+	i = procrfork(RFFDG, seenchild, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && atoi(buf) == i && strstr(buf, "'seen'") != nil,
+	   "RFNOWAIT: the abandoned child left no zombie");
+
+	pid = procrfork(RFFDG, notetestchild, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && atoi(buf) == pid && strstr(buf, "''") != nil,
+	   "notes: alarm cancelled, blocked read interrupted, self-note handled");
+
+	pipe(notefds);
+	pid = procrfork(RFFDG, catblocked, nil);
+	postnote(PNPROC, pid, "die");
+	n = await(buf, sizeof buf);
+	ok(n > 0 && atoi(buf) == pid && strstr(buf, "'note: die'") != nil,
+	   "an unhandled note kills; await reads it as the status");
+	close(notefds[0]);
+	close(notefds[1]);
+
+	pipe(notefds);
+	pid = procrfork(RFFDG|RFNOTEG, catblocked, nil);
+	postnote(PNGROUP, pid, "stop");
+	n = await(buf, sizeof buf);
+	ok(n > 0 && atoi(buf) == pid && strstr(buf, "'note: stop'") != nil,
+	   "notepg reaches the child's group; RFNOTEG kept init out of it");
+	close(notefds[0]);
+	close(notefds[1]);
 
 	USED(pid);
 	if(nfail == 0)

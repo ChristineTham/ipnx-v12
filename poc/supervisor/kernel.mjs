@@ -24,7 +24,8 @@ const T = { BIND: 2, CHDIR: 3, CLOSE: 4, DUP: 5, EXEC: 7, EXITS: 8, OPEN: 14,
   STAT: 42, FSTAT: 43, WSTAT: 44, MOUNT: 46, AWAIT: 47, PREAD: 50, PWRITE: 51,
   LINK: 60, SYMLINK: 61, READLINK: 62,   // the V12 additions (docs/syscalls.md)
   FD2PATH: 23, NSEC: 53, FWSTAT: 45,
-  ARGS: 200 };
+  ALARM: 6, NOTIFY: 28, NOTED: 29, UNMOUNT: 35,
+  ARGS: 200, NOTEGET: 202 };
 const RF = { NAMEG: 1, FDG: 4, PROC: 16, MEM: 32 };
 const OTRUNC = 16, DMDIR = 0x80000000;
 // mailbox: [0]=state(0 idle,1 req,2 done) [1]=trap [2..7]=args [8]=ret [9]=aux
@@ -172,7 +173,7 @@ function makeProcDev() {
         const p = procs.get(Number(name));
         return p ? node("dir", p) : null;
       }
-      if (n.kind === "dir" && (name === "ctl" || name === "status"))
+      if (n.kind === "dir" && (name === "ctl" || name === "status" || name === "note" || name === "notepg"))
         return node(name, n.proc);
       return null;
     },
@@ -181,10 +182,18 @@ function makeProcDev() {
       const p = n.proc;
       return sbytes(`${p.pid} ${p.cred.euid} ${p.cred.ruid} ${p.ppid}\n`);
     },
-    write: (n, data, off, cred) => {
-      if (n.kind !== "ctl") throw err9("not writable");
+    write: (n, data, off, cred, wpid) => {
+      if (n.kind !== "ctl" && n.kind !== "note" && n.kind !== "notepg")
+        throw err9("not writable");
       if (cred && cred.euid !== EVE && cred.euid !== n.proc.cred.euid)
         throw err9("not your process");
+      if (n.kind === "note") { postnote(n.proc, bstr(data).trim()); return data.length; }
+      if (n.kind === "notepg") {                      // the group, writer excepted (pgrpnote's rule)
+        const msg = bstr(data).trim();
+        for (const q of [...procs.values()])
+          if (q.noteGroup === n.proc.noteGroup && q.pid !== wpid) postnote(q, msg);
+        return data.length;
+      }
       const [verb, arg] = bstr(data).trim().split(/\s+/);
       if (verb !== "user" || !arg) throw err9(`bad ctl message '${bstr(data).trim()}'`);
       const c = n.proc.cred;
@@ -194,6 +203,23 @@ function makeProcDev() {
       return data.length;
     },
     stat: (n) => { throw err9("no stat on proc files (v0)"); },
+    len: () => 0,
+  };
+}
+
+// ---- devdup: '#d' — rc's rcmain reads its script as '. #d/0' ----
+function makeDupDev() {
+  const err9 = (m) => Object.assign(new Error(m), { guest: true });
+  return {
+    name: "dup",
+    attach: () => ({ kind: "root" }),
+    walk: (n, name, walker) => {
+      if (n.kind !== "root" || !/^\d+$/.test(name)) return null;
+      const c = walker.fdt.fds[Number(name)];
+      return c ? { kind: "fd", chan: c } : null;
+    },
+    read: () => new Uint8Array(0),
+    stat: () => { throw err9("no stat on dup files (v0)"); },
     len: () => 0,
   };
 }
@@ -213,7 +239,7 @@ const canon = (path, cwd) => {
   const out = [];
   for (const c of path.split("/")) {
     if (c === "" || c === ".") continue;
-    if (c === "..") throw err("dotdot unsupported in v0");
+    if (c === "..") { out.pop(); continue; }   // lexical, per cleanname(2)
     out.push(c);
   }
   return "/" + out.join("/");
@@ -243,6 +269,7 @@ async function symtarget(dev, node) {
 }
 async function walkOnce(proc, path, nofollowLast) {
   if (path.startsWith("#")) {
+    if (proc.nomnt) throw err("'#' names disallowed (RFNOMNT)");
     const slash = path.indexOf("/");
     let { dev, node } = attach(slash < 0 ? path : path.slice(0, slash), proc);
     if (slash >= 0)
@@ -305,13 +332,52 @@ async function readAll(c) {                        // exec's image read; open if
 const err = (msg) => Object.assign(new Error(msg), { guest: true });
 
 // ---- processes, channels, descriptor tables ----
-function newProc(ppid, { ns, fdt, cwd, cred, env }) {
+let nextNoteGroup = 1;
+function newProc(ppid, { ns, fdt, cwd, cred, env, noteGroup }) {
   const pid = nextpid++;
   const p = { pid, ppid, ns, fdt, cwd, cred, env: env ?? new Map(), umask: 0o22, errstr: "",
     zombies: [], awaitPending: false,
+    notes: [], hasHandler: false, noteGroup: noteGroup ?? nextNoteGroup++,
+    inflight: null, alarmTimer: null, nomnt: false, nowait: false,
     borrower: null, worker: null, mb: null, tx: null, argv: [] };
   procs.set(pid, p);
   return p;
+}
+
+// ---- notes: delivered at the syscall boundary (V7's timing — recorded as a
+// deviation from Plan 9's anytime delivery), interrupting blocked calls ----
+function postnote(proc, msg) {
+  if (!procs.has(proc.pid)) return;
+  proc.notes.push(String(msg).slice(0, 120));
+  if (proc.inflight) {                    // a blocked call: interrupt it
+    const f = proc.inflight;
+    proc.inflight = null;
+    f();
+  }
+  // otherwise the flag below is seen at the next syscall return
+}
+function killProc(proc, msg) {
+  const host = [...procs.values()].find((q) => q.borrower === proc) ?? proc;
+  procs.delete(proc.pid);
+  fdtClose(proc.fdt);
+  if (proc.alarmTimer) clearTimeout(proc.alarmTimer);
+  const parent = procs.get(proc.ppid);
+  if (host.borrower === proc) {
+    host.borrower = null;
+    zombie(parent, proc.pid, msg, proc.nowait);
+    reply(host, R_FORKRESUME, proc.pid);   // guard returns; parent sees the pid
+    return;
+  }
+  if (proc.pid === 1) { proc.worker?.terminate(); shutdown(1); return; }
+  if (proc.worker) {
+    const w = proc.worker;
+    w.setHandler(() => {});
+    // the worker is blocked in Atomics.wait; R_DIE sends it back to the pool
+    reply(proc, -3000, 0);
+    workerPool.push(w);
+    proc.worker = null;
+  }
+  if (!proc.nowait) zombie(parent, proc.pid, msg);
 }
 const newChan = (c, mode) => ({ dev: c.dev, node: c.node, path: c.path, mode, offset: 0, refs: 1 });
 const nsCopy = (ns) => new Map([...ns].map(([k, v]) => [k, v.slice()]));
@@ -347,14 +413,16 @@ const isAsyncified = (mod) =>
 // Chrome's wasm-memory budget (measured); a retired worker zeroes its
 // memory and waits for the next guest.
 const workerPool = [];
+const KDBG = typeof process !== "undefined" && process.env.KDBG;
 function spawn(proc, mod, argv, asy = null) {
+  if (KDBG) console.error(`[K spawn pid=${proc.pid} argv=${argv[0]} asy=${!!asy} pooled=${workerPool.length}]`);
   proc.mb = new Int32Array(new SharedArrayBuffer(64));
   proc.tx = new Uint8Array(new SharedArrayBuffer(TXSIZE));
   proc.argv = argv;
   proc.module = mod;
   proc.asyncified = isAsyncified(mod);
   const initMsg = { t: "init", mb: proc.mb, tx: proc.tx, mod,
-    snap: asy?.snap, dataPtr: asy?.dataPtr,
+    snap: asy?.snap, dataPtr: asy?.dataPtr, sp: asy?.sp,
     maxPages: proc.asyncified ? 256 : 80 };
   let w = workerPool.pop();
   if (w) w.post(initMsg, asy ? [asy.snap] : []);
@@ -365,11 +433,12 @@ function spawn(proc, mod, argv, asy = null) {
     // The parent's Worker finished its unwind: the child (whose proc record
     // rfork already made) gets a fresh Worker over the copied memory.
     if (m.t === "asyfork") {
+      if (KDBG) console.error(`[K asyfork pid=${m.pid}]`);
       const child = procs.get(m.pid);
-      if (child) spawn(child, proc.module, [...proc.argv], { snap: m.snap, dataPtr: m.dataPtr });
+      if (child) spawn(child, proc.module, [...proc.argv], { snap: m.snap, dataPtr: m.dataPtr, sp: m.sp });
     }
   });
-  w.onError((e) => { host.error(`worker pid ${proc.pid}: ${e.message ?? e}`); shutdown(1); });
+  w.onError((e) => { host.error(`worker pid ${proc.pid}: ${(typeof process !== "undefined" && process.env.KDBG ? e.stack : null) ?? e.message ?? e}`); shutdown(1); });
   return w;
 }
 
@@ -378,6 +447,8 @@ const txstr = (proc, off = 0) => {
   return bstr(proc.tx.subarray(off, end < 0 ? undefined : end));
 };
 function reply(proc, ret, aux = 0) {
+  const t = proc.borrower ?? proc;
+  proc.mb[10] = t.notes.length > 0 && t.hasHandler ? 1 : 0;
   proc.mb[8] = ret | 0; proc.mb[9] = aux | 0;
   Atomics.store(proc.mb, 0, ST.DONE);
   Atomics.notify(proc.mb, 0);
@@ -390,6 +461,10 @@ async function onSyscall(proc) {
   // the parent's mailbox belong to the child — its own fds, its own namespace.
   const self = proc.borrower ?? proc;
   const [, trap, a0, a1, a2, a3, a4] = proc.mb;
+  if (self.notes.length && !self.hasHandler && trap !== T.EXITS) {
+    const msg = "note: " + self.notes[0];
+    return killProc(self, msg);
+  }
   try {
     const r = await dispatch(proc, self, trap, a0, a1, a2, a3, a4);
     if (r !== undefined) reply(proc, r.ret ?? r, r.aux ?? 0);
@@ -408,6 +483,7 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     return Math.min(block.length, a1);
   }
   case T.BIND: {
+    if (self.nomnt) throw err("mounting disallowed (RFNOMNT)");
     const name = txstr(host), old = txstr(host, name.length + 1);
     const src = await walk(self, name);                          // resolved now, per bind(2)
     await nsInsert(self, canon(old, self.cwd), src, a2);
@@ -422,6 +498,8 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
   }
   case T.OPEN: {
     let c = await walk(self, txstr(host));
+    if (c.node && c.node.kind === "fd" && c.node.chan)   // '#d/N': share the chan itself
+      return fdAlloc(self, incref(c.node.chan));
     if (c.dev.clone && !c.node.ephemeral)          // never open a mount-table fid:
       c = { dev: c.dev, node: await c.dev.clone(c.node) };   // clone first, per Plan 9
     if (c.dev.open) await c.dev.open(c.node, a1, self.cred);
@@ -480,6 +558,7 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     return 0;
   }
   case T.MOUNT: {
+    if (self.nomnt) throw err("mounting disallowed (RFNOMNT)");
     const old = txstr(host), aname = txstr(host, old.length + 1);
     const c = incref(fdchk(self, a0));             // the kernel holds its own reference
     const node = await mountConn(c, readChan, aname, self.cred.euid);
@@ -507,9 +586,22 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     const n = Math.min(a2, TXSIZE);
     const cur = (a3 >>> 0) === 0xffffffff && (a4 >>> 0) === 0xffffffff;
     const off = cur ? c.offset : (a4 * 0x100000000 + (a3 >>> 0));
-    const ctx = { cred: self.cred, pid: self.pid, done: (data) => { if (cur) c.offset += data.length; host.tx.set(data); reply(host, data.length); } };
+    let settled = false;
+    const ctx = { cred: self.cred, pid: self.pid, done: (data) => {
+      if (settled) return;                         // an interrupt beat the device
+      settled = true;
+      self.inflight = null;
+      if (cur) c.offset += data.length;
+      host.tx.set(data);
+      reply(host, data.length);
+    } };
     const data = await c.dev.read(c.node, n, off, ctx);
-    if (data === undefined) return undefined;      // parked in the device
+    if (data === undefined) {
+      if (!settled)
+        self.inflight = () => { settled = true; self.errstr = "interrupted"; reply(host, -1); };
+      return undefined;                            // parked in the device
+    }
+    settled = true;
     if (cur) c.offset += data.length;
     host.tx.set(data);
     return data.length;
@@ -519,7 +611,7 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     const n = Math.min(a2, TXSIZE);
     const cur = (a3 >>> 0) === 0xffffffff && (a4 >>> 0) === 0xffffffff;
     const off = cur ? c.offset : (a4 * 0x100000000 + (a3 >>> 0));
-    const wrote = await c.dev.write(c.node, host.tx.subarray(0, n), off, self.cred);
+    const wrote = await c.dev.write(c.node, host.tx.subarray(0, n), off, self.cred, self.pid);
     if (cur) c.offset += wrote;
     return wrote;
   }
@@ -590,7 +682,54 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
     host.tx.set(b);
     return b.length - 1;
   }
-  case T.SLEEP: setTimeout(() => reply(host, 0), a0); return undefined;
+  case T.NOTIFY: self.hasHandler = a0 !== 0; return 0;
+  case T.NOTEGET: {
+    if (self.notes.length === 0) return 0;
+    const b = sbytes(self.notes.shift() + "\0");
+    host.tx.set(b);
+    return b.length - 1;
+  }
+  case T.NOTED:
+    if (a0 !== 0) return killProc(self, "note: unhandled");   // NDFLT
+    return 0;                                                 // NCONT
+  case T.ALARM: {
+    if (self.alarmTimer) { clearTimeout(self.alarmTimer); self.alarmTimer = null; }
+    if (a0 > 0)
+      self.alarmTimer = setTimeout(() => { self.alarmTimer = null; postnote(self, "alarm"); }, a0);
+    return 0;
+  }
+  case T.UNMOUNT: {
+    const name = txstr(host), old = txstr(host, name.length + 1);
+    if (self.nomnt) throw err("mounting disallowed (RFNOMNT)");
+    const key = canon(old, self.cwd);
+    const list = self.ns.get(key);
+    if (!list) throw err(`'${key}' is not a mount point`);
+    if (name === "") {                               // unmount(nil, old): the whole point
+      for (const el of list) el.c.dev.clunk?.(el.c.node);
+      self.ns.delete(key);
+      return 0;
+    }
+    // Match by the path bind recorded on the chan; '#' sources have none,
+    // so fall back to walking the name again and comparing identity.
+    const nm = name.startsWith("#") ? name : canon(name, self.cwd);
+    let i = list.findIndex((el) => el.c.path === nm);
+    if (i < 0) {
+      const src = await walk(self, name);
+      i = list.findIndex((el) => el.c.dev === src.dev && el.c.node === src.node);
+      src.dev.clunk?.(src.node);
+    }
+    if (i < 0) throw err(`'${name}' is not bound at '${key}'`);
+    const [el] = list.splice(i, 1);
+    el.c.dev.clunk?.(el.c.node);
+    if (list.length === 0) self.ns.delete(key);
+    return 0;
+  }
+  case T.SLEEP: {
+    const timer = setTimeout(() => { self.inflight = null; reply(host, 0); }, a0);
+    self.inflight = () => { clearTimeout(timer);
+      self.errstr = "interrupted"; reply(host, -1); };
+    return undefined;
+  }
   case T.RFORK: return rfork(host, self, a0, a2);
   case T.EXEC: return exec(host, self, a2);
   case T.EXITS: return exits(host, self);
@@ -601,19 +740,32 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
 
 // ---- rfork / exec / exits / await ----
 function rfork(host, self, flags, marker) {
-  if (!(flags & RF.PROC)) return 0;                     // flag changes on self: v0 no-ops
+  if (!(flags & RF.PROC)) {                             // flag changes on self
+    if (flags & 0x400) self.ns = new Map();
+    else if (flags & RF.NAMEG) self.ns = nsCopy(self.ns);
+    if (flags & 0x1000) { fdtClose(self.fdt); self.fdt = newFdt(); }
+    if (flags & 0x800) self.env = new Map();
+    else if (flags & 2) self.env = new Map(self.env);
+    if (flags & 8) self.noteGroup = nextNoteGroup++;
+    if (flags & 0x4000) self.nomnt = true;
+    return 0;
+  }
   if (host.borrower) throw err("nested lazy fork unsupported in v0");
   if (marker === 2) {                                   // asyncify: bare dual return
     if (!self.asyncified)
       throw err("not an asyncify build — add it to ASYNCIFY in poc/mk.sh, or use procrfork");
     if (flags & RF.MEM) throw err("RFMEM is the lazy path's flag; a bare fork copies");
     const child = newProc(self.pid, {
-      ns: flags & RF.NAMEG ? nsCopy(self.ns) : self.ns,
-      fdt: flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
+      ns: flags & 0x400 ? new Map() : flags & RF.NAMEG ? nsCopy(self.ns) : self.ns,
+      fdt: flags & 0x1000 ? newFdt() : flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
       cwd: self.cwd,
     cred: { ...self.cred },
     env: flags & 0x800 ? new Map() : flags & 2 ? new Map(self.env) : self.env,
+    noteGroup: flags & 8 ? undefined : self.noteGroup,
     });
+    child.hasHandler = self.hasHandler;
+    child.nomnt = self.nomnt || !!(flags & 0x4000);
+    child.nowait = !!(flags & 64);
     child.module = self.module;
     child.asyncified = true;
     return child.pid;   // one kernel return; the worker synthesizes the two
@@ -622,12 +774,16 @@ function rfork(host, self, flags, marker) {
     throw err("bare rfork(RFPROC) needs an asyncify build; procrfork is the exec path");
   if (!(flags & RF.MEM)) throw err("plain fork needs asyncify — the guard path is lazy");
   const child = newProc(self.pid, {
-    ns: flags & RF.NAMEG ? nsCopy(self.ns) : self.ns,
-    fdt: flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
+    ns: flags & 0x400 ? new Map() : flags & RF.NAMEG ? nsCopy(self.ns) : self.ns,
+    fdt: flags & 0x1000 ? newFdt() : flags & RF.FDG ? fdtCopy(self.fdt) : (self.fdt.refs++, self.fdt),
     cwd: self.cwd,
     cred: { ...self.cred },
     env: flags & 0x800 ? new Map() : flags & 2 ? new Map(self.env) : self.env,
+    noteGroup: flags & 8 ? undefined : self.noteGroup,
   });
+  child.hasHandler = self.hasHandler;
+  child.nomnt = self.nomnt || !!(flags & 0x4000);
+  child.nowait = !!(flags & 64);
   host.borrower = child;   // child borrows the parent's Worker and stack
   return { ret: 0, aux: child.pid };  // worker saves [0,sp) on seeing aux!=0
 }
@@ -639,15 +795,22 @@ async function exec(host, self, argc) {
     argv.push(s);
     o += s.length + 1;
   }
+  if (KDBG) console.error(`[K exec pid=${self.pid} path=${path} borrower=${host.borrower === self}]`);
   const c = await walk(self, path);
   let st = null;
   try { st = parseStat(await c.dev.stat(c.node)); } catch { /* dev without stat */ }
+  if (st && (st.mode & 0x80000000)) throw err(`'${path}' is a directory`);
   let mod = c.node._mod;                               // per-node compile cache
   if (!mod) {
-    mod = await WebAssembly.compile(await readAll(c));
+    try {
+      mod = await WebAssembly.compile(await readAll(c));
+    } catch {
+      throw err(`'${path}' exec format error`);
+    }
     if (typeof c.node === "object") c.node._mod = mod;
   }
   self.argv = argv.length ? argv : [path];
+  self.hasHandler = false;                             // fresh image, no handler yet
   if (st && (st.mode & DMSETUID))
     self.cred = { ...self.cred, euid: st.uid };    // the setuid bit (docs/uid.md)
   if (host.borrower === self) {
@@ -664,12 +827,13 @@ async function exec(host, self, argc) {
 }
 function exits(host, self) {
   const msg = txstr(host);
+  if (KDBG) console.error(`[K exits pid=${self.pid} msg='${msg}']`);
   const parent = procs.get(self.ppid);
   procs.delete(self.pid);
   fdtClose(self.fdt);                                  // pipes learn their EOF here
   if (host.borrower === self) {                        // exited without exec: vfork's other exit
     host.borrower = null;
-    zombie(parent, self.pid, msg);
+    zombie(parent, self.pid, msg, self.nowait);
     return { ret: R_FORKRESUME, aux: self.pid };
   }
   if (self.pid === 1) { host.worker?.terminate(); return shutdown(msg === "" ? 0 : 1); }
@@ -679,19 +843,22 @@ function exits(host, self) {
     workerPool.push(w);
     host.worker = null;
   }
-  zombie(parent, self.pid, msg);
+  if (self.alarmTimer) clearTimeout(self.alarmTimer);
+  zombie(parent, self.pid, msg, self.nowait);
   return { ret: -2000, aux: 0 };                       // R_RETIRE: worker parks itself
 }
-function zombie(parent, pid, msg) {
-  if (!parent) return;
+function zombie(parent, pid, msg, nowait = false) {
+  if (!parent || nowait) return;
   parent.zombies.push(`${pid} 0 0 0 '${msg}'`);
-  if (parent.awaitPending) { parent.awaitPending = false; sendWait(parent); }
+  if (parent.awaitPending) { parent.awaitPending = false; parent.inflight = null; sendWait(parent); }
 }
 function doAwait(host, self, max) {
   self.awaitmax = max;
   self.awaithost = host;
   if (self.zombies.length) return sendWait(self, true);
   self.awaitPending = true;
+  self.inflight = () => { self.awaitPending = false;
+    self.errstr = "interrupted"; reply(host, -1); };
   return undefined;                                    // blocked until a child dies
 }
 function sendWait(self, inline = false) {
@@ -715,7 +882,7 @@ export async function boot(theHost, { rootSeed, interactive }) {
   const hostRef = { host };
   const wsys = makeWsys(hostRef);
   devs = { M: makeRamfs(rootSeed, EVE), c: cons, "|": makePipeDev(), m: makeMntDev(),
-    p: makeProcDev(), e: makeEnvDev(), w: wsys };
+    p: makeProcDev(), e: makeEnvDev(), w: wsys, d: makeDupDev() };
   const init = newProc(0, { ns: new Map(), fdt: newFdt(), cwd: "/",
     cred: { euid: EVE, ruid: EVE } });
   const image = await readAll(await walk(init, "/bin/init"));

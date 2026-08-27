@@ -18,16 +18,18 @@ The architecture runs, boots to a shell, forks both ways, and speaks its protoco
 both directions: `poc/` is a working slice (hosted kernel in Node and the browser from
 one neutral core, freestanding-C wasm guests, per-process namespaces with union
 directories, the lazy-fork resume *and* the asyncify bare fork, pipes, a writable ramfs
-with V10 permission enforcement, the uid model running (docs/uid.md), a minimal `rc`
-with subshells, wire 9P at the mount boundary, exportfs serving a guest's namespace
+with V10 permission enforcement, the uid model running (docs/uid.md), **the REAL
+`rc`** — bison over its own `syn.y`, asyncified, prompting when fd 0 is `/dev/cons` —
+wire 9P at the mount boundary, exportfs serving a guest's namespace
 back out, and the window server: `#w` mints windows, `bind '#w/N' /dev` makes a
 namespace a window, `/dev/draw` is a real per-window file with text (`y i l s` and an
 8×8 font of our own authorship), `win rc` is a shell in a browser window, and the
 link/symlink family lands as the V12 additions, and **both real userspaces have their
 real libraries**: `libp9.a` is ~150 files of genuine 4th-edition libc/libbio/libregexp
-over one platform shim (`u.h`), twenty-five real commands ride it, V10 `cat`/`echo` sit
-in `/v10/bin` on `libv10` — ninety acceptance tests). Everything else is design
-documents.
+over one platform shim (`u.h`), twenty-four real commands and the real `rc` ride it,
+V10 `cat`/`echo` sit in `/v10/bin` on `libv10`, and the kernel carries what rc needs:
+notes at the syscall boundary, `unmount`, honest rfork flags, `#d` — 102 acceptance
+tests). Everything else is design documents.
 
 ## Commands
 
@@ -36,13 +38,19 @@ wasm-opt at `~/.local/opt/binaryen` — override with `WASI_SDK`/`BINARYEN` — 
 host's `bison` for vendored yacc grammars; Apple's clang has no wasm backend). `mk.sh`'s
 `ASYNCIFY` list names the binaries that may bare-fork. Compiling vendored libc source
 REQUIRES `-fno-builtin`: clang's libcall recogniser otherwise rewrites strlen's own body
-into a self-call (measured; RESEARCH §9.4):
+into a self-call (measured; RESEARCH §9.4). Two more findings are load-bearing
+(RESEARCH §9.5): `--table-base=4096` keeps wasm's small function-table indexes disjoint
+from rc's operand integers (`codefree` tells ops from operands by comparing `.f` slots),
+and `weaken.mjs` restores common-symbol semantics for rc.h's pre-ANSI tentative
+definitions — the wasm backend refuses `-fcommon` and wasm-ld's
+`--allow-multiple-definition` keeps the *first* definition even over a later
+initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 
 ```bash
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints ninety PASS lines,
+Boot the kernel — init (pid 1) runs the acceptance tests, prints 102 PASS lines,
 exits 0:
 
 ```bash
@@ -127,9 +135,12 @@ evidence, not a fresh opinion.
   guard's extent — **`procrfork(flags, fn, arg)`**, Plan 9's thread-library shape. Bare
   dual-return `rfork(RFPROC)` is asyncify's case, realised as a per-binary flag (never
   system-wide): `wasm-opt --asyncify` with instrumentation confined to paths reaching
-  `env.forka` (rc costs +5.5%); the worker unwinds, snapshots the whole memory, the
-  supervisor spawns a fresh Worker over the copy, both sides rewind — pid and 0. rc's
-  subshells run this way; its exec'ing forks stay on the guard path.
+  `env.forka` (the real rc costs +103% — its fmt-driven error paths make nearly every
+  function transitively reach an indirect call, so the confinement barely confines);
+  the worker unwinds, snapshots the whole memory (the fork-time `__stack_pointer`
+  travels too — globals are not part of the snapshot), the supervisor spawns a fresh
+  Worker over the copy, both sides rewind — pid and 0. Every fork the real rc makes
+  runs this way.
 - **Syscall transport: a Worker is a process** (§5.3) — per-process SAB mailbox,
   `Atomics.wait` in the Worker, kernel never blocks. Browser deployment needs COOP/COEP;
   Node needs nothing. Guest memory stays unshared (so no atomics/shared-memory flags in
@@ -192,10 +203,14 @@ namespace while sharing the parent's stack. A mount-table entry is a **union lis
 creates land in the MCREATE element. `cmd/exportfs.c` is devmnt's mirror — it serves its
 own namespace over wire 9P by relaying every request into real syscalls, so private
 binds travel and binaries exec across the wire; `libc/lib9p.[ch]` is the guest marshal
-vocabulary both servers share. `cmd/rc.c` is the shell: every fork is
-`procrfork(RFFDG, fn, arg)` (pipeline stages, `` `{...} `` captures — the latter exec
-`/bin/rc -c` so nothing ever forks without exec'ing), and subshells/functions are refused
-with an error naming the asyncify path. `supervisor/mnt9p.mjs` is devmnt — the only place
+vocabulary both servers share. **The shell is the real rc** —
+`plan9/sys/src/cmd/rc/` compiled verbatim (bison regenerates `syn.y` into `x.tab.h`'s
+namesake), linked by mk.sh's own rule: `weaken.mjs` restores common-symbol semantics
+for rc.h's tentative definitions, `--table-base=4096` keeps function-table indexes
+disjoint from `codefree`'s operand integers (both RESEARCH §9.5), and wasm-opt
+asyncifies the result so every bare `fork()` genuinely returns twice — pipelines,
+subshells, captures, `fn`, `while`, `switch`, and a prompt whenever `fd2path(0)` ends
+in `/dev/cons`. `supervisor/mnt9p.mjs` is devmnt — the only place
 the kernel marshals wire 9P: `mount(fd)` negotiates Tversion/Tattach, operations become
 tagged messages demultiplexed per connection, and a chan is **cloned (`Twalk`, no names)
 before open** so the attach fid is never consumed. `cmd/hellofs.c` is the proof server:
@@ -221,16 +236,17 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
   Guest C is Plan 9 style (tabs, `nil`, no const clutter); the build silences the
   builtin-redeclaration warnings that style causes.
 
-## Current state (2026-08-26)
+## Current state (2026-08-27)
 
-Documents and PoC written today; sixty-five acceptance tests pass on Node
-(`bash poc/run.sh`) **and in the browser** (`node poc/serve.mjs` → `/browser/`, measured
-in Chrome 148); `?i` boots to an interactive `rc` where `win bounce &`, `win scribble &`
-and `win rc &` open live windows (drag by title bar; click to focus; typing lands in the
-focused window's cons). Milestones on `main`: initial commit, rc, wire 9P, asyncify, the
-browser port, unions + exportfs, the uid model, the window server, text in draw, the
-link/symlink family, D1–D4 measured, and the real Plan 9 userspace grown to a system
-(real libc/bio/regexp + 25 commands; V10 waits for the parent project's ANSI
-conversion). Next: **real rc** (bison over `syn.y`, the door grep already opened), then
-`sam` via the real libdraw/libframe, then the native host — **macOS first, then iPad**
-(the user's platform order).
+102 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
+(`node poc/serve.mjs` → `/browser/`, measured in Chrome 148); `?i` boots to **the real
+Plan 9 rc** — pipelines, subshells, `` `{...} `` captures, `fn`, `while`, `switch` — and
+`win rc &` opens a shell window that prompts because rc's own `Isatty` finds
+`/dev/cons` by `fd2path`. Milestones on `main`: initial commit, rc, wire 9P, asyncify,
+the browser port, unions + exportfs, the uid model, the window server, text in draw,
+the link/symlink family, D1–D4 measured, the real Plan 9 userspace grown to a system,
+and **the real rc running the whole suite** over a kernel readied for it (notes with
+V7-boundary delivery, `alarm`, `unmount`, honest rfork flags, `#d`, `..` in walks; V10
+growth waits for the parent project's ANSI conversion). Next: `sam` via the real
+libdraw/libframe, then the native host — **macOS first, then iPad** (the user's
+platform order).

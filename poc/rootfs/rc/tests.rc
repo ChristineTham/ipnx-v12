@@ -5,57 +5,73 @@ fails=ok
 echo rc: up, running tests
 
 if(~ `{echo hello | cat} hello) echo PASS 'pipeline: echo hello | cat'; if not fails=bad
-if(~ `{echo a && echo b} a b) echo PASS 'lists: && runs both'; if not fails=bad
+if(~ `{echo a && echo b} 'a b') echo PASS 'lists: && runs both'; if not fails=bad
 greeting=hi; if(~ $greeting hi) echo PASS 'variables: x=v and $x'; if not fails=bad
-x=; for(i in 1 2 3) x=$x$i
-if(~ $x 123) echo PASS 'for loop with concatenation'; if not fails=bad
-if(~ `{echo /bin/c*} /bin/cat /bin/cp) echo PASS 'glob: /bin/c*'; if not fails=bad
+x=()
+for(i in 1 2 3) x=($x $i)
+if(~ $#x 3 && ~ $x(1)^$x(2)^$x(3) 123) echo PASS 'for loop accumulates a list'; if not fails=bad
+if(~ `{echo /bin/c*} */bin/cat* && ~ `{echo /bin/c*} */bin/cp*) echo PASS 'glob: /bin/c*'; if not fails=bad
 echo written > /tmp/t1
 if(~ `{cat /tmp/t1} written) echo PASS 'redirection > and ramfs write'; if not fails=bad
 echo more >> /tmp/t1
-if(~ `{wc /tmp/t1} 2) echo PASS 'append >> (wc counts 2 lines)'; if not fails=bad
-if(~ `{cat < /etc/motd | wc} 1) echo PASS 'input redirection <'; if not fails=bad
-if(~ `{ls /lib} alt) echo PASS 'ls reads directories'; if not fails=bad
+if(~ `{wc /tmp/t1} 2' '*) echo PASS 'append >> (wc counts 2 lines)'; if not fails=bad
+if(~ `{cat < /etc/motd | wc} 1' '*) echo PASS 'input redirection <'; if not fails=bad
+if(~ `{ls /lib} /lib/alt) echo PASS 'ls reads directories'; if not fails=bad
 mkdir /tmp/d; cp /etc/motd /tmp/d/m
-if(~ `{wc /tmp/d/m} 1) echo PASS 'mkdir and cp'; if not fails=bad
+if(~ `{wc /tmp/d/m} 1' '*) echo PASS 'mkdir and cp'; if not fails=bad
 rm /tmp/d/m /tmp/d
-if(~ `{ls /tmp} t1) echo PASS 'rm removes'; if not fails=bad
+if(~ `{ls /tmp} /tmp/t1) echo PASS 'rm removes'; if not fails=bad
 echo expect one error next:
 cat /nonexistent
 if(~ $status '') fails=bad; if not echo PASS 'errors set $status'
 bind /lib/alt /etc
 if(~ `{cat /etc/motd} the*) echo PASS 'bind is a command; lands in the rc namespace'; if not fails=bad
 cd /lib
-if(~ `{ls alt} motd) echo PASS 'cd builtin, relative walks'; if not fails=bad
+if(~ `{ls alt} alt/motd) echo PASS 'cd builtin, relative walks'; if not fails=bad
 cd /
 
-if(~ `{(echo a; echo b) | wc} 2) echo PASS 'subshell as a pipeline stage (bare fork)'; if not fails=bad
-x=outer; (x=inner; echo $x > /tmp/sub)
+if(~ `{{echo a; echo b} | wc} 2' '*) echo PASS 'a brace group as a pipeline stage (bare fork)'; if not fails=bad
+x=outer; @{x=inner; echo $x > /tmp/sub}
 if(~ $x outer && ~ `{cat /tmp/sub} inner) echo PASS 'subshell state is a copy, its work is real'; if not fails=bad
-(exit boom)
+@{exit boom}
 if(~ $status boom) echo PASS 'subshell status propagates'; if not fails=bad
 mkdir /tmp/xbin; cp /bin/echo /tmp/xbin/hello
 bind -a /tmp/xbin /bin
-if(~ `{hello union works} union works) echo PASS 'union: exec through bind -a'; if not fails=bad
-if(~ `{ls /bin} hello) echo PASS 'union: directory reads concatenate'; if not fails=bad
+if(~ `{hello union works} 'union works') echo PASS 'union: exec through bind -a'; if not fails=bad
+if(~ `{ls /bin} *hello*) echo PASS 'union: directory reads concatenate'; if not fails=bad
 bind -ac /tmp/xbin /bin
 echo made > /bin/unionfile
 if(~ `{cat /tmp/xbin/unionfile} made) echo PASS 'union: create lands in the MCREATE element'; if not fails=bad
 
-if(~ `{echo -n abc | wc} 0 1 3) echo PASS 'the real Plan 9 echo: -n, from 4th-edition source'; if not fails=bad
+if(~ `{echo -n abc | wc} '0 1 3') echo PASS 'the real Plan 9 echo: -n, from 4th-edition source'; if not fails=bad
 echo tenth edition payload > /tmp/v10cat
-if(~ `{/v10/bin/cat /tmp/v10cat} tenth edition payload) echo PASS 'the real V10 cat, from the TUHS tapes, reads the namespace'; if not fails=bad
-if(~ `{/v10/bin/echo -n abc | wc} 0 1 3) echo PASS 'the real V10 echo: -n'; if not fails=bad
-if(~ `{/v10/bin/echo -e 'a\tb' | wc} 1 2 4) echo PASS 'V10 echo -e escapes — the fingerprint Plan 9 echo lacks'; if not fails=bad
-if(~ `{/v10/bin/echo tenth edition | cat} tenth edition) echo PASS 'V10 and Plan 9 binaries, one pipeline, side by side'; if not fails=bad
+if(~ `{/v10/bin/cat /tmp/v10cat} 'tenth edition payload') echo PASS 'the real V10 cat, from the TUHS tapes, reads the namespace'; if not fails=bad
+if(~ `{/v10/bin/echo -n abc | wc} '0 1 3') echo PASS 'the real V10 echo: -n'; if not fails=bad
+if(~ `{/v10/bin/echo -e 'a\tb' | wc} '1 2 4') echo PASS 'V10 echo -e escapes — the fingerprint Plan 9 echo lacks'; if not fails=bad
+if(~ `{/v10/bin/echo tenth edition | cat} 'tenth edition') echo PASS 'V10 and Plan 9 binaries, one pipeline, side by side'; if not fails=bad
 
 if(~ `{echo hello | sed s/hello/goodbye/} goodbye) echo PASS 'real sed rewrites (libregexp at work)'; if not fails=bad
-if(~ `{echo a b c | tr a-c A-C} A B C) echo PASS 'real tr maps ranges'; if not fails=bad
-if(~ `{(echo b; echo a; echo b) | sort | uniq | wc} 2) echo PASS 'real sort | uniq pipeline'; if not fails=bad
-if(~ `{ls /bin | grep '^grep$'} grep) echo PASS 'real grep, anchored regexp'; if not fails=bad
-if(~ `{date | wc} 1) echo PASS 'real date speaks (nsec, ctime)'; if not fails=bad
+if(~ `{echo a b c | tr a-c A-C} 'A B C') echo PASS 'real tr maps ranges'; if not fails=bad
+if(~ `{{echo b; echo a; echo b} | sort | uniq | wc} 2' '*) echo PASS 'real sort | uniq pipeline'; if not fails=bad
+if(~ `{ls /bin | grep '^/bin/grep$'} /bin/grep) echo PASS 'real grep, anchored regexp'; if not fails=bad
+if(~ `{date | wc} 1' '*) echo PASS 'real date speaks (nsec, ctime)'; if not fails=bad
 if(test -f /etc/motd) echo PASS 'real test -f drives rc conditionals'; if not fails=bad
 if(test -d /nonexistent) fails=bad; if not echo PASS 'real test -d says no'
+
+# real-rc capabilities the mini shell refused outright
+fn twice {echo $1 $1}
+if(~ `{twice hey} 'hey hey') echo PASS 'fn: functions define and take arguments'; if not fails=bad
+n=()
+while(! ~ $#n 3) n=($n x)
+if(~ $#n 3) echo PASS 'while: loops until the condition holds'; if not fails=bad
+switch(two){
+case one
+	fails=bad
+case two
+	echo PASS 'switch/case selects the matching arm'
+case *
+	fails=bad
+}
 
 if(~ $fails ok) echo rc: tests done
 if not echo rc: TESTS FAILED

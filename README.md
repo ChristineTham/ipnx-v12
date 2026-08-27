@@ -92,7 +92,9 @@ namespace. That is what Plan 9 does and what every Plan 9 port has had to give u
 [poc/](poc/) is a working slice — a hosted kernel in Node executing freestanding-C wasm
 guests in per-process namespaces, with the lazy fork's parent resume *and* the asyncify
 path for bare dual-return `rfork` (rc's subshells are forked copies of the interpreter),
-pipes, a writable ramfs, a minimal `rc` with nine commands, and wire 9P at a real mount
+pipes, a writable ramfs, **the real Plan 9 `rc`** compiled from its own 4th-edition
+source over the real 4th-edition libc — twenty-four real commands beside it — and wire
+9P at a real mount
 boundary in both directions: a guest process serving 9P2000 on a pipe, mounted and read
 by clients that cannot tell it from a kernel device, and exportfs handing a whole
 namespace — private binds included — to another process, union directories completing

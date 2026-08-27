@@ -26,6 +26,9 @@ typedef unsigned long long uvlong;
 #define RFCENVG  (1<<11)
 #define RFCFDG   (1<<12)
 #define RFREND   (1<<13)
+
+enum { NCONT = 0, NDFLT = 1 };            /* noted(2) */
+enum { PNPROC = 1, PNGROUP = 2 };         /* postnote(2) */
 #define RFNOMNT  (1<<14)
 
 /* bind flags */
@@ -44,6 +47,14 @@ long  write(int fd, void *buf, long n);
 vlong seek(int fd, vlong off, int type);
 int   dup(int oldfd, int newfd);
 int   bind(char *name, char *old, int flag);
+int   unmount(char *name, char *old);
+int   notify(void (*f)(void*, char*));
+int   noted(int v);
+long  alarm(ulong ms);
+int   fork(void);
+int   postnote(int group, int pid, char *note);
+int   getpid(void);
+char* strncpy(char *dst, char *src, long n);
 int   chdir(char *path);
 int   rfork(int flags);
 typedef void (*Forkfn)(void*);

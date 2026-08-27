@@ -6,7 +6,7 @@
 // ../browser/worker.mjs for the page) supply the message port.
 let port, mb, tx;
 const ST = { IDLE: 0, REQ: 1, DONE: 2 };
-const R_FORKRESUME = -1000, R_EXECSELF = -1001, R_RETIRE = -2000;
+const R_FORKRESUME = -1000, R_EXECSELF = -1001, R_RETIRE = -2000, R_DIE = -3000;
 const T_STR = new Set([2, 3, 7, 8, 14, 22, 25, 41, 42, 44, 60, 61, 62]);   // traps whose a0 is a path/string
 class ForkResume { constructor(pid) { this.pid = pid; } }
 class ExecReplace {}
@@ -45,7 +45,7 @@ function guardBytes() {
     ...types, ...imports, ...funcs, ...exports, ...code]);
 }
 
-let memory, memU8, curInst = null, savedStack = null, forkPid = 0;
+let memory, memU8, curInst = null, curModule = null, curImports = null, savedStack = null, forkPid = 0;
 // memory.grow DETACHES the old buffer; never trust a cached view (found the
 // hard way: rc's heap crossing the initial 4MB detached memU8 mid-fork)
 function m8() {
@@ -53,7 +53,7 @@ function m8() {
     memU8 = new Uint8Array(memory.buffer);
   return memU8;
 }
-let pendingFork = null, rewinding = false, rewindReturn = 0;
+let pendingFork = null, rewinding = false, rewindReturn = 0, inNote = false;
 
 // Bare dual-return rfork, via asyncify (RESEARCH §5.2): unwind the whole
 // stack into the guest's buffer, snapshot linear memory, rewind twice.
@@ -65,7 +65,12 @@ function forka(flags, databuf) {
   }
   const pid = sys(19, flags, 0, 2, 0, 0);            // a2=2: asyncify fork
   if (pid < 0) return -1;
-  pendingFork = { pid, databuf };
+  // The rewind skips clang's sp -= N prologues (they sit in asyncify's
+  // normal-state guard) but the epilogues' sp += N still run, so without
+  // restoration the shadow stack drifts +N per rewound frame — measured:
+  // rc's VM state scribbled after one pipe fork. Emscripten's runtime
+  // restores the pointer around every rewind; so do we, both sides.
+  pendingFork = { pid, databuf, sp: curInst.exports.__stack_pointer.value };
   curInst.exports.asyncify_start_unwind(databuf);
   return 0;                                          // dummy; we are unwinding
 }
@@ -91,6 +96,11 @@ function sys(trap, a0, a1, a2, a3, a4) {
     else tx[o] = 0;
   }
   if (trap === 45) tx.set(m8().subarray(a1, a1 + a2));    // fwstat: raw record
+  if (trap === 35) {                        // unmount: name may be nil
+    let o = 0;
+    if (a0) o = cstr(a0, 0); else tx[o++] = 0;
+    cstr(a1, o);
+  }
   if (trap === 46) {                        // mount: old at a2, aname at a4
     let o = cstr(a2, 0);
     o = cstr(a4, o);
@@ -103,8 +113,10 @@ function sys(trap, a0, a1, a2, a3, a4) {
   Atomics.wait(mb, 0, ST.REQ);                       // Workers may block
   Atomics.store(mb, 0, ST.IDLE);
   const ret = mb[8], aux = mb[9];
-  if (trap === 19 && typeof process !== 'undefined' && process.env.KDBG)
-    console.error(`[sys19 ret=${ret} aux=${aux}]`);
+  if (typeof process !== 'undefined' && process.env.KDBG)
+    console.error(trap === 19
+      ? `[sys19 marker=${a2} flags=${a0.toString(8)} ret=${ret} aux=${aux}]`
+      : `[sys${trap} a0=${a0} ret=${ret}]`);
   if (ret === R_FORKRESUME) {                        // child left; resume parent
     m8().set(savedStack); savedStack = null;
     forkPid = aux;
@@ -112,15 +124,35 @@ function sys(trap, a0, a1, a2, a3, a4) {
   }
   if (ret === R_EXECSELF) throw new ExecReplace();
   if (ret === R_RETIRE) throw new ExecReplace();       // park; the next init reuses us
+  if (ret === R_DIE) throw new ExecReplace();          // killed; unwind and park
   if (ret > 0) {                                     // copy-outs, per trap
     if (trap === 50) m8().set(tx.subarray(0, ret), a1);                     // pread -> buf
     else if (trap === 42 || trap === 43) m8().set(tx.subarray(0, ret), a1); // stat/fstat -> edir
-    else if (trap === 41 || trap === 47 || trap === 200)
-      m8().set(tx.subarray(0, ret + 1), a0);        // errstr/await/args -> buf (NUL incl.)
+    else if (trap === 41 || trap === 47 || trap === 200 || trap === 202)
+      m8().set(tx.subarray(0, ret + 1), a0);        // errstr/await/args/noteget -> buf (NUL incl.)
     else if (trap === 62 || trap === 23) m8().set(tx.subarray(0, ret + 1), a1);  // readlink/fd2path
     else if (trap === 53) m8().set(tx.subarray(0, 8), a0);                  // nsec -> vlong*
   }
   if (trap === 21 && ret === 0) m8().set(tx.subarray(0, 8), a0);            // pipe -> fd[2]
+  // Deliver pending notes (V7 timing). Never on the fork return: raw0's
+  // guard frame is live there, and a handler dying inside it would feed
+  // ExecReplace to catch_all as a foreign exception (the detach-bug class).
+  if (typeof process !== "undefined" && process.env.KHEAP && curInst.exports.__freelist) {
+    const dv = new DataView(memory.buffer);
+    let h = dv.getUint32(curInst.exports.__freelist(), true);
+    for (let i = 0; h !== 0; i++) {
+      if (i > 10000 || h < 262144 || h + 8 > memory.buffer.byteLength) {
+        const fa = curInst.exports.__freelist();
+        console.error(`[HEAPCORRUPT after trap ${trap} a0=${a0} ret=${ret}: node 0x${h.toString(16)} step ${i} &freelist=0x${fa.toString(16)} head=0x${dv.getUint32(fa, true).toString(16)} nodesize=${h + 8 <= memory.buffer.byteLength ? dv.getUint32(h, true) : -1}]`);
+        break;
+      }
+      h = dv.getUint32(h + 4, true);
+    }
+  }
+  if (mb[10] === 1 && !inNote && trap !== 8 && trap !== 19) {
+    inNote = true;
+    try { curInst.exports.__notedispatch?.(); } finally { inNote = false; }
+  }
   return ret;
 }
 function cstr(ptr, o) {
@@ -145,12 +177,13 @@ function callStart() {
     curInst.exports._start();
     if (!pendingFork) break;                         // only an unwind returns here
     curInst.exports.asyncify_stop_unwind();
-    const { pid, databuf } = pendingFork;
+    const { pid, databuf, sp } = pendingFork;
     pendingFork = null;
     const snap = m8().slice().buffer;               // the child's whole memory
-    port.post({ t: "asyfork", pid, snap, dataPtr: databuf }, [snap]);
+    port.post({ t: "asyfork", pid, snap, dataPtr: databuf, sp }, [snap]);
     rewindReturn = pid;                              // this side is the parent
     rewinding = true;
+    curInst.exports.__stack_pointer.value = sp;      // exact, not drifted
     curInst.exports.asyncify_start_rewind(databuf);
   }
 }
@@ -170,15 +203,18 @@ async function run(mod, guardMod, asy) {
   }
   memU8 = undefined;
   const guard = new WebAssembly.Instance(guardMod, { env: { raw0, forkpd: () => forkPid } });
-  const inst = new WebAssembly.Instance(mod, {
+  curModule = mod;
+  curImports = {
     env: { memory, sys, forka },
     guard: { rfork: guard.exports.rfork },
-  });
+  };
+  const inst = new WebAssembly.Instance(mod, curImports);
   curInst = inst;
   if (asy) {                                          // a freshly forked child: rewind
     m8().set(new Uint8Array(asy.snap));
     rewindReturn = 0;
     rewinding = true;
+    if (asy.sp !== undefined) inst.exports.__stack_pointer.value = asy.sp;
     inst.exports.asyncify_start_rewind(asy.dataPtr);
   }
   callStart();
@@ -187,7 +223,7 @@ async function run(mod, guardMod, asy) {
 const guardMod = new WebAssembly.Module(guardBytes());
 let pending = Promise.resolve();
 function start(mod, asy) {
-  pendingFork = null; rewinding = false;
+  pendingFork = null; rewinding = false; inNote = false;
   pending = run(mod, guardMod, asy).catch((e) => {
     if (e instanceof ForkResume) return;              // parent resumed and _start returned? no: guard caught inside — reaching here means unwound past _start: only if guard missing
     if (e instanceof ExecReplace) return;             // replaced; 'load' message follows
@@ -202,7 +238,7 @@ export function startGuest(thePort) {
     if (m.t === "init") {
       mb = m.mb; tx = m.tx;
       maxPages = m.maxPages ?? 80;
-      start(m.mod, m.snap ? { snap: m.snap, dataPtr: m.dataPtr } : null);
+      start(m.mod, m.snap ? { snap: m.snap, dataPtr: m.dataPtr, sp: m.sp } : null);
     }
     if (m.t === "load") start(m.mod);
   });

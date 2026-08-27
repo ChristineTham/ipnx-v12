@@ -128,6 +128,8 @@ char *argv0;		/* set by ARGBEGIN; Plan 9's startup owns it, so ours does */
 typedef struct Hdr Hdr;
 struct Hdr { ulong size; Hdr *next; };
 static Hdr *freelist;
+__attribute__((export_name("__freelist")))
+int __freelist(void){ return (int)&freelist; }
 extern char __heap_base;
 static char *hp;
 
@@ -242,9 +244,31 @@ unsigned short *_runebsearch(unsigned short c, unsigned short *t, int n, int ne)
 		return t;
 	return 0;
 }
-/* notes are not delivered yet: handlers register and rest (deviation) */
-int notify(void (*f)(void*, char*)){ USED(f); return 0; }
-int noted(int v){ USED(v); return 0; }
+/* Notes: the kernel queues them and flags the mailbox; guestcore calls
+ * __notedispatch at the next syscall return (V7's timing, a recorded
+ * deviation from Plan 9's anytime delivery). The handler must call noted():
+ * NCONT returns here and the interrupted call has already returned -1 with
+ * errstr "interrupted"; NDFLT never returns (the kernel kills mid-syscall). */
+static void (*_onnote)(void*, char*);
+int notify(void (*f)(void*, char*)){
+	_onnote = f;
+	return _sys(28, f != 0, 0, 0, 0, 0);
+}
+int noted(int v){ return _sys(29, v, 0, 0, 0, 0); }
+__attribute__((export_name("__notedispatch")))
+void __notedispatch(void){
+	char note[128];
+
+	while(_sys(202, (int)note, sizeof note, 0, 0, 0) > 0){
+		if(_onnote == 0)
+			noted(NDFLT);
+		else
+			(*_onnote)(nil, note);
+	}
+}
+long alarm(ulong ms)              { return _sys(6, (int)ms, 0, 0, 0, 0); }
+int unmount(char *name, char *old){ return _sys(35, (int)name, (int)old, 0, 0, 0); }
+int fork(void)                    { return rfork(RFFDG|RFREND|RFPROC); }
 void longjmp(long *b, int v){ USED(b); USED(v); exits("longjmp"); }
 void abort(void){ exits("abort"); }
 
@@ -255,7 +279,7 @@ vlong nsec(void){
 		return -1;
 	return v;
 }
-int fd2path(int fd, char *buf, int n){ return _sys(23, fd, (int)buf, n, 0, 0); }
+int fd2path(int fd, char *buf, int n){ return _sys(23, fd, (int)buf, n, 0, 0) >= 0 ? 0 : -1; }   /* 0 on success, per fd2path(2) */
 int wstat(char *p, uchar *e, int n){ return _sys(44, (int)p, (int)e, n, 0, 0); }
 int fwstat(int fd, uchar *e, int n){ return _sys(45, fd, (int)e, n, 0, 0); }
 
