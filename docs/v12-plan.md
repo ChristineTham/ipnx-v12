@@ -367,7 +367,7 @@ answers, not exclusive:
 Taking asyncify on both buys uniformity at ~2× on binaries that natively would not need it.
 Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it belongs.
 
-## Decisions (2026-08-26; native-host decision added 2026-08-27)
+## Decisions (2026-08-26; native-host and OCI decisions added 2026-08-27)
 
 - **(2026-08-27) The native host is a Rust kernel core plus per-platform embedding
   shims — after the PoC completes.** The kernel never executes guest code, so the
@@ -382,6 +382,31 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   suite is guest-side and language-blind: it is the conformance spec any second
   kernel must pass. Until the PoC closes, `kernel.mjs` stays the reference
   implementation.
+
+- **(2026-08-27) OCI is two targets, taken at two different weights.**
+  *The scratch container is a stated target of the Rust milestone, for free*: the
+  kernel as a static musl binary, PID 1 in a `FROM scratch` image — no distro, no
+  userland, a few megabytes. Linux is the thinnest mach layer of any host: `futex`
+  is what `Atomics.wait` has been emulating all along, threads are Workers without
+  ceremony, and with no JIT ban the guests run on full wasmtime/Cranelift — the
+  fastest deployment of the system anywhere. It is also the natural CI machine.
+  *The cloud machine — no OS underneath — is a named aspiration, sequenced after
+  macOS and iPadOS*: the kernel booting directly on a hypervisor (Firecracker/KVM;
+  Kata- or Unikraft-style OCI packaging of the microVM), `pc/` directory number
+  four. Its mach layer is the first to add mechanism rather than glue — a timer
+  tick driving **epoch/fuel preemption** in the runtime (Workers gave preemption
+  free until now), **virtio-9p** serving the root straight into `devmnt`'s native
+  tongue, virtio-console for `#c`, and eventually virtio-net under **smoltcp** in a
+  `devip`-shaped device, the largest single lift. What it never adds is the part
+  that makes bare-metal kernels brutal: wasm's sandbox replaces the MMU (one
+  address space, no page tables, no context-switch assembly — recording the risk
+  plainly: a runtime escape is then a whole-system escape, with no hardware
+  backstop), and 9P replaces the VFS and the driver zoo. The wasm-native OCI shims
+  (runwasi, the component model) are watched, not targeted: they cannot yet host a
+  kernel that spawns instances with shared-memory mailboxes. The strategic point of
+  the cloud machine: a microVM that boots in ~100ms to a per-process-namespace
+  world, `exportfs` handing private namespaces between containers over wire 9P —
+  namespaces as the cloud primitive the sidecar pattern keeps reinventing badly.
 
 Evidence for each is in RESEARCH.md at the cited section.
 
