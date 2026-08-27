@@ -44,9 +44,8 @@ impl std::error::Error for GuestExit {}
 struct RState {
     pid: Pid,
     ev: Sender<Ev>,
-    reply_tx: Sender<KReply>,
-    reply_rx: Receiver<KReply>,
     memory: Option<Memory>,
+    in_note: bool,
     last_aux: i32,
     saved_stack: Option<Vec<u8>>,
     rewinding: bool,
@@ -139,14 +138,14 @@ fn sys(caller: &mut Caller<'_, RState>, trap: i32, a0: i32, a1: i32, a2: i32, a3
         let n = (a2 as usize).min(TXSIZE);
         tx.extend_from_slice(&data[a1 as usize..a1 as usize + n]); // pwrite buf
     }
-    let (ev, reply_tx) = {
-        let st = caller.data();
-        (st.ev.clone(), st.reply_tx.clone())
-    };
+    let ev = caller.data().ev.clone();
     let worker_pid = caller.data().pid;
+    // a fresh channel per call: an interrupted call's late device completion
+    // lands in a dropped receiver instead of poisoning the next syscall
+    let (reply_tx, reply_rx) = channel::<KReply>();
     ev.send(Ev::Sys { worker_pid, trap, a, tx, reply: reply_tx })
         .map_err(|_| wasmtime::Error::msg("kernel gone"))?;
-    let r = caller.data().reply_rx.recv().map_err(|_| wasmtime::Error::msg("kernel gone"))?;
+    let r = reply_rx.recv().map_err(|_| wasmtime::Error::msg("kernel gone"))?;
     caller.data_mut().last_aux = r.aux;
     match r.action {
         KAction::ForkResume => {
@@ -180,6 +179,15 @@ fn sys(caller: &mut Caller<'_, RState>, trap: i32, a0: i32, a1: i32, a2: i32, a3
         if let Some(dst) = dst {
             mem.write(&mut *caller, dst as usize, &r.data).ok();
         }
+    }
+    // V7 timing: pending notes dispatch after the call returns — never on the
+    // fork return (the guard frame is live there), never reentrantly
+    if r.note_pending && trap != 8 && trap != 19 && !caller.data().in_note {
+        caller.data_mut().in_note = true;
+        if let Some(Extern::Func(f)) = caller.get_export("__notedispatch") {
+            let _ = f.typed::<(), ()>(&mut *caller).and_then(|tf| tf.call(&mut *caller, ()));
+        }
+        caller.data_mut().in_note = false;
     }
     Ok(ret)
 }
@@ -349,13 +357,11 @@ fn run_one(engine: &Arc<Engine>, ev: &Sender<Ev>, pid: Pid, image: &Arc<Vec<u8>>
     }
     let asyncified = module.exports().any(|e| e.name() == "asyncify_start_unwind");
     let _ = ev.send(Ev::Started { pid, asyncified });
-    let (reply_tx, reply_rx) = channel::<KReply>();
     let state = RState {
         pid,
         ev: ev.clone(),
-        reply_tx,
-        reply_rx,
         memory: None,
+        in_note: false,
         last_aux: 0,
         saved_stack: None,
         rewinding: false,

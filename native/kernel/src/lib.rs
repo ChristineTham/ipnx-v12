@@ -102,13 +102,15 @@ pub struct KReply {
     pub action: KAction,
     /// ExecSelf carries the new image so the calling thread reloads in place
     pub load: Option<(Arc<Vec<u8>>, Vec<String>)>,
+    /// V7 timing: the runner calls __notedispatch when this is set
+    pub note_pending: bool,
 }
 
 fn ok(ret: i32) -> KReply {
-    KReply { ret, aux: 0, data: Vec::new(), action: KAction::None, load: None }
+    KReply { ret, aux: 0, data: Vec::new(), action: KAction::None, load: None, note_pending: false }
 }
 fn okd(ret: i32, data: Vec<u8>) -> KReply {
-    KReply { ret, aux: 0, data, action: KAction::None, load: None }
+    KReply { ret, aux: 0, data, action: KAction::None, load: None, note_pending: false }
 }
 
 type KErr = String;
@@ -137,6 +139,7 @@ enum DevId {
     Dup,
     Env,
     Union,
+    Proc,
 }
 
 // ---- nodes, one enum across the device set ----
@@ -154,6 +157,7 @@ enum Node {
     EnvRoot,
     EnvVar(String),
     Union(Rc<Vec<MountEl>>),
+    Proc { kind: u8, pid: Pid }, // 0 root, 1 dir, 2 ctl, 3 status, 4 note, 5 notepg
 }
 
 #[derive(Clone)]
@@ -220,9 +224,21 @@ struct Pipe {
 }
 type PipeR = Rc<RefCell<Pipe>>;
 
+#[derive(Clone)]
+enum WaitKind {
+    Reply { pid: Pid, tx: Sender<KReply> },
+    Aread { pid: Pid, tag: u32 },
+}
+
 struct Waiter {
     n: usize,
-    reply: Sender<KReply>,
+    kind: WaitKind,
+}
+
+enum TimerKind {
+    Sleep(Sender<KReply>),
+    Alarm(Pid),
+    Iowait(Pid),
 }
 
 // ---- processes ----
@@ -247,6 +263,12 @@ struct Proc {
     nomnt: bool,
     nowait: bool,
     note_group: u32,
+    notes: Vec<String>,
+    has_handler: bool,
+    inflight: Option<Sender<KReply>>,
+    alarm_token: Option<u64>,
+    ioq: VecDeque<(u32, Vec<u8>)>,
+    iowait: Option<(Sender<KReply>, Option<u64>)>, // (reply, timer token)
 }
 
 #[derive(Clone)]
@@ -278,7 +300,7 @@ pub struct Kernel {
     cons_buf: Vec<u8>,
     cons_eof: bool,
     cons_parked: Vec<Waiter>,
-    sleep_waiters: HashMap<u64, Sender<KReply>>,
+    timers: HashMap<u64, TimerKind>,
     next_token: u64,
     effects: Vec<Effect>,
     pub interactive: bool,
@@ -319,7 +341,7 @@ impl Kernel {
             cons_buf: Vec::new(),
             cons_eof: false,
             cons_parked: Vec::new(),
-            sleep_waiters: HashMap::new(),
+            timers: HashMap::new(),
             next_token: 1,
             effects: Vec::new(),
             interactive: false,
@@ -383,6 +405,8 @@ impl Kernel {
             umask: 0o22, errstr: String::new(), zombies: Vec::new(),
             await_reply: None, argv: Vec::new(), image: None, asyncified: false,
             borrower: None, nomnt: false, nowait: false, note_group: group,
+            notes: Vec::new(), has_handler: false, inflight: None,
+            alarm_token: None, ioq: VecDeque::new(), iowait: None,
         });
         pid
     }
@@ -401,7 +425,46 @@ impl Kernel {
             let w = self.cons_parked.remove(0);
             let take = w.n.min(self.cons_buf.len());
             let give: Vec<u8> = self.cons_buf.drain(0..take).collect();
-            let _ = w.reply.send(okd(give.len() as i32, give));
+            self.wake(w.kind, give);
+        }
+    }
+
+    // complete a parked read: a syscall reply or an AREAD landing in the ioq
+    fn wake(&mut self, kind: WaitKind, data: Vec<u8>) {
+        match kind {
+            WaitKind::Reply { pid, tx } => {
+                if let Some(p) = self.procs.get_mut(&pid) {
+                    p.inflight = None;
+                }
+                let r = self.stamp(pid, okd(data.len() as i32, data));
+                let _ = tx.send(r);
+            }
+            WaitKind::Aread { pid, tag } => self.aread_done(pid, tag, data),
+        }
+    }
+
+    fn stamp(&self, pid: Pid, mut r: KReply) -> KReply {
+        if let Some(p) = self.procs.get(&pid) {
+            r.note_pending = !p.notes.is_empty() && p.has_handler;
+        }
+        r
+    }
+
+    fn aread_done(&mut self, pid: Pid, tag: u32, data: Vec<u8>) {
+        let Some(p) = self.procs.get_mut(&pid) else { return };
+        p.ioq.push_back((tag, data));
+        if let Some((tx, timer)) = p.iowait.take() {
+            p.inflight = None;
+            if let Some(tok) = timer {
+                self.timers.remove(&tok);
+            }
+            let p = self.procs.get_mut(&pid).unwrap();
+            let (tag, data) = p.ioq.pop_front().unwrap();
+            let mut out = tag.to_le_bytes().to_vec();
+            out.extend_from_slice(&data);
+            let n = out.len() as i32;
+            let r = self.stamp(pid, okd(n, out));
+            let _ = tx.send(r);
         }
     }
 
@@ -413,9 +476,65 @@ impl Kernel {
     }
 
     pub fn timer_fired(&mut self, token: u64) {
-        if let Some(tx) = self.sleep_waiters.remove(&token) {
-            let _ = tx.send(ok(0));
+        match self.timers.remove(&token) {
+            Some(TimerKind::Sleep(tx)) => {
+                let _ = tx.send(ok(0));
+            }
+            Some(TimerKind::Alarm(pid)) => {
+                if self.procs.get(&pid).map(|p| p.alarm_token == Some(token)).unwrap_or(false) {
+                    self.procs.get_mut(&pid).unwrap().alarm_token = None;
+                    self.postnote(pid, "alarm");
+                }
+            }
+            Some(TimerKind::Iowait(pid)) => {
+                if let Some(p) = self.procs.get_mut(&pid) {
+                    if let Some((tx, _)) = p.iowait.take() {
+                        p.inflight = None;
+                        let _ = tx.send(ok(0)); // iowait timeout: 0 bytes
+                    }
+                }
+            }
+            None => {}
         }
+    }
+
+    // ---- notes: delivered at the syscall boundary (V7's timing) ----
+    pub fn postnote(&mut self, pid: Pid, msg: &str) {
+        let Some(p) = self.procs.get_mut(&pid) else { return };
+        let mut m = msg.to_string();
+        m.truncate(120);
+        p.notes.push(m);
+        if let Some(tx) = p.inflight.take() {
+            // a blocked call: interrupt it
+            p.errstr = "interrupted".into();
+            p.iowait = None;
+            let mut r = ok(-1);
+            r.note_pending = !p.notes.is_empty() && p.has_handler;
+            let _ = tx.send(r);
+        }
+    }
+
+    fn kill_proc(&mut self, worker_pid: Pid, pid: Pid, msg: &str) -> KReply {
+        let (ppid, nowait, fdt) = match self.procs.get(&pid) {
+            Some(p) => (p.ppid, p.nowait, p.fdt.clone()),
+            None => return ok(-1),
+        };
+        self.procs.remove(&pid);
+        self.fdt_close(&fdt);
+        let was_borrowed = self.procs.get(&worker_pid).and_then(|p| p.borrower) == Some(pid);
+        if was_borrowed {
+            self.procs.get_mut(&worker_pid).unwrap().borrower = None;
+            self.zombie(ppid, pid, msg, nowait);
+            return KReply { ret: -1000, aux: pid as i32, data: Vec::new(),
+                            action: KAction::ForkResume, load: None, note_pending: false };
+        }
+        if pid == 1 {
+            self.effects.push(Effect::Shutdown(1));
+        } else {
+            self.zombie(ppid, pid, msg, nowait);
+        }
+        KReply { ret: -3000, aux: 0, data: Vec::new(), action: KAction::Die,
+                 load: None, note_pending: false }
     }
 
     // a guest thread died outside the syscall path (bad image, runner error)
@@ -458,6 +577,7 @@ impl Kernel {
             'e' => Ok(DN { dev: DevId::Env, node: Node::EnvRoot, path: None }),
             'd' => Ok(DN { dev: DevId::Dup, node: Node::DupRoot, path: None }),
             'M' => Ok(DN { dev: DevId::Ram, node: Node::Ram(self.ram_root.clone()), path: None }),
+            'p' => Ok(DN { dev: DevId::Proc, node: Node::Proc { kind: 0, pid: 0 }, path: None }),
             _ => {
                 let _ = pid;
                 Err(format!("unknown device #{}", letter))
@@ -501,6 +621,24 @@ impl Kernel {
                     }
                 }
                 Ok(None)
+            }
+            (DevId::Proc, Node::Proc { kind: 0, .. }) => {
+                let target = if name == "self" {
+                    Some(pid) // the WALKER, never the binder
+                } else {
+                    name.parse::<Pid>().ok().filter(|q| self.procs.contains_key(q))
+                };
+                Ok(target.map(|q| DN { dev: DevId::Proc, node: Node::Proc { kind: 1, pid: q }, path: None }))
+            }
+            (DevId::Proc, Node::Proc { kind: 1, pid: q }) => {
+                let k = match name {
+                    "ctl" => 2,
+                    "status" => 3,
+                    "note" => 4,
+                    "notepg" => 5,
+                    _ => return Ok(None),
+                };
+                Ok(Some(DN { dev: DevId::Proc, node: Node::Proc { kind: k, pid: *q }, path: None }))
             }
             _ => Ok(None),
         }
@@ -701,9 +839,14 @@ impl Kernel {
         }
     }
 
-    // read; may PARK (registering the reply sender) — the JS ctx.done shape
+    // read; may PARK (registering its completion) — the JS ctx.done shape
     fn dev_read(&mut self, chan: &ChanR, n: usize, off: u64, pid: Pid,
                 reply: &Sender<KReply>) -> Result<Option<Vec<u8>>, KErr> {
+        self.dev_read_kind(chan, n, off, pid, WaitKind::Reply { pid, tx: reply.clone() })
+    }
+
+    fn dev_read_kind(&mut self, chan: &ChanR, n: usize, off: u64, pid: Pid,
+                     kind: WaitKind) -> Result<Option<Vec<u8>>, KErr> {
         let (dev, node) = {
             let c = chan.borrow();
             (c.dev, c.node.clone())
@@ -748,7 +891,7 @@ impl Kernel {
                     let give: Vec<u8> = self.cons_buf.drain(0..take).collect();
                     Ok(Some(give))
                 } else {
-                    self.cons_parked.push(Waiter { n, reply: reply.clone() });
+                    self.cons_parked.push(Waiter { n, kind });
                     Ok(None)
                 }
             }
@@ -760,7 +903,7 @@ impl Kernel {
                 } else if pb.refs[d] == 0 {
                     Ok(Some(Vec::new())) // EOF
                 } else {
-                    pb.parked[d].push(Waiter { n, reply: reply.clone() });
+                    pb.parked[d].push(Waiter { n, kind });
                     Ok(None)
                 }
             }
@@ -788,6 +931,14 @@ impl Kernel {
                 }
                 Ok(Some(out))
             }
+            (DevId::Proc, Node::Proc { kind: 3, pid: q }) => {
+                if off > 0 {
+                    return Ok(Some(Vec::new()));
+                }
+                let Some(t) = self.procs.get(&q) else { return Ok(Some(Vec::new())) };
+                Ok(Some(format!("{} {} {} {}\n", t.pid, t.cred.euid, t.cred.ruid, t.ppid).into_bytes()))
+            }
+            (DevId::Proc, _) => Ok(Some(Vec::new())),
             (DevId::Union, Node::Union(list)) => {
                 // concatenated listings, still integral records
                 let mut skip = off as usize;
@@ -850,7 +1001,7 @@ impl Kernel {
         out
     }
 
-    fn pipe_serve(p: &PipeR, d: usize) {
+    fn pipe_serve(&mut self, p: &PipeR, d: usize) {
         loop {
             let fired = {
                 let mut pb = p.borrow_mut();
@@ -859,9 +1010,9 @@ impl Kernel {
                 }
                 let w = pb.parked[d].remove(0);
                 let give = if pb.nbytes[d] > 0 { Self::pipe_drain(&mut pb, d, w.n) } else { Vec::new() };
-                (w.reply, give)
+                (w.kind, give)
             };
-            let _ = fired.0.send(okd(fired.1.len() as i32, fired.1));
+            self.wake(fired.0, fired.1);
         }
     }
 
@@ -899,13 +1050,55 @@ impl Kernel {
                     pb.q[end].push_back(data.to_vec());
                     pb.nbytes[end] += data.len();
                 }
-                Self::pipe_serve(&p, end);
+                self.pipe_serve(&p, end);
                 Ok(data.len())
             }
             (DevId::Env, Node::EnvVar(name)) => {
                 let p = self.procs.get(&pid).ok_or("no proc")?;
                 p.env.borrow_mut().insert(name.clone(), data.to_vec());
                 Ok(data.len())
+            }
+            (DevId::Proc, Node::Proc { kind, pid: q }) if kind >= 2 => {
+                let cred = self.procs.get(&pid).ok_or("no proc")?.cred.clone();
+                let tcred = self.procs.get(&q).ok_or("process gone")?.cred.clone();
+                if cred.euid != self.eve && cred.euid != tcred.euid {
+                    return Err("not your process".into());
+                }
+                let text = String::from_utf8_lossy(data).trim().to_string();
+                match kind {
+                    4 => {
+                        self.postnote(q, &text);
+                        Ok(data.len())
+                    }
+                    5 => {
+                        // the group, writer excepted (pgrpnote's rule)
+                        let group = self.procs.get(&q).map(|t| t.note_group).unwrap_or(0);
+                        let targets: Vec<Pid> = self.procs.values()
+                            .filter(|t| t.note_group == group && t.pid != pid)
+                            .map(|t| t.pid).collect();
+                        for t in targets {
+                            self.postnote(t, &text);
+                        }
+                        Ok(data.len())
+                    }
+                    _ => {
+                        let mut it = text.split_whitespace();
+                        let (verb, arg) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
+                        if verb != "user" || arg.is_empty() {
+                            return Err(format!("bad ctl message '{}'", text));
+                        }
+                        let t = self.procs.get_mut(&q).ok_or("process gone")?;
+                        if cred.euid == self.eve {
+                            t.cred.euid = arg.into(); // rule 1: eve -> anyone
+                            t.cred.ruid = arg.into();
+                        } else if arg == t.cred.ruid {
+                            t.cred.euid = arg.into(); // rule 2: back to ruid
+                        } else {
+                            return Err(format!("'{}' may not become '{}'", cred.euid, arg));
+                        }
+                        Ok(data.len())
+                    }
+                }
             }
             _ => Err("write not supported here (v0)".into()),
         }
@@ -938,7 +1131,7 @@ impl Kernel {
             }
             let dry = p.borrow().refs[end] == 0;
             if dry {
-                Self::pipe_serve(&p, end); // wake readers: data then EOF
+                self.pipe_serve(&p, end); // wake readers: data then EOF
             }
         }
     }
@@ -1053,8 +1246,21 @@ impl Kernel {
         if self.verbose {
             eprintln!("[K sys pid={} trap={} a0={}]", pid, trap, a[0]);
         }
+        // an unhandled note kills at the syscall boundary (V7's timing)
+        if trap != t::EXITS {
+            let doomed = self.procs.get(&pid)
+                .map(|p| !p.notes.is_empty() && !p.has_handler)
+                .unwrap_or(false);
+            if doomed {
+                let msg = format!("note: {}", self.procs.get(&pid).unwrap().notes[0]);
+                let r = self.kill_proc(worker_pid, pid, &msg);
+                let _ = reply.send(r);
+                return;
+            }
+        }
         match self.dispatch(worker_pid, pid, trap, a, &tx, &reply) {
             Ok(Done::Now(r)) => {
+                let r = if trap == t::EXITS || trap == t::RFORK { r } else { self.stamp(pid, r) };
                 let _ = reply.send(r);
             }
             Ok(Done::Parked) => {}
@@ -1232,7 +1438,12 @@ impl Kernel {
                         }
                         Ok(Done::Now(okd(data.len() as i32, data)))
                     }
-                    None => Ok(Done::Parked), // stream devices; offsets don't apply
+                    None => {
+                        if let Some(p) = self.procs.get_mut(&pid) {
+                            p.inflight = Some(reply.clone());
+                        }
+                        Ok(Done::Parked) // stream devices; offsets don't apply
+                    }
                 }
             }
             PWRITE => {
@@ -1290,7 +1501,8 @@ impl Kernel {
                 }
                 let token = self.next_token;
                 self.next_token += 1;
-                self.sleep_waiters.insert(token, reply.clone());
+                self.timers.insert(token, TimerKind::Sleep(reply.clone()));
+                self.procs.get_mut(&pid).unwrap().inflight = Some(reply.clone());
                 self.effects.push(Effect::Timer { ms, token });
                 Ok(Done::Parked)
             }
@@ -1344,6 +1556,7 @@ impl Kernel {
                     return Ok(Done::Now(okd(n, bytes)));
                 }
                 p.await_reply = Some((reply.clone(), max));
+                p.inflight = Some(reply.clone());
                 Ok(Done::Parked)
             }
             LINK => {
@@ -1506,10 +1719,75 @@ impl Kernel {
                 }
                 Ok(Done::Now(ok(0)))
             }
-            NOTIFY | NOTED | ALARM | NOTEGET => {
-                // the note machinery is a later tranche; rc's suite needs it,
-                // the early conformance run does not
-                Err(format!("trap {} not in the native tranche yet", trap))
+            NOTIFY => {
+                self.procs.get_mut(&pid).ok_or("no proc")?.has_handler = a[0] != 0;
+                Ok(Done::Now(ok(0)))
+            }
+            NOTEGET => {
+                let p = self.procs.get_mut(&pid).ok_or("no proc")?;
+                if p.notes.is_empty() {
+                    return Ok(Done::Now(ok(0)));
+                }
+                let mut b = p.notes.remove(0).into_bytes();
+                let n = b.len() as i32;
+                b.push(0);
+                Ok(Done::Now(okd(n, b)))
+            }
+            NOTED => {
+                if a[0] != 0 {
+                    return Ok(Done::Now(self.kill_proc(worker_pid, pid, "note: unhandled"))); // NDFLT
+                }
+                Ok(Done::Now(ok(0))) // NCONT
+            }
+            ALARM => {
+                let p = self.procs.get_mut(&pid).ok_or("no proc")?;
+                if let Some(tok) = p.alarm_token.take() {
+                    self.timers.remove(&tok);
+                }
+                if a[0] > 0 {
+                    let token = self.next_token;
+                    self.next_token += 1;
+                    self.procs.get_mut(&pid).unwrap().alarm_token = Some(token);
+                    self.timers.insert(token, TimerKind::Alarm(pid));
+                    self.effects.push(Effect::Timer { ms: a[0] as u64, token });
+                }
+                Ok(Done::Now(ok(0)))
+            }
+            AREAD => {
+                let c = self.fdchk(pid, a[1])?;
+                let n = (a[2] as usize).min(TXSIZE - 4);
+                let tag = a[0] as u32;
+                let off = c.borrow().offset;
+                match self.dev_read_kind(&c, n, off, pid, WaitKind::Aread { pid, tag })? {
+                    Some(data) => {
+                        c.borrow_mut().offset += data.len() as u64;
+                        self.aread_done(pid, tag, data);
+                    }
+                    None => {}
+                }
+                Ok(Done::Now(ok(0)))
+            }
+            IOWAIT => {
+                let p = self.procs.get_mut(&pid).ok_or("no proc")?;
+                if let Some((tag, data)) = p.ioq.pop_front() {
+                    let mut out = tag.to_le_bytes().to_vec();
+                    out.extend_from_slice(&data);
+                    let n = out.len() as i32;
+                    return Ok(Done::Now(okd(n, out)));
+                }
+                let timer = if a[2] > 0 {
+                    let token = self.next_token;
+                    self.next_token += 1;
+                    self.timers.insert(token, TimerKind::Iowait(pid));
+                    self.effects.push(Effect::Timer { ms: a[2] as u64, token });
+                    Some(token)
+                } else {
+                    None
+                };
+                let p = self.procs.get_mut(&pid).unwrap();
+                p.iowait = Some((reply.clone(), timer));
+                p.inflight = Some(reply.clone());
+                Ok(Done::Parked)
             }
             _ => Err(format!("bad syscall {} (native v1)", trap)),
         }
@@ -1695,7 +1973,7 @@ impl Kernel {
         }
         self.procs.get_mut(&worker_pid).unwrap().borrower = Some(child);
         Ok(Done::Now(KReply {
-            ret: 0, aux: child as i32, data: Vec::new(), action: KAction::None, load: None,
+            ret: 0, aux: child as i32, data: Vec::new(), action: KAction::None, load: None, note_pending: false,
         }))
     }
 
@@ -1754,13 +2032,13 @@ impl Kernel {
             self.effects.push(Effect::Spawn { pid, image, argv, asy: None });
             return Ok(Done::Now(KReply {
                 ret: -1000, aux: pid as i32, data: Vec::new(),
-                action: KAction::ForkResume, load: None,
+                action: KAction::ForkResume, load: None, note_pending: false,
             }));
         }
         // exec-in-place: the reply hands this thread its new image
         Ok(Done::Now(KReply {
             ret: -1001, aux: 0, data: Vec::new(), action: KAction::ExecSelf,
-            load: Some((image, argv)),
+            load: Some((image, argv)), note_pending: false,
         }))
     }
 
@@ -1778,18 +2056,18 @@ impl Kernel {
             self.zombie(ppid, pid, &msg, nowait);
             return Ok(Done::Now(KReply {
                 ret: -1000, aux: pid as i32, data: Vec::new(),
-                action: KAction::ForkResume, load: None,
+                action: KAction::ForkResume, load: None, note_pending: false,
             }));
         }
         if pid == 1 {
             self.effects.push(Effect::Shutdown(if msg.is_empty() { 0 } else { 1 }));
             return Ok(Done::Now(KReply {
-                ret: -3000, aux: 0, data: Vec::new(), action: KAction::Die, load: None,
+                ret: -3000, aux: 0, data: Vec::new(), action: KAction::Die, load: None, note_pending: false,
             }));
         }
         self.zombie(ppid, pid, &msg, nowait);
         Ok(Done::Now(KReply {
-            ret: -2000, aux: 0, data: Vec::new(), action: KAction::Retire, load: None,
+            ret: -2000, aux: 0, data: Vec::new(), action: KAction::Retire, load: None, note_pending: false,
         }))
     }
 }
