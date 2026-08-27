@@ -4,15 +4,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-**ipnx-v12**: **a modified Plan 9 kernel hosted as an ordinary userspace process** on
-macOS, iPadOS and the browser; **9P as the only IPC**; **per-process namespaces**;
-**WebAssembly as the executable format**; and a **Research Unix Tenth Edition personality**
-alongside Plan 9's own userland.
+**ipnx-v12 is a reimagining of Unix** — the counterfactual next Research edition:
+**a modified Plan 9 kernel hosted as an ordinary userspace process** (browser, macOS,
+iPadOS, OCI, eventually hypervisor-direct); **9P as the only IPC**; **per-process
+namespaces**; **WebAssembly as the executable format**; and **personalities as libc
+dialects** over that one kernel — Plan 9's own userland (taken entire, by the curation
+principle), a WASI ABI (Go `wasip1`, CPython's wasi builds), and a **modern Unix
+personality** whose surface is derived by measurement against three benchmarks — git,
+CPython, Go — never adopted from POSIX. Three refusals: no POSIX-the-standard, no
+systemd (boot is rc plus a namespace file), no Linux/BSD sediment. Three adoptions:
+sockets won (the BSD API over `/net` files), UTF-8 won (its authors invented it),
+modern software must run. The V10 exhibit (`/v10/bin` cat and echo, TUHS tapes) stays
+as heritage; V10 completeness is not a goal (re-founded 2026-08-27, decision log).
 
-The thesis, from the README: *the Plan 9 authors' biggest mistake was not preserving Unix
-semantics, and it was a choice rather than an oversight — "Compatibility was not a
-requirement for the system" — which is what makes it undoable.* With V10 rather than POSIX,
-because every limitation APE confesses is a POSIX.1-1990 feature V10 does not have.
+The thesis, from the README: *the Plan 9 authors' pivot gave Unix its best kernel and
+broke compatibility in the same act — "Compatibility was not a requirement for the
+system" — a choice, which is what makes it undoable.* This project takes the kernel and
+undoes the break: their curation of the userland preserved above, Unix's interface
+restored as personalities, the kernel unable to bloat by construction.
 
 The architecture runs, boots to a shell, forks both ways, and speaks its protocol in
 both directions: `poc/` is a working slice (hosted kernel in Node and the browser from
@@ -182,9 +191,11 @@ evidence, not a fresh opinion.
 
 ## The PoC's shape (poc/)
 
-**The userspace objective**: real Plan 9 and real V10 userspace, compiled to wasm from
-their own trees, side by side — each on its own libc.a rewritten over the kernel
-(`libc/` is lib9; `v10/lib` + `v10/include` is libv10). Vendored sources under
+**The userspace objective** (re-founded 2026-08-27): the real Plan 9 userspace entire —
+the designers' curation of Unix — plus a measured modern personality proven by three
+benchmarks (git via a `libunix` source port, CPython and Go via the WASI ABI). The V10
+binaries stay as the exhibit, each userspace on its own libc over the kernel (`libc/`
+is lib9; `v10/lib` + `v10/include` is libv10; V10 growth is no longer a goal). Vendored sources under
 `poc/plan9/sys/` and `poc/v10/usr/` are **verbatim — never edit them**; each batch
 carries a NOTICE with provenance (Foundation MIT for Plan 9; Nokia's covenant for V10,
 with LICENSE's scope note kept in step). The shim headers beside them are ours. V10
@@ -271,7 +282,7 @@ shadow-stack region), `proccreate` collapsing to `threadcreate`, and the kernel'
 AREAD/IOWAIT letting a read park one thread while the scheduler runs the rest. The
 load-bearing rule, learned the hard way: a suspended coroutine's stack is dead
 storage, so channels register, stash send values, and deliver through off-stack
-per-thread slots (V10 growth waits for the parent project's ANSI conversion).
+per-thread slots (the V10 exhibit stays; its growth is no longer a goal).
 And on all of it, **the whole editor**: `win sam &` in the browser, samtest
 headlessly — sam forking samterm, initdraw finding the window, libframe's `x`
 strings, the reply's glyphs read back out of the raster. Next: `acme` via the same

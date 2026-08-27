@@ -12,7 +12,11 @@ recorded here as data, because that tree is deliberately **not** copied into thi
 
 Build a **modified Plan 9 kernel that runs as an ordinary userspace process** on macOS,
 iPadOS and in the browser, executing **WebAssembly** binaries in a per-process namespace,
-and add a **Research Unix Tenth Edition personality** on top of it later.
+and add a **Unix personality** on top. *(Re-founded 2026-08-27, decision log: the
+personality is a **modern** Unix surface — derived by measurement against git, CPython
+and Go, not adopted from POSIX — plus a WASI second ABI; the Tenth Edition personality
+became the V10 exhibit, kept but no longer grown. The kernel findings below are
+untouched by the re-founding.)*
 
 Four findings drive that, in the order they mattered:
 
@@ -30,8 +34,11 @@ Four findings drive that, in the order they mattered:
 
 **Do not use WASI as the system interface** (§6). Its filesystem proposal names this
 project's founding premise as a stated non-goal, and no WASI proposal at any phase covers
-processes. WASI's role is `wasi:cli/command` — argv, environ, exit, stdio — so a ported
-foreign program can find its arguments.
+processes. *(2026-08-27: WASI's role widened from `wasi:cli/command` to a full second
+guest ABI — `wasi_snapshot_preview1` as a syscall dialect over the same chans, preopens
+mapping onto per-process binds — which is what carries Go `wasip1` binaries and
+CPython's official wasi builds. The finding stands unchanged: a dialect is not an
+interface; the system interface is 9P.)*
 
 **`fork` was the one genuinely unsolved thing** (§5) and the design turns on
 `rfork(RFPROC|RFMEM)` — §5.2 now records the lazy path's resume mechanism and its bound

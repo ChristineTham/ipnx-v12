@@ -547,6 +547,55 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   Research ancestry AND not required infrastructure — discretionary rather
   than forbidden should `/net` and appetite ever coincide.
 
+- **(2026-08-27, the re-founding) v12 is a reimagining of Unix; the V10
+  completeness principle is dropped.** The project line's own teleology, stated
+  plainly: ipnx v10 was the resurrection, v11 the reckoning that resurrection is
+  a logical dead end, and **v12 is the counterfactual next edition** — Unix
+  written afresh on a modern stack, starting from where its creators finished
+  (Plan 9), undoing the compatibility break while honouring Plan 9 semantics,
+  and avoiding the nightmare of Linux, BSD, POSIX-the-standard and systemd.
+  Consequences, each superseding where it conflicts:
+  *The V10 completeness principle (earlier today) is superseded* — the goal was
+  never to resurrect a dead operating system, and by the same period-piece
+  logic that excluded mothra/abaco, much of V10 would fall anyway. The V10
+  personality becomes **the exhibit**: the TUHS-tape binaries stay in
+  `/v10/bin` as heritage, the parent repository remains the museum, V10's
+  *sensibility* — small, sharp, anti-bureaucratic — survives as taste rather
+  than checklist, and V10 growth is no longer a goal (the ANSI-conversion
+  dependency dissolves). Upas and the garden dispositions stand on their Plan 9
+  curation-side merits.
+  *The modern personality is curated by measurement, not adopted from POSIX*:
+  port the three benchmarks, record every interface they demand, and that
+  derived list — the 20% of POSIX that is actually Unix: fds, fork/exec/pipes,
+  dirents, errno, sockets, mmap-enough — is the specification, the
+  `docs/syscalls.md` method aimed at the modern surface. APE's lesson kept,
+  re-aimed: it failed by chasing the whole standard.
+  *WASI is elevated from footnote to second ABI*: `wasi_snapshot_preview1`
+  implemented as a syscall dialect over the same chans (preopens map onto
+  per-process binds; no second VFS, no second process model), which carries
+  **Go** (`GOOS=wasip1` — the gc runtime is never ported natively) and
+  **CPython's official wasi builds** essentially on arrival. The §6 finding is
+  unchanged: the system interface is 9P; a dialect is not an interface.
+  *`libunix` takes libv10's seat* as the native modern personality for source
+  ports, **git the flagship** — famously portable C, NO_MMAP fallbacks,
+  fork/exec-heavy, and local git needs no sockets: `git status` on a
+  namespace-mounted repository is the single most persuasive demo available. A
+  native CPython against libunix later exceeds the wasi build, because
+  `subprocess` needs the fork/exec this kernel genuinely has.
+  *Sockets win the API; files keep the implementation*: when `/net` lands, the
+  personality exposes BSD socket calls translating to dial strings against
+  `/net` files — the winner's interface over the elegant loser's architecture.
+  *Acceptance is operational*: v12 supports modern Unix when, measurably, stock
+  git does init/status/commit/log/diff on a real repository through the
+  namespace; CPython runs a script that forks a pipeline through `subprocess`;
+  and a Go `wasip1` binary passes its own tests under the shim. Three programs,
+  three dialects, one kernel.
+  *Sequencing*: the PoC still closes with acme; post-PoC the WASI shim jumps
+  the curation sweeps in priority (small kernel-adjacent work, two benchmark
+  languages as the prize), then libunix-and-git as the personality milestone,
+  sockets with `/net`. The README and CLAUDE.md carry the manifesto from this
+  date; RESEARCH's TL;DR is annotated in place.
+
 Evidence for each is in RESEARCH.md at the cited section.
 
 - **The kernel call list is derived** — [docs/syscalls.md](syscalls.md), call by call.
