@@ -95,7 +95,11 @@ and in Chrome.** Beside it all, TUHS-tape V10 `cat` and `echo` run unmodified in
 
 Next: `acme` closes the proof of concept; then the Rust kernel core and its shims; then
 the personalities in benchmark order — a Go binary, a Python interpreter, and `git
-status` on a real repository, each through its own dialect of the same kernel.
+status` on a real repository, each through its own dialect of the same kernel. Beyond,
+stated as aspiration: cloud-, AI-, and Kubernetes-native by the same move that absorbed
+everything else — S3 buckets, lambda functions, language models and pods as file trees
+in a namespace, and a per-agent namespace as the capability model the AI world is still
+groping toward.
 
 ## Standing on
 

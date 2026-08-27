@@ -626,6 +626,35 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   story, now policy. This is genuinely new and beyond Plan 9, and embraced as
   such.
 
+- **(2026-08-27) The native-to-the-new-world aspirations: cloud-native,
+  AI-native, Kubernetes-native — stated now, sequenced later.** All
+  aspirational, none blocking, each admitted only because it passes the one
+  test: *does it become a file tree in a namespace?* **S3 over 9P** — the
+  webfs pattern (Plan 9 served FTP and HTTP as file trees) aimed at a bucket:
+  objects as files, an `s3fs` guest behind `/net` or a mach service before
+  it, and the same treatment for any cloud API with nouns. **Lambdas both
+  ways** — functions as files (write payload, read response), and the deeper
+  symmetry: Lambda runs on Firecracker, and the cloud-machine rung IS the
+  Firecracker architecture — ipnx *as* the function is the already-specified
+  deployment form meeting its market. **Inside k8s** — mach-layer courtesies:
+  logs to stdout (cons already is), config as namespace scripts (decided),
+  SIGTERM as a note, probes as an exec'd rc script or a served health file,
+  PVCs as 9P mounts (the storage decision verbatim). **Hosting workloads** —
+  honesty draws the credible line: ipnx executes wasm, not Linux ELF, and
+  never pretends to host arbitrary Docker images; the honest form is **a
+  Kubernetes node for wasm workloads** — a CRI shim mapping pods onto
+  processes plus namespaces, a stronger isolation and composition story than
+  the existing wasm shims, because pods are namespace assembly and that is
+  this kernel's native verb. **AI-native** — models as files (`/mnt/llm`:
+  write prompt, read completion; sessions as directories) is the easy half;
+  the strong half is that **a per-agent namespace is the capability model the
+  agent world is groping toward**: an agent's whole visible world assembled
+  from binds and unions, nothing else reachable by construction, iostats as
+  the audit log, MCP-shaped tool access as "mount this tree". That one is not
+  ipnx keeping up with AI; it is ipnx holding the answer to agent sandboxing
+  that the ecosystem currently fakes with allowlists. Sequencing: post-PoC,
+  mostly post-`/net`, none ahead of the benchmarks.
+
 Evidence for each is in RESEARCH.md at the cited section.
 
 - **The kernel call list is derived** — [docs/syscalls.md](syscalls.md), call by call.
