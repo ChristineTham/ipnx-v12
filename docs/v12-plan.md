@@ -599,6 +599,33 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   sockets with `/net`. The README and CLAUDE.md carry the manifesto from this
   date; RESEARCH's TL;DR is annotated in place.
 
+- **(2026-08-27) The citizenship clause: ipnx lives in the wasm world in both
+  directions.** WASI-as-second-ABI was accommodation — the inbound direction,
+  foreign software running here. This clause adds citizenship: ipnx also
+  *provides into* the component ecosystem, a neighbour among Rust, Python, Go
+  and Node components rather than a walled garden that imports them. The
+  reasoning: the component model answers "how do many modules make one
+  program" — typed interfaces, linking — and lacks everything an operating
+  system contributes: processes, identity, names, mounts, runtime composition.
+  There is no `bind` in the component world; that is this kernel's entire
+  inventory. **The component model has linkers; it needs an operating
+  system.** Outbound, concretely: a **9P → `wasi:filesystem` bridge** serving
+  an ipnx namespace — unions, private binds, exportfs-imported trees — as a
+  foreign component's world, per-request namespaces for an ecosystem whose
+  preopens only gesture at them; **the Rust kernel core packaged as a wasm
+  component**, embeddable in other people's runtimes as a library OS (the
+  runwasi *hosting* verdict stands — watched, not targeted — providing is a
+  different act from being hosted); and **preview2 with `/net`**, sockets
+  arriving in WASI's timeline exactly where the network milestone sits. The
+  standing tension stays stated: WIT's typed interfaces and 9P's uniform
+  untyped one do not compose as system interfaces (RESEARCH §6, unchanged) —
+  the resolution is topological, **typed at the edges, files at the core** —
+  dialects and adapters at the boundary, nine-ish operations on names within.
+  Node needs no new posture: it cannot be a guest and was the first mach
+  layer — living beside the modern components is the architecture's origin
+  story, now policy. This is genuinely new and beyond Plan 9, and embraced as
+  such.
+
 Evidence for each is in RESEARCH.md at the cited section.
 
 - **The kernel call list is derived** — [docs/syscalls.md](syscalls.md), call by call.
