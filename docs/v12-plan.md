@@ -835,8 +835,12 @@ already moving (same day): **the WASI second ABI runs** — `wasi1.mjs`
 implements `wasi_snapshot_preview1` over the same mailbox with fd 3, the one
 preopen, as the namespace root; a wasi-libc citizen and a **real Go binary**
 (`GOOS=wasip1`, go1.25.6) read the motd, list directories, round-trip files
-and sleep on `poll_oneoff`, on both hosts — **128 tests**. The first
-benchmark's toolchain speaks to the kernel; CPython's wasi build is next.
+and sleep on `poll_oneoff`, on both hosts — and **REAL CPython 3.14.7** (the
+wasi build, 30.5MB) boots by landmark, imports its stdlib from a 21-file
+measured subset (`wasi/pylib.txt` — everything else is frozen into the
+binary), runs a script out of the namespace and round-trips json — **130
+tests**. Two of the three benchmark runtimes speak to the kernel; git's
+`libunix` port is the third.
 
 ## Sources
 

@@ -48,9 +48,10 @@ export function makeWasi(ctx) {
 
   // ---- errors: errstr text -> errno number ----
   function kerrno() {
-    const n = sysTx(T.ERRSTR, [], 0, NOCOPY, 128, 0, 0);
+    const n = sysTx(T.ERRSTR, [], 0, 128, 0, 0, 0);   // a1 is errstr(2)'s cap
     // slice, not subarray: a browser TextDecoder refuses SAB-backed views
     const msg = new TextDecoder().decode(txView().slice(0, Math.max(n, 0)));
+    if (globalThis.process?.env?.KWASI) console.error(`[kerrno n=${n} msg=${JSON.stringify(msg)}]`);
     if (/does not exist|not found/.test(msg)) return E.noent;
     if (/exists|in use/.test(msg)) return E.exist;
     if (/permission|denied/.test(msg)) return E.acces;
@@ -58,6 +59,7 @@ export function makeWasi(ctx) {
     if (/not a directory/.test(msg)) return E.notdir;
     if (/not empty/.test(msg)) return E.notempty;
     if (/bad fd|fd out of range|not open/.test(msg)) return E.badf;
+    if (/not a symlink|readlink not supported/.test(msg)) return E.inval;  // POSIX callers probe with readlink
     return E.io;
   }
 
@@ -239,6 +241,8 @@ export function makeWasi(ctx) {
       fds.set(to, f); fds.delete(from);
       return E.success;
     },
+    fd_filestat_set_size: () => E.notsup,           // ftruncate: no wstat-length path yet
+    fd_filestat_set_times: () => E.success,         // utimes: accepted, not recorded
     fd_sync: () => E.success,
     fd_datasync: () => E.success,
     fd_advise: () => E.success,
@@ -309,7 +313,11 @@ export function makeWasi(ctx) {
       return E.success;
     },
 
-    // ---- directories: 9P records in, wasi dirents out ----
+    // ---- directories: 9P records in, wasi dirents out. The directory is
+    // snapshotted whole on the first read (one continuous enumeration at
+    // the offsets the kernel itself returned) and served by INDEX cookie —
+    // byte-offset cookies across separate enumerations proved fragile, and
+    // a directory can change between reads (pyc writes, measured). ----
     fd_readdir: (fd, bufP, buflen, cookie, outP) => {
       const f = fds.get(fd);
       if (!f || !f.isdir) return E.notdir;
@@ -319,36 +327,50 @@ export function makeWasi(ctx) {
         if (kfd < 0) return kerrno();
         f.kfd = kfd;
       }
-      let pos = BigInt.asUintN(64, cookie);
-      let used = 0;
-      const enc = new TextEncoder();
-      outer: for (;;) {
-        const n = sysTx(T.PREAD, [], kfd, NOCOPY, 8192,
-          Number(pos & 0xffffffffn) | 0, Number(pos >> 32n) | 0);
-        if (n < 0) return kerrno();
-        if (n === 0) break;
-        const chunk = txView().slice(0, n);
-        let off = 0;
-        while (off + 2 <= n) {
-          const st = parse9(chunk, off);
-          const name = enc.encode(st.name);
-          const need = 24 + name.length;
-          if (used + need > buflen) {                // partial dirent signals "full"
-            if (used === 0) { used = buflen; }
-            break outer;
+      let idx = Number(BigInt.asUintN(64, cookie));
+      if (idx === 0 || !f.dirents) {
+        f.dirents = [];
+        let pos = 0;
+        for (;;) {
+          const n = sysTx(T.PREAD, [], kfd, NOCOPY, TXSIZE, pos | 0, 0);
+          if (globalThis.process?.env?.KWASI) console.error(`[snap pos=${pos} n=${n}]`);
+          if (n < 0) return kerrno();
+          if (n === 0) break;
+          const chunk = txView().slice(0, n);
+          let off = 0;
+          while (off + 2 <= n) {
+            const st = parse9(chunk, off);
+            f.dirents.push({ name: st.name, qtype: st.qtype });
+            off += st.size;
           }
-          const d = dv();
-          d.setBigUint64(bufP + used, pos + BigInt(off + st.size), true);  // d_next
-          d.setBigUint64(bufP + used + 8, 0n, true);                       // d_ino
-          d.setUint32(bufP + used + 16, name.length, true);
-          d.setUint8(bufP + used + 20, ftype(st.qtype, "/"));
-          m8().set(name, bufP + used + 24);
-          used += need;
-          off += st.size;
+          pos += n;
         }
-        pos += BigInt(off);
       }
-      dv().setUint32(outP, used, true);
+      const d = dv();
+      const enc = new TextEncoder();
+      let used = 0;
+      for (; idx < f.dirents.length; idx++) {
+        const e = f.dirents[idx];
+        const name = enc.encode(e.name);
+        const need = 24 + name.length;
+        const rec = new Uint8Array(need);
+        const rv = new DataView(rec.buffer);
+        rv.setBigUint64(0, BigInt(idx + 1), true);   // d_next: index cookie
+        rv.setBigUint64(8, 0n, true);
+        rv.setUint32(16, name.length, true);
+        rv.setUint8(20, ftype(e.qtype, "/"));
+        rec.set(name, 24);
+        // preview1's contract: bufused < buflen means END OF DIRECTORY, so
+        // a dirent that doesn't fit is written TRUNCATED to fill the buffer
+        // exactly — the caller resumes from the last whole entry's cookie
+        // (measured: breaking early read as exhaustion at entry ~118/185,
+        // and importlib's cached scan then swore /lib had no re)
+        const take = Math.min(need, buflen - used);
+        m8().set(rec.subarray(0, take), bufP + used);
+        used += take;
+        if (take < need) break;
+      }
+      d.setUint32(outP, used, true);
       return E.success;
     },
 
@@ -371,6 +393,7 @@ export function makeWasi(ctx) {
         kfd = sysTx(T.OPEN, [path], 0, mode, 0, 0, 0);
       }
       if (kfd < 0) return kerrno();
+      if (globalThis.process?.env?.KWASI) console.error(`[open ${path}]`);
       let isdir = false;
       const sn = sysTx(T.FSTAT, [], kfd, NOCOPY, 4096, 0, 0);
       if (sn >= 0) isdir = !!(parse9(txView().slice(0, sn), 0).qtype & 0x80);

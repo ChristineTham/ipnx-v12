@@ -2,3 +2,5 @@
 poc/build/
 poc/rootfs/bin/
 poc/rootfs/v10/
+poc/rootfs/lib/python3.14/
+poc/rootfs/tmp/

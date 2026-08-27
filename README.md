@@ -96,18 +96,19 @@ process keeps scheduling, wire 9P in both directions, a uid model enforcing real
 permissions — the one item Plan 9's own compatibility layer called impossible — and
 hard links and symlinks minted as this edition's own wire types. And the first
 proof that the modern world is welcome: **a real Go binary — compiled with
-ordinary `GOOS=wasip1 go build`, knowing nothing of Plan 9 — reads files, lists
-directories and sleeps on timers against this kernel**, through a WASI shim whose
-single preopened directory is the process's namespace root. **128 acceptance
-tests, green on Node and in Chrome. The proof of concept is complete.** Beside it
+ordinary `GOOS=wasip1 go build` — and real CPython 3.14, both knowing nothing of
+Plan 9, read files, list directories, sleep on timers and run scripts against
+this kernel**, through a WASI shim whose single preopened directory is the
+process's namespace root. **130 acceptance tests, green on Node and in Chrome.
+The proof of concept is complete.** Beside it
 all, TUHS-tape V10 `cat` and `echo` run unmodified in `/v10/bin`: the exhibit that
 started the journey, kept in the room.
 
 Next: a Rust kernel core with per-platform
 shims — macOS, iPadOS, a `FROM scratch` OCI container, the microVM. Then the
-personalities, in benchmark order: the Go binary under the WASI shim already
-runs — next a Python interpreter that can actually `fork`, and `git status` on a
-real repository. Beyond,
+personalities, in benchmark order: the Go binary and the Python interpreter
+under the WASI shim already run — next teaching Python to actually `fork`, and
+`git status` on a real repository. Beyond,
 stated as aspiration and admitted by one test — *does it become a file tree in a
 namespace?* — the cloud and the cluster: your S3 bucket is a directory, the model is a
 file you write prompts into, the pod is a namespace, and the function is this machine,

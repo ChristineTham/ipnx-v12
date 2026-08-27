@@ -249,6 +249,19 @@ gochild(void *v)
 	exits("exec");
 }
 
+static void
+pychild(void *v)
+{
+	char *av[] = { "python", "/tmp/pytest.py", nil };
+
+	USED(v);
+	dup(wasipipe[1], 1);
+	close(wasipipe[0]);
+	close(wasipipe[1]);
+	exec("/bin/python", av);
+	exits("exec");
+}
+
 /* drain a pipe until the writer closes */
 static int
 readall(int fd, char *buf, int cap)
@@ -638,6 +651,24 @@ main(int argc, char *argv[])
 		   strstr(out, "/etc has") != nil && strstr(out, "has 0 entries") == nil &&
 		   strstr(out, "readback: written by go") != nil,
 		   "WASI ABI: Go slept on poll_oneoff, listed /etc, round-tripped a file");
+
+		/* and REAL CPython — the second benchmark's interpreter, running
+		 * a script file out of the namespace, its stdlib subset measured
+		 * into the rootfs (wasi/pylib.txt) */
+		pipe(wasipipe);
+		pid = procrfork(RFFDG, pychild, nil);
+		close(wasipipe[1]);
+		readall(wasipipe[0], out, sizeof out);
+		close(wasipipe[0]);
+		n = await(buf, sizeof buf);
+		ok(n > 0 && strstr(buf, "''") != nil &&
+		   strstr(out, "script ran on wasi 3.14") != nil &&
+		   strstr(out, "root: bin etc lib") != nil,
+		   "WASI ABI: REAL CPython 3.14 booted and found its stdlib through the namespace");
+		ok(strstr(out, "readback: written by python") != nil &&
+		   strstr(out, "json: plan9 42") != nil &&
+		   strstr(out, "sum: 4950") != nil,
+		   "WASI ABI: Python imported json, round-tripped a file, computed");
 	}
 
 	/* The asyncify path: forktest is a transformed binary whose bare

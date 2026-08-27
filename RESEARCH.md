@@ -947,6 +947,43 @@ And the WASI second ABI, landing the same day the PoC closed, measured six:
   shim didn't have: args, environ (empty), monotonic clock, `random_get`,
   `poll_oneoff`, and the fd/path families.
 
+And CPython — the second benchmark's interpreter, Brett Cannon's wasi build of
+3.14.7, 30,522,756 bytes — landed the same day and measured five more:
+
+- **preview1's `fd_readdir` signals end-of-directory by `bufused < buflen`** —
+  so a shim that stops at the last whole dirent reads as exhaustion. Measured:
+  `os.listdir` of a 185-entry directory returned 118, and importlib's CACHED
+  FileFinder scan then swore the stdlib had no `re` — zero opens, module not
+  found, while smaller directories worked perfectly. The contract wants the
+  final dirent written TRUNCATED so the buffer fills exactly; the caller
+  resumes from the last whole entry's cookie.
+- **Byte-offset cookies across separate directory enumerations are fragile**
+  (the directory can change between reads — CPython writes `__pycache__`
+  entries mid-scan, measured). The shim now snapshots the whole directory on
+  first read — one continuous enumeration at the offsets the kernel itself
+  returned — and serves dirents by index cookie.
+- **The stdlib closure is 21 files** (`wasi/pylib.txt`): os + json + re and
+  re's cascade (enum, functools, operator, keyword, types, reprlib, copyreg,
+  collections, encodings×3); everything else CPython boots with is frozen
+  into python.wasm. Two measurement lessons carried in the manifest: getpath
+  STATS `os.py` as the prefix landmark without ever opening it, and importlib
+  prefers shipped `__pycache__` pycs over sources — an open log must
+  normalise pyc loads back to their source names or undercount.
+- **POSIX callers probe with `readlink` and expect EINVAL** for a
+  non-symlink; the kernel's "not a symlink" errstr maps there, not to EIO —
+  getpath treats EIO as fatal and EINVAL as "not a venv".
+- **The shim's own bug class: errstr truncation breaks errno regexes.** An
+  argument in the wrong mailbox slot capped errstr at 26 bytes;
+  `"'/pyvenv.cfg' does not exi"` failed the `/does not exist/` match, mapped
+  to EIO, and CPython died at line 355 of frozen getpath — three layers of
+  misdirection from one transposed parameter. errno mapping wants the whole
+  message.
+
+The run itself: `python /tmp/pytest.py` boots, finds its stdlib through the
+namespace by landmark, imports json (through `re`, compiled by the real
+`_compiler` chain), round-trips a file, and writes `__pycache__` pycs whose
+finalisation exercises `path_rename` — V10's link+remove — in passing.
+
 ---
 
 ## 10. Licensing

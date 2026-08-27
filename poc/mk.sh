@@ -309,6 +309,23 @@ echo "  bin/wasitest  $(wc -c < rootfs/bin/wasitest | tr -d ' ') bytes (wasi-lib
 (cd wasi/gotest && GOOS=wasip1 GOARCH=wasm go build -trimpath -o ../../rootfs/bin/gotest .)
 echo "  bin/gotest  $(wc -c < rootfs/bin/gotest | tr -d ' ') bytes (REAL Go, wasip1)"
 
+# The third citizen: REAL CPython, Brett Cannon's wasi_sdk build of 3.14.7,
+# cached in build/ (a 26MB download, once). The stdlib subset is measured,
+# not guessed: wasi/pylib.txt is the closure the acceptance script opens.
+PYZIP=build/python-wasi-3.14.7.zip
+if [ ! -f "$PYZIP" ]; then
+  curl -fsSL -o "$PYZIP" https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.14.7/python-3.14.7-wasi_sdk-24.zip
+fi
+unzip -o -q "$PYZIP" python.wasm -d build/pyx
+cp build/pyx/python.wasm rootfs/bin/python
+mkdir -p rootfs/lib/python3.14/lib-dynload rootfs/lib/python3.14/site-packages
+grep -v '^#' wasi/pylib.txt | while read -r f; do
+  mkdir -p "rootfs/$(dirname "$f")"
+  unzip -o -q "$PYZIP" "$f" -d rootfs/
+done
+cp wasi/pytest.py rootfs/tmp/pytest.py
+echo "  bin/python  $(wc -c < rootfs/bin/python | tr -d ' ') bytes (REAL CPython 3.14.7, wasi)"
+
 # pack the rootfs for the browser host (fetched by browser/main.mjs)
 node -e '
 const fs = require("fs"), p = require("path");

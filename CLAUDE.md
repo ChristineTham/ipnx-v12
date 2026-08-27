@@ -57,15 +57,17 @@ door opened (`strtod`/`fltfmt` verbatim), and `#s` — srv(3), a posted fd's
 channel kept alive by name — as the kernel's last PoC device — and **the WASI
 second ABI runs**: `supervisor/wasi1.mjs` is `wasi_snapshot_preview1` over the
 same mailbox, fd 3's one preopen is the namespace root, and a wasi-libc
-citizen plus a **real Go binary** (`GOOS=wasip1`) run files, directories and
-timers against the kernel — 128 acceptance tests). Everything else is design
-documents.
+citizen plus a **real Go binary** (`GOOS=wasip1`) plus **REAL CPython 3.14**
+(the wasi build, its stdlib a measured 21-file subset over what is frozen
+in-binary) run files, directories, timers and json against the kernel — 130
+acceptance tests). Everything else is design documents.
 
 ## Commands
 
 Build the guest binaries (requires wasi-sdk at `~/.local/opt/wasi-sdk`, binaryen's
 wasm-opt at `~/.local/opt/binaryen` — override with `WASI_SDK`/`BINARYEN` — the
-host's `bison` for vendored yacc grammars, and `go` for the wasip1 citizen;
+host's `bison` for vendored yacc grammars, `go` for the wasip1 citizen, and
+network once for the CPython wasi build (a 26MB download cached in `build/`);
 Apple's clang has no wasm backend). `mk.sh`'s
 `ASYNCIFY` list names the binaries that may bare-fork. Compiling vendored libc source
 REQUIRES `-fno-builtin`: clang's libcall recogniser otherwise rewrites strlen's own body
@@ -81,7 +83,7 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints 128 PASS lines,
+Boot the kernel — init (pid 1) runs the acceptance tests, prints 130 PASS lines,
 exits 0:
 
 ```bash
@@ -273,7 +275,7 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (2026-08-27)
 
-128 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
+130 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
 (`node poc/serve.mjs` → `/browser/`, measured in Chrome 148); `?i` boots to **the real
 Plan 9 rc** — pipelines, subshells, `` `{...} `` captures, `fn`, `while`, `switch` — and
 `win rc &` opens a shell window that prompts because rc's own `Isatty` finds
@@ -311,6 +313,11 @@ into the transfer SAB; the preopen is the namespace root; rename is
 link+remove, V10's rule), and both foreign citizens — wasi-libc's wasitest
 and a real `GOOS=wasip1` Go binary — passed on the first Node run. The one
 browser divergence was §5.3's TextDecoder-vs-SAB rule recurring: decode only
-copies. Next: CPython's wasi build, then the native host — **macOS first,
-then iPad** (the user's platform order) — as the Rust core with per-platform
-shims (decisions of 2026-08-27, below).
+copies. **And REAL CPython 3.14.7 runs** — the wasi build boots by landmark
+stat, imports through a measured 21-file stdlib subset (wasi/pylib.txt; the
+rest is frozen in-binary), and its pyc writes exercise path_rename live. The
+carried lesson: preview1's fd_readdir ends the directory at bufused <
+buflen, so the final dirent must ship truncated (the 118-of-185 listing that
+convinced importlib the stdlib had no `re`). Next: git via libunix, then the
+native host — **macOS first, then iPad** (the user's platform order) — as
+the Rust core with per-platform shims (decisions of 2026-08-27, below).
