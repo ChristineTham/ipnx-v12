@@ -367,7 +367,7 @@ answers, not exclusive:
 Taking asyncify on both buys uniformity at ~2× on binaries that natively would not need it.
 Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it belongs.
 
-## Decisions (2026-08-26; native-host, OCI, storage, toolchain and userland-curation decisions added 2026-08-27)
+## Decisions (2026-08-26; native-host, OCI, storage, toolchain, userland-curation and V10-completeness decisions added 2026-08-27)
 
 - **(2026-08-27) The native host is a Rust kernel core plus per-platform embedding
   shims — after the PoC completes.** The kernel never executes guest code, so the
@@ -514,6 +514,38 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   swappable. Port-time rule as ever: verify contents against the 4e tree and
   measure before claiming (the games list, cron's exact shape, tarfs's
   provenance).
+
+- **(2026-08-27) The completeness principle for V10 — and upas resequenced, not
+  refused.** Refusal and sequencing are different acts, and only the second is
+  ever applied to software with Research ancestry. Stated for the specimen side
+  as the curation principle is stated for `/bin`: **the V10 personality aims at
+  the whole Tenth Edition userland; nothing is refused; the only exceptions are
+  dead substrates, represented by their living descendants** — Datakit (its
+  role passes to `/net` over IP, the `dial` abstraction preserved) and the Blit
+  hardware (whose interactive layer survives as its own descendants: sam, and
+  the mux lineage the window server implements; the Blit was optional
+  equipment, so the text userland is the complete common experience). Under
+  this principle **upas is in on both sides** — Presotto's, born in Research
+  Unix, the later Research editions' mail system, carried by its author into
+  Plan 9, and by design small programs over mailbox files rather than a
+  monolith. Decomposed by dependency: the **local core** (marshal, mailbox
+  reading, local delivery, aliases) needs no network and is meaningful now —
+  ipnx is already multi-user; Plan 9's compiles on the open toolchain door,
+  V10's follows the ANSI conversion, side by side per the cat-and-echo
+  pattern. **Transport** (smtp, qer/runq) parks behind `/net` beside cron's
+  dial-out half. **upas/fs** — mail as a 9P filesystem — rides lib9p and
+  libthread, and is the most this-system-shaped piece in the garden. The
+  garden sorts by the same ancestry test: in — `faces` (vismon's descendant),
+  **`proof`** (the troff previewer, Blit-era roots — typeset preview in a
+  window without ghostscript, closing the document factory's loop visually),
+  `calendar`, `news`, the clock-tier trinkets under the games precedent;
+  sequenced behind absent substrate — `page` (ghostscript), `vt`/`con`
+  (`/net`), `juke`/audio (no devaudio in any mach layer yet); out on
+  principled grounds — `mothra`/`abaco` fail both tests (the web postdates
+  V10: no ancestry to curate, no completeness claim) and carry the heaviest
+  dependency chain in the tree. The never-list's basis is henceforth: no
+  Research ancestry AND not required infrastructure — discretionary rather
+  than forbidden should `/net` and appetite ever coincide.
 
 Evidence for each is in RESEARCH.md at the cited section.
 
