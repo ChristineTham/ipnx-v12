@@ -9,6 +9,7 @@
 // tests; cons text is host-rendered (no fonts in draw yet); dir reads and
 // stats are absent.
 import { sbytes, bstr, concat } from "./bytes.mjs";
+import { marshalStat } from "./stat9.mjs";
 import * as D from "./draw.mjs";
 
 const derr = (m) => Object.assign(new Error(m), { guest: true });
@@ -60,7 +61,7 @@ export function makeWsys(hostRef) {
       }
       if (n.kind === "windir") {
         const { win } = n;
-        if (["cons", "mouse", "wctl", "winid", "label", "rgb"].includes(name))
+        if (["cons", "mouse", "wctl", "winid", "label", "rgb", "consctl", "cursor"].includes(name))
           return { kind: name, win };
         if (name === "draw") return { kind: "drawdir", win };
         return null;
@@ -131,20 +132,42 @@ export function makeWsys(hostRef) {
         hostRef.host.winLabel?.(win.wid, win.label);
         return data.length;
       case "wctl": {
-        const t = bstr(data).trim().split(/\s+/);
+        const raw = bstr(data);
+        if (raw.startsWith("type ")) {               // keyboard injection: tests drive sam
+          win.consbuf = concat([win.consbuf, new Uint8Array(data.slice(5))]);
+          if (typeof process !== "undefined" && process.env.KDRAW)
+            console.error(`[type fed ${data.length - 5} bytes, parked readers: ${win.consparked.length}]`);
+          serveCons(win);
+          return data.length;
+        }
+        const t = raw.trim().split(/\s+/);
         if (t[0] === "move" && t.length === 3) { win.x = +t[1]; win.y = +t[2]; }
         else if (t[0] === "resize" && t.length === 3) resize(win, +t[1], +t[2]);
         else if (t[0] === "delete") del(win);
-        else throw derr(`wctl: bad message '${bstr(data).trim()}'`);
+        else throw derr(`wctl: bad message '${raw.trim()}'`);
         hostRef.host.winGeom?.(win.wid, win.x, win.y, win.w, win.h);
         return data.length;
       }
       case "drawdata": return drawmsgs(win, n.conn, new Uint8Array(data));
+      case "consctl": return data.length;             // rawon/rawoff: raw is the default
+      case "cursor": return data.length;              // cursor shapes: host policy, v0 ignores
       default: throw derr(`no write on ${n.kind}`);
       }
     },
     clunk: () => {},
-    stat: () => { throw derr("no stat on wsys files (v0)"); },
+    stat: (n) => {
+      const dir = ["root", "windir", "drawdir", "conndir"].includes(n.kind);
+      const names = { root: "wsys", windir: String(n.win?.wid ?? 0), drawdir: "draw",
+        conndir: String(n.conn?.id ?? 0), drawnew: "new", drawctl: "ctl",
+        drawdata: "data", drawrefresh: "refresh" };
+      return marshalStat({
+        name: names[n.kind] ?? n.kind,
+        qtype: dir ? 0x80 : 0,
+        qpath: (n.win?.wid ?? 0) * 1024 + (n.conn?.id ?? 0) * 16 + (n.kind.length),
+        mode: ((dir ? 0x80000000 | 0o555 : 0o666) >>> 0),
+        length: n.kind === "rgb" ? n.win.img.back.data.length : 0,
+      });
+    },
     len: (n) => (n.kind === "rgb" ? n.win.img.back.data.length : 0),
     // the host half calls in through these:
     mouse: (wid, x, y, buttons) => {
@@ -185,8 +208,10 @@ export function makeWsys(hostRef) {
       return i;
     };
     let o = 0;
+    const oplog = [];
     while (o < b.length) {
       const op = String.fromCharCode(b[o]);
+      if (typeof process !== "undefined" && process.env.KDRAW) oplog.push(op);
       switch (op) {
       case "b": {                          // id[4] screen[4] refresh[1] chan[4] repl[1] r[16] clipr[16] color[4]
         const id = u32(o + 1), screenid = u32(o + 5);
@@ -264,23 +289,35 @@ export function makeWsys(hostRef) {
         o += 37;
         break;
       }
-      case "s": {                          // dst[4] src[4] font[4] p[8] clipr[16] sp[8] ni[2] ni*index[2]
+      case "s": case "x": {                // dst[4] src[4] font[4] p[8] clipr[16] sp[8] [x: bg[4] bgp[8]] ni[2] ni*index[2]
         const dst = img(u32(o + 1)), src = img(u32(o + 5)), fontim = img(u32(o + 9));
-        if (!fontim.font) throw derr("draw: s needs a font image");
+        if (!fontim.font) throw derr(`draw: ${op} needs a font image`);
         let x = s32(o + 13);
         const y = s32(o + 17);
         const sp = [s32(o + 37), s32(o + 41)];
         const ni = v.getUint16(o + 45, true);
+        let base = o + 47, bg = null, bgp = null;
+        if (op === "x") {                  // string with background: libframe's path
+          bg = img(u32(o + 47));
+          bgp = [s32(o + 51), s32(o + 55)];
+          base = o + 59;
+        }
         for (let k = 0; k < ni; k++) {
-          const slot = fontim.font.slots[v.getUint16(o + 47 + 2 * k, true)];
+          const slot = fontim.font.slots[v.getUint16(base + 2 * k, true)];
           if (slot) {
+            if (bg) {
+              D.drawOp(dst, [x, y - fontim.font.ascent, x + slot.width,
+                y - fontim.font.ascent + fontim.h], bg, bgp);
+              bgp = [bgp[0] + slot.width, bgp[1]];
+            }
             D.glyph(dst, [x + slot.left, y - fontim.font.ascent], fontim, slot.r, src, sp);
             x += slot.width;
           }
         }
-        o += 47 + 2 * ni;
+        o = base + 2 * ni;
         break;
       }
+      case "O": o += 2; break;             // set compositing op: S-over-D is all v0 does
       case "v":
         hostRef.host.winPresent?.(win.wid, win.w, win.h, win.img.back.data);
         o += 1;
@@ -288,6 +325,8 @@ export function makeWsys(hostRef) {
       default: throw derr(`draw: message '${op}' not implemented (have b d f L e E y i l s v c A F t)`);
       }
     }
+    if (typeof process !== "undefined" && process.env.KDRAW && oplog.length)
+      console.error(`[draw ${oplog.join("")}]`);
     return b.length;
   }
 

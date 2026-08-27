@@ -726,7 +726,7 @@ async function dispatch(host, self, trap, a0, a1, a2, a3, a4) {
       }
     };
     const ctx = { cred: self.cred, pid: self.pid, done: fin };
-    Promise.resolve(c.dev.read(c.node, n, -1, ctx)).then((d) => { if (d !== undefined) fin(d); },
+    Promise.resolve(c.dev.read(c.node, n, c.offset, ctx)).then((d) => { if (d !== undefined) fin(d); },
       () => fin(new Uint8Array(0)));
     return 0;
   }

@@ -119,11 +119,16 @@ $LD build/crt9.o build/lib9-rc.o build/lib9p.o build/draw9.o \
   -o rootfs/bin/rc.tmp && mv rootfs/bin/rc.tmp rootfs/bin/rc
 echo "  bin/rc  $(wc -c < rootfs/bin/rc | tr -d ' ') bytes (REAL rc, asyncified)"
 
-# the real libdraw and libframe, as archives; draw clients link them
+# the real libdraw and libframe, as archives; draw clients link them.
+# stringbg.c writes `int op` against draw.h's `Drawop op` — kencc shrugged,
+# clang errors — so the build derives the reconciled file, as with io.c.
+sed 's/, int op)/, Drawop op)/' plan9/sys/src/libdraw/stringbg.c > build/libdraw-stringbg.c
 : > build/p9draw.list
 for c in plan9/sys/src/libdraw/*.c plan9/sys/src/libframe/*.c; do
   b=$(basename "$c" .c)
-  $P9CC -c "$c" -o "build/p9-draw-$b.o"
+  src="$c"
+  case "$b" in stringbg) src=build/libdraw-stringbg.c;; esac
+  $P9CC -c "$src" -o "build/p9-draw-$b.o"
   echo "build/p9-draw-$b.o" >> build/p9draw.list
 done
 "$SDK/bin/llvm-ar" crs build/libdraw.a $(cat build/p9draw.list)
@@ -168,6 +173,28 @@ $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/threadtest.o bui
   --enable-nontrapping-float-to-int \
   -o rootfs/bin/threadtest.tmp && mv rootfs/bin/threadtest.tmp rootfs/bin/threadtest
 echo "  bin/threadtest  $(wc -c < rootfs/bin/threadtest | tr -d ' ') bytes (libthread, asyncified)"
+
+# samterm: the real editor's screen — libframe over libdraw over libthread,
+# spoken to by sam over the mesg protocol; sam spawns /bin/aux/samterm
+mkdir -p rootfs/bin/aux
+# io.c's one `&mousectl->Mouse` names an unnamed member — kencc's idiom,
+# GCC's -fplan9-extensions, but not clang's. The build derives an
+# equivalent file (the member is at offset 0), as bison derives grammars.
+sed 's/&mousectl->Mouse/(Mouse*)mousectl/' plan9/sys/src/cmd/samterm/io.c > build/samterm-io.c
+for c in plan9/sys/src/cmd/samterm/*.c; do
+  b=$(basename "$c" .c)
+  src="$c"
+  case "$b" in io) src=build/samterm-io.c;; esac
+  $P9CC -fshort-wchar -Iplan9/sys/src/cmd/samterm -Iplan9/sys/src/cmd/sam -c "$src" -o "build/p9-samterm-$b.o"
+done
+$P9CC -c libc/mousekbd.c -o build/mousekbd.o
+$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/p9-samterm-*.o build/libthread.o build/mousekbd.o build/p9-plumb-mesg.o build/p9-plumb-sendtext.o build/libdraw.a build/libp9.a -o rootfs/bin/aux/samterm
+"$BINARYEN/bin/wasm-opt" rootfs/bin/aux/samterm \
+  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj,env.tsave,env.tjump -O2 \
+  --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
+  --enable-nontrapping-float-to-int \
+  -o rootfs/bin/aux/samterm.tmp && mv rootfs/bin/aux/samterm.tmp rootfs/bin/aux/samterm
+echo "  bin/aux/samterm  $(wc -c < rootfs/bin/aux/samterm | tr -d ' ') bytes (REAL samterm, asyncified)"
 
 # real Plan 9 sources (poc/plan9/NOTICE): compiled unmodified, void main,
 # through the shim headers — these SUPERSEDE any same-named PoC command

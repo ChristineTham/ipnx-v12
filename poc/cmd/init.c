@@ -199,6 +199,16 @@ threadtestchild(void *v)
 	exits("exec");
 }
 
+static void
+samtestchild(void *v)
+{
+	char *av[] = { "samtest", nil };
+
+	USED(v);
+	exec("/bin/samtest", av);
+	exits("exec");
+}
+
 /* ---- the kernel work for rc: rfork honesty and notes ---- */
 
 static void
@@ -521,6 +531,13 @@ main(int argc, char *argv[])
 	n = await(buf, sizeof buf);
 	ok(n > 0 && atoi(buf) == pid && strstr(buf, "''") != nil,
 	   "libthread: threadtest suite ran clean");
+
+	/* The whole editor: sam over samterm in a window namespace — the
+	 * mesg protocol, libframe, the font cache, libthread, async reads —
+	 * typed at through wctl, verified in the raster. */
+	pid = procrfork(RFFDG|RFNAMEG, samtestchild, nil);
+	n = await(buf, sizeof buf);
+	ok(n > 0 && strstr(buf, "''") != nil, "sam+samterm: the editor round trip ran clean");
 
 	/* The asyncify path: forktest is a transformed binary whose bare
 	 * rfork(RFPROC) genuinely returns twice — its four checks print

@@ -33,11 +33,13 @@ notes at the syscall boundary, `unmount`, honest rfork flags, `#d`, and real
 run in terminal mode (`sam -d`): structural regexps, the `x/c/s/i` loop, and the
 buffer piped through real commands — and **the real libdraw draws**: `geninitdraw`
 speaks `/dev/draw/new` against `#w`, `getwindow` allocates a screen and window view,
-and the real default font lands glyphs through `y/i/l/s` — and **libthread runs**, the
-real thread.h API as a wasm platform layer: coroutines over saved asyncify contexts,
+and the real default font lands glyphs through `y/i/l/s` — libthread runs (the real
+thread.h API as a wasm platform layer: coroutines over saved asyncify contexts,
 channels delivering through off-stack slots, blocking reads that park a thread while
-the process keeps scheduling — 117 acceptance tests). Everything else is design
-documents.
+the process keeps scheduling) — and **the real sam EDITS IN A WINDOW**: `win sam &`
+boots sam over samterm, libframe renders the command window through the device's
+`x` (string-with-background), typed text crosses the mesg protocol and sam's answer
+renders back — 120 acceptance tests). Everything else is design documents.
 
 ## Commands
 
@@ -58,7 +60,7 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints 117 PASS lines,
+Boot the kernel — init (pid 1) runs the acceptance tests, prints 120 PASS lines,
 exits 0:
 
 ```bash
@@ -246,7 +248,7 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (2026-08-27)
 
-117 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
+120 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
 (`node poc/serve.mjs` → `/browser/`, measured in Chrome 148); `?i` boots to **the real
 Plan 9 rc** — pipelines, subshells, `` `{...} `` captures, `fn`, `while`, `switch` — and
 `win rc &` opens a shell window that prompts because rc's own `Isatty` finds
