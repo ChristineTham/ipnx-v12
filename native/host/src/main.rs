@@ -133,6 +133,11 @@ fn sys(caller: &mut Caller<'_, RState>, trap: i32, a0: i32, a1: i32, a2: i32, a3
         }
         push_str(&mut tx, &mem, &*caller, a1 as u32);
     }
+    if trap == 46 {
+        // mount: old at a2, aname at a4 (guestcore's rule)
+        push_str(&mut tx, &mem, &*caller, a2 as u32);
+        push_str(&mut tx, &mem, &*caller, a4 as u32);
+    }
     if trap == 51 {
         let data = mem.data(&*caller);
         let n = (a2 as usize).min(TXSIZE);
@@ -174,6 +179,7 @@ fn sys(caller: &mut Caller<'_, RState>, trap: i32, a0: i32, a1: i32, a2: i32, a3
             62 | 23 => Some(a1 as u32),      // readlink/fd2path
             53 => Some(a0 as u32),           // nsec -> vlong*
             21 => Some(a0 as u32),           // pipe -> fd[2]
+            211 => Some(a0 as u32),          // iowait -> tag+data
             _ => None,
         };
         if let Some(dst) = dst {

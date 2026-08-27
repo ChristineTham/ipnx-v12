@@ -2,17 +2,20 @@
 // reference implementation; the 130-test guest suite is the conformance
 // spec). Same shapes throughout: proc table, per-process namespaces as
 // mount maps with longest-prefix walk, refcounted channels, union lists,
-// parked device reads. The kernel is a pure state machine: syscalls come in
-// through `syscall`, replies leave through per-call senders, and everything
-// the platform must do (spawn a guest, write the console, arm a timer)
-// leaves as an `Effect` — the embedding shim's contract.
+// parked device reads — and, like the reference, ASYNC THROUGHOUT: devmnt
+// suspends in the middle of a walk while an R-message crosses a pipe, so
+// dispatch runs as tasks on the kernel's own single-threaded executor
+// (exec.rs; no tokio). The kernel remains a pure state machine to its host:
+// syscalls in through `syscall`, replies out through per-call senders, and
+// everything platform-bound leaves as an `Effect`.
 
+pub mod exec;
 pub mod stat9;
 
+use exec::{oneshot, Completer, LocalExec};
 use stat9::{marshal_stat, parse_stat, StatIn, DMDIR, DMSETUID, DMSYMLINK, QTDIR, QTFILE, QTSYMLINK};
 use std::cell::RefCell;
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
@@ -44,6 +47,7 @@ pub mod t {
     pub const FSTAT: i32 = 43;
     pub const WSTAT: i32 = 44;
     pub const FWSTAT: i32 = 45;
+    pub const MOUNT: i32 = 46;
     pub const AWAIT: i32 = 47;
     pub const PREAD: i32 = 50;
     pub const PWRITE: i32 = 51;
@@ -53,6 +57,8 @@ pub mod t {
     pub const READLINK: i32 = 62;
     pub const ARGS: i32 = 200;
     pub const NOTEGET: i32 = 202;
+    pub const AREAD: i32 = 210;
+    pub const IOWAIT: i32 = 211;
 }
 
 mod rf {
@@ -89,10 +95,10 @@ pub enum Effect {
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub enum KAction {
     None,
-    ForkResume, // parent's runner restores [0,sp) and unwinds to the guard
-    ExecSelf,   // this thread reloads: a Spawn effect carries its new image
-    Retire,     // guest exited; the thread ends
-    Die,        // killed
+    ForkResume,
+    ExecSelf,
+    Retire,
+    Die,
 }
 
 pub struct KReply {
@@ -100,9 +106,7 @@ pub struct KReply {
     pub aux: i32,
     pub data: Vec<u8>,
     pub action: KAction,
-    /// ExecSelf carries the new image so the calling thread reloads in place
     pub load: Option<(Arc<Vec<u8>>, Vec<String>)>,
-    /// V7 timing: the runner calls __notedispatch when this is set
     pub note_pending: bool,
 }
 
@@ -114,13 +118,15 @@ fn okd(ret: i32, data: Vec<u8>) -> KReply {
 }
 
 type KErr = String;
-enum Done {
-    Now(KReply),
-    Parked, // the reply sender was stored somewhere and fires later
+type KRes = Result<KReply, KErr>;
+
+// a parked read completes with data, or an interrupt (postnote's doing)
+pub enum RRes {
+    Data(Vec<u8>),
+    Intr,
 }
 
 // ---- channels ----
-#[derive(Clone)]
 pub struct Chan {
     dev: DevId,
     node: Node,
@@ -140,9 +146,9 @@ enum DevId {
     Env,
     Union,
     Proc,
+    Mnt,
 }
 
-// ---- nodes, one enum across the device set ----
 #[derive(Clone)]
 enum Node {
     Ram(RamRef),
@@ -158,13 +164,7 @@ enum Node {
     EnvVar(String),
     Union(Rc<Vec<MountEl>>),
     Proc { kind: u8, pid: Pid }, // 0 root, 1 dir, 2 ctl, 3 status, 4 note, 5 notepg
-}
-
-#[derive(Clone)]
-struct DN {
-    dev: DevId,
-    node: Node,
-    path: Option<String>, // what bind(2) recorded; unmount matches by it
+    Mnt(MntRef),
 }
 
 fn node_eq(a: &Node, b: &Node) -> bool {
@@ -179,8 +179,16 @@ fn node_eq(a: &Node, b: &Node) -> bool {
         | (Node::EnvRoot, Node::EnvRoot) => true,
         (Node::Pipe { p: x, end: e1 }, Node::Pipe { p: y, end: e2 }) => Rc::ptr_eq(x, y) && e1 == e2,
         (Node::EnvVar(x), Node::EnvVar(y)) => x == y,
+        (Node::Mnt(x), Node::Mnt(y)) => Rc::ptr_eq(x, y),
         _ => false,
     }
+}
+
+#[derive(Clone)]
+struct DN {
+    dev: DevId,
+    node: Node,
+    path: Option<String>, // what bind(2) recorded; unmount matches by it
 }
 
 #[derive(Clone)]
@@ -226,7 +234,7 @@ type PipeR = Rc<RefCell<Pipe>>;
 
 #[derive(Clone)]
 enum WaitKind {
-    Reply { pid: Pid, tx: Sender<KReply> },
+    Wake { pid: Pid, c: Completer<RRes> },
     Aread { pid: Pid, tag: u32 },
 }
 
@@ -236,13 +244,136 @@ struct Waiter {
 }
 
 enum TimerKind {
-    Sleep(Sender<KReply>),
+    Sleep(Completer<RRes>),
     Alarm(Pid),
     Iowait(Pid),
 }
 
+// ---- devmnt: the ONE place the kernel marshals wire 9P ----
+const MSIZE: usize = 8216; // 8192 data + IOHDRSZ(24)
+const NOFID: u32 = 0xffff_ffff;
+mod tv {
+    pub const VERSION: u8 = 100;
+    pub const ATTACH: u8 = 104;
+    pub const RERROR: u8 = 107;
+    pub const WALK: u8 = 110;
+    pub const OPEN: u8 = 112;
+    pub const CREATE: u8 = 114;
+    pub const READ: u8 = 116;
+    pub const WRITE: u8 = 118;
+    pub const CLUNK: u8 = 120;
+    pub const REMOVE: u8 = 122;
+    pub const STAT: u8 = 124;
+    pub const WSTAT: u8 = 126;
+    // V12 extension messages, minted in the unused >127 range
+    pub const LINK: u8 = 128;
+    pub const SYMLINK: u8 = 130;
+    pub const READLINK: u8 = 132;
+}
+
+struct ConnSt {
+    chan: ChanR, // the transport (incref'd by mount)
+    tags: HashMap<u16, Completer<Result<Vec<u8>, KErr>>>,
+    expect: HashMap<u16, u8>,
+    nexttag: u16,
+    nextfid: u32,
+    dead: Option<KErr>,
+}
+type ConnR = Rc<RefCell<ConnSt>>;
+
+struct MntNode {
+    conn: ConnR,
+    fid: u32,
+    qtype: u8,
+    ephemeral: std::cell::Cell<bool>,
+    opened: std::cell::Cell<bool>,
+}
+type MntRef = Rc<MntNode>;
+
+struct W9(Vec<u8>);
+impl W9 {
+    fn new() -> W9 {
+        W9(Vec::new())
+    }
+    fn u8(mut self, v: u8) -> W9 {
+        self.0.push(v);
+        self
+    }
+    fn u16(mut self, v: u16) -> W9 {
+        self.0.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+    fn u32(mut self, v: u32) -> W9 {
+        self.0.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+    fn u64(mut self, v: u64) -> W9 {
+        self.0.extend_from_slice(&v.to_le_bytes());
+        self
+    }
+    fn s(mut self, s: &str) -> W9 {
+        self.0.extend_from_slice(&(s.len() as u16).to_le_bytes());
+        self.0.extend_from_slice(s.as_bytes());
+        self
+    }
+    fn raw(mut self, b: &[u8]) -> W9 {
+        self.0.extend_from_slice(b);
+        self
+    }
+    fn frame(self, ty: u8, tag: u16) -> Vec<u8> {
+        let mut out = Vec::with_capacity(7 + self.0.len());
+        out.extend_from_slice(&((7 + self.0.len()) as u32).to_le_bytes());
+        out.push(ty);
+        out.extend_from_slice(&tag.to_le_bytes());
+        out.extend_from_slice(&self.0);
+        out
+    }
+}
+
+struct R9<'a> {
+    b: &'a [u8],
+    o: usize,
+}
+impl<'a> R9<'a> {
+    fn new(b: &'a [u8]) -> R9<'a> {
+        R9 { b, o: 0 }
+    }
+    fn u8(&mut self) -> u8 {
+        let v = self.b[self.o];
+        self.o += 1;
+        v
+    }
+    fn u16(&mut self) -> u16 {
+        let v = u16::from_le_bytes(self.b[self.o..self.o + 2].try_into().unwrap());
+        self.o += 2;
+        v
+    }
+    fn u32(&mut self) -> u32 {
+        let v = u32::from_le_bytes(self.b[self.o..self.o + 4].try_into().unwrap());
+        self.o += 4;
+        v
+    }
+    fn s(&mut self) -> String {
+        let n = self.u16() as usize;
+        let v = String::from_utf8_lossy(&self.b[self.o..self.o + n]).into_owned();
+        self.o += n;
+        v
+    }
+    fn qid(&mut self) -> (u8, u32, u64) {
+        let ty = self.u8();
+        let vers = self.u32();
+        let path = u64::from_le_bytes(self.b[self.o..self.o + 8].try_into().unwrap());
+        self.o += 8;
+        (ty, vers, path)
+    }
+    fn rest(&self) -> &'a [u8] {
+        &self.b[self.o..]
+    }
+}
+
 // ---- processes ----
 type NsR = Rc<RefCell<HashMap<String, Vec<MountEl>>>>;
+type EnvR = Rc<RefCell<HashMap<String, Vec<u8>>>>;
 
 struct Proc {
     pid: Pid,
@@ -255,7 +386,7 @@ struct Proc {
     umask: u32,
     errstr: String,
     zombies: Vec<String>,
-    await_reply: Option<(Sender<KReply>, usize)>, // parked await: (sender, max)
+    await_wait: Option<(Completer<RRes>, usize)>,
     argv: Vec<String>,
     image: Option<Arc<Vec<u8>>>,
     asyncified: bool,
@@ -265,10 +396,10 @@ struct Proc {
     note_group: u32,
     notes: Vec<String>,
     has_handler: bool,
-    inflight: Option<Sender<KReply>>,
+    inflight: Option<Completer<RRes>>,
     alarm_token: Option<u64>,
     ioq: VecDeque<(u32, Vec<u8>)>,
-    iowait: Option<(Sender<KReply>, Option<u64>)>, // (reply, timer token)
+    iowait: Option<(Completer<RRes>, Option<u64>)>,
 }
 
 #[derive(Clone)]
@@ -276,8 +407,6 @@ pub struct Cred {
     pub euid: String,
     pub ruid: String,
 }
-
-type EnvR = Rc<RefCell<HashMap<String, Vec<u8>>>>;
 
 struct Fdt {
     refs: u32,
@@ -289,8 +418,17 @@ fn new_fdt() -> FdtR {
     Rc::new(RefCell::new(Fdt { refs: 1, fds: Vec::new() }))
 }
 
-// ---- the kernel ----
-pub struct Kernel {
+fn now_secs() -> u32 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0)
+}
+fn now_nanos() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
+}
+
+// ---- the kernel state (behind the public facade) ----
+struct KState {
     procs: HashMap<Pid, Proc>,
     nextpid: Pid,
     next_note_group: u32,
@@ -303,25 +441,29 @@ pub struct Kernel {
     timers: HashMap<u64, TimerKind>,
     next_token: u64,
     effects: Vec<Effect>,
-    pub interactive: bool,
-    pub verbose: bool,
+    verbose: bool,
 }
 
-fn now_secs() -> u32 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0)
+type K = Rc<RefCell<KState>>;
+
+enum WalkRes {
+    Hit(DN),
+    Redirect(String),
 }
-fn now_nanos() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
+
+// ---- the public facade: the same surface the host already speaks ----
+pub struct Kernel {
+    k: K,
+    ex: Rc<LocalExec>,
+    pub interactive: bool,
+    pub verbose: bool,
 }
 
 impl Kernel {
     pub fn new(seed: &Seed, eve: &str) -> Kernel {
         let boot = now_secs();
         let mut qgen = 1u64;
-        let root = Self::load_seed(seed, "/", eve, boot, &mut qgen);
-        // a writable corner, always
+        let root = load_seed(seed, "/", eve, boot, &mut qgen);
         if kid(&root, "tmp").is_none() {
             let t = Rc::new(RefCell::new(RNode {
                 name: "tmp".into(), qpath: qgen, dir: true, data: Vec::new(),
@@ -332,1219 +474,1874 @@ impl Kernel {
             root.borrow_mut().kids.push(("tmp".into(), t));
         }
         Kernel {
-            procs: HashMap::new(),
-            nextpid: 1,
-            next_note_group: 1,
-            eve: eve.into(),
-            ram_root: root,
-            qgen,
-            cons_buf: Vec::new(),
-            cons_eof: false,
-            cons_parked: Vec::new(),
-            timers: HashMap::new(),
-            next_token: 1,
-            effects: Vec::new(),
+            k: Rc::new(RefCell::new(KState {
+                procs: HashMap::new(),
+                nextpid: 1,
+                next_note_group: 1,
+                eve: eve.into(),
+                ram_root: root,
+                qgen,
+                cons_buf: Vec::new(),
+                cons_eof: false,
+                cons_parked: Vec::new(),
+                timers: HashMap::new(),
+                next_token: 1,
+                effects: Vec::new(),
+                verbose: false,
+            })),
+            ex: LocalExec::new(),
             interactive: false,
             verbose: false,
         }
     }
 
-    fn load_seed(s: &Seed, name: &str, eve: &str, boot: u32, qgen: &mut u64) -> RamRef {
-        let q = *qgen;
-        *qgen += 1;
-        if s.dir {
-            let node = Rc::new(RefCell::new(RNode {
-                name: name.into(), qpath: q, dir: true, data: Vec::new(),
-                kids: Vec::new(), uid: eve.into(), mode: 0o755, atime: boot,
-                mtime: boot, symlink: None,
-            }));
-            for k in &s.kids {
-                let child = Self::load_seed(k, &k.name, eve, boot, qgen);
-                node.borrow_mut().kids.push((k.name.clone(), child));
-            }
-            node
-        } else {
-            Rc::new(RefCell::new(RNode {
-                name: name.into(), qpath: q, dir: false, data: s.data.clone(),
-                kids: Vec::new(), uid: eve.into(), mode: 0o644, atime: boot,
-                mtime: boot, symlink: None,
-            }))
-        }
-    }
-
     pub fn take_effects(&mut self) -> Vec<Effect> {
-        std::mem::take(&mut self.effects)
+        self.ex.run_until_stalled();
+        std::mem::take(&mut self.k.borrow_mut().effects)
     }
 
-    // ---- boot: pid 1 runs init out of the seeded tree ----
     pub fn boot(&mut self, argv: Vec<String>) -> Result<(), String> {
-        let pid = self.new_proc(0, Rc::new(RefCell::new(HashMap::new())), new_fdt(), "/".into(),
-            Cred { euid: self.eve.clone(), ruid: self.eve.clone() },
-            Rc::new(RefCell::new(HashMap::new())), None);
-        let dn = self.walk(pid, "/bin/init", false)?;
-        let image = Arc::new(self.read_all(&dn)?);
-        let p = self.procs.get_mut(&pid).unwrap();
-        p.argv = argv.clone();
-        p.image = Some(image.clone());
-        p.asyncified = false;
-        self.effects.push(Effect::Spawn { pid, image, argv, asy: None });
+        self.k.borrow_mut().verbose = self.verbose;
+        let k = self.k.clone();
+        let eve = k.borrow().eve.clone();
+        let pid = new_proc(&k, 0, Rc::new(RefCell::new(HashMap::new())), new_fdt(),
+                           "/".into(), Cred { euid: eve.clone(), ruid: eve },
+                           Rc::new(RefCell::new(HashMap::new())), None);
+        let argv2 = argv.clone();
+        self.ex.spawn(async move {
+            let r: Result<(), KErr> = async {
+                let dn = walk(&k, pid, "/bin/init", false).await?;
+                let image = Arc::new(read_all(&k, &dn, pid).await?);
+                let mut kb = k.borrow_mut();
+                let p = kb.procs.get_mut(&pid).unwrap();
+                p.argv = argv2.clone();
+                p.image = Some(image.clone());
+                kb.effects.push(Effect::Spawn { pid, image, argv: argv2.clone(), asy: None });
+                Ok(())
+            }
+            .await;
+            if let Err(e) = r {
+                eprintln!("boot: {}", e);
+                k.borrow_mut().effects.push(Effect::Shutdown(1));
+            }
+        });
+        self.ex.run_until_stalled();
         Ok(())
     }
 
-    fn new_proc(&mut self, ppid: Pid, ns: NsR, fdt: FdtR,
-                cwd: String, cred: Cred, env: EnvR, note_group: Option<u32>) -> Pid {
-        let pid = self.nextpid;
-        self.nextpid += 1;
-        let group = note_group.unwrap_or_else(|| {
-            let g = self.next_note_group;
-            self.next_note_group += 1;
-            g
-        });
-        self.procs.insert(pid, Proc {
-            pid, ppid, ns, fdt, cwd, cred, env,
-            umask: 0o22, errstr: String::new(), zombies: Vec::new(),
-            await_reply: None, argv: Vec::new(), image: None, asyncified: false,
-            borrower: None, nomnt: false, nowait: false, note_group: group,
-            notes: Vec::new(), has_handler: false, inflight: None,
-            alarm_token: None, ioq: VecDeque::new(), iowait: None,
-        });
-        pid
-    }
-
-    // ---- console plumbing (the host feeds stdin, we hand it to readers) ----
-    pub fn cons_feed(&mut self, chunk: &[u8]) {
-        self.cons_buf.extend_from_slice(chunk);
-        self.cons_serve();
-    }
-    pub fn cons_end(&mut self) {
-        self.cons_eof = true;
-        self.cons_serve();
-    }
-    fn cons_serve(&mut self) {
-        while !self.cons_parked.is_empty() && (!self.cons_buf.is_empty() || self.cons_eof) {
-            let w = self.cons_parked.remove(0);
-            let take = w.n.min(self.cons_buf.len());
-            let give: Vec<u8> = self.cons_buf.drain(0..take).collect();
-            self.wake(w.kind, give);
-        }
-    }
-
-    // complete a parked read: a syscall reply or an AREAD landing in the ioq
-    fn wake(&mut self, kind: WaitKind, data: Vec<u8>) {
-        match kind {
-            WaitKind::Reply { pid, tx } => {
-                if let Some(p) = self.procs.get_mut(&pid) {
-                    p.inflight = None;
+    pub fn syscall(&mut self, worker_pid: Pid, trap: i32, a: [i32; 5], tx: Vec<u8>,
+                   reply: Sender<KReply>) {
+        let k = self.k.clone();
+        let ex = self.ex.clone();
+        self.ex.spawn(async move {
+            let pid = k.borrow().procs.get(&worker_pid).and_then(|p| p.borrower).unwrap_or(worker_pid);
+            if k.borrow().verbose {
+                eprintln!("[K sys pid={} trap={} a0={}]", pid, trap, a[0]);
+            }
+            if trap != t::EXITS {
+                let doom = {
+                    let kb = k.borrow();
+                    kb.procs.get(&pid).and_then(|p| {
+                        if !p.notes.is_empty() && !p.has_handler {
+                            Some(format!("note: {}", p.notes[0]))
+                        } else {
+                            None
+                        }
+                    })
+                };
+                if let Some(msg) = doom {
+                    let r = kill_proc(&k, worker_pid, pid, &msg);
+                    let _ = reply.send(r);
+                    return;
                 }
-                let r = self.stamp(pid, okd(data.len() as i32, data));
-                let _ = tx.send(r);
             }
-            WaitKind::Aread { pid, tag } => self.aread_done(pid, tag, data),
-        }
+            let r = match dispatch(&k, &ex, worker_pid, pid, trap, a, tx).await {
+                Ok(r) => {
+                    if trap == t::EXITS || trap == t::RFORK {
+                        r
+                    } else {
+                        stamp(&k, pid, r)
+                    }
+                }
+                Err(msg) => {
+                    if k.borrow().verbose {
+                        eprintln!("[K err pid={} trap={}: {}]", pid, trap, msg);
+                    }
+                    if let Some(p) = k.borrow_mut().procs.get_mut(&pid) {
+                        p.errstr = msg;
+                    }
+                    stamp(&k, pid, ok(-1))
+                }
+            };
+            let _ = reply.send(r);
+        });
+        self.ex.run_until_stalled();
     }
 
-    fn stamp(&self, pid: Pid, mut r: KReply) -> KReply {
-        if let Some(p) = self.procs.get(&pid) {
-            r.note_pending = !p.notes.is_empty() && p.has_handler;
-        }
-        r
-    }
-
-    fn aread_done(&mut self, pid: Pid, tag: u32, data: Vec<u8>) {
-        let Some(p) = self.procs.get_mut(&pid) else { return };
-        p.ioq.push_back((tag, data));
-        if let Some((tx, timer)) = p.iowait.take() {
-            p.inflight = None;
-            if let Some(tok) = timer {
-                self.timers.remove(&tok);
-            }
-            let p = self.procs.get_mut(&pid).unwrap();
-            let (tag, data) = p.ioq.pop_front().unwrap();
-            let mut out = tag.to_le_bytes().to_vec();
-            out.extend_from_slice(&data);
-            let n = out.len() as i32;
-            let r = self.stamp(pid, okd(n, out));
-            let _ = tx.send(r);
-        }
-    }
-
-    // the runner reports what it learned at instantiation
     pub fn set_asyncified(&mut self, pid: Pid, on: bool) {
-        if let Some(p) = self.procs.get_mut(&pid) {
+        if let Some(p) = self.k.borrow_mut().procs.get_mut(&pid) {
             p.asyncified = on;
         }
     }
 
+    pub fn cons_feed(&mut self, chunk: &[u8]) {
+        self.k.borrow_mut().cons_buf.extend_from_slice(chunk);
+        cons_serve(&self.k);
+        self.ex.run_until_stalled();
+    }
+
+    pub fn cons_end(&mut self) {
+        self.k.borrow_mut().cons_eof = true;
+        cons_serve(&self.k);
+        self.ex.run_until_stalled();
+    }
+
     pub fn timer_fired(&mut self, token: u64) {
-        match self.timers.remove(&token) {
-            Some(TimerKind::Sleep(tx)) => {
-                let _ = tx.send(ok(0));
-            }
+        let kind = self.k.borrow_mut().timers.remove(&token);
+        match kind {
+            Some(TimerKind::Sleep(c)) => c.complete(RRes::Data(Vec::new())),
             Some(TimerKind::Alarm(pid)) => {
-                if self.procs.get(&pid).map(|p| p.alarm_token == Some(token)).unwrap_or(false) {
-                    self.procs.get_mut(&pid).unwrap().alarm_token = None;
-                    self.postnote(pid, "alarm");
+                let armed = self.k.borrow().procs.get(&pid)
+                    .map(|p| p.alarm_token == Some(token)).unwrap_or(false);
+                if armed {
+                    self.k.borrow_mut().procs.get_mut(&pid).unwrap().alarm_token = None;
+                    postnote(&self.k, pid, "alarm");
                 }
             }
             Some(TimerKind::Iowait(pid)) => {
-                if let Some(p) = self.procs.get_mut(&pid) {
-                    if let Some((tx, _)) = p.iowait.take() {
+                let c = {
+                    let mut kb = self.k.borrow_mut();
+                    kb.procs.get_mut(&pid).and_then(|p| {
                         p.inflight = None;
-                        let _ = tx.send(ok(0)); // iowait timeout: 0 bytes
-                    }
+                        p.iowait.take().map(|(c, _)| c)
+                    })
+                };
+                if let Some(c) = c {
+                    c.complete(RRes::Data(Vec::new())); // iowait timeout: 0 bytes
                 }
             }
             None => {}
         }
+        self.ex.run_until_stalled();
     }
 
-    // ---- notes: delivered at the syscall boundary (V7's timing) ----
-    pub fn postnote(&mut self, pid: Pid, msg: &str) {
-        let Some(p) = self.procs.get_mut(&pid) else { return };
+    pub fn asyfork(&mut self, parent_pid: Pid, child_pid: Pid, snap: Vec<u8>, data_ptr: u32, sp: u32) {
+        let mut kb = self.k.borrow_mut();
+        let argv = kb.procs.get(&parent_pid).map(|p| p.argv.clone()).unwrap_or_default();
+        if let Some(c) = kb.procs.get_mut(&child_pid) {
+            c.argv = argv.clone();
+            if let Some(image) = c.image.clone() {
+                kb.effects.push(Effect::Spawn {
+                    pid: child_pid, image, argv,
+                    asy: Some(AsySnap { snap, data_ptr, sp }),
+                });
+            }
+        }
+    }
+
+    pub fn proc_died(&mut self, pid: Pid, msg: &str) {
+        let taken = self.k.borrow_mut().procs.remove(&pid);
+        let Some(p) = taken else { return };
+        fdt_close(&self.k, &p.fdt);
+        if pid == 1 {
+            self.k.borrow_mut().effects.push(Effect::Shutdown(1));
+            return;
+        }
+        zombie(&self.k, p.ppid, pid, msg, p.nowait);
+        self.ex.run_until_stalled();
+    }
+}
+
+fn load_seed(s: &Seed, name: &str, eve: &str, boot: u32, qgen: &mut u64) -> RamRef {
+    let q = *qgen;
+    *qgen += 1;
+    if s.dir {
+        let node = Rc::new(RefCell::new(RNode {
+            name: name.into(), qpath: q, dir: true, data: Vec::new(),
+            kids: Vec::new(), uid: eve.into(), mode: 0o755, atime: boot,
+            mtime: boot, symlink: None,
+        }));
+        for k in &s.kids {
+            let child = load_seed(k, &k.name, eve, boot, qgen);
+            node.borrow_mut().kids.push((k.name.clone(), child));
+        }
+        node
+    } else {
+        Rc::new(RefCell::new(RNode {
+            name: name.into(), qpath: q, dir: false, data: s.data.clone(),
+            kids: Vec::new(), uid: eve.into(), mode: 0o644, atime: boot,
+            mtime: boot, symlink: None,
+        }))
+    }
+}
+
+fn new_proc(k: &K, ppid: Pid, ns: NsR, fdt: FdtR, cwd: String, cred: Cred, env: EnvR,
+            note_group: Option<u32>) -> Pid {
+    let mut kb = k.borrow_mut();
+    let pid = kb.nextpid;
+    kb.nextpid += 1;
+    let group = note_group.unwrap_or_else(|| {
+        let g = kb.next_note_group;
+        kb.next_note_group += 1;
+        g
+    });
+    kb.procs.insert(pid, Proc {
+        pid, ppid, ns, fdt, cwd, cred, env,
+        umask: 0o22, errstr: String::new(), zombies: Vec::new(),
+        await_wait: None, argv: Vec::new(), image: None, asyncified: false,
+        borrower: None, nomnt: false, nowait: false, note_group: group,
+        notes: Vec::new(), has_handler: false, inflight: None,
+        alarm_token: None, ioq: VecDeque::new(), iowait: None,
+    });
+    pid
+}
+
+fn stamp(k: &K, pid: Pid, mut r: KReply) -> KReply {
+    if let Some(p) = k.borrow().procs.get(&pid) {
+        r.note_pending = !p.notes.is_empty() && p.has_handler;
+    }
+    r
+}
+
+// ---- notes ----
+fn postnote(k: &K, pid: Pid, msg: &str) {
+    let c = {
+        let mut kb = k.borrow_mut();
+        let Some(p) = kb.procs.get_mut(&pid) else { return };
         let mut m = msg.to_string();
         m.truncate(120);
         p.notes.push(m);
-        if let Some(tx) = p.inflight.take() {
-            // a blocked call: interrupt it
+        p.iowait = None;
+        p.await_wait = None;
+        p.inflight.take()
+    };
+    if let Some(c) = c {
+        if let Some(p) = k.borrow_mut().procs.get_mut(&pid) {
             p.errstr = "interrupted".into();
-            p.iowait = None;
-            let mut r = ok(-1);
-            r.note_pending = !p.notes.is_empty() && p.has_handler;
-            let _ = tx.send(r);
         }
+        c.complete(RRes::Intr);
     }
+}
 
-    fn kill_proc(&mut self, worker_pid: Pid, pid: Pid, msg: &str) -> KReply {
-        let (ppid, nowait, fdt) = match self.procs.get(&pid) {
+fn kill_proc(k: &K, worker_pid: Pid, pid: Pid, msg: &str) -> KReply {
+    let (ppid, nowait, fdt) = {
+        let kb = k.borrow();
+        match kb.procs.get(&pid) {
             Some(p) => (p.ppid, p.nowait, p.fdt.clone()),
             None => return ok(-1),
-        };
-        self.procs.remove(&pid);
-        self.fdt_close(&fdt);
-        let was_borrowed = self.procs.get(&worker_pid).and_then(|p| p.borrower) == Some(pid);
-        if was_borrowed {
-            self.procs.get_mut(&worker_pid).unwrap().borrower = None;
-            self.zombie(ppid, pid, msg, nowait);
-            return KReply { ret: -1000, aux: pid as i32, data: Vec::new(),
-                            action: KAction::ForkResume, load: None, note_pending: false };
         }
-        if pid == 1 {
-            self.effects.push(Effect::Shutdown(1));
-        } else {
-            self.zombie(ppid, pid, msg, nowait);
-        }
-        KReply { ret: -3000, aux: 0, data: Vec::new(), action: KAction::Die,
-                 load: None, note_pending: false }
+    };
+    k.borrow_mut().procs.remove(&pid);
+    fdt_close(k, &fdt);
+    let was_borrowed = k.borrow().procs.get(&worker_pid).and_then(|p| p.borrower) == Some(pid);
+    if was_borrowed {
+        k.borrow_mut().procs.get_mut(&worker_pid).unwrap().borrower = None;
+        zombie(k, ppid, pid, msg, nowait);
+        return KReply { ret: -1000, aux: pid as i32, data: Vec::new(),
+                        action: KAction::ForkResume, load: None, note_pending: false };
     }
+    if pid == 1 {
+        k.borrow_mut().effects.push(Effect::Shutdown(1));
+    } else {
+        zombie(k, ppid, pid, msg, nowait);
+    }
+    KReply { ret: -3000, aux: 0, data: Vec::new(), action: KAction::Die,
+             load: None, note_pending: false }
+}
 
-    // a guest thread died outside the syscall path (bad image, runner error)
-    pub fn proc_died(&mut self, pid: Pid, msg: &str) {
-        if let Some(p) = self.procs.remove(&pid) {
-            self.fdt_close(&p.fdt);
-            if pid == 1 {
-                self.effects.push(Effect::Shutdown(1));
+fn zombie(k: &K, ppid: Pid, pid: Pid, msg: &str, nowait: bool) {
+    if nowait {
+        return;
+    }
+    let fire = {
+        let mut kb = k.borrow_mut();
+        let Some(parent) = kb.procs.get_mut(&ppid) else { return };
+        parent.zombies.push(format!("{} 0 0 0 '{}'", pid, msg));
+        parent.inflight = None;
+        parent.await_wait.take().map(|(c, max)| {
+            let s = parent.zombies.remove(0);
+            (c, s, max)
+        })
+    };
+    if let Some((c, s, max)) = fire {
+        let mut bytes = s.into_bytes();
+        bytes.truncate(max.saturating_sub(1));
+        c.complete(RRes::Data(bytes));
+    }
+}
+
+// ---- console ----
+fn cons_serve(k: &K) {
+    loop {
+        let fired = {
+            let mut kb = k.borrow_mut();
+            if kb.cons_parked.is_empty() || (kb.cons_buf.is_empty() && !kb.cons_eof) {
                 return;
             }
-            self.zombie(p.ppid, pid, msg, p.nowait);
-        }
-    }
-
-    // ---- namespace ----
-    fn canon(path: &str, cwd: &str) -> String {
-        let path = if !path.starts_with('/') && !path.starts_with('#') {
-            format!("{}/{}", cwd, path)
-        } else {
-            path.to_string()
+            let w = kb.cons_parked.remove(0);
+            let take = w.n.min(kb.cons_buf.len());
+            let give: Vec<u8> = kb.cons_buf.drain(0..take).collect();
+            (w.kind, give)
         };
-        if path.starts_with('#') {
-            return path;
-        }
-        let mut out: Vec<&str> = Vec::new();
-        for c in path.split('/') {
-            match c {
-                "" | "." => {}
-                ".." => { out.pop(); } // lexical, per cleanname(2)
-                c => out.push(c),
-            }
-        }
-        format!("/{}", out.join("/"))
+        wake(k, fired.0, fired.1);
     }
+}
 
-    fn attach(&mut self, spec: &str, pid: Pid) -> Result<DN, KErr> {
-        let letter = spec.chars().nth(1).unwrap_or(' ');
-        match letter {
-            'c' => Ok(DN { dev: DevId::Cons, node: Node::ConsRoot, path: None }),
-            'e' => Ok(DN { dev: DevId::Env, node: Node::EnvRoot, path: None }),
-            'd' => Ok(DN { dev: DevId::Dup, node: Node::DupRoot, path: None }),
-            'M' => Ok(DN { dev: DevId::Ram, node: Node::Ram(self.ram_root.clone()), path: None }),
-            'p' => Ok(DN { dev: DevId::Proc, node: Node::Proc { kind: 0, pid: 0 }, path: None }),
-            _ => {
-                let _ = pid;
-                Err(format!("unknown device #{}", letter))
+fn wake(k: &K, kind: WaitKind, data: Vec<u8>) {
+    match kind {
+        WaitKind::Wake { pid, c } => {
+            if let Some(p) = k.borrow_mut().procs.get_mut(&pid) {
+                p.inflight = None;
             }
+            c.complete(RRes::Data(data));
+        }
+        WaitKind::Aread { pid, tag } => aread_done(k, pid, tag, data),
+    }
+}
+
+fn aread_done(k: &K, pid: Pid, tag: u32, data: Vec<u8>) {
+    let fire = {
+        let mut kb = k.borrow_mut();
+        let Some(p) = kb.procs.get_mut(&pid) else { return };
+        p.ioq.push_back((tag, data));
+        p.iowait.take().map(|(c, timer)| {
+            p.inflight = None;
+            let (tag, data) = p.ioq.pop_front().unwrap();
+            (c, timer, tag, data)
+        })
+    };
+    if let Some((c, timer, tag, data)) = fire {
+        if let Some(tok) = timer {
+            k.borrow_mut().timers.remove(&tok);
+        }
+        let mut out = tag.to_le_bytes().to_vec();
+        out.extend_from_slice(&data);
+        c.complete(RRes::Data(out));
+    }
+}
+
+// ---- namespace ----
+fn canon(path: &str, cwd: &str) -> String {
+    let path = if !path.starts_with('/') && !path.starts_with('#') {
+        format!("{}/{}", cwd, path)
+    } else {
+        path.to_string()
+    };
+    if path.starts_with('#') {
+        return path;
+    }
+    let mut out: Vec<&str> = Vec::new();
+    for c in path.split('/') {
+        match c {
+            "" | "." => {}
+            ".." => { out.pop(); } // lexical, per cleanname(2)
+            c => out.push(c),
         }
     }
+    format!("/{}", out.join("/"))
+}
 
-    fn dev_walk(&mut self, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>, KErr> {
-        match (&dn.dev, &dn.node) {
-            (DevId::Ram, Node::Ram(r)) => Ok(kid(r, name).map(|k| DN { dev: DevId::Ram, node: Node::Ram(k), path: None })),
-            (DevId::Cons, Node::ConsRoot) => Ok(match name {
-                "cons" => Some(Node::ConsCons),
-                "user" => Some(Node::ConsUser),
-                "pid" => Some(Node::ConsPid),
-                "null" => Some(Node::ConsNull),
-                _ => None,
-            }
-            .map(|n| DN { dev: DevId::Cons, node: n, path: None })),
-            (DevId::Dup, Node::DupRoot) => {
-                let fdn: usize = match name.parse() {
-                    Ok(v) => v,
-                    Err(_) => return Ok(None),
-                };
-                let p = self.procs.get(&pid).ok_or("no proc")?;
-                let c = p.fdt.borrow().fds.get(fdn).cloned().flatten();
-                Ok(c.map(|c| DN { dev: DevId::Dup, node: Node::DupFd(c), path: None }))
-            }
-            (DevId::Env, Node::EnvRoot) => {
-                let p = self.procs.get(&pid).ok_or("no proc")?;
-                if p.env.borrow().contains_key(name) {
-                    Ok(Some(DN { dev: DevId::Env, node: Node::EnvVar(name.into()), path: None }))
-                } else {
+fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
+    let letter = spec.chars().nth(1).unwrap_or(' ');
+    match letter {
+        'c' => Ok(DN { dev: DevId::Cons, node: Node::ConsRoot, path: None }),
+        'e' => Ok(DN { dev: DevId::Env, node: Node::EnvRoot, path: None }),
+        'd' => Ok(DN { dev: DevId::Dup, node: Node::DupRoot, path: None }),
+        'p' => Ok(DN { dev: DevId::Proc, node: Node::Proc { kind: 0, pid: 0 }, path: None }),
+        'M' => Ok(DN { dev: DevId::Ram, node: Node::Ram(k.borrow().ram_root.clone()), path: None }),
+        _ => Err(format!("unknown device #{}", letter)),
+    }
+}
+
+// walk one name on a CONCRETE (non-union) node
+async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>, KErr> {
+    match (&dn.dev, &dn.node) {
+        (DevId::Ram, Node::Ram(r)) => {
+            Ok(kid(r, name).map(|kd| DN { dev: DevId::Ram, node: Node::Ram(kd), path: None }))
+        }
+        (DevId::Cons, Node::ConsRoot) => Ok(match name {
+            "cons" => Some(Node::ConsCons),
+            "user" => Some(Node::ConsUser),
+            "pid" => Some(Node::ConsPid),
+            "null" => Some(Node::ConsNull),
+            _ => None,
+        }
+        .map(|n| DN { dev: DevId::Cons, node: n, path: None })),
+        (DevId::Dup, Node::DupRoot) => {
+            let fdn: usize = match name.parse() {
+                Ok(v) => v,
+                Err(_) => return Ok(None),
+            };
+            let fdt = k.borrow().procs.get(&pid).ok_or("no proc")?.fdt.clone();
+            let c = fdt.borrow().fds.get(fdn).cloned().flatten();
+            Ok(c.map(|c| DN { dev: DevId::Dup, node: Node::DupFd(c), path: None }))
+        }
+        (DevId::Env, Node::EnvRoot) => {
+            let env = k.borrow().procs.get(&pid).ok_or("no proc")?.env.clone();
+            let has = env.borrow().contains_key(name);
+            Ok(if has {
+                Some(DN { dev: DevId::Env, node: Node::EnvVar(name.into()), path: None })
+            } else {
+                None
+            })
+        }
+        (DevId::Proc, Node::Proc { kind: 0, .. }) => {
+            let target = if name == "self" {
+                Some(pid) // the WALKER, never the binder
+            } else {
+                name.parse::<Pid>().ok().filter(|q| k.borrow().procs.contains_key(q))
+            };
+            Ok(target.map(|q| DN { dev: DevId::Proc, node: Node::Proc { kind: 1, pid: q }, path: None }))
+        }
+        (DevId::Proc, Node::Proc { kind: 1, pid: q }) => {
+            let kd = match name {
+                "ctl" => 2,
+                "status" => 3,
+                "note" => 4,
+                "notepg" => 5,
+                _ => return Ok(None),
+            };
+            Ok(Some(DN { dev: DevId::Proc, node: Node::Proc { kind: kd, pid: *q }, path: None }))
+        }
+        (DevId::Mnt, Node::Mnt(m)) => {
+            let conn = m.conn.clone();
+            let newfid = {
+                let mut cb = conn.borrow_mut();
+                let f = cb.nextfid;
+                cb.nextfid += 1;
+                f
+            };
+            let body = W9::new().u32(m.fid).u32(newfid).u16(1).s(name);
+            match rpc(k, &conn, tv::WALK, body).await {
+                Ok(rb) => {
+                    let mut r = R9::new(&rb);
+                    let nw = r.u16();
+                    if nw != 1 {
+                        if k.borrow().verbose {
+                            eprintln!("[K mnt walk '{}': nwqid={}]", name, nw);
+                        }
+                        return Ok(None);
+                    }
+                    let (qt, _, _) = r.qid();
+                    if m.ephemeral.get() {
+                        clunk_fid(k, &conn, m.fid);
+                    }
+                    Ok(Some(DN {
+                        dev: DevId::Mnt,
+                        node: Node::Mnt(Rc::new(MntNode {
+                            conn, fid: newfid, qtype: qt,
+                            ephemeral: std::cell::Cell::new(true),
+                            opened: std::cell::Cell::new(false),
+                        })),
+                        path: None,
+                    }))
+                }
+                Err(e) => {
+                    if k.borrow().verbose {
+                        eprintln!("[K mnt walk '{}' rpc err: {}]", name, e);
+                    }
                     Ok(None)
                 }
             }
-            (DevId::Union, Node::Union(list)) => {
-                let els: Vec<MountEl> = list.iter().cloned().collect();
-                for el in els {
-                    if let Ok(Some(dn2)) = self.dev_walk(&el.dn, name, pid) {
-                        return Ok(Some(dn2)); // leaving the union: real dev takes over
-                    }
-                }
-                Ok(None)
-            }
-            (DevId::Proc, Node::Proc { kind: 0, .. }) => {
-                let target = if name == "self" {
-                    Some(pid) // the WALKER, never the binder
-                } else {
-                    name.parse::<Pid>().ok().filter(|q| self.procs.contains_key(q))
-                };
-                Ok(target.map(|q| DN { dev: DevId::Proc, node: Node::Proc { kind: 1, pid: q }, path: None }))
-            }
-            (DevId::Proc, Node::Proc { kind: 1, pid: q }) => {
-                let k = match name {
-                    "ctl" => 2,
-                    "status" => 3,
-                    "note" => 4,
-                    "notepg" => 5,
-                    _ => return Ok(None),
-                };
-                Ok(Some(DN { dev: DevId::Proc, node: Node::Proc { kind: k, pid: *q }, path: None }))
-            }
-            _ => Ok(None),
         }
+        _ => Ok(None),
     }
+}
 
-    fn symtarget(&self, dn: &DN) -> Option<String> {
-        if let Node::Ram(r) = &dn.node {
-            return r.borrow().symlink.clone();
-        }
-        None
-    }
-
-    fn walk(&mut self, pid: Pid, path: &str, nofollow_last: bool) -> Result<DN, KErr> {
-        let cwd = self.procs.get(&pid).map(|p| p.cwd.clone()).unwrap_or_else(|| "/".into());
-        let mut full = Self::canon(path, &cwd);
-        for depth in 0.. {
-            if depth > 8 {
-                return Err("too many levels of symlinks".into());
-            }
-            match self.walk_once(pid, &full, nofollow_last)? {
-                WalkRes::Hit(dn) => return Ok(dn),
-                WalkRes::Redirect(r) => full = Self::canon(&r, &cwd),
+async fn dev_walk(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>, KErr> {
+    if let (DevId::Union, Node::Union(list)) = (&dn.dev, &dn.node) {
+        let els: Vec<MountEl> = list.iter().cloned().collect();
+        for el in els {
+            if let Ok(Some(dn2)) = Box::pin(dev_walk_one(k, &el.dn, name, pid)).await {
+                return Ok(Some(dn2)); // leaving the union: the real dev takes over
             }
         }
-        unreachable!()
+        return Ok(None);
     }
+    dev_walk_one(k, dn, name, pid).await
+}
 
-    fn walk_once(&mut self, pid: Pid, path: &str, nofollow_last: bool) -> Result<WalkRes, KErr> {
-        if path.starts_with('#') {
-            let nomnt = self.procs.get(&pid).map(|p| p.nomnt).unwrap_or(false);
-            if nomnt {
-                return Err("'#' names disallowed (RFNOMNT)".into());
+async fn symtarget(k: &K, dn: &DN) -> Option<String> {
+    if let Node::Ram(r) = &dn.node {
+        return r.borrow().symlink.clone();
+    }
+    if let Node::Mnt(m) = &dn.node {
+        if m.qtype & 0x02 != 0 {
+            // QTSYMLINK over the wire: ask the server (minted Treadlink)
+            let conn = m.conn.clone();
+            if let Ok(rb) = rpc(k, &conn, tv::READLINK, W9::new().u32(m.fid)).await {
+                return Some(R9::new(&rb).s());
             }
-            let slash = path.find('/');
-            let spec = match slash {
-                Some(i) => &path[..i],
-                None => path,
+        }
+    }
+    None
+}
+
+async fn walk(k: &K, pid: Pid, path: &str, nofollow_last: bool) -> Result<DN, KErr> {
+    let cwd = k.borrow().procs.get(&pid).map(|p| p.cwd.clone()).unwrap_or_else(|| "/".into());
+    let mut full = canon(path, &cwd);
+    for depth in 0.. {
+        if depth > 8 {
+            return Err("too many levels of symlinks".into());
+        }
+        match walk_once(k, pid, &full, nofollow_last).await? {
+            WalkRes::Hit(dn) => return Ok(dn),
+            WalkRes::Redirect(r) => full = canon(&r, &cwd),
+        }
+    }
+    unreachable!()
+}
+
+async fn walk_once(k: &K, pid: Pid, path: &str, nofollow_last: bool) -> Result<WalkRes, KErr> {
+    if path.starts_with('#') {
+        let nomnt = k.borrow().procs.get(&pid).map(|p| p.nomnt).unwrap_or(false);
+        if nomnt {
+            return Err("'#' names disallowed (RFNOMNT)".into());
+        }
+        let slash = path.find('/');
+        let spec = match slash {
+            Some(i) => &path[..i],
+            None => path,
+        };
+        let mut dn = attach(k, spec)?;
+        if let Some(i) = slash {
+            for name in path[i + 1..].split('/').filter(|s| !s.is_empty()) {
+                dn = dev_walk(k, &dn, name, pid).await?
+                    .ok_or_else(|| format!("'{}' does not exist", path))?;
+            }
+        }
+        return Ok(WalkRes::Hit(dn));
+    }
+    let (best, list) = {
+        let kb = k.borrow();
+        let p = kb.procs.get(&pid).ok_or("no proc")?;
+        let ns = p.ns.borrow();
+        let mut best = String::new();
+        let mut list: Option<Vec<MountEl>> = None;
+        for (pfx, l) in ns.iter() {
+            let matches = path == pfx
+                || path.starts_with(&(if pfx == "/" { "/".to_string() } else { format!("{}/", pfx) }));
+            if matches && pfx.len() > best.len() {
+                best = pfx.clone();
+                list = Some(l.clone());
+            }
+        }
+        (best, list)
+    };
+    let mut dn = match &list {
+        Some(l) if l.len() == 1 => l[0].dn.clone(),
+        Some(l) => DN { dev: DevId::Union, node: Node::Union(Rc::new(l.clone())), path: None },
+        None => DN { dev: DevId::Ram, node: Node::Ram(k.borrow().ram_root.clone()), path: None },
+    };
+    let full_comps: Vec<String> =
+        path.split('/').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+    let rest: Vec<String> =
+        path[best.len()..].split('/').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
+    for (i, name) in rest.iter().enumerate() {
+        let next = dev_walk(k, &dn, name, pid).await?
+            .ok_or_else(|| format!("'{}' does not exist", path))?;
+        dn = next;
+        if i == rest.len() - 1 && nofollow_last {
+            break;
+        }
+        if let Some(target) = symtarget(k, &dn).await {
+            let here = full_comps.len() - rest.len() + i;
+            let base = if target.starts_with('/') {
+                target
+            } else {
+                let mut parts: Vec<&str> = full_comps[..here].iter().map(|s| s.as_str()).collect();
+                parts.push(&target);
+                format!("/{}", parts.join("/"))
             };
-            let mut dn = self.attach(spec, pid)?;
-            if let Some(i) = slash {
-                for name in path[i + 1..].split('/').filter(|s| !s.is_empty()) {
-                    dn = self
-                        .dev_walk(&dn, name, pid)?
-                        .ok_or_else(|| format!("'{}' does not exist", path))?;
-                }
-            }
-            return Ok(WalkRes::Hit(dn));
+            let rem = rest[i + 1..].join("/");
+            let redirect = if rem.is_empty() { base } else { format!("{}/{}", base, rem) };
+            return Ok(WalkRes::Redirect(redirect));
         }
-        // longest-prefix bind
-        let (best, list) = {
-            let p = self.procs.get(&pid).ok_or("no proc")?;
-            let ns = p.ns.borrow();
-            let mut best = String::new();
-            let mut list: Option<Vec<MountEl>> = None;
-            for (pfx, l) in ns.iter() {
-                let matches = path == pfx
-                    || path.starts_with(&(if pfx == "/" { "/".to_string() } else { format!("{}/", pfx) }));
-                if matches && pfx.len() > best.len() {
-                    best = pfx.clone();
-                    list = Some(l.clone());
-                }
+    }
+    dn.path = Some(path.to_string());
+    Ok(WalkRes::Hit(dn))
+}
+
+async fn walk_parent(k: &K, pid: Pid, path: &str) -> Result<(DN, String), KErr> {
+    let cwd = k.borrow().procs.get(&pid).map(|p| p.cwd.clone()).unwrap_or_else(|| "/".into());
+    let path = canon(path, &cwd);
+    let i = path.rfind('/').unwrap_or(0);
+    let base = path[i + 1..].to_string();
+    if base.is_empty() || path.starts_with('#') {
+        return Err(format!("bad path '{}'", path));
+    }
+    let parent = walk(k, pid, if i == 0 { "/" } else { &path[..i] }, false).await?;
+    Ok((parent, base))
+}
+
+async fn ns_insert(k: &K, pid: Pid, old: &str, dn: DN, flag: i32) -> Result<(), KErr> {
+    let mode = flag & 3;
+    let create = flag & 4 != 0;
+    let el = MountEl { dn, create };
+    let ns = k.borrow().procs.get(&pid).ok_or("no proc")?.ns.clone();
+    if mode == 0 {
+        ns.borrow_mut().insert(old.into(), vec![el]);
+        return Ok(());
+    }
+    let have = ns.borrow().get(old).cloned();
+    let mut list = match have {
+        Some(l) => l,
+        None => {
+            let under = walk(k, pid, old, false).await?; // must exist, per bind(2)
+            match (&under.dev, &under.node) {
+                (DevId::Union, Node::Union(l)) => l.as_ref().clone(),
+                _ => vec![MountEl { dn: under, create: false }],
             }
-            (best, list)
+        }
+    };
+    if mode == 2 {
+        list.push(el); // MAFTER
+    } else {
+        list.insert(0, el); // MBEFORE
+    }
+    ns.borrow_mut().insert(old.into(), list);
+    Ok(())
+}
+
+// ---- devmnt plumbing ----
+fn clunk_fid(k: &K, conn: &ConnR, fid: u32) {
+    // fire and forget: nothing to do with the answer
+    let tag = {
+        let mut cb = conn.borrow_mut();
+        if cb.dead.is_some() {
+            return;
+        }
+        let tag = cb.nexttag;
+        cb.nexttag = cb.nexttag.wrapping_add(1).max(1);
+        let (c, _w) = oneshot::<Result<Vec<u8>, KErr>>();
+        cb.tags.insert(tag, c);
+        cb.expect.insert(tag, tv::CLUNK + 1);
+        tag
+    };
+    let frame = W9::new().u32(fid).frame(tv::CLUNK, tag);
+    let chan = conn.borrow().chan.clone();
+    let _ = dev_write_sync(k, &chan, &frame, u64::MAX, 1);
+}
+
+async fn rpc(k: &K, conn: &ConnR, ty: u8, body: W9) -> Result<Vec<u8>, KErr> {
+    let (tag, w) = {
+        let mut cb = conn.borrow_mut();
+        if let Some(d) = &cb.dead {
+            return Err(d.clone());
+        }
+        let tag = cb.nexttag;
+        cb.nexttag = cb.nexttag.wrapping_add(1).max(1);
+        let (c, w) = oneshot::<Result<Vec<u8>, KErr>>();
+        cb.tags.insert(tag, c);
+        cb.expect.insert(tag, ty + 1);
+        (tag, w)
+    };
+    let frame = body.frame(ty, tag);
+    let chan = conn.borrow().chan.clone();
+    dev_write_sync(k, &chan, &frame, u64::MAX, 1)?;
+    w.await
+}
+
+// the per-connection reader task: frames in, tags completed
+async fn conn_reader(k: K, conn: ConnR) {
+    let chan = conn.borrow().chan.clone();
+    let mut rbuf: Vec<u8> = Vec::new();
+    loop {
+        let res = dev_read_async(&k, &chan, MSIZE, u64::MAX, 1).await;
+        let chunk = match res {
+            Ok(RRes::Data(d)) if !d.is_empty() => d,
+            _ => {
+                let dead = "mount server closed".to_string();
+                let mut cb = conn.borrow_mut();
+                cb.dead = Some(dead.clone());
+                for (_, c) in cb.tags.drain() {
+                    c.complete(Err(dead.clone()));
+                }
+                cb.expect.clear();
+                return;
+            }
         };
-        let mut dn = match &list {
-            Some(l) if l.len() == 1 => l[0].dn.clone(),
-            Some(l) => DN { dev: DevId::Union, node: Node::Union(Rc::new(l.clone())), path: None },
-            None => DN { dev: DevId::Ram, node: Node::Ram(self.ram_root.clone()), path: None },
-        };
-        let full_comps: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-        let rest: Vec<&str> = path[best.len()..].split('/').filter(|s| !s.is_empty()).collect();
-        for (i, name) in rest.iter().enumerate() {
-            let next = self
-                .dev_walk(&dn, name, pid)?
-                .ok_or_else(|| format!("'{}' does not exist", path))?;
-            dn = next;
-            if i == rest.len() - 1 && nofollow_last {
+        rbuf.extend_from_slice(&chunk);
+        loop {
+            if rbuf.len() < 4 {
                 break;
             }
-            if let Some(target) = self.symtarget(&dn) {
-                let here = full_comps.len() - rest.len() + i;
-                let base = if target.starts_with('/') {
-                    target
-                } else {
-                    format!("/{}", full_comps[..here].iter().chain([target.as_str()].iter()).cloned().collect::<Vec<_>>().join("/"))
-                };
-                let rem = rest[i + 1..].join("/");
-                let redirect = if rem.is_empty() { base } else { format!("{}/{}", base, rem) };
-                return Ok(WalkRes::Redirect(redirect));
+            let size = u32::from_le_bytes(rbuf[0..4].try_into().unwrap()) as usize;
+            if rbuf.len() < size {
+                break;
+            }
+            let msg: Vec<u8> = rbuf.drain(0..size).collect();
+            let ty = msg[4];
+            let tag = u16::from_le_bytes(msg[5..7].try_into().unwrap());
+            let (pend, expect) = {
+                let mut cb = conn.borrow_mut();
+                (cb.tags.remove(&tag), cb.expect.remove(&tag))
+            };
+            let Some(pend) = pend else { continue }; // stray tag: drop
+            if ty == tv::RERROR {
+                let emsg = R9::new(&msg[7..]).s();
+                pend.complete(Err(emsg));
+            } else if Some(ty) != expect {
+                pend.complete(Err(format!("9P: expected R{}, got {}", expect.unwrap_or(0), ty)));
+            } else {
+                pend.complete(Ok(msg[7..].to_vec()));
             }
         }
-        dn.path = Some(path.to_string());
-        Ok(WalkRes::Hit(dn))
     }
+}
 
-    fn walk_parent(&mut self, pid: Pid, path: &str) -> Result<(DN, String), KErr> {
-        let cwd = self.procs.get(&pid).map(|p| p.cwd.clone()).unwrap_or_else(|| "/".into());
-        let path = Self::canon(path, &cwd);
-        let i = path.rfind('/').unwrap_or(0);
-        let base = path[i + 1..].to_string();
-        if base.is_empty() || path.starts_with('#') {
-            return Err(format!("bad path '{}'", path));
-        }
-        let parent = self.walk(pid, if i == 0 { "/" } else { &path[..i] }, false)?;
-        Ok((parent, base))
+// ---- device I/O ----
+fn ram_stat(node: &RamRef) -> Vec<u8> {
+    let n = node.borrow();
+    let qtype = if n.dir { QTDIR } else if n.symlink.is_some() { QTSYMLINK } else { QTFILE };
+    let dm = if n.dir { DMDIR } else if n.symlink.is_some() { DMSYMLINK } else { 0 };
+    let length = if n.dir { 0 } else if let Some(s) = &n.symlink { s.len() as u64 } else { n.data.len() as u64 };
+    marshal_stat(&StatIn {
+        name: &n.name, uid: &n.uid, gid: &n.uid, qpath: n.qpath,
+        atime: n.atime, mtime: n.mtime, qtype, mode: dm | n.mode, length,
+        ..Default::default()
+    })
+}
+
+fn ram_access(k: &K, node: &RamRef, cred: &Cred, want: u32) -> Result<(), KErr> {
+    if cred.euid == k.borrow().eve {
+        return Ok(());
     }
-
-    fn ns_insert(&mut self, pid: Pid, old: &str, dn: DN, flag: i32) -> Result<(), KErr> {
-        let mode = flag & 3;
-        let create = flag & 4 != 0;
-        let el = MountEl { dn, create };
-        if mode == 0 {
-            let p = self.procs.get_mut(&pid).ok_or("no proc")?;
-            p.ns.borrow_mut().insert(old.into(), vec![el]);
-            return Ok(());
-        }
-        let have = self.procs.get(&pid).ok_or("no proc")?.ns.borrow().get(old).cloned();
-        let mut list = match have {
-            Some(l) => l,
-            None => {
-                let under = self.walk(pid, old, false)?; // must exist, per bind(2)
-                match (&under.dev, &under.node) {
-                    (DevId::Union, Node::Union(l)) => l.as_ref().clone(),
-                    _ => vec![MountEl { dn: under, create: false }],
-                }
-            }
-        };
-        if mode == 2 {
-            list.push(el); // MAFTER
-        } else {
-            list.insert(0, el); // MBEFORE
-        }
-        self.procs.get_mut(&pid).ok_or("no proc")?.ns.borrow_mut().insert(old.into(), list);
-        Ok(())
+    let n = node.borrow();
+    let bits = if n.uid == cred.euid { n.mode >> 6 } else { n.mode };
+    if bits & want != want {
+        return Err(format!(
+            "permission denied ('{}' is {}'s, mode {:o})",
+            n.name, n.uid, n.mode & 0o777
+        ));
     }
+    Ok(())
+}
 
-    // ---- device I/O ----
-    fn ram_stat(node: &RamRef) -> Vec<u8> {
-        let n = node.borrow();
-        let qtype = if n.dir { QTDIR } else if n.symlink.is_some() { QTSYMLINK } else { QTFILE };
-        let dm = if n.dir { DMDIR } else if n.symlink.is_some() { DMSYMLINK } else { 0 };
-        let length = if n.dir { 0 } else if let Some(s) = &n.symlink { s.len() as u64 } else { n.data.len() as u64 };
-        marshal_stat(&StatIn {
-            name: &n.name, uid: &n.uid, gid: &n.uid, qpath: n.qpath,
-            atime: n.atime, mtime: n.mtime, qtype, mode: dm | n.mode, length,
-            ..Default::default()
-        })
-    }
-
-    fn ram_access(&self, node: &RamRef, cred: &Cred, want: u32) -> Result<(), KErr> {
-        if cred.euid == self.eve {
-            return Ok(());
+async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
+    match (&dn.dev, &dn.node) {
+        (DevId::Ram, Node::Ram(r)) => Ok(ram_stat(r)),
+        (DevId::Cons, n) => {
+            let (name, dir) = match n {
+                Node::ConsRoot => ("/", true),
+                Node::ConsCons => ("cons", false),
+                Node::ConsUser => ("user", false),
+                Node::ConsPid => ("pid", false),
+                Node::ConsNull => ("null", false),
+                _ => return Err("no stat".into()),
+            };
+            Ok(marshal_stat(&StatIn {
+                name,
+                qtype: if dir { QTDIR } else { QTFILE },
+                mode: if dir { DMDIR | 0o555 } else { 0o666 },
+                ..Default::default()
+            }))
         }
-        let n = node.borrow();
-        let bits = if n.uid == cred.euid { n.mode >> 6 } else { n.mode };
-        if bits & want != want {
-            return Err(format!(
-                "permission denied ('{}' is {}'s, mode {:o})",
-                n.name, n.uid, n.mode & 0o777
-            ));
+        (DevId::Union, Node::Union(list)) => {
+            let first = list[0].dn.clone();
+            Box::pin(dev_stat(k, &first, pid)).await
         }
-        Ok(())
+        (DevId::Env, Node::EnvVar(name)) => {
+            let env = k.borrow().procs.get(&pid).ok_or("no proc")?.env.clone();
+            let len = env.borrow().get(name).map(|v| v.len()).unwrap_or(0);
+            Ok(marshal_stat(&StatIn { name, mode: 0o664, length: len as u64, ..Default::default() }))
+        }
+        (DevId::Env, Node::EnvRoot) => Ok(marshal_stat(&StatIn {
+            name: "/", qtype: QTDIR, mode: DMDIR | 0o775, ..Default::default()
+        })),
+        (DevId::Pipe, _) => Ok(marshal_stat(&StatIn { name: "data", mode: 0o600, ..Default::default() })),
+        (DevId::Mnt, Node::Mnt(m)) => {
+            let conn = m.conn.clone();
+            let rb = rpc(k, &conn, tv::STAT, W9::new().u32(m.fid)).await?;
+            let mut r = R9::new(&rb);
+            r.u16(); // outer size, per stat(5)'s double count
+            Ok(r.rest().to_vec())
+        }
+        _ => Err("no stat on this device (v0)".into()),
     }
+}
 
-    fn dev_stat(&mut self, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
-        match (&dn.dev, &dn.node) {
-            (DevId::Ram, Node::Ram(r)) => Ok(Self::ram_stat(r)),
-            (DevId::Cons, n) => {
-                let (name, dir) = match n {
-                    Node::ConsRoot => ("/", true),
-                    Node::ConsCons => ("cons", false),
-                    Node::ConsUser => ("user", false),
-                    Node::ConsPid => ("pid", false),
-                    Node::ConsNull => ("null", false),
-                    _ => return Err("no stat".into()),
-                };
-                Ok(marshal_stat(&StatIn {
-                    name,
-                    qtype: if dir { QTDIR } else { QTFILE },
-                    mode: if dir { DMDIR | 0o555 } else { 0o666 },
-                    ..Default::default()
-                }))
-            }
-            (DevId::Union, Node::Union(list)) => {
-                let first = list[0].dn.clone();
-                self.dev_stat(&first, pid)
-            }
-            (DevId::Env, Node::EnvVar(name)) => {
-                let p = self.procs.get(&pid).ok_or("no proc")?;
-                let len = p.env.borrow().get(name).map(|v| v.len()).unwrap_or(0);
-                Ok(marshal_stat(&StatIn { name, mode: 0o664, length: len as u64, ..Default::default() }))
-            }
-            (DevId::Env, Node::EnvRoot) => Ok(marshal_stat(&StatIn {
-                name: "/", qtype: QTDIR, mode: DMDIR | 0o775, ..Default::default()
-            })),
-            (DevId::Pipe, _) => Ok(marshal_stat(&StatIn { name: "data", mode: 0o600, ..Default::default() })),
-            _ => Err("no stat on this device (v0)".into()),
+// async read: sync devices answer now; pipe/cons park on a oneshot; mnt rpcs.
+// off_in == u64::MAX means "current offset" (and advances it).
+async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) -> Result<RRes, KErr> {
+    let (dev, node, cur_off) = {
+        let c = chan.borrow();
+        (c.dev, c.node.clone(), c.offset)
+    };
+    let cur = off_in == u64::MAX;
+    let off = if cur { cur_off } else { off_in };
+    fn advance(chan: &ChanR, cur: bool, len: usize) {
+        if cur {
+            chan.borrow_mut().offset += len as u64;
         }
     }
-
-    // read; may PARK (registering its completion) — the JS ctx.done shape
-    fn dev_read(&mut self, chan: &ChanR, n: usize, off: u64, pid: Pid,
-                reply: &Sender<KReply>) -> Result<Option<Vec<u8>>, KErr> {
-        self.dev_read_kind(chan, n, off, pid, WaitKind::Reply { pid, tx: reply.clone() })
-    }
-
-    fn dev_read_kind(&mut self, chan: &ChanR, n: usize, off: u64, pid: Pid,
-                     kind: WaitKind) -> Result<Option<Vec<u8>>, KErr> {
-        let (dev, node) = {
-            let c = chan.borrow();
-            (c.dev, c.node.clone())
-        };
-        match (dev, node) {
-            (DevId::Ram, Node::Ram(r)) => {
-                if r.borrow().dir {
-                    // read(5): an integral number of directory entries
-                    let mut skip = off as usize;
-                    let mut out = Vec::new();
-                    let kids: Vec<RamRef> = r.borrow().kids.iter().map(|(_, v)| v.clone()).collect();
-                    for k in kids {
-                        let rec = Self::ram_stat(&k);
-                        if skip >= rec.len() {
-                            skip -= rec.len();
-                            continue;
-                        }
-                        if out.len() + rec.len() > n {
-                            break;
-                        }
-                        out.extend_from_slice(&rec);
-                    }
-                    Ok(Some(out))
-                } else {
-                    let d = r.borrow();
-                    let start = (off as usize).min(d.data.len());
-                    let end = (off as usize + n).min(d.data.len());
-                    Ok(Some(d.data[start..end].to_vec()))
-                }
-            }
-            (DevId::Cons, Node::ConsUser) => {
-                let euid = self.procs.get(&pid).map(|p| p.cred.euid.clone()).unwrap_or_default();
-                Ok(Some(if off == 0 { euid.into_bytes() } else { Vec::new() }))
-            }
-            (DevId::Cons, Node::ConsPid) => {
-                Ok(Some(if off == 0 { pid.to_string().into_bytes() } else { Vec::new() }))
-            }
-            (DevId::Cons, Node::ConsNull) => Ok(Some(Vec::new())),
-            (DevId::Cons, Node::ConsCons) => {
-                if !self.cons_buf.is_empty() || self.cons_eof {
-                    let take = n.min(self.cons_buf.len());
-                    let give: Vec<u8> = self.cons_buf.drain(0..take).collect();
-                    Ok(Some(give))
-                } else {
-                    self.cons_parked.push(Waiter { n, kind });
-                    Ok(None)
-                }
-            }
-            (DevId::Pipe, Node::Pipe { p, end }) => {
-                let d = 1 ^ end;
-                let mut pb = p.borrow_mut();
-                if pb.nbytes[d] > 0 {
-                    Ok(Some(Self::pipe_drain(&mut pb, d, n)))
-                } else if pb.refs[d] == 0 {
-                    Ok(Some(Vec::new())) // EOF
-                } else {
-                    pb.parked[d].push(Waiter { n, kind });
-                    Ok(None)
-                }
-            }
-            (DevId::Env, Node::EnvVar(name)) => {
-                let p = self.procs.get(&pid).ok_or("no proc")?;
-                let env = p.env.borrow();
-                let data = env.get(&name).cloned().unwrap_or_default();
-                let start = (off as usize).min(data.len());
-                let end = (off as usize + n).min(data.len());
-                Ok(Some(data[start..end].to_vec()))
-            }
-            (DevId::Env, Node::EnvRoot) => {
-                let p = self.procs.get(&pid).ok_or("no proc")?;
+    match (dev, node) {
+        (DevId::Ram, Node::Ram(r)) => {
+            let out = if r.borrow().dir {
                 let mut skip = off as usize;
                 let mut out = Vec::new();
-                let entries: Vec<(String, usize)> = p.env.borrow().iter()
-                    .map(|(k, v)| (k.clone(), v.len())).collect();
-                for (k, vlen) in entries {
-                    let rec = marshal_stat(&StatIn {
-                        name: &k, mode: 0o664, length: vlen as u64, ..Default::default()
-                    });
-                    if skip >= rec.len() { skip -= rec.len(); continue; }
-                    if out.len() + rec.len() > n { break; }
+                let kids: Vec<RamRef> = r.borrow().kids.iter().map(|(_, v)| v.clone()).collect();
+                for kd in kids {
+                    let rec = ram_stat(&kd);
+                    if skip >= rec.len() {
+                        skip -= rec.len();
+                        continue;
+                    }
+                    if out.len() + rec.len() > n {
+                        break;
+                    }
                     out.extend_from_slice(&rec);
                 }
-                Ok(Some(out))
-            }
-            (DevId::Proc, Node::Proc { kind: 3, pid: q }) => {
-                if off > 0 {
-                    return Ok(Some(Vec::new()));
-                }
-                let Some(t) = self.procs.get(&q) else { return Ok(Some(Vec::new())) };
-                Ok(Some(format!("{} {} {} {}\n", t.pid, t.cred.euid, t.cred.ruid, t.ppid).into_bytes()))
-            }
-            (DevId::Proc, _) => Ok(Some(Vec::new())),
-            (DevId::Union, Node::Union(list)) => {
-                // concatenated listings, still integral records
-                let mut skip = off as usize;
-                let mut out = Vec::new();
-                let els: Vec<MountEl> = list.iter().cloned().collect();
-                for el in els {
-                    let listing = self.list_dir(&el.dn, pid)?;
-                    let mut o = 0usize;
-                    while o + 2 <= listing.len() {
-                        let size = u16::from_le_bytes([listing[o], listing[o + 1]]) as usize + 2;
-                        let rec = &listing[o..(o + size).min(listing.len())];
-                        o += size;
-                        if skip >= rec.len() { skip -= rec.len(); continue; }
-                        if out.len() + rec.len() > n { return Ok(Some(out)); }
-                        out.extend_from_slice(rec);
-                    }
-                }
-                Ok(Some(out))
-            }
-            _ => Err("read not supported here (v0)".into()),
-        }
-    }
-
-    fn list_dir(&mut self, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
-        // full listing of one union element (synchronous devices only in v1)
-        let chan = Rc::new(RefCell::new(Chan {
-            dev: dn.dev, node: dn.node.clone(), path: None, mode: 0, offset: 0, refs: 1,
-        }));
-        let (tx, _rx) = std::sync::mpsc::channel();
-        let mut out = Vec::new();
-        let mut off = 0u64;
-        loop {
-            match self.dev_read(&chan, 8192, off, pid, &tx)? {
-                Some(chunk) if chunk.is_empty() => break,
-                Some(chunk) => {
-                    off += chunk.len() as u64;
-                    out.extend_from_slice(&chunk);
-                }
-                None => return Err("parked in list_dir".into()),
-            }
-        }
-        Ok(out)
-    }
-
-    fn pipe_drain(p: &mut Pipe, d: usize, want: usize) -> Vec<u8> {
-        let mut out = Vec::new();
-        while let Some(head) = p.q[d].front_mut() {
-            if out.len() >= want {
-                break;
-            }
-            let take = head.len().min(want - out.len());
-            out.extend_from_slice(&head[..take]);
-            if take == head.len() {
-                p.q[d].pop_front();
+                out
             } else {
-                head.drain(0..take);
-            }
-        }
-        p.nbytes[d] -= out.len();
-        out
-    }
-
-    fn pipe_serve(&mut self, p: &PipeR, d: usize) {
-        loop {
-            let fired = {
-                let mut pb = p.borrow_mut();
-                if pb.parked[d].is_empty() || (pb.nbytes[d] == 0 && pb.refs[d] != 0) {
-                    return;
-                }
-                let w = pb.parked[d].remove(0);
-                let give = if pb.nbytes[d] > 0 { Self::pipe_drain(&mut pb, d, w.n) } else { Vec::new() };
-                (w.kind, give)
+                let d = r.borrow();
+                let start = (off as usize).min(d.data.len());
+                let end = (off as usize + n).min(d.data.len());
+                d.data[start..end].to_vec()
             };
-            self.wake(fired.0, fired.1);
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Cons, Node::ConsUser) => {
+            let euid = k.borrow().procs.get(&pid).map(|p| p.cred.euid.clone()).unwrap_or_default();
+            let out = if off == 0 { euid.into_bytes() } else { Vec::new() };
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Cons, Node::ConsPid) => {
+            let out = if off == 0 { pid.to_string().into_bytes() } else { Vec::new() };
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Cons, Node::ConsNull) => Ok(RRes::Data(Vec::new())),
+        (DevId::Cons, Node::ConsCons) => {
+            let now = {
+                let mut kb = k.borrow_mut();
+                if !kb.cons_buf.is_empty() || kb.cons_eof {
+                    let take = n.min(kb.cons_buf.len());
+                    Some(kb.cons_buf.drain(0..take).collect::<Vec<u8>>())
+                } else {
+                    None
+                }
+            };
+            if let Some(give) = now {
+                advance(chan, cur, give.len());
+                return Ok(RRes::Data(give));
+            }
+            let (c, w) = oneshot::<RRes>();
+            {
+                let mut kb = k.borrow_mut();
+                kb.cons_parked.push(Waiter { n, kind: WaitKind::Wake { pid, c: c.clone() } });
+                if let Some(p) = kb.procs.get_mut(&pid) {
+                    p.inflight = Some(c);
+                }
+            }
+            let r = w.await;
+            if let RRes::Data(d) = &r {
+                advance(chan, cur, d.len());
+            }
+            Ok(r)
+        }
+        (DevId::Pipe, Node::Pipe { p, end }) => {
+            let d = 1 ^ end;
+            let now = {
+                let mut pb = p.borrow_mut();
+                if pb.nbytes[d] > 0 {
+                    Some(pipe_drain(&mut pb, d, n))
+                } else if pb.refs[d] == 0 {
+                    Some(Vec::new()) // EOF
+                } else {
+                    None
+                }
+            };
+            if let Some(give) = now {
+                advance(chan, cur, give.len());
+                return Ok(RRes::Data(give));
+            }
+            let (c, w) = oneshot::<RRes>();
+            {
+                p.borrow_mut().parked[d].push(Waiter { n, kind: WaitKind::Wake { pid, c: c.clone() } });
+                if let Some(pr) = k.borrow_mut().procs.get_mut(&pid) {
+                    pr.inflight = Some(c);
+                }
+            }
+            let r = w.await;
+            if let RRes::Data(dd) = &r {
+                advance(chan, cur, dd.len());
+            }
+            Ok(r)
+        }
+        (DevId::Env, Node::EnvVar(name)) => {
+            let env = k.borrow().procs.get(&pid).ok_or("no proc")?.env.clone();
+            let data = env.borrow().get(&name).cloned().unwrap_or_default();
+            let start = (off as usize).min(data.len());
+            let end = (off as usize + n).min(data.len());
+            let out = data[start..end].to_vec();
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Env, Node::EnvRoot) => {
+            let env = k.borrow().procs.get(&pid).ok_or("no proc")?.env.clone();
+            let mut skip = off as usize;
+            let mut out = Vec::new();
+            let entries: Vec<(String, usize)> =
+                env.borrow().iter().map(|(kk, v)| (kk.clone(), v.len())).collect();
+            for (kk, vlen) in entries {
+                let rec = marshal_stat(&StatIn {
+                    name: &kk, mode: 0o664, length: vlen as u64, ..Default::default()
+                });
+                if skip >= rec.len() { skip -= rec.len(); continue; }
+                if out.len() + rec.len() > n { break; }
+                out.extend_from_slice(&rec);
+            }
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Proc, Node::Proc { kind: 3, pid: q }) => {
+            if off > 0 {
+                return Ok(RRes::Data(Vec::new()));
+            }
+            let s = {
+                let kb = k.borrow();
+                kb.procs.get(&q)
+                    .map(|tp| format!("{} {} {} {}\n", tp.pid, tp.cred.euid, tp.cred.ruid, tp.ppid))
+                    .unwrap_or_default()
+            };
+            let out = s.into_bytes();
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Proc, _) => Ok(RRes::Data(Vec::new())),
+        (DevId::Union, Node::Union(list)) => {
+            let mut skip = off as usize;
+            let mut out = Vec::new();
+            let els: Vec<MountEl> = list.iter().cloned().collect();
+            'outer: for el in els {
+                let listing = list_dir(k, &el.dn, pid).await?;
+                let mut o = 0usize;
+                while o + 2 <= listing.len() {
+                    let size = u16::from_le_bytes([listing[o], listing[o + 1]]) as usize + 2;
+                    let rec = &listing[o..(o + size).min(listing.len())];
+                    o += size;
+                    if skip >= rec.len() { skip -= rec.len(); continue; }
+                    if out.len() + rec.len() > n { break 'outer; }
+                    out.extend_from_slice(rec);
+                }
+            }
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Mnt, Node::Mnt(m)) => {
+            let count = n.min(MSIZE - 24);
+            let conn = m.conn.clone();
+            let rb = rpc(k, &conn, tv::READ, W9::new().u32(m.fid).u64(off).u32(count as u32)).await?;
+            let mut r = R9::new(&rb);
+            let got = r.u32() as usize;
+            let out = r.rest()[..got.min(r.rest().len())].to_vec();
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        _ => Err("read not supported here (v0)".into()),
+    }
+}
+
+async fn list_dir(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
+    // full listing of one union element; a mnt element clones + opens its
+    // own fid, per the JS listDir
+    let dn = if let Node::Mnt(m) = &dn.node {
+        let cloned = mnt_clone(k, m).await?;
+        mnt_open(k, &cloned, 0).await?;
+        DN { dev: DevId::Mnt, node: Node::Mnt(cloned), path: None }
+    } else {
+        dn.clone()
+    };
+    let chan = Rc::new(RefCell::new(Chan {
+        dev: dn.dev, node: dn.node.clone(), path: None, mode: 0, offset: 0, refs: 1,
+    }));
+    let mut out = Vec::new();
+    let mut off = 0u64;
+    loop {
+        match Box::pin(dev_read_async(k, &chan, 8192, off, pid)).await? {
+            RRes::Data(chunk) if chunk.is_empty() => break,
+            RRes::Data(chunk) => {
+                off += chunk.len() as u64;
+                out.extend_from_slice(&chunk);
+            }
+            RRes::Intr => return Err("interrupted".into()),
         }
     }
+    if let Node::Mnt(m) = &dn.node {
+        clunk_fid(k, &m.conn.clone(), m.fid);
+    }
+    Ok(out)
+}
 
-    fn dev_write(&mut self, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Result<usize, KErr> {
-        let (dev, node) = {
-            let c = chan.borrow();
-            (c.dev, c.node.clone())
-        };
-        match (dev, node) {
-            (DevId::Ram, Node::Ram(r)) => {
-                let off = off_in as usize;
-                let mut n = r.borrow_mut();
-                if n.dir {
-                    return Err("write on directory".into());
-                }
-                let end = off + data.len();
-                if end > n.data.len() {
-                    n.data.resize(end, 0);
-                }
-                n.data[off..end].copy_from_slice(data);
-                n.mtime = now_secs();
-                Ok(data.len())
-            }
-            (DevId::Cons, Node::ConsNull) => Ok(data.len()),
-            (DevId::Cons, _) => {
-                self.effects.push(Effect::ConsWrite(data.to_vec()));
-                Ok(data.len())
-            }
-            (DevId::Pipe, Node::Pipe { p, end }) => {
-                {
-                    let mut pb = p.borrow_mut();
-                    if pb.refs[1 ^ end] == 0 {
-                        return Err("write on closed pipe".into());
-                    }
-                    pb.q[end].push_back(data.to_vec());
-                    pb.nbytes[end] += data.len();
-                }
-                self.pipe_serve(&p, end);
-                Ok(data.len())
-            }
-            (DevId::Env, Node::EnvVar(name)) => {
-                let p = self.procs.get(&pid).ok_or("no proc")?;
-                p.env.borrow_mut().insert(name.clone(), data.to_vec());
-                Ok(data.len())
-            }
-            (DevId::Proc, Node::Proc { kind, pid: q }) if kind >= 2 => {
-                let cred = self.procs.get(&pid).ok_or("no proc")?.cred.clone();
-                let tcred = self.procs.get(&q).ok_or("process gone")?.cred.clone();
-                if cred.euid != self.eve && cred.euid != tcred.euid {
-                    return Err("not your process".into());
-                }
-                let text = String::from_utf8_lossy(data).trim().to_string();
-                match kind {
-                    4 => {
-                        self.postnote(q, &text);
-                        Ok(data.len())
-                    }
-                    5 => {
-                        // the group, writer excepted (pgrpnote's rule)
-                        let group = self.procs.get(&q).map(|t| t.note_group).unwrap_or(0);
-                        let targets: Vec<Pid> = self.procs.values()
-                            .filter(|t| t.note_group == group && t.pid != pid)
-                            .map(|t| t.pid).collect();
-                        for t in targets {
-                            self.postnote(t, &text);
-                        }
-                        Ok(data.len())
-                    }
-                    _ => {
-                        let mut it = text.split_whitespace();
-                        let (verb, arg) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
-                        if verb != "user" || arg.is_empty() {
-                            return Err(format!("bad ctl message '{}'", text));
-                        }
-                        let t = self.procs.get_mut(&q).ok_or("process gone")?;
-                        if cred.euid == self.eve {
-                            t.cred.euid = arg.into(); // rule 1: eve -> anyone
-                            t.cred.ruid = arg.into();
-                        } else if arg == t.cred.ruid {
-                            t.cred.euid = arg.into(); // rule 2: back to ruid
-                        } else {
-                            return Err(format!("'{}' may not become '{}'", cred.euid, arg));
-                        }
-                        Ok(data.len())
-                    }
-                }
-            }
-            _ => Err("write not supported here (v0)".into()),
+async fn mnt_clone(k: &K, m: &MntRef) -> Result<MntRef, KErr> {
+    // Twalk, zero names: a fresh fid — the attach fid is never consumed
+    let conn = m.conn.clone();
+    let newfid = {
+        let mut cb = conn.borrow_mut();
+        let f = cb.nextfid;
+        cb.nextfid += 1;
+        f
+    };
+    rpc(k, &conn, tv::WALK, W9::new().u32(m.fid).u32(newfid).u16(0)).await?;
+    Ok(Rc::new(MntNode {
+        conn, fid: newfid, qtype: m.qtype,
+        ephemeral: std::cell::Cell::new(true),
+        opened: std::cell::Cell::new(false),
+    }))
+}
+
+async fn mnt_open(k: &K, m: &MntRef, mode: u32) -> Result<(), KErr> {
+    let conn = m.conn.clone();
+    rpc(k, &conn, tv::OPEN, W9::new().u32(m.fid).u8(mode as u8)).await?;
+    m.ephemeral.set(false);
+    m.opened.set(true);
+    Ok(())
+}
+
+fn pipe_drain(p: &mut Pipe, d: usize, want: usize) -> Vec<u8> {
+    let mut out = Vec::new();
+    while let Some(head) = p.q[d].front_mut() {
+        if out.len() >= want {
+            break;
+        }
+        let take = head.len().min(want - out.len());
+        out.extend_from_slice(&head[..take]);
+        if take == head.len() {
+            p.q[d].pop_front();
+        } else {
+            head.drain(0..take);
         }
     }
+    p.nbytes[d] -= out.len();
+    out
+}
 
-    fn dev_len(&self, chan: &ChanR) -> u64 {
-        let c = chan.borrow();
-        match (&c.dev, &c.node) {
-            (DevId::Ram, Node::Ram(r)) => {
-                let n = r.borrow();
-                if n.dir { 0 } else { n.data.len() as u64 }
-            }
-            _ => 0,
-        }
-    }
-
-    fn clunk(&mut self, chan: &ChanR) {
-        let node = {
-            let mut c = chan.borrow_mut();
-            c.refs -= 1;
-            if c.refs > 0 {
+fn pipe_serve(k: &K, p: &PipeR, d: usize) {
+    loop {
+        let fired = {
+            let mut pb = p.borrow_mut();
+            if pb.parked[d].is_empty() || (pb.nbytes[d] == 0 && pb.refs[d] != 0) {
                 return;
             }
-            c.node.clone()
+            let w = pb.parked[d].remove(0);
+            let give = if pb.nbytes[d] > 0 { pipe_drain(&mut pb, d, w.n) } else { Vec::new() };
+            (w.kind, give)
         };
-        if let Node::Pipe { p, end } = node {
+        wake(k, fired.0, fired.1);
+    }
+}
+
+// sync write (ram/cons/pipe/env/proc); mnt goes through dev_write_async
+fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Result<usize, KErr> {
+    let (dev, node, cur_off) = {
+        let c = chan.borrow();
+        (c.dev, c.node.clone(), c.offset)
+    };
+    let cur = off_in == u64::MAX;
+    let off = if cur { cur_off } else { off_in };
+    let wrote = match (dev, node) {
+        (DevId::Ram, Node::Ram(r)) => {
+            let off = off as usize;
+            let mut n = r.borrow_mut();
+            if n.dir {
+                return Err("write on directory".into());
+            }
+            let end = off + data.len();
+            if end > n.data.len() {
+                n.data.resize(end, 0);
+            }
+            n.data[off..end].copy_from_slice(data);
+            n.mtime = now_secs();
+            data.len()
+        }
+        (DevId::Cons, Node::ConsNull) => data.len(),
+        (DevId::Cons, _) => {
+            k.borrow_mut().effects.push(Effect::ConsWrite(data.to_vec()));
+            data.len()
+        }
+        (DevId::Pipe, Node::Pipe { p, end }) => {
+            {
+                let mut pb = p.borrow_mut();
+                if pb.refs[1 ^ end] == 0 {
+                    return Err("write on closed pipe".into());
+                }
+                pb.q[end].push_back(data.to_vec());
+                pb.nbytes[end] += data.len();
+            }
+            pipe_serve(k, &p, end);
+            data.len()
+        }
+        (DevId::Env, Node::EnvVar(name)) => {
+            let env = k.borrow().procs.get(&pid).ok_or("no proc")?.env.clone();
+            env.borrow_mut().insert(name.clone(), data.to_vec());
+            data.len()
+        }
+        (DevId::Proc, Node::Proc { kind, pid: q }) if kind >= 2 => {
+            proc_write(k, kind, q, data, pid)?
+        }
+        _ => return Err("write not supported here (v0)".into()),
+    };
+    if cur {
+        chan.borrow_mut().offset += wrote as u64;
+    }
+    Ok(wrote)
+}
+
+async fn dev_write_async(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Result<usize, KErr> {
+    let mnt = {
+        let c = chan.borrow();
+        match &c.node {
+            Node::Mnt(m) => Some(m.clone()),
+            _ => None,
+        }
+    };
+    if let Some(m) = mnt {
+        let cur = off_in == u64::MAX;
+        let off = if cur { chan.borrow().offset } else { off_in };
+        let d = &data[..data.len().min(MSIZE - 24)];
+        let conn = m.conn.clone();
+        let rb = rpc(k, &conn, tv::WRITE,
+                     W9::new().u32(m.fid).u64(off).u32(d.len() as u32).raw(d)).await?;
+        let wrote = R9::new(&rb).u32() as usize;
+        if cur {
+            chan.borrow_mut().offset += wrote as u64;
+        }
+        return Ok(wrote);
+    }
+    dev_write_sync(k, chan, data, off_in, pid)
+}
+
+fn proc_write(k: &K, kind: u8, q: Pid, data: &[u8], pid: Pid) -> Result<usize, KErr> {
+    let (cred, tcred, eve) = {
+        let kb = k.borrow();
+        let cred = kb.procs.get(&pid).ok_or("no proc")?.cred.clone();
+        let tcred = kb.procs.get(&q).ok_or("process gone")?.cred.clone();
+        (cred, tcred, kb.eve.clone())
+    };
+    if cred.euid != eve && cred.euid != tcred.euid {
+        return Err("not your process".into());
+    }
+    let text = String::from_utf8_lossy(data).trim().to_string();
+    match kind {
+        4 => {
+            postnote(k, q, &text);
+            Ok(data.len())
+        }
+        5 => {
+            // the group, writer excepted (pgrpnote's rule)
+            let targets: Vec<Pid> = {
+                let kb = k.borrow();
+                let group = kb.procs.get(&q).map(|t| t.note_group).unwrap_or(0);
+                kb.procs.values().filter(|t| t.note_group == group && t.pid != pid).map(|t| t.pid).collect()
+            };
+            for t in targets {
+                postnote(k, t, &text);
+            }
+            Ok(data.len())
+        }
+        _ => {
+            let mut it = text.split_whitespace();
+            let (verb, arg) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
+            if verb != "user" || arg.is_empty() {
+                return Err(format!("bad ctl message '{}'", text));
+            }
+            let mut kb = k.borrow_mut();
+            let tp = kb.procs.get_mut(&q).ok_or("process gone")?;
+            if cred.euid == eve {
+                tp.cred.euid = arg.into(); // rule 1: eve -> anyone
+                tp.cred.ruid = arg.into();
+            } else if arg == tp.cred.ruid {
+                tp.cred.euid = arg.into(); // rule 2: back to ruid
+            } else {
+                return Err(format!("'{}' may not become '{}'", cred.euid, arg));
+            }
+            Ok(data.len())
+        }
+    }
+}
+
+fn dev_len(chan: &ChanR) -> u64 {
+    let c = chan.borrow();
+    match (&c.dev, &c.node) {
+        (DevId::Ram, Node::Ram(r)) => {
+            let n = r.borrow();
+            if n.dir { 0 } else { n.data.len() as u64 }
+        }
+        _ => 0,
+    }
+}
+
+fn clunk(k: &K, chan: &ChanR) {
+    let node = {
+        let mut c = chan.borrow_mut();
+        c.refs -= 1;
+        if c.refs > 0 {
+            return;
+        }
+        c.node.clone()
+    };
+    match node {
+        Node::Pipe { p, end } => {
             {
                 let mut pb = p.borrow_mut();
                 pb.refs[end] -= 1;
             }
             let dry = p.borrow().refs[end] == 0;
             if dry {
-                self.pipe_serve(&p, end); // wake readers: data then EOF
+                pipe_serve(k, &p, end); // wake readers: data then EOF
             }
         }
+        Node::Mnt(m) => clunk_fid(k, &m.conn.clone(), m.fid),
+        _ => {}
     }
+}
 
-    fn fdt_close(&mut self, fdt: &FdtR) {
-        let done = {
-            let mut f = fdt.borrow_mut();
-            f.refs -= 1;
-            f.refs == 0
-        };
-        if done {
-            let fds: Vec<ChanR> = fdt.borrow_mut().fds.drain(..).flatten().collect();
-            for c in fds {
-                self.clunk(&c);
-            }
-        }
-    }
-
-    fn fdt_copy(&mut self, fdt: &FdtR) -> FdtR {
-        let fds: Vec<Option<ChanR>> = fdt.borrow().fds.clone();
-        for c in fds.iter().flatten() {
-            c.borrow_mut().refs += 1;
-        }
-        Rc::new(RefCell::new(Fdt { refs: 1, fds }))
-    }
-
-    fn fd_alloc(&mut self, pid: Pid, chan: ChanR, at: Option<usize>) -> i32 {
-        let fdt = self.procs.get(&pid).unwrap().fdt.clone();
-        if let Some(at) = at {
-            let old = {
-                let mut f = fdt.borrow_mut();
-                if f.fds.len() <= at {
-                    f.fds.resize(at + 1, None);
-                }
-                f.fds[at].take()
-            };
-            if let Some(old) = old {
-                self.clunk(&old);
-            }
-            fdt.borrow_mut().fds[at] = Some(chan);
-            return at as i32;
-        }
+fn fdt_close(k: &K, fdt: &FdtR) {
+    let done = {
         let mut f = fdt.borrow_mut();
-        for (i, slot) in f.fds.iter_mut().enumerate() {
-            if slot.is_none() {
-                *slot = Some(chan);
-                return i as i32;
-            }
-        }
-        f.fds.push(Some(chan));
-        (f.fds.len() - 1) as i32
-    }
-
-    fn fdchk(&self, pid: Pid, fd: i32) -> Result<ChanR, KErr> {
-        let p = self.procs.get(&pid).ok_or("no proc")?;
-        if fd < 0 {
-            return Err(format!("fd {} not open", fd));
-        }
-        let c = p.fdt.borrow().fds.get(fd as usize).cloned().flatten();
-        c.ok_or_else(|| format!("fd {} not open", fd))
-    }
-
-    fn zombie(&mut self, ppid: Pid, pid: Pid, msg: &str, nowait: bool) {
-        if nowait {
-            return;
-        }
-        if let Some(parent) = self.procs.get_mut(&ppid) {
-            parent.zombies.push(format!("{} 0 0 0 '{}'", pid, msg));
-            if let Some((tx, max)) = parent.await_reply.take() {
-                let s = parent.zombies.remove(0);
-                let mut bytes = s.into_bytes();
-                bytes.truncate(max.saturating_sub(1));
-                bytes.push(0);
-                let n = bytes.len() as i32 - 1;
-                let _ = tx.send(okd(n, bytes));
-            }
+        f.refs -= 1;
+        f.refs == 0
+    };
+    if done {
+        let fds: Vec<ChanR> = fdt.borrow_mut().fds.drain(..).flatten().collect();
+        for c in fds {
+            clunk(k, &c);
         }
     }
+}
 
-    fn read_all(&mut self, dn: &DN) -> Result<Vec<u8>, KErr> {
-        let chan = Rc::new(RefCell::new(Chan {
-            dev: dn.dev, node: dn.node.clone(), path: None, mode: 0, offset: 0, refs: 1,
-        }));
-        let (tx, _rx) = std::sync::mpsc::channel();
-        let mut out = Vec::new();
-        let mut off = 0u64;
-        loop {
-            match self.dev_read(&chan, 65536, off, 1, &tx)? {
-                Some(chunk) if chunk.is_empty() => break,
-                Some(chunk) => {
-                    off += chunk.len() as u64;
-                    out.extend_from_slice(&chunk);
-                }
-                None => return Err("parked reading an image".into()),
-            }
-        }
-        Ok(out)
+fn fdt_copy(fdt: &FdtR) -> FdtR {
+    let fds: Vec<Option<ChanR>> = fdt.borrow().fds.clone();
+    for c in fds.iter().flatten() {
+        c.borrow_mut().refs += 1;
     }
+    Rc::new(RefCell::new(Fdt { refs: 1, fds }))
+}
 
-    // ---- the dispatcher ----
-    // tx holds the marshalled strings/buffers, exactly as the JS transfer SAB
-    // did; replies carry copy-out bytes the runner writes to guest memory.
-    pub fn syscall(&mut self, worker_pid: Pid, trap: i32, a: [i32; 5], tx: Vec<u8>,
-                   reply: Sender<KReply>) {
-        // borrowed-worker routing: a lazy-fork child issues syscalls on the
-        // parent's thread; the borrower record owns them
-        let pid = self
-            .procs
-            .get(&worker_pid)
-            .and_then(|p| p.borrower)
-            .unwrap_or(worker_pid);
-        if self.verbose {
-            eprintln!("[K sys pid={} trap={} a0={}]", pid, trap, a[0]);
+fn fd_alloc(k: &K, pid: Pid, chan: ChanR, at: Option<usize>) -> i32 {
+    let fdt = k.borrow().procs.get(&pid).unwrap().fdt.clone();
+    if let Some(at) = at {
+        let old = {
+            let mut f = fdt.borrow_mut();
+            if f.fds.len() <= at {
+                f.fds.resize(at + 1, None);
+            }
+            f.fds[at].take()
+        };
+        if let Some(old) = old {
+            clunk(k, &old);
         }
-        // an unhandled note kills at the syscall boundary (V7's timing)
-        if trap != t::EXITS {
-            let doomed = self.procs.get(&pid)
-                .map(|p| !p.notes.is_empty() && !p.has_handler)
-                .unwrap_or(false);
-            if doomed {
-                let msg = format!("note: {}", self.procs.get(&pid).unwrap().notes[0]);
-                let r = self.kill_proc(worker_pid, pid, &msg);
-                let _ = reply.send(r);
-                return;
-            }
-        }
-        match self.dispatch(worker_pid, pid, trap, a, &tx, &reply) {
-            Ok(Done::Now(r)) => {
-                let r = if trap == t::EXITS || trap == t::RFORK { r } else { self.stamp(pid, r) };
-                let _ = reply.send(r);
-            }
-            Ok(Done::Parked) => {}
-            Err(msg) => {
-                if self.verbose {
-                    eprintln!("[K err pid={} trap={}: {}]", pid, trap, msg);
-                }
-                if let Some(p) = self.procs.get_mut(&pid) {
-                    p.errstr = msg;
-                }
-                let _ = reply.send(ok(-1));
-            }
+        fdt.borrow_mut().fds[at] = Some(chan);
+        return at as i32;
+    }
+    let mut f = fdt.borrow_mut();
+    for (i, slot) in f.fds.iter_mut().enumerate() {
+        if slot.is_none() {
+            *slot = Some(chan);
+            return i as i32;
         }
     }
+    f.fds.push(Some(chan));
+    (f.fds.len() - 1) as i32
+}
 
-    fn txstr(tx: &[u8], off: usize) -> String {
-        if off >= tx.len() {
-            return String::new();
-        }
-        let end = tx[off..].iter().position(|&b| b == 0).map(|i| off + i).unwrap_or(tx.len());
-        String::from_utf8_lossy(&tx[off..end]).into_owned()
+fn fdchk(k: &K, pid: Pid, fd: i32) -> Result<ChanR, KErr> {
+    let fdt = k.borrow().procs.get(&pid).ok_or("no proc")?.fdt.clone();
+    if fd < 0 {
+        return Err(format!("fd {} not open", fd));
     }
+    let c = fdt.borrow().fds.get(fd as usize).cloned().flatten();
+    c.ok_or_else(|| format!("fd {} not open", fd))
+}
 
-    fn dispatch(&mut self, worker_pid: Pid, pid: Pid, trap: i32, a: [i32; 5], tx: &[u8],
-                reply: &Sender<KReply>) -> Result<Done, KErr> {
-        use t::*;
-        match trap {
-            BIND => {
-                if self.procs.get(&pid).ok_or("no proc")?.nomnt {
-                    return Err("mounting disallowed (RFNOMNT)".into());
-                }
-                let name = Self::txstr(tx, 0);
-                let old = Self::txstr(tx, name.len() + 1);
-                let src = self.walk(pid, &name, false)?; // resolved now, per bind(2)
-                let cwd = self.procs.get(&pid).unwrap().cwd.clone();
-                let oldc = Self::canon(&old, &cwd);
-                self.ns_insert(pid, &oldc, src, a[2])?;
-                Ok(Done::Now(ok(0)))
+async fn read_all(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
+    // exec's image read; open first if the dev needs it (mnt does)
+    let dn = if let Node::Mnt(m) = &dn.node {
+        if !m.opened.get() {
+            mnt_open(k, m, 0).await?;
+        }
+        dn.clone()
+    } else {
+        dn.clone()
+    };
+    let chan = Rc::new(RefCell::new(Chan {
+        dev: dn.dev, node: dn.node.clone(), path: None, mode: 0, offset: 0, refs: 1,
+    }));
+    let mut out = Vec::new();
+    let mut off = 0u64;
+    loop {
+        match dev_read_async(k, &chan, 65536, off, pid).await? {
+            RRes::Data(chunk) if chunk.is_empty() => break,
+            RRes::Data(chunk) => {
+                off += chunk.len() as u64;
+                out.extend_from_slice(&chunk);
             }
-            CHDIR => {
-                let path = Self::txstr(tx, 0);
-                let cwd = self.procs.get(&pid).unwrap().cwd.clone();
-                let full = Self::canon(&path, &cwd);
-                self.walk(pid, &full, false)?;
-                self.procs.get_mut(&pid).unwrap().cwd = full;
-                Ok(Done::Now(ok(0)))
+            RRes::Intr => return Err("interrupted".into()),
+        }
+    }
+    if let Node::Mnt(m) = &dn.node {
+        clunk_fid(k, &m.conn.clone(), m.fid);
+    }
+    Ok(out)
+}
+
+fn txstr(tx: &[u8], off: usize) -> String {
+    if off >= tx.len() {
+        return String::new();
+    }
+    let end = tx[off..].iter().position(|&b| b == 0).map(|i| off + i).unwrap_or(tx.len());
+    String::from_utf8_lossy(&tx[off..end]).into_owned()
+}
+
+// ---- the dispatcher ----
+async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i32,
+                  a: [i32; 5], tx: Vec<u8>) -> KRes {
+    use t::*;
+    match trap {
+        BIND => {
+            if k.borrow().procs.get(&pid).ok_or("no proc")?.nomnt {
+                return Err("mounting disallowed (RFNOMNT)".into());
             }
-            CLOSE => {
-                let c = self.fdchk(pid, a[0])?;
-                let p = self.procs.get(&pid).unwrap();
-                p.fdt.borrow_mut().fds[a[0] as usize] = None;
-                self.clunk(&c);
-                Ok(Done::Now(ok(0)))
+            let name = txstr(&tx, 0);
+            let old = txstr(&tx, name.len() + 1);
+            let src = walk(k, pid, &name, false).await?; // resolved now, per bind(2)
+            let cwd = k.borrow().procs.get(&pid).unwrap().cwd.clone();
+            let oldc = canon(&old, &cwd);
+            ns_insert(k, pid, &oldc, src, a[2]).await?;
+            Ok(ok(0))
+        }
+        MOUNT => {
+            if k.borrow().procs.get(&pid).ok_or("no proc")?.nomnt {
+                return Err("mounting disallowed (RFNOMNT)".into());
             }
-            DUP => {
-                let c = self.fdchk(pid, a[0])?;
-                c.borrow_mut().refs += 1;
-                let fd = if a[1] >= 0 {
-                    self.fd_alloc(pid, c, Some(a[1] as usize))
-                } else {
-                    self.fd_alloc(pid, c, None)
-                };
-                Ok(Done::Now(ok(fd)))
+            let old = txstr(&tx, 0);
+            let aname = txstr(&tx, old.len() + 1);
+            let c = fdchk(k, pid, a[0])?;
+            c.borrow_mut().refs += 1; // the kernel holds its own reference
+            let conn = Rc::new(RefCell::new(ConnSt {
+                chan: c, tags: HashMap::new(), expect: HashMap::new(),
+                nexttag: 1, nextfid: 1, dead: None,
+            }));
+            ex.spawn(conn_reader(k.clone(), conn.clone()));
+            let rb = rpc(k, &conn, tv::VERSION, W9::new().u32(MSIZE as u32).s("9P2000")).await?;
+            let mut r = R9::new(&rb);
+            let _msize = r.u32();
+            let ver = r.s();
+            if ver != "9P2000" {
+                return Err(format!("server speaks '{}', not 9P2000", ver));
             }
-            OPEN => {
-                let path = Self::txstr(tx, 0);
-                let dn = self.walk(pid, &path, false)?;
-                // '#d/N' (and posted names later): share the chan itself
-                if let Node::DupFd(target) = &dn.node {
-                    target.borrow_mut().refs += 1;
-                    let fd = self.fd_alloc(pid, target.clone(), None);
-                    return Ok(Done::Now(ok(fd)));
-                }
-                self.open_perm(&dn, a[1] as u32, pid)?;
-                let cwd = self.procs.get(&pid).unwrap().cwd.clone();
-                let chan = Rc::new(RefCell::new(Chan {
-                    dev: dn.dev, node: dn.node, path: Some(Self::canon(&path, &cwd)),
-                    mode: a[1] as u32, offset: 0, refs: 1,
-                }));
-                let fd = self.fd_alloc(pid, chan, None);
-                Ok(Done::Now(ok(fd)))
+            let uname = k.borrow().procs.get(&pid).unwrap().cred.euid.clone();
+            let fid = {
+                let mut cb = conn.borrow_mut();
+                let f = cb.nextfid;
+                cb.nextfid += 1;
+                f
+            };
+            let rb = rpc(k, &conn, tv::ATTACH,
+                         W9::new().u32(fid).u32(NOFID).s(&uname).s(&aname)).await?;
+            let (qt, _, _) = R9::new(&rb).qid();
+            let node = Node::Mnt(Rc::new(MntNode {
+                conn, fid, qtype: qt,
+                ephemeral: std::cell::Cell::new(false),
+                opened: std::cell::Cell::new(false),
+            }));
+            let cwd = k.borrow().procs.get(&pid).unwrap().cwd.clone();
+            let oldc = canon(&old, &cwd);
+            ns_insert(k, pid, &oldc, DN { dev: DevId::Mnt, node, path: None }, a[3]).await?;
+            Ok(ok(0))
+        }
+        UNMOUNT => {
+            let name = txstr(&tx, 0);
+            let old = txstr(&tx, name.len() + 1);
+            if k.borrow().procs.get(&pid).ok_or("no proc")?.nomnt {
+                return Err("mounting disallowed (RFNOMNT)".into());
             }
-            CREATE => {
-                let cpath = Self::txstr(tx, 0);
-                let mode = a[1] as u32;
-                let perm = a[2] as u32;
-                let isdir = perm & DMDIR != 0;
-                // create(2): an existing file (not a dir create) opens + truncates
-                if !isdir {
-                    if let Ok(dn) = self.walk(pid, &cpath, false) {
-                        self.open_perm(&dn, mode | OTRUNC, pid)?;
-                        if let Node::Ram(r) = &dn.node {
-                            r.borrow_mut().data.clear();
-                        }
+            let cwd = k.borrow().procs.get(&pid).unwrap().cwd.clone();
+            let key = canon(&old, &cwd);
+            let ns = k.borrow().procs.get(&pid).unwrap().ns.clone();
+            let have = ns.borrow().get(&key).cloned();
+            let Some(mut list) = have else {
+                return Err(format!("'{}' is not a mount point", key));
+            };
+            if name.is_empty() {
+                ns.borrow_mut().remove(&key);
+                return Ok(ok(0));
+            }
+            let nm = if name.starts_with('#') { name.clone() } else { canon(&name, &cwd) };
+            let mut i = list.iter().position(|el| el.dn.path.as_deref() == Some(nm.as_str()));
+            if i.is_none() {
+                let src = walk(k, pid, &name, false).await?;
+                i = list.iter().position(|el| el.dn.dev == src.dev && node_eq(&el.dn.node, &src.node));
+            }
+            let Some(i) = i else {
+                return Err(format!("'{}' is not bound at '{}'", name, key));
+            };
+            list.remove(i);
+            if list.is_empty() {
+                ns.borrow_mut().remove(&key);
+            } else {
+                ns.borrow_mut().insert(key, list);
+            }
+            Ok(ok(0))
+        }
+        CHDIR => {
+            let path = txstr(&tx, 0);
+            let cwd = k.borrow().procs.get(&pid).unwrap().cwd.clone();
+            let full = canon(&path, &cwd);
+            walk(k, pid, &full, false).await?;
+            k.borrow_mut().procs.get_mut(&pid).unwrap().cwd = full;
+            Ok(ok(0))
+        }
+        CLOSE => {
+            let c = fdchk(k, pid, a[0])?;
+            let fdt = k.borrow().procs.get(&pid).unwrap().fdt.clone();
+            fdt.borrow_mut().fds[a[0] as usize] = None;
+            clunk(k, &c);
+            Ok(ok(0))
+        }
+        DUP => {
+            let c = fdchk(k, pid, a[0])?;
+            c.borrow_mut().refs += 1;
+            let fd = if a[1] >= 0 {
+                fd_alloc(k, pid, c, Some(a[1] as usize))
+            } else {
+                fd_alloc(k, pid, c, None)
+            };
+            Ok(ok(fd))
+        }
+        OPEN => {
+            let path = txstr(&tx, 0);
+            let dn = walk(k, pid, &path, false).await?;
+            if let Node::DupFd(target) = &dn.node {
+                target.borrow_mut().refs += 1;
+                let fd = fd_alloc(k, pid, target.clone(), None);
+                return Ok(ok(fd));
+            }
+            // mnt: clone before open, so the attach fid is never consumed
+            let dn = if let Node::Mnt(m) = &dn.node {
+                let m2 = if m.ephemeral.get() { m.clone() } else { mnt_clone(k, m).await? };
+                mnt_open(k, &m2, a[1] as u32 & 0x0f).await?;
+                DN { dev: DevId::Mnt, node: Node::Mnt(m2), path: dn.path.clone() }
+            } else {
+                open_perm(k, &dn, a[1] as u32, pid)?;
+                dn
+            };
+            let cwd = k.borrow().procs.get(&pid).unwrap().cwd.clone();
+            let chan = Rc::new(RefCell::new(Chan {
+                dev: dn.dev, node: dn.node, path: Some(canon(&path, &cwd)),
+                mode: a[1] as u32, offset: 0, refs: 1,
+            }));
+            let fd = fd_alloc(k, pid, chan, None);
+            Ok(ok(fd))
+        }
+        CREATE => {
+            let cpath = txstr(&tx, 0);
+            let mode = a[1] as u32;
+            let perm = a[2] as u32;
+            let isdir = perm & DMDIR != 0;
+            if !isdir {
+                if let Ok(dn) = walk(k, pid, &cpath, false).await {
+                    // create(2): an existing file opens and truncates
+                    if let Node::Mnt(m) = &dn.node {
+                        let m2 = if m.ephemeral.get() { m.clone() } else { mnt_clone(k, m).await? };
+                        mnt_open(k, &m2, (mode & 0x0f) | OTRUNC).await?;
                         let chan = Rc::new(RefCell::new(Chan {
-                            dev: dn.dev, node: dn.node, path: Some(cpath.clone()),
+                            dev: DevId::Mnt, node: Node::Mnt(m2), path: Some(cpath.clone()),
                             mode, offset: 0, refs: 1,
                         }));
-                        let fd = self.fd_alloc(pid, chan, None);
-                        return Ok(Done::Now(ok(fd)));
+                        return Ok(ok(fd_alloc(k, pid, chan, None)));
                     }
-                }
-                let (parent, base) = self.walk_parent(pid, &cpath)?;
-                let parent = match (&parent.dev, &parent.node) {
-                    (DevId::Union, Node::Union(list)) => list
-                        .iter()
-                        .find(|e| e.create)
-                        .map(|e| e.dn.clone())
-                        .ok_or("create in a union needs an element bound with -c (MCREATE)")?,
-                    _ => parent,
-                };
-                if let Node::EnvRoot = &parent.node {
-                    // env vars are created into the walker's group
-                    let p = self.procs.get(&pid).ok_or("no proc")?;
-                    p.env.borrow_mut().insert(base.clone(), Vec::new());
+                    open_perm(k, &dn, mode | OTRUNC, pid)?;
+                    if let Node::Ram(r) = &dn.node {
+                        r.borrow_mut().data.clear();
+                    }
                     let chan = Rc::new(RefCell::new(Chan {
-                        dev: DevId::Env, node: Node::EnvVar(base), path: Some(cpath),
+                        dev: dn.dev, node: dn.node, path: Some(cpath.clone()),
                         mode, offset: 0, refs: 1,
                     }));
-                    let fd = self.fd_alloc(pid, chan, None);
-                    return Ok(Done::Now(ok(fd)));
+                    return Ok(ok(fd_alloc(k, pid, chan, None)));
                 }
-                let umask = self.procs.get(&pid).unwrap().umask;
-                let cred = self.procs.get(&pid).unwrap().cred.clone();
-                let node = self.ram_create(&parent, &base, perm & !umask, isdir, &cred)?;
+            }
+            let (parent, base) = walk_parent(k, pid, &cpath).await?;
+            let parent = match (&parent.dev, &parent.node) {
+                (DevId::Union, Node::Union(list)) => list
+                    .iter()
+                    .find(|e| e.create)
+                    .map(|e| e.dn.clone())
+                    .ok_or("create in a union needs an element bound with -c (MCREATE)")?,
+                _ => parent,
+            };
+            if let Node::EnvRoot = &parent.node {
+                let env = k.borrow().procs.get(&pid).ok_or("no proc")?.env.clone();
+                env.borrow_mut().insert(base.clone(), Vec::new());
                 let chan = Rc::new(RefCell::new(Chan {
-                    dev: DevId::Ram, node: Node::Ram(node), path: Some(cpath),
+                    dev: DevId::Env, node: Node::EnvVar(base), path: Some(cpath),
                     mode, offset: 0, refs: 1,
                 }));
-                let fd = self.fd_alloc(pid, chan, None);
-                Ok(Done::Now(ok(fd)))
+                return Ok(ok(fd_alloc(k, pid, chan, None)));
             }
-            REMOVE => {
-                let path = Self::txstr(tx, 0);
-                let (parent, base) = self.walk_parent(pid, &path)?;
-                if let Node::EnvRoot = &parent.node {
-                    let p = self.procs.get(&pid).ok_or("no proc")?;
-                    p.env.borrow_mut().remove(&base);
-                    return Ok(Done::Now(ok(0)));
-                }
-                let cred = self.procs.get(&pid).unwrap().cred.clone();
-                if let Node::Ram(pr) = &parent.node {
-                    self.ram_access(pr, &cred, 2)?;
-                    let found = kid(pr, &base).ok_or_else(|| format!("'{}' does not exist", base))?;
-                    if found.borrow().dir && !found.borrow().kids.is_empty() {
-                        return Err("directory not empty".into());
-                    }
-                    pr.borrow_mut().kids.retain(|(k, _)| k != &base);
-                    Ok(Done::Now(ok(0)))
-                } else {
-                    Err("remove not supported on this device".into())
-                }
-            }
-            SEEK => {
-                let c = self.fdchk(pid, a[0])?;
-                let off = ((a[2] as i64) << 32) | (a[1] as u32 as i64);
-                let len = self.dev_len(&c);
-                let mut cb = c.borrow_mut();
-                cb.offset = match a[3] {
-                    0 => off as u64,
-                    1 => (cb.offset as i64 + off) as u64,
-                    _ => (len as i64 + off) as u64,
-                };
-                Ok(Done::Now(ok(cb.offset as i32)))
-            }
-            PREAD => {
-                let c = self.fdchk(pid, a[0])?;
-                let n = (a[2] as usize).min(TXSIZE);
-                let cur = a[3] == -1 && a[4] == -1;
-                let off = if cur { c.borrow().offset } else { ((a[4] as u32 as u64) << 32) | a[3] as u32 as u64 };
-                match self.dev_read(&c, n, off, pid, reply)? {
-                    Some(data) => {
-                        if cur {
-                            c.borrow_mut().offset += data.len() as u64;
-                        }
-                        Ok(Done::Now(okd(data.len() as i32, data)))
-                    }
-                    None => {
-                        if let Some(p) = self.procs.get_mut(&pid) {
-                            p.inflight = Some(reply.clone());
-                        }
-                        Ok(Done::Parked) // stream devices; offsets don't apply
-                    }
-                }
-            }
-            PWRITE => {
-                let c = self.fdchk(pid, a[0])?;
-                let n = (a[2] as usize).min(TXSIZE).min(tx.len());
-                let cur = a[3] == -1 && a[4] == -1;
-                let off = if cur { c.borrow().offset } else { ((a[4] as u32 as u64) << 32) | a[3] as u32 as u64 };
-                let wrote = self.dev_write(&c, &tx[..n], off, pid)?;
-                if cur {
-                    c.borrow_mut().offset += wrote as u64;
-                }
-                Ok(Done::Now(ok(wrote as i32)))
-            }
-            STAT => {
-                let path = Self::txstr(tx, 0);
-                let dn = self.walk(pid, &path, a[3] == 1)?; // a3: lstat's nofollow
-                let rec = self.dev_stat(&dn, pid)?;
-                let n = rec.len() as i32;
-                Ok(Done::Now(okd(n, rec)))
-            }
-            FSTAT => {
-                let c = self.fdchk(pid, a[0])?;
-                let dn = {
-                    let cb = c.borrow();
-                    DN { dev: cb.dev, node: cb.node.clone(), path: None }
-                };
-                let rec = self.dev_stat(&dn, pid)?;
-                let n = rec.len() as i32;
-                Ok(Done::Now(okd(n, rec)))
-            }
-            ERRSTR => {
-                // exchange, per errstr(2)
-                let newe = Self::txstr(tx, 0);
-                let p = self.procs.get_mut(&pid).ok_or("no proc")?;
-                let olde = std::mem::replace(&mut p.errstr, newe);
-                let cap = (a[1] as usize).max(1);
-                let mut bytes: Vec<u8> = olde.into_bytes();
-                bytes.truncate(cap - 1);
-                bytes.push(0);
-                Ok(Done::Now(okd(bytes.len() as i32 - 1, bytes)))
-            }
-            FD2PATH => {
-                let c = self.fdchk(pid, a[0])?;
-                let path = c.borrow().path.clone().unwrap_or_default();
-                let mut bytes = path.into_bytes();
-                bytes.truncate((a[2] as usize).saturating_sub(1));
-                bytes.push(0);
-                Ok(Done::Now(okd(bytes.len() as i32 - 1, bytes)))
-            }
-            NSEC => Ok(Done::Now(okd(8, now_nanos().to_le_bytes().to_vec()))),
-            SLEEP => {
-                let ms = a[0].max(0) as u64;
-                if ms == 0 {
-                    return Ok(Done::Now(ok(0)));
-                }
-                let token = self.next_token;
-                self.next_token += 1;
-                self.timers.insert(token, TimerKind::Sleep(reply.clone()));
-                self.procs.get_mut(&pid).unwrap().inflight = Some(reply.clone());
-                self.effects.push(Effect::Timer { ms, token });
-                Ok(Done::Parked)
-            }
-            PIPE => {
-                let p = Rc::new(RefCell::new(Pipe {
-                    q: [VecDeque::new(), VecDeque::new()],
-                    nbytes: [0, 0],
-                    refs: [1, 1],
-                    parked: [Vec::new(), Vec::new()],
+            if let Node::Mnt(m) = &parent.node {
+                // Tcreate: the fid comes to represent (and opens) the new file
+                let m2 = if m.ephemeral.get() { m.clone() } else { mnt_clone(k, m).await? };
+                let conn = m2.conn.clone();
+                rpc(k, &conn, tv::CREATE,
+                    W9::new().u32(m2.fid).s(&base).u32(perm).u8((mode & 0x0f) as u8)).await?;
+                m2.ephemeral.set(false);
+                m2.opened.set(true);
+                let chan = Rc::new(RefCell::new(Chan {
+                    dev: DevId::Mnt, node: Node::Mnt(m2), path: Some(cpath),
+                    mode, offset: 0, refs: 1,
                 }));
-                let mk = |end: usize| {
-                    Rc::new(RefCell::new(Chan {
-                        dev: DevId::Pipe, node: Node::Pipe { p: p.clone(), end },
-                        path: Some("#|/data".into()), mode: 2, offset: 0, refs: 1,
-                    }))
-                };
-                let c0 = mk(0);
-                let c1 = mk(1);
-                let fd0 = self.fd_alloc(pid, c0, None);
-                let fd1 = self.fd_alloc(pid, c1, None);
-                let mut data = Vec::with_capacity(8);
-                data.extend_from_slice(&fd0.to_le_bytes());
-                data.extend_from_slice(&fd1.to_le_bytes());
-                Ok(Done::Now(okd(0, data)))
+                return Ok(ok(fd_alloc(k, pid, chan, None)));
             }
-            ARGS => {
-                let p = self.procs.get(&pid).ok_or("no proc")?;
-                let mut block = Vec::new();
-                for s in &p.argv {
-                    block.extend_from_slice(s.as_bytes());
-                    block.push(0);
+            let (umask, cred) = {
+                let kb = k.borrow();
+                let p = kb.procs.get(&pid).unwrap();
+                (p.umask, p.cred.clone())
+            };
+            let node = ram_create(k, &parent, &base, perm & !umask, isdir, &cred)?;
+            let chan = Rc::new(RefCell::new(Chan {
+                dev: DevId::Ram, node: Node::Ram(node), path: Some(cpath),
+                mode, offset: 0, refs: 1,
+            }));
+            Ok(ok(fd_alloc(k, pid, chan, None)))
+        }
+        REMOVE => {
+            let path = txstr(&tx, 0);
+            let (parent, base) = walk_parent(k, pid, &path).await?;
+            if let Node::EnvRoot = &parent.node {
+                let env = k.borrow().procs.get(&pid).ok_or("no proc")?.env.clone();
+                env.borrow_mut().remove(&base);
+                return Ok(ok(0));
+            }
+            if let Node::Mnt(_) = &parent.node {
+                // walk to the name, then Tremove (which clunks, per remove(5))
+                let target = dev_walk_one(k, &parent, &base, pid).await?
+                    .ok_or_else(|| format!("'{}' does not exist", base))?;
+                if let Node::Mnt(tm) = &target.node {
+                    let conn = tm.conn.clone();
+                    rpc(k, &conn, tv::REMOVE, W9::new().u32(tm.fid)).await?;
                 }
-                block.truncate(a[1] as usize);
-                Ok(Done::Now(okd(block.len() as i32, block)))
+                return Ok(ok(0));
             }
-            RFORK => self.rfork(worker_pid, pid, a[0], a[2]),
-            EXEC => self.exec_call(worker_pid, pid, tx, a[2]),
-            EXITS => self.exits(worker_pid, pid, tx),
-            AWAIT => {
-                let p = self.procs.get_mut(&pid).ok_or("no proc")?;
+            let cred = k.borrow().procs.get(&pid).unwrap().cred.clone();
+            if let Node::Ram(pr) = &parent.node {
+                ram_access(k, pr, &cred, 2)?;
+                let found = kid(pr, &base).ok_or_else(|| format!("'{}' does not exist", base))?;
+                if found.borrow().dir && !found.borrow().kids.is_empty() {
+                    return Err("directory not empty".into());
+                }
+                pr.borrow_mut().kids.retain(|(kk, _)| kk != &base);
+                Ok(ok(0))
+            } else {
+                Err("remove not supported on this device".into())
+            }
+        }
+        SEEK => {
+            let c = fdchk(k, pid, a[0])?;
+            let off = ((a[2] as i64) << 32) | (a[1] as u32 as i64);
+            let len = dev_len(&c);
+            let mut cb = c.borrow_mut();
+            cb.offset = match a[3] {
+                0 => off as u64,
+                1 => (cb.offset as i64 + off) as u64,
+                _ => (len as i64 + off) as u64,
+            };
+            Ok(ok(cb.offset as i32))
+        }
+        PREAD => {
+            let c = fdchk(k, pid, a[0])?;
+            let n = (a[2] as usize).min(TXSIZE);
+            let cur = a[3] == -1 && a[4] == -1;
+            let off = if cur { u64::MAX } else { ((a[4] as u32 as u64) << 32) | a[3] as u32 as u64 };
+            match dev_read_async(k, &c, n, off, pid).await? {
+                RRes::Data(data) => Ok(okd(data.len() as i32, data)),
+                RRes::Intr => Err("interrupted".into()),
+            }
+        }
+        PWRITE => {
+            let c = fdchk(k, pid, a[0])?;
+            let n = (a[2] as usize).min(TXSIZE).min(tx.len());
+            let cur = a[3] == -1 && a[4] == -1;
+            let off = if cur { u64::MAX } else { ((a[4] as u32 as u64) << 32) | a[3] as u32 as u64 };
+            let wrote = dev_write_async(k, &c, &tx[..n], off, pid).await?;
+            Ok(ok(wrote as i32))
+        }
+        STAT => {
+            let path = txstr(&tx, 0);
+            let dn = walk(k, pid, &path, a[3] == 1).await?; // a3: lstat's nofollow
+            let rec = dev_stat(k, &dn, pid).await?;
+            if let Node::Mnt(m) = &dn.node {
+                if m.ephemeral.get() {
+                    clunk_fid(k, &m.conn.clone(), m.fid);
+                }
+            }
+            let n = rec.len() as i32;
+            Ok(okd(n, rec))
+        }
+        FSTAT => {
+            let c = fdchk(k, pid, a[0])?;
+            let dn = {
+                let cb = c.borrow();
+                DN { dev: cb.dev, node: cb.node.clone(), path: None }
+            };
+            let rec = dev_stat(k, &dn, pid).await?;
+            let n = rec.len() as i32;
+            Ok(okd(n, rec))
+        }
+        WSTAT => {
+            let path = txstr(&tx, 0);
+            let rec = tx[path.len() + 1..(path.len() + 1 + a[2] as usize).min(tx.len())].to_vec();
+            let st = parse_stat(&rec).ok_or("bad stat record")?;
+            let (parent, base) = walk_parent(k, pid, &path).await?;
+            let dn = walk(k, pid, &path, true).await?;
+            if let Node::Mnt(m) = &dn.node {
+                let conn = m.conn.clone();
+                let body = W9::new().u32(m.fid).u16(rec.len() as u16).raw(&rec);
+                rpc(k, &conn, tv::WSTAT, body).await?;
+                if m.ephemeral.get() {
+                    clunk_fid(k, &conn, m.fid);
+                }
+                return Ok(ok(0));
+            }
+            let (cred, eve) = {
+                let kb = k.borrow();
+                (kb.procs.get(&pid).ok_or("no proc")?.cred.clone(), kb.eve.clone())
+            };
+            let Node::Ram(node) = &dn.node else {
+                return Err("wstat not supported on this device".into());
+            };
+            wstat_ram(node, &parent, &base, &st, &cred, &eve)?;
+            Ok(ok(0))
+        }
+        FWSTAT => {
+            let c = fdchk(k, pid, a[0])?;
+            let rec = tx[..(a[2] as usize).min(tx.len())].to_vec();
+            let st = parse_stat(&rec).ok_or("bad stat record")?;
+            let (cred, eve) = {
+                let kb = k.borrow();
+                (kb.procs.get(&pid).ok_or("no proc")?.cred.clone(), kb.eve.clone())
+            };
+            enum Target {
+                Ram(RamRef),
+                Mnt(MntRef),
+            }
+            let target = {
+                let cb = c.borrow();
+                match &cb.node {
+                    Node::Ram(r) => Target::Ram(r.clone()),
+                    Node::Mnt(m) => Target::Mnt(m.clone()),
+                    _ => return Err("wstat not supported on this device".into()),
+                }
+            };
+            match target {
+                Target::Mnt(m) => {
+                    let conn = m.conn.clone();
+                    let body = W9::new().u32(m.fid).u16(rec.len() as u16).raw(&rec);
+                    rpc(k, &conn, tv::WSTAT, body).await?;
+                    Ok(ok(0))
+                }
+                Target::Ram(node) => {
+                    if st.mode != 0xffff_ffff {
+                        if cred.euid != eve && cred.euid != node.borrow().uid {
+                            return Err(format!("not owner of '{}'", node.borrow().name));
+                        }
+                        node.borrow_mut().mode = st.mode & (0o7777 | 0x000C_0000);
+                    }
+                    if !st.uid.is_empty() {
+                        if cred.euid != eve {
+                            return Err("only the host owner may chown (docs/uid.md D3)".into());
+                        }
+                        node.borrow_mut().uid = st.uid.clone();
+                    }
+                    Ok(ok(0))
+                }
+            }
+        }
+        ERRSTR => {
+            let newe = txstr(&tx, 0);
+            let mut kb = k.borrow_mut();
+            let p = kb.procs.get_mut(&pid).ok_or("no proc")?;
+            let olde = std::mem::replace(&mut p.errstr, newe);
+            let cap = (a[1] as usize).max(1);
+            let mut bytes: Vec<u8> = olde.into_bytes();
+            bytes.truncate(cap - 1);
+            bytes.push(0);
+            Ok(okd(bytes.len() as i32 - 1, bytes))
+        }
+        FD2PATH => {
+            let c = fdchk(k, pid, a[0])?;
+            let path = c.borrow().path.clone().unwrap_or_default();
+            let mut bytes = path.into_bytes();
+            bytes.truncate((a[2] as usize).saturating_sub(1));
+            bytes.push(0);
+            Ok(okd(bytes.len() as i32 - 1, bytes))
+        }
+        NSEC => Ok(okd(8, now_nanos().to_le_bytes().to_vec())),
+        SLEEP => {
+            let ms = a[0].max(0) as u64;
+            if ms == 0 {
+                return Ok(ok(0));
+            }
+            let (c, w) = oneshot::<RRes>();
+            {
+                let mut kb = k.borrow_mut();
+                let token = kb.next_token;
+                kb.next_token += 1;
+                kb.timers.insert(token, TimerKind::Sleep(c.clone()));
+                kb.effects.push(Effect::Timer { ms, token });
+                if let Some(p) = kb.procs.get_mut(&pid) {
+                    p.inflight = Some(c);
+                }
+            }
+            match w.await {
+                RRes::Data(_) => Ok(ok(0)),
+                RRes::Intr => Err("interrupted".into()),
+            }
+        }
+        PIPE => {
+            let p = Rc::new(RefCell::new(Pipe {
+                q: [VecDeque::new(), VecDeque::new()],
+                nbytes: [0, 0],
+                refs: [1, 1],
+                parked: [Vec::new(), Vec::new()],
+            }));
+            let mk = |end: usize| {
+                Rc::new(RefCell::new(Chan {
+                    dev: DevId::Pipe, node: Node::Pipe { p: p.clone(), end },
+                    path: Some("#|/data".into()), mode: 2, offset: 0, refs: 1,
+                }))
+            };
+            let fd0 = fd_alloc(k, pid, mk(0), None);
+            let fd1 = fd_alloc(k, pid, mk(1), None);
+            let mut data = Vec::with_capacity(8);
+            data.extend_from_slice(&fd0.to_le_bytes());
+            data.extend_from_slice(&fd1.to_le_bytes());
+            Ok(okd(0, data))
+        }
+        ARGS => {
+            let kb = k.borrow();
+            let p = kb.procs.get(&pid).ok_or("no proc")?;
+            let mut block = Vec::new();
+            for s in &p.argv {
+                block.extend_from_slice(s.as_bytes());
+                block.push(0);
+            }
+            block.truncate(a[1] as usize);
+            Ok(okd(block.len() as i32, block))
+        }
+        NOTIFY => {
+            k.borrow_mut().procs.get_mut(&pid).ok_or("no proc")?.has_handler = a[0] != 0;
+            Ok(ok(0))
+        }
+        NOTEGET => {
+            let mut kb = k.borrow_mut();
+            let p = kb.procs.get_mut(&pid).ok_or("no proc")?;
+            if p.notes.is_empty() {
+                return Ok(ok(0));
+            }
+            let mut b = p.notes.remove(0).into_bytes();
+            let n = b.len() as i32;
+            b.push(0);
+            Ok(okd(n, b))
+        }
+        NOTED => {
+            if a[0] != 0 {
+                return Ok(kill_proc(k, worker_pid, pid, "note: unhandled")); // NDFLT
+            }
+            Ok(ok(0)) // NCONT
+        }
+        ALARM => {
+            let mut kb = k.borrow_mut();
+            let tok = kb.procs.get_mut(&pid).ok_or("no proc")?.alarm_token.take();
+            if let Some(tok) = tok {
+                kb.timers.remove(&tok);
+            }
+            if a[0] > 0 {
+                let token = kb.next_token;
+                kb.next_token += 1;
+                kb.procs.get_mut(&pid).unwrap().alarm_token = Some(token);
+                kb.timers.insert(token, TimerKind::Alarm(pid));
+                kb.effects.push(Effect::Timer { ms: a[0] as u64, token });
+            }
+            Ok(ok(0))
+        }
+        AREAD => {
+            let c = fdchk(k, pid, a[1])?;
+            let n = (a[2] as usize).min(TXSIZE - 4);
+            let tag = a[0] as u32;
+            // fire and forget: the read completes into the ioq; the async
+            // read makes AREAD device-blind (mounts included) for free
+            let k2 = k.clone();
+            let vb = k.borrow().verbose;
+            ex.spawn(async move {
+                if vb {
+                    eprintln!("[K aread task start pid={} tag={} fd={}]", pid, tag, a[1]);
+                }
+                let r = dev_read_async(&k2, &c, n, u64::MAX, pid).await;
+                let data = match r {
+                    Ok(RRes::Data(d)) => d,
+                    Err(ref e) if vb => {
+                        eprintln!("[K aread err: {}]", e);
+                        Vec::new()
+                    }
+                    _ => Vec::new(),
+                };
+                if vb {
+                    eprintln!("[K aread done pid={} tag={} n={}]", pid, tag, data.len());
+                }
+                aread_done(&k2, pid, tag, data);
+            });
+            Ok(ok(0))
+        }
+        IOWAIT => {
+            {
+                let mut kb = k.borrow_mut();
+                let vb = kb.verbose;
+                let p = kb.procs.get_mut(&pid).ok_or("no proc")?;
+                if vb {
+                    eprintln!("[K iowait pid={} ms={} ioq={}]", pid, a[2], p.ioq.len());
+                }
+                if let Some((tag, data)) = p.ioq.pop_front() {
+                    let mut out = tag.to_le_bytes().to_vec();
+                    out.extend_from_slice(&data);
+                    let n = out.len() as i32;
+                    return Ok(okd(n, out));
+                }
+            }
+            let (c, w) = oneshot::<RRes>();
+            {
+                let mut kb = k.borrow_mut();
+                let timer = if a[2] > 0 {
+                    let token = kb.next_token;
+                    kb.next_token += 1;
+                    kb.timers.insert(token, TimerKind::Iowait(pid));
+                    kb.effects.push(Effect::Timer { ms: a[2] as u64, token });
+                    Some(token)
+                } else {
+                    None
+                };
+                let p = kb.procs.get_mut(&pid).unwrap();
+                p.iowait = Some((c.clone(), timer));
+                p.inflight = Some(c);
+            }
+            match w.await {
+                RRes::Data(out) => Ok(okd(out.len() as i32, out)),
+                RRes::Intr => Err("interrupted".into()),
+            }
+        }
+        RFORK => rfork(k, worker_pid, pid, a[0], a[2]),
+        EXEC => exec_call(k, worker_pid, pid, &tx, a[2]).await,
+        EXITS => exits(k, worker_pid, pid, &tx),
+        AWAIT => {
+            {
+                let mut kb = k.borrow_mut();
+                let p = kb.procs.get_mut(&pid).ok_or("no proc")?;
                 if a[2] == 1 && p.zombies.is_empty() {
-                    return Ok(Done::Now(ok(0))); // nohang, nothing yet
+                    return Ok(ok(0)); // nohang, nothing yet
                 }
                 let max = a[1] as usize;
                 if !p.zombies.is_empty() {
@@ -1553,526 +2350,419 @@ impl Kernel {
                     bytes.truncate(max.saturating_sub(1));
                     bytes.push(0);
                     let n = bytes.len() as i32 - 1;
-                    return Ok(Done::Now(okd(n, bytes)));
-                }
-                p.await_reply = Some((reply.clone(), max));
-                p.inflight = Some(reply.clone());
-                Ok(Done::Parked)
-            }
-            LINK => {
-                let old = Self::txstr(tx, 0);
-                let nu = Self::txstr(tx, old.len() + 1);
-                let o = self.walk(pid, &old, true)?; // link the name given, not its target
-                let (parent, base) = self.walk_parent(pid, &nu)?;
-                let cred = self.procs.get(&pid).unwrap().cred.clone();
-                match (&parent.node, &o.node) {
-                    (Node::Ram(pr), Node::Ram(onode)) => {
-                        self.ram_access(pr, &cred, 2)?;
-                        if kid(pr, &base).is_some() {
-                            return Err(format!("'{}' already exists", base));
-                        }
-                        if onode.borrow().dir {
-                            return Err("cannot hard-link a directory".into());
-                        }
-                        pr.borrow_mut().kids.push((base, onode.clone()));
-                        Ok(Done::Now(ok(0)))
-                    }
-                    _ => Err("link not supported on this device".into()),
+                    return Ok(okd(n, bytes));
                 }
             }
-            SYMLINK => {
-                let target = Self::txstr(tx, 0);
-                let nu = Self::txstr(tx, target.len() + 1);
-                let (parent, base) = self.walk_parent(pid, &nu)?;
-                let cred = self.procs.get(&pid).unwrap().cred.clone();
-                if let Node::Ram(pr) = &parent.node {
-                    self.ram_access(pr, &cred, 2)?;
+            let (c, w) = oneshot::<RRes>();
+            {
+                let mut kb = k.borrow_mut();
+                let p = kb.procs.get_mut(&pid).unwrap();
+                p.await_wait = Some((c.clone(), a[1] as usize));
+                p.inflight = Some(c);
+            }
+            match w.await {
+                RRes::Data(mut bytes) => {
+                    let n = bytes.len() as i32;
+                    bytes.push(0);
+                    Ok(okd(n, bytes))
+                }
+                RRes::Intr => Err("interrupted".into()),
+            }
+        }
+        LINK => {
+            let old = txstr(&tx, 0);
+            let nu = txstr(&tx, old.len() + 1);
+            let o = walk(k, pid, &old, true).await?; // link the name, not its target
+            let (parent, base) = walk_parent(k, pid, &nu).await?;
+            if let (Node::Mnt(pm), Node::Mnt(om)) = (&parent.node, &o.node) {
+                if !Rc::ptr_eq(&pm.conn, &om.conn) {
+                    return Err("cross-device link".into());
+                }
+                let conn = pm.conn.clone();
+                rpc(k, &conn, tv::LINK, W9::new().u32(pm.fid).u32(om.fid).s(&base)).await?;
+                return Ok(ok(0));
+            }
+            let cred = k.borrow().procs.get(&pid).unwrap().cred.clone();
+            match (&parent.node, &o.node) {
+                (Node::Ram(pr), Node::Ram(onode)) => {
+                    ram_access(k, pr, &cred, 2)?;
                     if kid(pr, &base).is_some() {
                         return Err(format!("'{}' already exists", base));
                     }
-                    let q = self.qgen;
-                    self.qgen += 1;
-                    let node = Rc::new(RefCell::new(RNode {
-                        name: base.clone(), qpath: q, dir: false, data: Vec::new(),
-                        kids: Vec::new(), uid: cred.euid.clone(), mode: 0o777,
-                        atime: now_secs(), mtime: now_secs(), symlink: Some(target),
-                    }));
-                    pr.borrow_mut().kids.push((base, node));
-                    Ok(Done::Now(ok(0)))
-                } else {
-                    Err("symlink not supported on this device".into())
-                }
-            }
-            READLINK => {
-                let path = Self::txstr(tx, 0);
-                let dn = self.walk(pid, &path, true)?;
-                if let Node::Ram(r) = &dn.node {
-                    if let Some(t) = r.borrow().symlink.clone() {
-                        let mut bytes = t.into_bytes();
-                        let n = bytes.len() as i32;
-                        bytes.push(0);
-                        return Ok(Done::Now(okd(n, bytes)));
+                    if onode.borrow().dir {
+                        return Err("cannot hard-link a directory".into());
                     }
-                    return Err("not a symlink".into());
+                    pr.borrow_mut().kids.push((base, onode.clone()));
+                    Ok(ok(0))
                 }
-                Err("readlink not supported on this device".into())
-            }
-            WSTAT => {
-                let path = Self::txstr(tx, 0);
-                let rec = &tx[path.len() + 1..(path.len() + 1 + a[2] as usize).min(tx.len())];
-                let st = parse_stat(rec).ok_or("bad stat record")?;
-                let (parent, base) = self.walk_parent(pid, &path)?;
-                let dn = self.walk(pid, &path, true)?;
-                let cred = self.procs.get(&pid).ok_or("no proc")?.cred.clone();
-                let Node::Ram(node) = &dn.node else {
-                    return Err("wstat not supported on this device".into());
-                };
-                if st.mode != 0xffff_ffff {
-                    if cred.euid != self.eve && cred.euid != node.borrow().uid {
-                        return Err(format!("not owner of '{}'", node.borrow().name));
-                    }
-                    node.borrow_mut().mode = st.mode & (0o7777 | 0x000C_0000);
-                }
-                if !st.uid.is_empty() {
-                    if cred.euid != self.eve {
-                        return Err("only the host owner may chown (docs/uid.md D3)".into());
-                    }
-                    node.borrow_mut().uid = st.uid.clone();
-                }
-                if !st.name.is_empty() && st.name != base {
-                    if cred.euid != self.eve && cred.euid != node.borrow().uid {
-                        return Err(format!("not owner of '{}'", node.borrow().name));
-                    }
-                    if let Node::Ram(pr) = &parent.node {
-                        if kid(pr, &st.name).is_some() {
-                            return Err(format!("'{}' already exists", st.name));
-                        }
-                        pr.borrow_mut().kids.retain(|(k, _)| k != &base);
-                        node.borrow_mut().name = st.name.clone();
-                        pr.borrow_mut().kids.push((st.name.clone(), node.clone()));
-                        pr.borrow_mut().mtime = now_secs();
-                    }
-                }
-                if st.mtime != 0xffff_ffff {
-                    node.borrow_mut().mtime = st.mtime;
-                }
-                Ok(Done::Now(ok(0)))
-            }
-            FWSTAT => {
-                let c = self.fdchk(pid, a[0])?;
-                let rec = &tx[..(a[2] as usize).min(tx.len())];
-                let st = parse_stat(rec).ok_or("bad stat record")?;
-                let cred = self.procs.get(&pid).ok_or("no proc")?.cred.clone();
-                let node = {
-                    let cb = c.borrow();
-                    match &cb.node {
-                        Node::Ram(r) => r.clone(),
-                        _ => return Err("wstat not supported on this device".into()),
-                    }
-                };
-                if st.mode != 0xffff_ffff {
-                    if cred.euid != self.eve && cred.euid != node.borrow().uid {
-                        return Err(format!("not owner of '{}'", node.borrow().name));
-                    }
-                    node.borrow_mut().mode = st.mode & (0o7777 | 0x000C_0000);
-                }
-                if !st.uid.is_empty() {
-                    if cred.euid != self.eve {
-                        return Err("only the host owner may chown (docs/uid.md D3)".into());
-                    }
-                    node.borrow_mut().uid = st.uid.clone();
-                }
-                Ok(Done::Now(ok(0)))
-            }
-            UNMOUNT => {
-                let name = Self::txstr(tx, 0);
-                let old = Self::txstr(tx, name.len() + 1);
-                if self.procs.get(&pid).ok_or("no proc")?.nomnt {
-                    return Err("mounting disallowed (RFNOMNT)".into());
-                }
-                let cwd = self.procs.get(&pid).unwrap().cwd.clone();
-                let key = Self::canon(&old, &cwd);
-                let ns = self.procs.get(&pid).unwrap().ns.clone();
-                let have = ns.borrow().get(&key).cloned();
-                let Some(mut list) = have else {
-                    return Err(format!("'{}' is not a mount point", key));
-                };
-                if name.is_empty() {
-                    // unmount(nil, old): the whole point
-                    ns.borrow_mut().remove(&key);
-                    return Ok(Done::Now(ok(0)));
-                }
-                let nm = if name.starts_with('#') { name.clone() } else { Self::canon(&name, &cwd) };
-                let mut i = list.iter().position(|el| el.dn.path.as_deref() == Some(nm.as_str()));
-                if i.is_none() {
-                    let src = self.walk(pid, &name, false)?;
-                    i = list.iter().position(|el| el.dn.dev == src.dev && node_eq(&el.dn.node, &src.node));
-                }
-                let Some(i) = i else {
-                    return Err(format!("'{}' is not bound at '{}'", name, key));
-                };
-                list.remove(i);
-                if list.is_empty() {
-                    ns.borrow_mut().remove(&key);
-                } else {
-                    ns.borrow_mut().insert(key, list);
-                }
-                Ok(Done::Now(ok(0)))
-            }
-            NOTIFY => {
-                self.procs.get_mut(&pid).ok_or("no proc")?.has_handler = a[0] != 0;
-                Ok(Done::Now(ok(0)))
-            }
-            NOTEGET => {
-                let p = self.procs.get_mut(&pid).ok_or("no proc")?;
-                if p.notes.is_empty() {
-                    return Ok(Done::Now(ok(0)));
-                }
-                let mut b = p.notes.remove(0).into_bytes();
-                let n = b.len() as i32;
-                b.push(0);
-                Ok(Done::Now(okd(n, b)))
-            }
-            NOTED => {
-                if a[0] != 0 {
-                    return Ok(Done::Now(self.kill_proc(worker_pid, pid, "note: unhandled"))); // NDFLT
-                }
-                Ok(Done::Now(ok(0))) // NCONT
-            }
-            ALARM => {
-                let p = self.procs.get_mut(&pid).ok_or("no proc")?;
-                if let Some(tok) = p.alarm_token.take() {
-                    self.timers.remove(&tok);
-                }
-                if a[0] > 0 {
-                    let token = self.next_token;
-                    self.next_token += 1;
-                    self.procs.get_mut(&pid).unwrap().alarm_token = Some(token);
-                    self.timers.insert(token, TimerKind::Alarm(pid));
-                    self.effects.push(Effect::Timer { ms: a[0] as u64, token });
-                }
-                Ok(Done::Now(ok(0)))
-            }
-            AREAD => {
-                let c = self.fdchk(pid, a[1])?;
-                let n = (a[2] as usize).min(TXSIZE - 4);
-                let tag = a[0] as u32;
-                let off = c.borrow().offset;
-                match self.dev_read_kind(&c, n, off, pid, WaitKind::Aread { pid, tag })? {
-                    Some(data) => {
-                        c.borrow_mut().offset += data.len() as u64;
-                        self.aread_done(pid, tag, data);
-                    }
-                    None => {}
-                }
-                Ok(Done::Now(ok(0)))
-            }
-            IOWAIT => {
-                let p = self.procs.get_mut(&pid).ok_or("no proc")?;
-                if let Some((tag, data)) = p.ioq.pop_front() {
-                    let mut out = tag.to_le_bytes().to_vec();
-                    out.extend_from_slice(&data);
-                    let n = out.len() as i32;
-                    return Ok(Done::Now(okd(n, out)));
-                }
-                let timer = if a[2] > 0 {
-                    let token = self.next_token;
-                    self.next_token += 1;
-                    self.timers.insert(token, TimerKind::Iowait(pid));
-                    self.effects.push(Effect::Timer { ms: a[2] as u64, token });
-                    Some(token)
-                } else {
-                    None
-                };
-                let p = self.procs.get_mut(&pid).unwrap();
-                p.iowait = Some((reply.clone(), timer));
-                p.inflight = Some(reply.clone());
-                Ok(Done::Parked)
-            }
-            _ => Err(format!("bad syscall {} (native v1)", trap)),
-        }
-    }
-
-    fn open_perm(&mut self, dn: &DN, mode: u32, pid: Pid) -> Result<(), KErr> {
-        if let Node::Ram(r) = &dn.node {
-            let cred = self.procs.get(&pid).ok_or("no proc")?.cred.clone();
-            let rw = mode & 3;
-            let mut want = match rw {
-                1 => 2,
-                2 => 6,
-                _ => 4,
-            };
-            if mode & OTRUNC != 0 {
-                want |= 2;
-            }
-            self.ram_access(r, &cred, want)?;
-            if mode & OTRUNC != 0 && !r.borrow().dir {
-                r.borrow_mut().data.clear();
+                _ => Err("link not supported on this device".into()),
             }
         }
-        Ok(())
-    }
-
-    fn ram_create(&mut self, parent: &DN, name: &str, perm: u32, isdir: bool,
-                  cred: &Cred) -> Result<RamRef, KErr> {
-        let pr = match &parent.node {
-            Node::Ram(r) => r.clone(),
-            _ => return Err("create not supported on this device".into()),
-        };
-        if !pr.borrow().dir {
-            return Err("create in non-directory".into());
-        }
-        self.ram_access(&pr, cred, 2)?;
-        if let Some(old) = kid(&pr, name) {
-            if old.borrow().dir || isdir {
-                return Err(format!("'{}' already exists", name));
+        SYMLINK => {
+            let target = txstr(&tx, 0);
+            let nu = txstr(&tx, target.len() + 1);
+            let (parent, base) = walk_parent(k, pid, &nu).await?;
+            if let Node::Mnt(pm) = &parent.node {
+                let conn = pm.conn.clone();
+                rpc(k, &conn, tv::SYMLINK, W9::new().u32(pm.fid).s(&base).s(&target)).await?;
+                return Ok(ok(0));
             }
-            self.ram_access(&old, cred, 2)?;
-            old.borrow_mut().data.clear();
-            return Ok(old);
-        }
-        let q = self.qgen;
-        self.qgen += 1;
-        let node = Rc::new(RefCell::new(RNode {
-            name: name.into(), qpath: q, dir: isdir, data: Vec::new(),
-            kids: Vec::new(), uid: cred.euid.clone(), mode: perm & 0o7777,
-            atime: now_secs(), mtime: now_secs(), symlink: None,
-        }));
-        pr.borrow_mut().kids.push((name.into(), node.clone()));
-        pr.borrow_mut().mtime = now_secs();
-        Ok(node)
-    }
-
-    // ---- rfork / exec / exits (the lifecycle, ported shape for shape) ----
-    fn rfork(&mut self, worker_pid: Pid, pid: Pid, flags: i32, marker: i32) -> Result<Done, KErr> {
-        if flags & rf::PROC == 0 {
-            // flag changes on self
-            let (ns2, env2) = {
-                let p = self.procs.get(&pid).ok_or("no proc")?;
-                let ns2 = if flags & rf::CNAMEG != 0 {
-                    Some(Rc::new(RefCell::new(HashMap::new())))
-                } else if flags & rf::NAMEG != 0 {
-                    Some(Rc::new(RefCell::new(p.ns.borrow().clone())))
-                } else {
-                    None
+            let cred = k.borrow().procs.get(&pid).unwrap().cred.clone();
+            if let Node::Ram(pr) = &parent.node {
+                ram_access(k, pr, &cred, 2)?;
+                if kid(pr, &base).is_some() {
+                    return Err(format!("'{}' already exists", base));
+                }
+                let q = {
+                    let mut kb = k.borrow_mut();
+                    let q = kb.qgen;
+                    kb.qgen += 1;
+                    q
                 };
-                let env2 = if flags & rf::CENVG != 0 {
-                    Some(Rc::new(RefCell::new(HashMap::new())))
-                } else if flags & rf::ENVG != 0 {
-                    Some(Rc::new(RefCell::new(p.env.borrow().clone())))
-                } else {
-                    None
-                };
-                (ns2, env2)
-            };
-            if flags & rf::CFDG != 0 {
-                let old = self.procs.get(&pid).unwrap().fdt.clone();
-                self.fdt_close(&old);
-                self.procs.get_mut(&pid).unwrap().fdt = new_fdt();
-            }
-            let group = if flags & rf::NOTEG != 0 {
-                let g = self.next_note_group;
-                self.next_note_group += 1;
-                Some(g)
+                let node = Rc::new(RefCell::new(RNode {
+                    name: base.clone(), qpath: q, dir: false, data: Vec::new(),
+                    kids: Vec::new(), uid: cred.euid.clone(), mode: 0o777,
+                    atime: now_secs(), mtime: now_secs(), symlink: Some(target),
+                }));
+                pr.borrow_mut().kids.push((base, node));
+                Ok(ok(0))
             } else {
-                None
-            };
-            let p = self.procs.get_mut(&pid).unwrap();
-            if let Some(ns) = ns2 {
-                p.ns = ns;
-            }
-            if let Some(env) = env2 {
-                p.env = env;
-            }
-            if let Some(g) = group {
-                p.note_group = g;
-            }
-            if flags & rf::NOMNT != 0 {
-                p.nomnt = true;
-            }
-            return Ok(Done::Now(ok(0)));
-        }
-        if self.procs.get(&worker_pid).and_then(|p| p.borrower).is_some() {
-            return Err("nested lazy fork unsupported in v0".into());
-        }
-        struct Bits {
-            ns: NsR,
-            env: EnvR,
-            cwd: String,
-            cred: Cred,
-            group: Option<u32>,
-            nomnt: bool,
-            image: Option<Arc<Vec<u8>>>,
-            asyncified: bool,
-        }
-        let bits = {
-            let p = self.procs.get(&pid).ok_or("no proc")?;
-            Bits {
-                ns: if flags & rf::CNAMEG != 0 {
-                    Rc::new(RefCell::new(HashMap::new()))
-                } else if flags & rf::NAMEG != 0 {
-                    Rc::new(RefCell::new(p.ns.borrow().clone()))
-                } else {
-                    p.ns.clone() // SHARED, per rfork(2) — /bin/bind depends on it
-                },
-                env: if flags & rf::CENVG != 0 {
-                    Rc::new(RefCell::new(HashMap::new()))
-                } else if flags & rf::ENVG != 0 {
-                    Rc::new(RefCell::new(p.env.borrow().clone()))
-                } else {
-                    p.env.clone()
-                },
-                cwd: p.cwd.clone(),
-                cred: p.cred.clone(),
-                group: if flags & rf::NOTEG != 0 { None } else { Some(p.note_group) },
-                nomnt: p.nomnt,
-                image: p.image.clone(),
-                asyncified: p.asyncified,
-            }
-        };
-        let fdt = {
-            let p = self.procs.get(&pid).unwrap();
-            if flags & rf::CFDG != 0 {
-                new_fdt()
-            } else if flags & rf::FDG != 0 {
-                let f = p.fdt.clone();
-                self.fdt_copy(&f)
-            } else {
-                let f = p.fdt.clone();
-                f.borrow_mut().refs += 1;
-                f
-            }
-        };
-        if marker == 2 {
-            // asyncify: bare dual return
-            if !bits.asyncified {
-                return Err("not an asyncify build — add it to ASYNCIFY in poc/mk.sh, or use procrfork".into());
-            }
-            if flags & rf::MEM != 0 {
-                return Err("RFMEM is the lazy path's flag; a bare fork copies".into());
-            }
-            let child = self.new_proc(pid, bits.ns, fdt, bits.cwd, bits.cred, bits.env, bits.group);
-            let c = self.procs.get_mut(&child).unwrap();
-            c.nomnt = bits.nomnt || flags & rf::NOMNT != 0;
-            c.nowait = flags & rf::NOWAIT != 0;
-            c.image = bits.image;
-            c.asyncified = true;
-            return Ok(Done::Now(ok(child as i32))); // one return; the runner makes two
-        }
-        if marker != 1 {
-            return Err("bare rfork(RFPROC) needs an asyncify build; procrfork is the exec path".into());
-        }
-        if flags & rf::MEM == 0 {
-            return Err("plain fork needs asyncify — the guard path is lazy".into());
-        }
-        let child = self.new_proc(pid, bits.ns, fdt, bits.cwd, bits.cred, bits.env, bits.group);
-        {
-            let c = self.procs.get_mut(&child).unwrap();
-            c.nomnt = bits.nomnt || flags & rf::NOMNT != 0;
-            c.nowait = flags & rf::NOWAIT != 0;
-        }
-        self.procs.get_mut(&worker_pid).unwrap().borrower = Some(child);
-        Ok(Done::Now(KReply {
-            ret: 0, aux: child as i32, data: Vec::new(), action: KAction::None, load: None, note_pending: false,
-        }))
-    }
-
-    // the runner (guest thread) tells us a bare fork unwound: spawn the child
-    pub fn asyfork(&mut self, parent_pid: Pid, child_pid: Pid, snap: Vec<u8>, data_ptr: u32, sp: u32) {
-        let argv = self.procs.get(&parent_pid).map(|p| p.argv.clone()).unwrap_or_default();
-        if let Some(c) = self.procs.get_mut(&child_pid) {
-            c.argv = argv.clone();
-            if let Some(image) = c.image.clone() {
-                self.effects.push(Effect::Spawn {
-                    pid: child_pid, image, argv,
-                    asy: Some(AsySnap { snap, data_ptr, sp }),
-                });
+                Err("symlink not supported on this device".into())
             }
         }
-    }
-
-    fn exec_call(&mut self, worker_pid: Pid, pid: Pid, tx: &[u8], argc: i32) -> Result<Done, KErr> {
-        let path = Self::txstr(tx, 0);
-        let mut argv = Vec::new();
-        let mut o = path.len() + 1;
-        for _ in 0..argc {
-            let s = Self::txstr(tx, o);
-            o += s.len() + 1;
-            argv.push(s);
-        }
-        let dn = self.walk(pid, &path, false)?;
-        // directory and setuid checks, from the stat record
-        if let Ok(rec) = self.dev_stat(&dn, pid) {
-            if let Some(st) = parse_stat(&rec) {
-                if st.mode & DMDIR != 0 {
-                    return Err(format!("'{}' is a directory", path));
+        READLINK => {
+            let path = txstr(&tx, 0);
+            let dn = walk(k, pid, &path, true).await?;
+            if let Node::Mnt(m) = &dn.node {
+                let conn = m.conn.clone();
+                let rb = rpc(k, &conn, tv::READLINK, W9::new().u32(m.fid)).await?;
+                let target = R9::new(&rb).s();
+                if m.ephemeral.get() {
+                    clunk_fid(k, &conn, m.fid);
                 }
-                if st.mode & DMSETUID != 0 {
-                    let p = self.procs.get_mut(&pid).unwrap();
-                    p.cred.euid = st.uid.clone();
-                }
+                let mut bytes = target.into_bytes();
+                let n = bytes.len() as i32;
+                bytes.push(0);
+                return Ok(okd(n, bytes));
             }
+            if let Node::Ram(r) = &dn.node {
+                if let Some(tg) = r.borrow().symlink.clone() {
+                    let mut bytes = tg.into_bytes();
+                    let n = bytes.len() as i32;
+                    bytes.push(0);
+                    return Ok(okd(n, bytes));
+                }
+                return Err("not a symlink".into());
+            }
+            Err("readlink not supported on this device".into())
         }
-        let image = self.read_all(&dn)?;
-        if image.len() < 4 || image[0..4] != [0x00, 0x61, 0x73, 0x6d] {
-            return Err(format!("'{}' exec format error", path));
-        }
-        let image = Arc::new(image);
-        let argv = if argv.is_empty() { vec![path.clone()] } else { argv };
-        {
-            let p = self.procs.get_mut(&pid).unwrap();
-            p.argv = argv.clone();
-            p.image = Some(image.clone());
-        }
-        let is_borrowed = self.procs.get(&worker_pid).and_then(|p| p.borrower) == Some(pid);
-        if is_borrowed {
-            // lazy-fork child leaves the borrowed stack for its own thread;
-            // the parent's runner restores [0,sp) and unwinds to the guard
-            self.procs.get_mut(&worker_pid).unwrap().borrower = None;
-            self.effects.push(Effect::Spawn { pid, image, argv, asy: None });
-            return Ok(Done::Now(KReply {
-                ret: -1000, aux: pid as i32, data: Vec::new(),
-                action: KAction::ForkResume, load: None, note_pending: false,
-            }));
-        }
-        // exec-in-place: the reply hands this thread its new image
-        Ok(Done::Now(KReply {
-            ret: -1001, aux: 0, data: Vec::new(), action: KAction::ExecSelf,
-            load: Some((image, argv)), note_pending: false,
-        }))
-    }
-
-    fn exits(&mut self, worker_pid: Pid, pid: Pid, tx: &[u8]) -> Result<Done, KErr> {
-        let msg = Self::txstr(tx, 0);
-        let (ppid, nowait, fdt) = {
-            let p = self.procs.get(&pid).ok_or("no proc")?;
-            (p.ppid, p.nowait, p.fdt.clone())
-        };
-        self.procs.remove(&pid);
-        self.fdt_close(&fdt); // pipes learn their EOF here
-        let was_borrowed = self.procs.get(&worker_pid).and_then(|p| p.borrower) == Some(pid);
-        if was_borrowed {
-            self.procs.get_mut(&worker_pid).unwrap().borrower = None;
-            self.zombie(ppid, pid, &msg, nowait);
-            return Ok(Done::Now(KReply {
-                ret: -1000, aux: pid as i32, data: Vec::new(),
-                action: KAction::ForkResume, load: None, note_pending: false,
-            }));
-        }
-        if pid == 1 {
-            self.effects.push(Effect::Shutdown(if msg.is_empty() { 0 } else { 1 }));
-            return Ok(Done::Now(KReply {
-                ret: -3000, aux: 0, data: Vec::new(), action: KAction::Die, load: None, note_pending: false,
-            }));
-        }
-        self.zombie(ppid, pid, &msg, nowait);
-        Ok(Done::Now(KReply {
-            ret: -2000, aux: 0, data: Vec::new(), action: KAction::Retire, load: None, note_pending: false,
-        }))
+        _ => Err(format!("bad syscall {} (native)", trap)),
     }
 }
 
-enum WalkRes {
-    Hit(DN),
-    Redirect(String),
+fn wstat_ram(node: &RamRef, parent: &DN, base: &str, st: &stat9::StatOut,
+             cred: &Cred, eve: &str) -> Result<(), KErr> {
+    if st.mode != 0xffff_ffff {
+        if cred.euid != eve && cred.euid != node.borrow().uid {
+            return Err(format!("not owner of '{}'", node.borrow().name));
+        }
+        node.borrow_mut().mode = st.mode & (0o7777 | 0x000C_0000);
+    }
+    if !st.uid.is_empty() {
+        if cred.euid != eve {
+            return Err("only the host owner may chown (docs/uid.md D3)".into());
+        }
+        node.borrow_mut().uid = st.uid.clone();
+    }
+    if !st.name.is_empty() && st.name != base {
+        if cred.euid != eve && cred.euid != node.borrow().uid {
+            return Err(format!("not owner of '{}'", node.borrow().name));
+        }
+        if let Node::Ram(pr) = &parent.node {
+            if kid(pr, &st.name).is_some() {
+                return Err(format!("'{}' already exists", st.name));
+            }
+            pr.borrow_mut().kids.retain(|(kk, _)| kk != base);
+            node.borrow_mut().name = st.name.clone();
+            pr.borrow_mut().kids.push((st.name.clone(), node.clone()));
+            pr.borrow_mut().mtime = now_secs();
+        }
+    }
+    if st.mtime != 0xffff_ffff {
+        node.borrow_mut().mtime = st.mtime;
+    }
+    Ok(())
+}
+
+fn open_perm(k: &K, dn: &DN, mode: u32, pid: Pid) -> Result<(), KErr> {
+    if let Node::Ram(r) = &dn.node {
+        let cred = k.borrow().procs.get(&pid).ok_or("no proc")?.cred.clone();
+        let rw = mode & 3;
+        let mut want = match rw {
+            1 => 2,
+            2 => 6,
+            _ => 4,
+        };
+        if mode & OTRUNC != 0 {
+            want |= 2;
+        }
+        ram_access(k, r, &cred, want)?;
+        if mode & OTRUNC != 0 && !r.borrow().dir {
+            r.borrow_mut().data.clear();
+        }
+    }
+    Ok(())
+}
+
+fn ram_create(k: &K, parent: &DN, name: &str, perm: u32, isdir: bool,
+              cred: &Cred) -> Result<RamRef, KErr> {
+    let pr = match &parent.node {
+        Node::Ram(r) => r.clone(),
+        _ => return Err("create not supported on this device".into()),
+    };
+    if !pr.borrow().dir {
+        return Err("create in non-directory".into());
+    }
+    ram_access(k, &pr, cred, 2)?;
+    if let Some(old) = kid(&pr, name) {
+        if old.borrow().dir || isdir {
+            return Err(format!("'{}' already exists", name));
+        }
+        ram_access(k, &old, cred, 2)?;
+        old.borrow_mut().data.clear();
+        return Ok(old);
+    }
+    let q = {
+        let mut kb = k.borrow_mut();
+        let q = kb.qgen;
+        kb.qgen += 1;
+        q
+    };
+    let node = Rc::new(RefCell::new(RNode {
+        name: name.into(), qpath: q, dir: isdir, data: Vec::new(),
+        kids: Vec::new(), uid: cred.euid.clone(), mode: perm & 0o7777,
+        atime: now_secs(), mtime: now_secs(), symlink: None,
+    }));
+    pr.borrow_mut().kids.push((name.into(), node.clone()));
+    pr.borrow_mut().mtime = now_secs();
+    Ok(node)
+}
+
+// ---- rfork / exec / exits (the lifecycle) ----
+fn rfork(k: &K, worker_pid: Pid, pid: Pid, flags: i32, marker: i32) -> KRes {
+    if flags & rf::PROC == 0 {
+        let (ns2, env2) = {
+            let kb = k.borrow();
+            let p = kb.procs.get(&pid).ok_or("no proc")?;
+            let ns2 = if flags & rf::CNAMEG != 0 {
+                Some(Rc::new(RefCell::new(HashMap::new())))
+            } else if flags & rf::NAMEG != 0 {
+                Some(Rc::new(RefCell::new(p.ns.borrow().clone())))
+            } else {
+                None
+            };
+            let env2 = if flags & rf::CENVG != 0 {
+                Some(Rc::new(RefCell::new(HashMap::new())))
+            } else if flags & rf::ENVG != 0 {
+                Some(Rc::new(RefCell::new(p.env.borrow().clone())))
+            } else {
+                None
+            };
+            (ns2, env2)
+        };
+        if flags & rf::CFDG != 0 {
+            let old = k.borrow().procs.get(&pid).unwrap().fdt.clone();
+            fdt_close(k, &old);
+            k.borrow_mut().procs.get_mut(&pid).unwrap().fdt = new_fdt();
+        }
+        let mut kb = k.borrow_mut();
+        let group = if flags & rf::NOTEG != 0 {
+            let g = kb.next_note_group;
+            kb.next_note_group += 1;
+            Some(g)
+        } else {
+            None
+        };
+        let p = kb.procs.get_mut(&pid).unwrap();
+        if let Some(ns) = ns2 {
+            p.ns = ns;
+        }
+        if let Some(env) = env2 {
+            p.env = env;
+        }
+        if let Some(g) = group {
+            p.note_group = g;
+        }
+        if flags & rf::NOMNT != 0 {
+            p.nomnt = true;
+        }
+        return Ok(ok(0));
+    }
+    if k.borrow().procs.get(&worker_pid).and_then(|p| p.borrower).is_some() {
+        return Err("nested lazy fork unsupported in v0".into());
+    }
+    struct Bits {
+        ns: NsR,
+        env: EnvR,
+        cwd: String,
+        cred: Cred,
+        group: Option<u32>,
+        nomnt: bool,
+        image: Option<Arc<Vec<u8>>>,
+        asyncified: bool,
+    }
+    let bits = {
+        let kb = k.borrow();
+        let p = kb.procs.get(&pid).ok_or("no proc")?;
+        Bits {
+            ns: if flags & rf::CNAMEG != 0 {
+                Rc::new(RefCell::new(HashMap::new()))
+            } else if flags & rf::NAMEG != 0 {
+                Rc::new(RefCell::new(p.ns.borrow().clone()))
+            } else {
+                p.ns.clone() // SHARED, per rfork(2) — /bin/bind depends on it
+            },
+            env: if flags & rf::CENVG != 0 {
+                Rc::new(RefCell::new(HashMap::new()))
+            } else if flags & rf::ENVG != 0 {
+                Rc::new(RefCell::new(p.env.borrow().clone()))
+            } else {
+                p.env.clone()
+            },
+            cwd: p.cwd.clone(),
+            cred: p.cred.clone(),
+            group: if flags & rf::NOTEG != 0 { None } else { Some(p.note_group) },
+            nomnt: p.nomnt,
+            image: p.image.clone(),
+            asyncified: p.asyncified,
+        }
+    };
+    let fdt = {
+        let kb = k.borrow();
+        let p = kb.procs.get(&pid).unwrap();
+        if flags & rf::CFDG != 0 {
+            new_fdt()
+        } else if flags & rf::FDG != 0 {
+            fdt_copy(&p.fdt)
+        } else {
+            let f = p.fdt.clone();
+            f.borrow_mut().refs += 1;
+            f
+        }
+    };
+    if marker == 2 {
+        if !bits.asyncified {
+            return Err("not an asyncify build — add it to ASYNCIFY in poc/mk.sh, or use procrfork".into());
+        }
+        if flags & rf::MEM != 0 {
+            return Err("RFMEM is the lazy path's flag; a bare fork copies".into());
+        }
+        let child = new_proc(k, pid, bits.ns, fdt, bits.cwd, bits.cred, bits.env, bits.group);
+        let mut kb = k.borrow_mut();
+        let c = kb.procs.get_mut(&child).unwrap();
+        c.nomnt = bits.nomnt || flags & rf::NOMNT != 0;
+        c.nowait = flags & rf::NOWAIT != 0;
+        c.image = bits.image;
+        c.asyncified = true;
+        return Ok(ok(child as i32)); // one return; the runner makes two
+    }
+    if marker != 1 {
+        return Err("bare rfork(RFPROC) needs an asyncify build; procrfork is the exec path".into());
+    }
+    if flags & rf::MEM == 0 {
+        return Err("plain fork needs asyncify — the guard path is lazy".into());
+    }
+    let child = new_proc(k, pid, bits.ns, fdt, bits.cwd, bits.cred, bits.env, bits.group);
+    {
+        let mut kb = k.borrow_mut();
+        let c = kb.procs.get_mut(&child).unwrap();
+        c.nomnt = bits.nomnt || flags & rf::NOMNT != 0;
+        c.nowait = flags & rf::NOWAIT != 0;
+        kb.procs.get_mut(&worker_pid).unwrap().borrower = Some(child);
+    }
+    Ok(KReply {
+        ret: 0, aux: child as i32, data: Vec::new(), action: KAction::None,
+        load: None, note_pending: false,
+    })
+}
+
+async fn exec_call(k: &K, worker_pid: Pid, pid: Pid, tx: &[u8], argc: i32) -> KRes {
+    let path = txstr(tx, 0);
+    let mut argv = Vec::new();
+    let mut o = path.len() + 1;
+    for _ in 0..argc {
+        let s = txstr(tx, o);
+        o += s.len() + 1;
+        argv.push(s);
+    }
+    let dn = walk(k, pid, &path, false).await?;
+    if let Ok(rec) = dev_stat(k, &dn, pid).await {
+        if let Some(st) = parse_stat(&rec) {
+            if st.mode & DMDIR != 0 {
+                return Err(format!("'{}' is a directory", path));
+            }
+            if st.mode & DMSETUID != 0 {
+                k.borrow_mut().procs.get_mut(&pid).unwrap().cred.euid = st.uid.clone();
+            }
+        }
+    }
+    let image = read_all(k, &dn, pid).await?;
+    if image.len() < 4 || image[0..4] != [0x00, 0x61, 0x73, 0x6d] {
+        return Err(format!("'{}' exec format error", path));
+    }
+    let image = Arc::new(image);
+    let argv = if argv.is_empty() { vec![path.clone()] } else { argv };
+    {
+        let mut kb = k.borrow_mut();
+        let p = kb.procs.get_mut(&pid).unwrap();
+        p.argv = argv.clone();
+        p.image = Some(image.clone());
+        p.has_handler = false; // fresh image, no handler yet
+    }
+    let is_borrowed = k.borrow().procs.get(&worker_pid).and_then(|p| p.borrower) == Some(pid);
+    if is_borrowed {
+        let mut kb = k.borrow_mut();
+        kb.procs.get_mut(&worker_pid).unwrap().borrower = None;
+        kb.effects.push(Effect::Spawn { pid, image, argv, asy: None });
+        return Ok(KReply {
+            ret: -1000, aux: pid as i32, data: Vec::new(),
+            action: KAction::ForkResume, load: None, note_pending: false,
+        });
+    }
+    Ok(KReply {
+        ret: -1001, aux: 0, data: Vec::new(), action: KAction::ExecSelf,
+        load: Some((image, argv)), note_pending: false,
+    })
+}
+
+fn exits(k: &K, worker_pid: Pid, pid: Pid, tx: &[u8]) -> KRes {
+    let msg = txstr(tx, 0);
+    let (ppid, nowait, fdt) = {
+        let kb = k.borrow();
+        let p = kb.procs.get(&pid).ok_or("no proc")?;
+        (p.ppid, p.nowait, p.fdt.clone())
+    };
+    k.borrow_mut().procs.remove(&pid);
+    fdt_close(k, &fdt); // pipes learn their EOF here
+    let was_borrowed = k.borrow().procs.get(&worker_pid).and_then(|p| p.borrower) == Some(pid);
+    if was_borrowed {
+        k.borrow_mut().procs.get_mut(&worker_pid).unwrap().borrower = None;
+        zombie(k, ppid, pid, &msg, nowait);
+        return Ok(KReply {
+            ret: -1000, aux: pid as i32, data: Vec::new(),
+            action: KAction::ForkResume, load: None, note_pending: false,
+        });
+    }
+    if pid == 1 {
+        k.borrow_mut().effects.push(Effect::Shutdown(if msg.is_empty() { 0 } else { 1 }));
+        return Ok(KReply {
+            ret: -3000, aux: 0, data: Vec::new(), action: KAction::Die,
+            load: None, note_pending: false,
+        });
+    }
+    zombie(k, ppid, pid, &msg, nowait);
+    Ok(KReply {
+        ret: -2000, aux: 0, data: Vec::new(), action: KAction::Retire,
+        load: None, note_pending: false,
+    })
 }

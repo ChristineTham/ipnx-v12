@@ -1034,6 +1034,25 @@ forces the core async — a single-threaded executor of the kernel's own
 (no tokio; the effect seam unchanged) is the recorded next step, ahead of
 devmnt, the window server, and the wasi shim.
 
+Tranche three (same day): **the core went async and devmnt landed** —
+96 of 130. The executor is 160 lines (`exec.rs`): boxed futures, wakers
+pushing task ids onto a ready queue, and a oneshot whose first-completion-
+wins rule IS the interrupt semantics (postnote completes Intr; the device's
+late completion finds the slot taken — no double-reply plumbing). Dispatch
+became tasks; parking became awaiting; AREAD became a spawned subtask that
+made async reads device-blind (mounts included) for free. Three measured
+lessons: (1) a missing trap-46 marshalling in the runner sent MOUNT an
+empty `old`, which canonicalised to `/` and SHADOWED THE ROOT with the
+9P server — twenty tests failed at a distance from one absent case-arm,
+and the errstr text (`mnt walk 'n'`) was the map back; (2) **the copy-out
+table is load-bearing and both hosts have now lost the same entry
+independently** — IOWAIT's tag+data never reached guest memory, libthread
+matched a garbage tag, and the reader thread slept forever (the JS host
+lost the identical entry to a broken batch script months apart); (3) the
+per-connection reader task plus tag/expect maps port mnt9p.mjs directly,
+clone-before-open included — exportfs and wire symlinks passed unchanged
+once MOUNT marshalled.
+
 Conformance at first light: **75 of 130** — init's lifecycle tranche, the
 whole rc script (35 lines), forktest, sam -d, links/symlinks, wstat, unmount,
 unions, RFNOMNT/RFNOWAIT. The 55 still red sit in four unported subsystems:

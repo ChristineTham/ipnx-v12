@@ -847,16 +847,15 @@ capability, per the `/cc` decision), not hand-carried around it. The Rust
 kernel core is under way (same day): `native/` holds the kernel crate (the
 core as a pure state machine — syscalls in, effects out, the per-platform
 seam) and the macOS host shim (wasmtime 37, a thread per guest, the guard as
-a plain host function — RESEARCH §9.6). **80 of the 130 conformance tests
+a plain host function — RESEARCH §9.6). **96 of the 130 conformance tests
 pass**: the real rc's whole script, sam -d, forktest, links, unions, wstat,
-unmount, the note machinery, the uid suite via devproc, and libthread on
-native AREAD/IOWAIT. Still red, three subsystems: wire 9P (13), the window
-server + draw (15), the WASI shim (6). The recorded next step is
-structural: devmnt is irreducibly async (every mount op awaits an
-R-message through a parked read), so the core goes async on its own
-single-threaded executor — no tokio, the effect seam unchanged — before
-the three remaining tranches. `kernel.mjs` is the reference implementation;
-the suite is the spec.
+unmount, the note machinery, the uid suite via devproc, libthread on native
+AREAD/IOWAIT — and, on the async core (the kernel's own 160-line executor,
+no tokio, effect seam unchanged), **wire 9P entire**: mount(fd), hellofs,
+exportfs with private namespaces travelling, symlinks over minted message
+types, wstat through the wire. Still red, exactly two subsystems: the
+window server + draw engine (19) and the WASI shim on wasmtime (6).
+`kernel.mjs` is the reference implementation; the suite is the spec.
 
 ## Sources
 
