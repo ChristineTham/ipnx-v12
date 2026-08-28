@@ -91,6 +91,61 @@ Before a single line of WASM code is converted to machine instructions or execut
 * Structural Integrity: The runtime scans the .wasm binary to ensure it follows the strict WebAssembly specification format.
 * Type and Stack Safety: The validator performs static type checking on the stack-based operations. It ensures that functions cannot leave dangling variables on the stack, call non-existent functions, or manipulate types illegally. If a binary fails verification, it is rejected entirely before compile time.
 
+## Users, identity and profiles
+
+UNIX was a time-sharing system, supporting multiple users on one machine. Modern systems
+are generally the other way around: one person per device, and one person using many
+devices. UNIX also invented something else under the same mechanism — the daemon user, a
+"user" that owns resources and runs processes but is never a person at all. Today the
+daemons outnumber the people: most identities in the modern world are service accounts,
+workload roles and agents.
+
+IPNX takes the uid apart into what it actually was:
+
+- **The person** is the owner of a kernel instance — exactly one per instance, many
+  instances per person. Timesharing is inverted rather than restored: a kernel now costs
+  a browser tab, so multi-tenancy happens by running another instance, not by sharing
+  one. There is no `login` and no getty; you do not log into your own machine.
+- **The role** is the daemon user, kept deliberately: a name that owns resources and is
+  conferred, never logged into. Where a UNIX daemon got only a uid, an IPNX daemon gets
+  a reduced namespace — its confinement is simply the binds it was started with.
+- **The agent** is a role plus a namespace, and it is the genuinely new population. The
+  name is for the audit trail; the namespace is the authority.
+- **The network identity** is an authenticated claim, made per connection. There is no
+  global registry of users; each server believes a proof. A person, across all their
+  devices, is their keyring.
+
+The organising rule: **names are for accounting; namespaces are for authority.**
+
+This is also what `su` means here. It is not "superuser" — there is no superuser to
+become. It is an identity transition under the kernel's rules, with no password and no
+setuid machinery. The direction that matters most is downward: `su none` starts a shell
+with almost nothing, which is exactly what you want before running something you do not
+trust.
+
+### The profile
+
+A user's profile is essentially: what rights they can exercise, their namespace
+configuration, which services they connect to, and their credentials, passwords and
+certificates. Plan 9 built all of this, but in four separate pieces — factotum (the key
+agent), secstore (the networked keyring), the per-user profile script, and the namespace
+description file — and the industry then rebuilt each piece separately as password
+managers, passkeys and dotfile repositories, without ever unifying them.
+
+IPNX unifies them as the profile: a file tree, served like everything else. Namespace
+fragments describe what to assemble — a base, a per-device section, a section per
+service — so one profile can span a home directory on the local device, NAS mounts, and
+remote git repositories, and still work on a device where some of those do not exist.
+The profile speaks IPNX names, never host paths, so it is portable across devices; an
+unreachable mount degrades gracefully rather than breaking the profile. Credentials are
+never plain files: programs use a key by writing a challenge and reading a response, so
+secrets stay inside the agent — which also lets each platform keep them in its native
+secure storage. The durable copy of a profile can live anywhere mountable, including a
+git repository, which makes an identity versioned and diffable.
+
+An AI agent's identity falls out of the same design: it is given a sub-profile — fewer
+namespace fragments, scoped credentials, its own name in the audit trail.
+
 ## Current Status
 
 A kernel with processes, pipes, windows and a permission model. A
