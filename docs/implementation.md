@@ -68,7 +68,8 @@ userspace/       (M0) the guest world, graduated from poc/: libc/ (lib9),
                  the build system (mk.sh and its tools)
 docs/            design.md (why), architecture.md (what), handbook.md (how),
                  implementation.md (when — this), platforms.md (where),
-                 poc.md (was), identity.md (who), syscalls.md (the call census)
+                 poc.md (was), identity.md (who a user is), personas.md
+                 (who it is for), syscalls.md (the call census)
 poc/             FROZEN — the JS reference kernel and its two host shims.
                  Runs the floor suite forever; changes no more.
 ```
@@ -134,6 +135,16 @@ built for this), embed it in a JS shim structurally parallel to
 plumbing. The JS kernel then serves as oracle only.
 **Acceptance:** the floor suite in Chrome on the Rust core; `?i` boots rc;
 the window server drawing through the same `#w`.
+
+### The public demo *(S, standalone — any time)* — consumes: personas (2026-08-29)
+The browser port is finished, frozen, and unreachable — P2 and P3's whole
+journey ([personas.md](personas.md)) is "click a URL, type into rc". Host it:
+any static host that can set the COOP/COEP headers SharedArrayBuffer needs
+(Netlify/Cloudflare Pages via a `_headers` file; GitHub Pages only with the
+service-worker shim), the rootfs and binaries as static assets, a landing
+line and a two-minute tour beside it. No kernel work.
+**Acceptance:** the floor suite green at the public URL in a fresh browser;
+`?i` boots rc; the README (hers) gains the link as a status fact.
 
 ### M6 — the iPadOS app *(M–L)* — consumes: engine matrix + iOS-files decisions (2026-08-27)
 wasmtime with Pulley (the interpreter backend) and

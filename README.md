@@ -273,6 +273,8 @@ mechanism for identity across machines. The full history and its lessons are in
  calls dispositioned, V10's 68 routines mapped onto them.
 **[docs/identity.md](docs/identity.md)** — identity: what a user is here, and the
  uid model the compatibility layer could not do, and this kernel can.
+**[docs/personas.md](docs/personas.md)** — the personas: who this is for, and
+ what each needs to see before believing.
 **[docs/poc.md](docs/poc.md)** — the proof of concept's record, frozen: what three
  days built and what they proved.
 

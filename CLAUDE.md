@@ -131,6 +131,7 @@ is indistinguishable from a shipped one.
 | `docs/poc.md` | **frozen** — the PoC's record and declaration (2026-08-26 → 2026-08-29): chronology, final state, what it proved |
 | `docs/syscalls.md` | **the derived call list** — Plan 9's 40 live calls dispositioned for V12; V10's 68 routines mapped onto them |
 | `docs/identity.md` | **the who** — what a user is (person, role, agent, network person), and the uid model — the item APE called impossible, decided and running: kernel credentials, `/proc` ctl transitions, `DMSETUID`, the two enforcement regimes |
+| `docs/personas.md` | **who it is for** — the five personas with jobs and belief tests, the non-users, the coverage map over the milestones, and the gaps the exercise caught (the public demo) |
 | `poc/README.md` | the frozen reference implementation's layout and its deliberate v0 deviations |
 
 Findings go in RESEARCH.md with provenance; decisions go in the design (docs/design.md);

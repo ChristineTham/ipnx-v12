@@ -8,7 +8,8 @@ answers, and put back the compatibility Plan 9 threw away?***
 [architecture.md](architecture.md); **how** to work on it, [handbook.md](handbook.md);
 **when** it gets built, [implementation.md](implementation.md); **where** it runs and
 where things live, [platforms.md](platforms.md); **who** a user is,
-[identity.md](identity.md); what **was**, [poc.md](poc.md).*
+[identity.md](identity.md), and who it is **for**, [personas.md](personas.md);
+what **was**, [poc.md](poc.md).*
 
 **The statement, once.** A **modified Plan 9 kernel hosted as an ordinary userspace
 process** — browser, macOS, iPadOS, OCI, eventually hypervisor-direct; **9P as the only
