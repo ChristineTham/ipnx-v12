@@ -3,7 +3,7 @@
 > [!NOTE]
 > What if UNIX was reimplemented today, on a modern computing ecosystem? What would it look like?
 
-UNIX is the ancestor of nearly every major computing platform today: Linux, originally a student project to create a UNIX "clone", is now the foundation of servers, supercomputers, embedded devices and Android. Apple's operating systems are a direct descendant of Unix, based on BSD and Mach. Even legacy systems like IBM mainframes and Windows computers can embed Unix or Linux. In short, there is not a single computing device today (from data centres to personal devices to home routers and appliances) that did not owe it's existence to, or isn't directly influenced by, UNIX.
+UNIX is the ancestor of nearly every major computing platform today: Linux, originally a student project to create a UNIX "clone", is now the foundation of servers, supercomputers, embedded devices and Android. Apple's operating systems are a direct descendant of Unix, based on BSD and Mach. Even legacy systems like IBM mainframes and Windows computers can embed Unix or Linux. In short, there is not a single computing device today (from data centres to personal devices to home routers and appliances) that did not owe its existence to, or isn't directly influenced by, UNIX.
 
 We all know the legendary story of how UNIX began, at Bell Labs. After the failure of the Multics project, Ken Thompson found a PDP-7 while looking for a home for his game *Space Travel*. He wrote a new disk driver and test suite, and realised he was three weeks away from a full operating system. While his wife was away, he built the first version, and the rest is history.
 
@@ -34,28 +34,28 @@ It is based on:
 
 So IPNX v12 will run everywhere - in a browser on any machine, or using a WASM runtime engine (eg. [wasmtime](https://wasmtime.dev)), or directly inside a container.
 
-INPX v12 consists of:
+IPNX v12 consists of:
 
 - a reimplementation of the Plan 9 kernel in Rust, as an ordinary userspace process on the host system, with
 - both Plan 9 and UNIX v10 utilities and commands supported as WASM binaries in a per process namespace.
-- The kernel supports Plan 9 syscalls natively, and UNIX v10 via a personality layer.
+- The kernel supports Plan 9 syscalls natively, and UNIX v10 via a personality layer (in progress — two V10 binaries run today on a thin libc).
 - The kernel is compiled using the host Rust toolchain.
 - WASM binaries are also compiled using the host toolchain, but are portable and can run everywhere.
 - WASI is supported, so IPNX binaries can coexist with non IPNX WASM binaries.
 - 9P2000 is used as the interprocess communication mechanism between processes.
-- IPNX does not implement a filesystem, it leverages existing filesystems from the host and the Internet via 9P.
+- IPNX never implements an on-disk format; today it runs on an in-memory tree seeded from the host at boot, and host and network filesystems arrive as 9P mounts.
 
 IPNX v12 adheres to the three principles behind [Plan 9](https://9p.io/plan9/):
 
 > First, resources are named and accessed like files in a hierarchical file system. Second, there is a standard protocol, called 9P, for accessing these resources. Third, the disjoint hierarchies provided by different services are joined together into a single private hierarchical file name space.
 
-IPNX v12 is not a reimplementation on all of Plan 9. The kernel is fresh, inspired by the Plan 9 kernel, and the commands are partially borrowed from Plan 9. The UNIX personality is inspired by Tenth Edition, and it also lifts from that edition's userspace. The rest of it is new, reimagined for modern times.
+IPNX v12 is not a reimplementation of all of Plan 9. The kernel is fresh, inspired by the Plan 9 kernel, and the commands are partially borrowed from Plan 9. The UNIX personality is inspired by Tenth Edition, and it also lifts from that edition's userspace. The rest of it is new, reimagined for modern times.
 
 In summary, IPNX is not Plan 9, it is not UNIX, and it most definitely is not Linux or macOS. It is what Unix may have become if it was reimplemented today.
 
 ## Security model
 
-IPNX v12 processes are secure by design. It assumes from day one that the running application is malicious. Processes do not share memory, there is no shared memory implementation. They run as separate web workers and communicate with each other only through 9P and WASI interfaces. There is no superuser, IPNX inherits WASM's strict capability-based, sandboxed security architecture. Each process is limited by the capabilities and namespace provided to it. The kernel itself can be compromised on the host, so the system in not totally secure, but the attack surface is very specific and technically outside the system itself.
+IPNX v12 processes are secure by design. It assumes from day one that the running application is malicious. Processes never share memory with one another after exec; the only shared regions are the transient fork window and each process's private mailbox to the kernel. They run as separate web workers (OS threads under wasmtime) and communicate with each other only through 9P and pipes. There is no superuser, IPNX inherits WASM's strict capability-based, sandboxed security architecture. Each process is limited by the capabilities and namespace provided to it. The kernel itself can be compromised on the host, so the system is not totally secure, but the attack surface is very specific and technically outside the system itself.
 
 Of course, it is still possible to create dangerous WASM binaries through over-privilege, and the binaries themselves may contain logic vulnerabilities, so it does not eliminate all security risks, but IPNX v12 starts from a zero trust security foundation.
 
@@ -65,7 +65,7 @@ A WASM module operates inside an entirely isolated environment. It is completely
 
 * No Ambient Authority: A native binary or a Docker container inherits the permissions of the user executing it (e.g., access to your home directory, network, and environment variables). A WASM module has zero ambient authority.
 * Explicit Imports Only: A WASM binary cannot access the filesystem, initiate a network request, or even read the system clock unless the host runtime explicitly passes that specific function into the module as an import.
-* The WebAssembly System Interface (WASI): WASI manages these imports using capability-based security. Instead of giving a module permission to open any file, you must explicitly pass a file descriptor for a specific folder at startup. The module cannot traverse outside that folder.
+* The WebAssembly System Interface (WASI): WASI manages these imports using capability-based security. Instead of giving a module permission to open any file, you must explicitly pass a file descriptor for a specific folder at startup. The module cannot traverse outside that folder. In IPNX the single preopened directory is the process's namespace root, so the namespace itself is the capability boundary.
 
 However, note that IPNX v12 does allow fork() and rfork() so processes can inherit other processes' capabilities (by design). So practically, IPNX 12 processes may share a common set of capabilities, but a per-process namespace ensures the capabilities can be fine tuned.
 
@@ -81,7 +81,7 @@ One of WASM's greatest defenses against classic exploits like buffer overflows i
 
 WASM prevents attackers from hijacking the execution flow of an application via structural constraints.
 
-* Validated Call Targets: Function pointers do not point to raw memory addresses. Instead, they are represented as integer indices inside a strictly managed, immutable Function Table.
+* Validated Call Targets: Function pointers do not point to raw memory addresses. Instead, they are represented as integer indices inside a strictly managed Function Table, fixed at instantiation in IPNX binaries.
 * Type-Safe Indirect Calls: When a WASM module performs an indirect call (a function pointer call), the runtime verifies at the exact moment of execution that the function signature (arguments and return types) perfectly matches the expected type definition. If they do not match, the execution aborts immediately. This stops "Return-Oriented Programming" (ROP) attacks, where hackers string together random fragments of existing machine code to bypass security boundaries.
 
 ### Verification and Validation
@@ -99,11 +99,12 @@ returning twice. An editor — the real `sam`, the one Rob Pike wrote, drawing i
 into a window that is literally a file. Type `win sam &` and 1980s Bell Labs software
 paints glyphs in Chrome through `/dev/draw`.
 
-The kernel is about 2,700 lines. It carries
-46,000 lines of untouched Bell Labs userspace today, and it is built to carry Go
-binaries, Python, and git repositories tomorrow — through the same nine
-operations on names. A hundred and twenty tests boot it, exercise everything from fork
-to fonts, and shut it down clean, identically on Node and in Chrome.
+The kernel is about 3,000 lines in JavaScript and 4,000 in Rust — small enough to
+read in a sitting, twice over. It carries 61,000 lines of untouched Bell Labs
+userspace today, and Go binaries and Python already run beside them — with git
+repositories to come — through the same handful of operations on names. A hundred
+and thirty-one tests boot it, exercise everything from fork to fonts, and shut it
+down clean, identically on Node, in Chrome, and on the Rust kernel under wasmtime.
 
 ## The tricks are the architecture
 
@@ -113,60 +114,34 @@ a file, and every process composes its own world.
 - **A window is a file.** `bind '#w/1' /dev` makes a namespace into a window, and the
   editor draws by writing to it. This is one of the ideas that most Plan 9 ports had to
   abandon. A browser tab provides a place where it works naturally.
-- **Hand someone a world.** `exportfs` serves your namespace — private binds included —
-  to another process, another container, another machine. Not a copy: the thing itself,
-  over one protocol.
-- **Give an AI a namespace, not an allowlist.** An agent's visible universe is
-  assembled from binds: exactly the folders, tools and services you mounted, nothing
-  else *reachable by construction*, with the audit log for free. This is the sandbox
-  the agent ecosystem is currently faking with permission prompts.
-- **The kernel cannot bloat.** Plan 9 native, WASI, and a modern Unix surface are all
-  just libc dialects over the same file protocol. Personalities multiply; the kernel
-  stays readable in an afternoon. There is no ioctl swamp because there is nowhere to
-  dig one.
-- **A computer as a function call.** The same kernel is headed for a microVM that boots
-  in ~100 milliseconds, holds nothing it can't remount, and dies without ceremony —
-  which is to say: the architecture Lambda runs on, with an actual operating system's
-  manners.
-  - **A process can be given a world.** `exportfs` serves a namespace, including its
+- **A process can be given a world.** `exportfs` serves a namespace, including its
   private binds, to another process, container or machine. It is not a copy of the
   namespace; it is the namespace itself, served over one protocol.
-  - **An AI can be given a namespace rather than an allowlist.** Its visible universe is
+- **An AI can be given a namespace rather than an allowlist.** Its visible universe is
   assembled from binds: the folders, tools and services mounted for it, and nothing else
   reachable by construction. The audit trail follows from the same design.
-  - **The kernel does not need to grow with every personality.** Plan 9, WASI and the
+- **The kernel does not need to grow with every personality.** Plan 9, WASI and the
   modern UNIX interface are libc dialects over the same file protocol. The personalities
   can multiply in userspace while the kernel remains small and understandable. There is
   no ioctl interface because there is no separate mechanism to add one.
-  - **A computer can be treated as a function call.** The same kernel is intended to run
+- **A computer can be treated as a function call.** The same kernel is intended to run
   in a microVM that boots in about 100 milliseconds, mounts what it needs, and then goes
   away. This is the sort of environment used by services such as Lambda, but with an
   actual operating system underneath.
 
 ## The principles
 
-- **Curation over completeness.** Plan 9's `/bin` is its designers' own testimony about
-  which parts of Unix were worth keeping. It is taken entire — the filters, `cron`,
-  the games — absences included: `sed 10q` remains the answer to `head`.
-- **Measurement over standards.** The modern personality is derived, not adopted: port
-  git, CPython and Go, record every interface they actually demand, and that list is
-  the specification. The useful fifth of POSIX, earned line by line.
-- **Refusal and sequencing are different acts.** Anything with Unix ancestry is never
-  refused, only sequenced behind its dependencies. The only true exclusions have
-  neither ancestry nor necessity.
-- **Personalities live in userspace, behind 9P,** where they compose and can be
-  unmounted. Growth happens where it can't hurt anyone.
-  - **Curation over completeness.** Plan 9's `/bin` is its designers' testimony about
-  which parts of UNIX were worth keeping. I have taken it whole: the filters, `cron`,
+- **Curation over completeness.** Plan 9's `/bin` is its designers' testimony about
+  which parts of UNIX were worth keeping. I am taking it whole: the filters, `cron`,
   and the games, including its omissions. `sed 10q` remains the answer to `head`.
-  - **Measurement over standards.** The modern personality is derived rather than adopted.
+- **Measurement over standards.** The modern personality is derived rather than adopted.
   I will port git, CPython and Go, record the interfaces they actually require, and use
   that list as the specification. The useful part of POSIX is earned one interface at a
   time.
-  - **Refusal and sequencing are different things.** Anything with UNIX ancestry is not
+- **Refusal and sequencing are different things.** Anything with UNIX ancestry is not
   refused; it is sequenced behind its dependencies. The only genuine exclusions are
   things with neither ancestry nor necessity.
-  - **Personalities live in userspace, behind 9P,** where they can be composed and
+- **Personalities live in userspace, behind 9P,** where they can be composed and
   unmounted. The system can grow without making the kernel more complicated.
 
 ## What runs today
