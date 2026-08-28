@@ -283,7 +283,7 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (2026-08-27)
 
-130 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
+131 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
 (`node poc/serve.mjs` → `/browser/`, measured in Chrome 148); `?i` boots to **the real
 Plan 9 rc** — pipelines, subshells, `` `{...} `` captures, `fn`, `while`, `switch` — and
 `win rc &` opens a shell window that prompts because rc's own `Isatty` finds
@@ -330,7 +330,7 @@ convinced importlib the stdlib had no `re`). git is deferred to the
 modern personality (it gets built under it, not ported around it — decision
 log). The native host has begun: `native/` is the Rust kernel core (a pure
 state machine: syscalls in, effects out) plus the macOS wasmtime shim — the
-real rc, sam -d and forktest already pass there (96/130; §9.6 records why
+real rc, sam -d and forktest already pass there (now the full 131/131; §9.6 records why
 the native guard needs no hand-written wasm, why fork must SHARE the
 namespace — /bin/bind is the proof — why devmnt forced the core async,
 and how one missing trap-46 marshalling shadowed the root with a 9P
