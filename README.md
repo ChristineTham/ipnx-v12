@@ -244,6 +244,16 @@ IPNX uses `emu`'s architecture with WebAssembly in place of Dis. WebAssembly is 
 virtual machine for which the whole world now builds toolchains. The kernel is small
 enough that reimplementing it for each substrate is a milestone rather than a lifetime.
 
+The security model also has ancestors, most of them dead: capability operating systems
+from Amoeba to EROS. They died of a consistent set of causes — above all, that no
+existing software ran on them — and IPNX is designed against that history. The first
+thing this system proved was that unmodified Go and Python binaries run; the
+capabilities themselves never appear as a concept anyone must learn, because here a
+capability is just a namespace, a file descriptor, a bind. Amoeba's best idea, the
+cryptographically-checked ticket that became the web's signed URL, is the planned
+mechanism for identity across machines. The full history and its lessons are in
+[RESEARCH.md](RESEARCH.md).
+
 ## The documents
 
 **[RESEARCH.md](RESEARCH.md)** — the living evidence base: every finding with
