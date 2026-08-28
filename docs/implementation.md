@@ -76,7 +76,10 @@ wasi/ rootfs/ mk.sh weaken.mjs` to `userspace/`, path fixes in `mk.sh`,
 docs' path references. `poc/` keeps only the frozen supervisor and its Node and
 browser shims, consuming `userspace/`'s build products.
 **Acceptance:** both kernels green from the new paths; `poc/run.sh` unchanged
-in behaviour; a tree listing in the README's terms.
+in behaviour; a tree listing in the README's terms; a `VERSIONS` record of the
+measured toolchain (wasi-sdk, binaryen, bison, Node, Rust) that `mk.sh` warns
+against on drift (six-hats catch: the §9.4–9.5 findings are version-dependent
+and the versions were recorded nowhere).
 
 ### M1 — the `FROM scratch` container *(S–M)* — consumes: OCI decision (2026-08-27)
 The first OCI weight: cross-compile the macOS host's code for
@@ -84,7 +87,11 @@ The first OCI weight: cross-compile the macOS host's code for
 fine inside a container), static binary, `FROM scratch`, `COPY` the host and
 the rootfs. The whole operating system as a distroless image measured in
 megabytes. **Acceptance:** `docker run ipnx` prints the floor suite and exits
-0; `docker run -it ipnx -i` boots to rc; image size recorded in RESEARCH.
+0; `docker run -it ipnx -i` boots to rc; image size recorded in RESEARCH;
+**CI on push** runs the suite in this container (the floor stops being a
+manual discipline), and a second pinned-Node image preserves **the oracle in
+amber** — the frozen reference guarded against host drift (both six-hats
+catches).
 
 ### M2 — the namespace-file boot *(S)* — consumes: profile decision stage 1 (2026-08-29)
 The decision log has said from the start that *boot is rc plus a namespace
@@ -134,14 +141,29 @@ line beside it — and **the tour**: an rc script in the rootfs (`tour` at the
 demo prompt), its chapters doubling as P3's seed exercises, runnable
 non-interactively by a self-skipping test. No kernel work.
 **Acceptance:** the floor suite green at the public URL in a fresh browser;
-`?i` boots rc; the README (hers) gains the link as a status fact.
+`?i` boots rc; the README (hers) gains the link as a status fact; a NOTICES
+page beside the landing states the third-party licence surface (PSF, Go's
+BSD, the V10 covenant); the landing names which browsers are measured.
+
+### The bench pass *(S, standalone — before CI trusts timing)*
+Six-hats catch: zero runtime performance numbers exist — P4's "boots in
+under a second" belief test has no baseline, and Pulley's slowdown is
+flagged "measure before trusted" and unmeasured. A self-skipping measurement
+boot prints syscall round-trip, pipe throughput, fork latency, boot-to-init
+time, and per-process memory; numbers land in RESEARCH per host, and the
+raster tests' polling margins are measured on slow hosts before CI treats a
+timeout as a failure.
+**Acceptance:** the table in RESEARCH, one row per host, dated.
 
 ### M6 — the iPadOS app *(M–L)* — consumes: engine matrix + iOS-files decisions (2026-08-27)
 wasmtime with Pulley (the interpreter backend) and
 `signals_based_traps(false)` — no JIT, no runtime codegen, App Store-lawful.
 SwiftUI shell over M3's presentation shape; user-granted folders arrive as
 security-scoped bookmarks surfaced as binds (the decision: a granted subtree
-*is* a bind). Measure Pulley's slowdown honestly into RESEARCH.
+*is* a bind). Measure Pulley's slowdown honestly into RESEARCH. **Gate
+(six-hats):** the WKWebView-stopgap claim rides on the browser port running
+under WebKit — unverified; the suite runs under Safari before the stopgap is
+trusted.
 **Acceptance:** the floor suite green on an iPad (self-skipping what the
 sandbox forbids, each skip named); acme editing a file in a granted folder.
 
@@ -158,8 +180,9 @@ a cross-instance pipeline; the BSD-API surface deferred to the personality
 
 ### M8 — identity on the wire *(M–L)* — consumes: the five 2026-08-29 identity decisions
 The credential half, in the capability doctrine's terms: `devcap` minting
-Amoeba-shaped sparse tickets (port/object/rights/check with a modern MAC,
-expiry over revocation); the auth agent (factotum's shape) holding keys as
+Amoeba-shaped sparse tickets (port/object/rights/check with a modern MAC —
+boring, reviewed primitives only, the six-hats rule — expiry over
+revocation); the auth agent (factotum's shape) holding keys as
 use-don't-read files; `su`'s third rule — authenticated transition — landing
 beside the two running ones; wire mounts authenticating by ticket.
 **Acceptance:** a ticketed mount succeeds, an expired one refuses, a `su none`
@@ -238,6 +261,8 @@ M7 is the gate everything distributed waits behind.
 - **M5:** whether guest Workers instantiate modules themselves (as today) or
   the core-in-wasm proxies instantiation; SAB ownership between two wasm
   instances.
+- **M3/M5:** text-mirrored console windows (the xterm.js path) as the
+  screen-reader answer — accessibility is unpromised before it exists.
 - **M6:** Pulley's measured slowdown on the suite; whether CPython under
   Pulley is usable or needs the wasmi fallback from the engine matrix.
 - **M7:** the browser's `/net` relay protocol (WebSocket framing of the wire);

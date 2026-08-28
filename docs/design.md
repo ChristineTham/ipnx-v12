@@ -617,6 +617,24 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-29) The six-hats pass — the blind spots, caught and adopted.**
+  De Bono's parallel-thinking sweep run over the whole project at the
+  declaration; the record is [six-hats.md](six-hats.md). The catches, each
+  now in the plan: **CI on push via the M1 container** (the floor stops
+  being a manual discipline) and **the oracle in amber** (a pinned-Node
+  image, because frozen means unfixable and host drift would kill it);
+  **toolchain pinning at M0** (`VERSIONS` — the §9.4–9.5 findings are
+  version-dependent and the versions were recorded nowhere); **the bench
+  pass** (zero runtime performance numbers existed — P4's belief test had
+  no baseline); **the WebKit gate on M6's stopgap claim** (a dated decision
+  rode on an unverified assumption); **the trust-boundary contract in
+  architecture.md**; **NOTICES on the demo**; accessibility and M8's
+  boring-primitives rule noted where they will be paid. Meta-verdict,
+  recorded: the thinking phase is complete — declare, roles, design
+  thinking, hats — and the review rituals consolidate into one cadence
+  (ledger + design-thinking + hats; after each shipped form, any validation
+  event, or quarterly). The next commit builds.
+
 - **(2026-08-27) OCI is two targets, taken at two different weights.**
   *The scratch container is a stated target of the Rust milestone, for free*: the
   kernel as a static musl binary, PID 1 in a `FROM scratch` image — no distro, no

@@ -133,6 +133,7 @@ is indistinguishable from a shipped one.
 | `docs/identity.md` | **the who** — what a user is (person, role, agent, network person), and the uid model — the item APE called impossible, decided and running: kernel credentials, `/proc` ctl transitions, `DMSETUID`, the two enforcement regimes |
 | `docs/personas.md` | **who it is for** — the five personas with jobs and belief tests, the non-users, the coverage map over the milestones, and the gaps the exercise caught (the public demo) |
 | `docs/design-thinking.md` | **the iteration record** — method (cited), POVs, the ideation table with rejected ideas, the rederived will/won't and its reconciliation, the doc review, the validation plan and cadence |
+| `docs/six-hats.md` | **the completeness check** — dated parallel-thinking sessions (facts/feelings/risks/value/alternatives/process), each catch dispositioned; runs on the consolidated review cadence |
 | `poc/README.md` | the frozen reference implementation's layout and its deliberate v0 deviations |
 
 Findings go in RESEARCH.md with provenance; decisions go in the design (docs/design.md);

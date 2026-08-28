@@ -159,6 +159,27 @@ host is written against this section and judged by the suite.
 - Assertions are about **semantics, not one host's layout** (raster tests
   assert inked bands, not pixel positions).
 
+## Contract: what is trusted
+
+- **The engine's sandbox is the isolation primitive.** A guest reaches
+  exactly its imports and its linear memory; everything else it can touch is
+  what its namespace resolves. There is no second barrier: on hosted rungs
+  the host OS process stands behind the engine, on the microVM rung nothing
+  does — a runtime escape there is a whole-system escape, recorded plainly
+  ([design.md](design.md), OCI decision).
+- **Trusted**: the kernel (both implementations), the host shims, the build
+  toolchain's output.
+- **Untrusted by construction**: every guest (its authority is its
+  namespace, nothing else), every wire-mounted server (the client applies
+  the protocol and its own policy — "the namespace unions services; it
+  cannot union their trust", [identity.md](identity.md)), and every wire
+  client (per-attach identity; the server decides what the name may do).
+- **A demo visitor** executes guests in their own browser only; the hosting
+  is static files; nothing a visitor does reaches another visitor or a
+  server.
+- The future credential mechanism (M8) uses boring, reviewed cryptographic
+  primitives only — cleverness is out of contract.
+
 ## Deliberately not architecture
 
 Per-host internals (how a shim spawns threads or paints), window *policy*

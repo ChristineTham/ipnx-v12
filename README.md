@@ -277,6 +277,8 @@ mechanism for identity across machines. The full history and its lessons are in
  what each needs to see before believing.
 **[docs/design-thinking.md](docs/design-thinking.md)** — the design-thinking
  record: how the personas were derived, what was considered, kept and refused.
+**[docs/six-hats.md](docs/six-hats.md)** — the completeness checks: dated
+ sweeps for what the plans keep missing.
 **[docs/poc.md](docs/poc.md)** — the proof of concept's record, frozen: what three
  days built and what they proved.
 
