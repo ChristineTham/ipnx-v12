@@ -223,6 +223,11 @@ implementation and the native rewrite. The proof of concept is complete, and the
 kernel has been built twice.** Alongside it, TUHS-tape V10 `cat` and `echo` run
 unmodified in `/v10/bin`, preserving the exhibit that started the project.
 
+Before the build, four review lenses — the deployment ledger (where it runs),
+design thinking (who it is for), a six-hats pass (what we had missed), and
+virtue ethics (what character the work keeps) — have each been applied and
+recorded in the documents below; they now repeat together, on one cadence.
+
 Next: the per-platform
 shims around the Rust core — iPadOS, a `FROM scratch` OCI container, the microVM. Then the
 personalities, in benchmark order: the Go binary and the Python interpreter
