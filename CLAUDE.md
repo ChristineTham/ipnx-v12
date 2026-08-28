@@ -127,9 +127,11 @@ is indistinguishable from a shipped one.
 | `poc/README.md` | what the PoC proves, its layout, its deliberate v0 deviations |
 
 Findings go in RESEARCH.md with provenance; decisions go in the plan; both are living.
-Keep them consistent — the architecture statement appears in README, RESEARCH TL;DR and
-the plan, deliberately, and a change to it changes all three. Prefer a pointer over a copy
-for anything else ("a list that appears twice will disagree").
+Keep them consistent — the architecture statement appears in RESEARCH's TL;DR and the
+plan, deliberately, and a change to it changes both. **README.md is Christine's own
+document, written in her voice (2026-08-29): never rewrite or re-voice it — when a
+milestone lands, update only the factual status lines inside her text.** Prefer a
+pointer over a copy for anything else ("a list that appears twice will disagree").
 
 ## The parent repository
 
