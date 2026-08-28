@@ -1,7 +1,7 @@
 # The proof of concept — the record (2026-08-26 → 2026-08-29, complete)
 
 **Declared complete 2026-08-29.** The PoC ran three days by the calendar and one
-architecture by intent: the full design of [v12-plan.md](v12-plan.md), built as a
+architecture by intent: the full design of [design.md](design.md), built as a
 working slice until it had nothing left to prove. Final state: **131 acceptance
 tests, green on three hosts** — the JS reference kernel on Node, the same kernel
 in Chrome, and the Rust kernel core under wasmtime — with the real Plan 9
@@ -23,11 +23,11 @@ What the PoC deliberately did not do is listed in
 [poc/README.md](../poc/README.md); the findings it produced are in
 [RESEARCH.md](../RESEARCH.md) (§5 fork/transport, §7 GUI, §9.4–9.6 toolchain,
 native core); the decisions it settled are dated entries in the
-[decision log](v12-plan.md).
+[decision log](design.md).
 
 ---
 
-The chronology below is the PoC section of v12-plan.md as it accreted, milestone
+The chronology below is the PoC section of design.md as it accreted, milestone
 by milestone, moved here verbatim on the day of declaration — a period record,
 including its forward-looking sentences, each of which came true.
 

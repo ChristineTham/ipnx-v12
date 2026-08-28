@@ -1,7 +1,7 @@
 # A hosted Plan 9 with a Research Unix personality — feasibility study
 
 *Begun 2026-08-26 and **living** — the evidence base behind
-[docs/v12-plan.md](docs/v12-plan.md). Findings land here as they are established, with their
+[docs/design.md](docs/design.md). Findings land here as they are established, with their
 provenance; decisions and scope stay in the plan.*
 
 *It is written to be self-contained. Measurements taken against the Research Unix V10 tree

@@ -2,7 +2,7 @@
 
 **Living document** (begun 2026-08-29, the day the PoC was declared complete).
 This is the build sequence for the real system. It consumes the
-[decision log](v12-plan.md) — decisions are made there, with dates and
+[decision log](design.md) — decisions are made there, with dates and
 evidence, and *sequenced* here; nothing in this file reopens one. The PoC's
 record is frozen in [poc.md](poc.md); findings continue to land in
 [RESEARCH.md](../RESEARCH.md) as they are measured.
@@ -59,7 +59,7 @@ hosts/
 userspace/       (M0) the guest world, graduated from poc/: libc/ (lib9),
                  plan9/ + v10/ (vendored, verbatim), cmd/, wasi/, rootfs seed,
                  the build system (mk.sh and its tools)
-docs/            v12-plan.md (design + decisions), implementation.md (this),
+docs/            design.md (design + decisions), implementation.md (this),
                  poc.md (frozen), syscalls.md, uid.md
 poc/             FROZEN — the JS reference kernel and its two host shims.
                  Runs the floor suite forever; changes no more.
@@ -213,7 +213,7 @@ M0 ──► M1 ──► M11
 M1–M5 are independent of each other after M0 and can be reordered by appetite;
 M7 is the gate everything distributed waits behind.
 
-## Engineering questions (not design questions — those live in v12-plan)
+## Engineering questions (not design questions — those live in design.md)
 
 - **M1:** static musl wasmtime build flags; whether Cranelift's mmap'd code
   pages need a seccomp note in the image docs.

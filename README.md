@@ -258,7 +258,7 @@ mechanism for identity across machines. The full history and its lessons are in
 
 **[RESEARCH.md](RESEARCH.md)** — the living evidence base: every finding with
  provenance, from Plan 9's call table to the wasm toolchain's measured behaviors.
-**[docs/v12-plan.md](docs/v12-plan.md)** — the living spec: scope, decisions with
+**[docs/design.md](docs/design.md)** — the living spec: scope, decisions with
  dates, open questions.
 **[docs/syscalls.md](docs/syscalls.md)** — the derived call list: Plan 9's 40 live
  calls dispositioned, V10's 68 routines mapped onto them.
