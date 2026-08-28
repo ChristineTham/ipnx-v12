@@ -167,6 +167,14 @@ numbers, and the curated V10 role names as heritage — and groups (D2)
 matter less than they did, because roles absorb most of what groups were
 for.
 
+The person's *configuration* — namespace fragments, service mounts,
+credentials — is the **profile**, a file tree served by a userspace agent
+(the decision log, 2026-08-29): factotum's shape unified with secstore's
+store/agent split and the /lib/namespace language, portable across a
+person's instances, with secrets on a use-don't-read interface and an AI
+agent's identity as a sub-profile. The kernel contributes nothing to it,
+which is the point.
+
 ## What this closes
 
 Of the ten identity-family calls docs/syscalls.md classed as *design*: the seven uid/gid

@@ -494,6 +494,54 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   and groups (deferral D2) get less urgent because roles absorb most of
   what groups did.
 
+- **(2026-08-29) The profile: identity's configuration, unified.** Plan 9
+  built the user profile in four scattered pieces nobody named as one
+  thing: factotum (the key agent — secrets in memory only, protocol steps
+  performed on the owner's behalf, mounted as a file server), secstore
+  (the durable *networked* keyring, one strong unlock at boot — agent in
+  RAM, store on the network: a distributed password manager in 1999),
+  `$home/lib/profile` (the per-user namespace script), and
+  `/lib/namespace` (the declarative bind/mount language `newns`
+  interprets). The industry rebuilt each piece separately — password
+  managers and platform keychains are secstore, passkeys are factotum's
+  sign-the-challenge model winning late, dotfiles and kubeconfig contexts
+  are lib/profile — and unified nothing. IPNX unifies them as **the
+  profile: a file tree served by a userspace file server** (the kernel's
+  fifth consecutive identity decision costing it zero lines), mounted at
+  `/mnt/profile`:
+  `namespace/` holds fragment files in the /lib/namespace little language
+  — `base` + `device/<name>` + `service/<svc>`, unioned by context
+  (ssh_config's Host blocks, kubeconfig's contexts, done as files);
+  `services/` is the fstab-of-the-person (dial address, protocol, aname,
+  mountpoint, credential *reference*); `keys/` is the agent interface and
+  **secrets are never ordinary readable files** — programs write a
+  challenge and read a response, use-don't-read, which also lets each
+  platform shim back the store with its native secure enclave while the
+  profile stays portable text. "Rights" is deliberately NOT a subtree:
+  by the user decision, rights are namespaces plus roles, so the profile
+  records how to *exercise* them (which fragments, which role tickets)
+  and grants nothing — servers still decide. Three portability rules:
+  **the profile speaks IPNX names, never host paths** (each shim maps
+  "the home directory" to its device — the profile never learns a host
+  path, as the kernel never learns an on-disk format); **construction is
+  best-effort** (an unreachable NAS mounts nothing; a laptop on a plane
+  is not a broken profile); **the store is remote and durable, the agent
+  local and volatile** — the durable profile is text plus encrypted
+  blobs and lives in anything mountable, including a git repo (versioned,
+  diffable, rollback-able identity for free), unlocked once per device
+  (PAK then, passkey-shaped now). Delegation falls out: an AI agent's
+  identity (role + namespace) is exactly *a sub-profile* — fewer
+  fragments, scoped tickets, its own audit name. Refused: kernel
+  mechanism, a global identity provider (the profile presents proofs;
+  servers verify per connection), plaintext secrets, and package
+  management (this is not Nix). Factotum is adopted as a SHAPE, not a
+  program — its protocols are period pieces, its design (agent as file
+  server, use-don't-read, delegation) is the ancestor. **Sequencing in
+  two stages, neither throwaway**: the namespace half needs nothing and
+  can land now (boot already wants "rc plus a namespace file"; per-agent
+  sub-profiles included); the credential half needs /net to reach stores
+  and services, and pairs with devcap.
+
 - **(2026-08-27) OCI is two targets, taken at two different weights.**
   *The scratch container is a stated target of the Rust milestone, for free*: the
   kernel as a static musl binary, PID 1 in a `FROM scratch` image — no distro, no
