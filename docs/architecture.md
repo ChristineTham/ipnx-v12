@@ -3,7 +3,8 @@
 **Role: what the system *is*, present tense.** The *why* behind every shape here
 is argued in [design.md](design.md); the *evidence* lives in
 [RESEARCH.md](../RESEARCH.md); the *sequence* is [implementation.md](implementation.md);
-the *history* is [poc.md](poc.md). This document carries no rationale and no
+the *practice* is [handbook.md](handbook.md); the *deployments and namespace map*
+are [platforms.md](platforms.md); the *history* is [poc.md](poc.md). This document carries no rationale and no
 chronology — if a sentence would start with "because," it belongs elsewhere and
 appears here as a link. It changes only when a contract changes, in the same
 commit as the change.

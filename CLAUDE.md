@@ -125,6 +125,8 @@ is indistinguishable from a shipped one.
 | `RESEARCH.md` | **living evidence base** — every finding with provenance: Plan 9's call list, `rfork` flags verbatim, APE's limits, the fork-resume mechanism and its measurements, WASI phases, the toolchain recipe (§9.4), V10 measurements |
 | `docs/design.md` | **the why** — scope, design rationale, decisions taken (with dates), open questions |
 | `docs/architecture.md` | **the what** — present-tense invariants and contracts: component map, guest ABI, host contract, wire, the suite; changes only with a contract, in the same commit |
+| `docs/handbook.md` | **the how** — prerequisites, build/run, the build system's load-bearing flags, how to add a command/test/device/host, debugging practice |
+| `docs/platforms.md` | **the where** — deployment forms with engine and state, the canonical boot namespace, and the dated deployment-review ledger (doctrine #5's home) |
 | `docs/implementation.md` | **the living build plan** — milestones M0–M12 with dependencies, acceptance criteria, engineering questions; the sequence work follows |
 | `docs/poc.md` | **frozen** — the PoC's record and declaration (2026-08-26 → 2026-08-29): chronology, final state, what it proved |
 | `docs/syscalls.md` | **the derived call list** — Plan 9's 40 live calls dispositioned for V12; V10's 68 routines mapped onto them |
@@ -132,7 +134,8 @@ is indistinguishable from a shipped one.
 | `poc/README.md` | the frozen reference implementation's layout and its deliberate v0 deviations |
 
 Findings go in RESEARCH.md with provenance; decisions go in the design (docs/design.md);
-contract changes go in docs/architecture.md in the same commit as the code; all three are living.
+contract changes go in docs/architecture.md in the same commit as the code; deployment-story
+reviews land dated in docs/platforms.md's ledger; all of these are living.
 Keep them consistent — the architecture statement appears in RESEARCH's TL;DR and the
 plan, deliberately, and a change to it changes both. **README.md is Christine's own
 document, written in her voice (2026-08-29): never rewrite or re-voice it — when a

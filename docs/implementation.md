@@ -5,7 +5,9 @@ This is the build sequence for the real system. It consumes the
 [decision log](design.md) — decisions are made there, with dates and
 evidence, and *sequenced* here; nothing in this file reopens one. What the
 system *is* — the invariants and contracts the milestones build against — is
-[architecture.md](architecture.md). The PoC's record is frozen in
+[architecture.md](architecture.md); the working practice is
+[handbook.md](handbook.md); the deployment forms and the namespace map are
+[platforms.md](platforms.md). The PoC's record is frozen in
 [poc.md](poc.md); findings continue to land in [RESEARCH.md](../RESEARCH.md)
 as they are measured.
 
@@ -64,8 +66,9 @@ hosts/
 userspace/       (M0) the guest world, graduated from poc/: libc/ (lib9),
                  plan9/ + v10/ (vendored, verbatim), cmd/, wasi/, rootfs seed,
                  the build system (mk.sh and its tools)
-docs/            design.md (why), architecture.md (what), implementation.md
-                 (when — this), poc.md (was), syscalls.md + uid.md (spec deep-dives)
+docs/            design.md (why), architecture.md (what), handbook.md (how),
+                 implementation.md (when — this), platforms.md (where),
+                 poc.md (was), syscalls.md + uid.md (spec deep-dives)
 poc/             FROZEN — the JS reference kernel and its two host shims.
                  Runs the floor suite forever; changes no more.
 ```

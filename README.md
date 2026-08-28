@@ -263,8 +263,12 @@ mechanism for identity across machines. The full history and its lessons are in
 **[docs/architecture.md](docs/architecture.md)** — the architecture: what the system
  is, present tense — the component map and the contracts a host, a guest, and the
  wire must honour.
+**[docs/handbook.md](docs/handbook.md)** — the handbook: how to build, run,
+ extend and debug it.
 **[docs/implementation.md](docs/implementation.md)** — the build plan: milestones
  with dependencies and acceptance, from the tree to the microVM.
+**[docs/platforms.md](docs/platforms.md)** — the platforms: where it runs, the
+ namespace map, and the deployment reviews.
 **[docs/syscalls.md](docs/syscalls.md)** — the derived call list: Plan 9's 40 live
  calls dispositioned, V10's 68 routines mapped onto them.
 **[docs/uid.md](docs/uid.md)** — the uid model: why the compatibility layer could
