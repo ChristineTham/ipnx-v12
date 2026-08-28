@@ -438,6 +438,28 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   already-green browser port runs on iPad *with full JIT today* — faster
   execution than the native Pulley build it is a stopgap for.
 
+- **(2026-08-29) su without a superuser — the security landing.** The
+  README's "there is no superuser" is structural, at three boundaries: the
+  sandbox above (nothing to escalate to), device policy within (the eve
+  bypass belongs to each device, not the core), and the mount table outward
+  (eve-ness does not serialize; each server applies its own policy to the
+  attach-time `uname` — the superuser's reach ends where root's always did
+  in practice, at the NFS boundary). `su` is identity transition under
+  docs/uid.md's two rules, never escalation: a personality-layer command
+  over `/proc/self/ctl`, no password, no setuid machinery; `su none` — the
+  privilege-drop shell — is the celebrated direction and the per-agent
+  primitive; kill comes free through note permissions (V10's euid rule).
+  Recorded impossibility, a feature: namespace-wide write is the union of
+  per-server grants fixed at attach, so it is not a grantable thing — su
+  re-evaluates local authority instantly and can only request more by
+  re-attaching (auth/as's shape). **The namespace unions services; it
+  cannot union their trust.** Earmarked: Plan 9's devcap (`#¤`,
+  caphash/capuse) as the authenticated third rule ("user X, bearing
+  proof"), sequenced with /net and factotum-shaped work; uids stay
+  per-server names with the personality owning name↔number. Landed with
+  the entry: `cmd/su.c`, `#p` in the boot namespace, and the suite's 131st
+  test (`su none id` → `none none`) green on all three hosts.
+
 - **(2026-08-27) OCI is two targets, taken at two different weights.**
   *The scratch container is a stated target of the Rust milestone, for free*: the
   kernel as a static musl binary, PID 1 in a `FROM scratch` image — no distro, no

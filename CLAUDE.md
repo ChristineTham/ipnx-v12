@@ -59,7 +59,7 @@ second ABI runs**: `supervisor/wasi1.mjs` is `wasi_snapshot_preview1` over the
 same mailbox, fd 3's one preopen is the namespace root, and a wasi-libc
 citizen plus a **real Go binary** (`GOOS=wasip1`) plus **REAL CPython 3.14**
 (the wasi build, its stdlib a measured 21-file subset over what is frozen
-in-binary) run files, directories, timers and json against the kernel — 130
+in-binary) run files, directories, timers and json against the kernel — 131
 acceptance tests). Everything else is design documents.
 
 ## Commands
@@ -83,7 +83,7 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 bash poc/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints 130 PASS lines,
+Boot the kernel — init (pid 1) runs the acceptance tests, prints 131 PASS lines,
 exits 0:
 
 ```bash
@@ -103,7 +103,7 @@ COOP/COEP headers SharedArrayBuffer needs; `?i` boots interactive):
 node poc/serve.mjs
 ```
 
-The native host (the Rust core, RESEARCH §9.6; the full 130/130 conformance) builds and runs with cargo:
+The native host (the Rust core, RESEARCH §9.6; the full 131/131 conformance) builds and runs with cargo:
 
 ```bash
 cargo run --release --manifest-path native/Cargo.toml -p host -- poc/rootfs
@@ -336,6 +336,6 @@ namespace — /bin/bind is the proof — why devmnt forced the core async,
 and how one missing trap-46 marshalling shadowed the root with a 9P
 server). The async core runs wire 9P entire, the WASI shim passed
 all six citizens first run, and the window server + draw engine closed
-the suite: **130/130 on all three hosts — Node, Chrome, and the Rust
+the suite: **131/131 on all three hosts — Node, Chrome, and the Rust
 kernel under wasmtime**. Next per the decision log: the FROM-scratch
 OCI container, then the iPadOS shim on Pulley.

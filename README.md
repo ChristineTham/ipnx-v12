@@ -187,7 +187,7 @@ The first proof that the modern world can coexist with this system is also worki
 real Go binary, compiled with ordinary `GOOS=wasip1 go build`, and real CPython 3.14**
 can read files, list directories, sleep on timers and run scripts against the kernel.
 They know nothing about Plan 9. They use a WASI shim whose single preopened directory is
-the process's namespace root. **130 acceptance tests pass on Node, in Chrome — and on
+the process's namespace root. **131 acceptance tests pass on Node, in Chrome — and on
 the Rust kernel core under wasmtime: the same suite, identical on the reference
 implementation and the native rewrite. The proof of concept is complete, and the
 kernel has been built twice.** Alongside it, TUHS-tape V10 `cat` and `echo` run

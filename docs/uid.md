@@ -95,6 +95,41 @@ and the kernel gains nothing new.
 The two regimes are not a compromise; they are V10's kernel and Plan 9's protocol each
 enforcing where each is authoritative.
 
+## su without a superuser (2026-08-29)
+
+There is no superuser, structurally, at three boundaries: above the kernel
+(eve's total authority is the hosting process's sandbox — there is nothing to
+escalate to), at every mount (eve-ness does not serialize; a 9P server sees a
+`uname` string and applies its own policy, so the superuser's reach ends at
+the mount table, where root's reach always ended in practice — NFS
+root-squash was Unix admitting it), and inside the kernel (the eve bypass is
+each device's own policy, not the core's — authority lives at the resource).
+
+`su` is therefore **identity transition under the two rules, never
+escalation**: a personality-layer command (`cmd/su.c`, ~50 lines of sugar
+over `/proc/self/ctl`) with no password and no setuid machinery, because
+there is no root to set. `su user cmd` works when rule 1 or 2 allows it; the
+celebrated direction is **`su none` — the privilege-drop shell**, the
+primitive the per-agent-namespace aspiration runs on. Killing comes free and
+orthogonally: notes through `/proc/<pid>/note` are permitted to eve or a
+matching euid — V10's own kill rule.
+
+Two recorded impossibilities, both features: a non-eve user cannot become
+anyone (no rule allows it until authentication exists), and **"a shell with
+write permission across the whole namespace" is not a grantable thing** —
+namespace-wide write is the union of per-server grants fixed at attach time,
+so su re-evaluates local authority instantly and can only *request* more from
+a server by re-attaching under the new identity (Plan 9's `auth/as` shape).
+The namespace unions services; it cannot union their trust.
+
+The earmarked future mechanism is Plan 9's **devcap** (`#¤`,
+`/dev/caphash` + `/dev/capuse`): the host owner mints a one-shot capability
+`user1@user2@hash`, hands it over, and possession authorizes the switch —
+su-without-a-superuser as a third ctl rule ("user X, bearing proof"),
+sequenced with `/net` and factotum-shaped authentication. Until then, uids
+remain per-server names: the attach-time `uname` records who a mount speaks
+for, and the personality owns any name↔number mapping.
+
 ## What this closes
 
 Of the ten identity-family calls docs/syscalls.md classed as *design*: the seven uid/gid

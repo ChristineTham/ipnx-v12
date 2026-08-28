@@ -352,6 +352,7 @@ main(int argc, char *argv[])
 	bind("#e", "/env", MREPL);
 	bind("#d", "/fd", MREPL);
 	bind("#s", "/srv", MREPL);
+	bind("#p", "/proc", MREPL);
 	fd = open("/dev/cons", ORDWR);
 	dup(fd, 0);
 	dup(fd, 1);

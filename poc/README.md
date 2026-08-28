@@ -18,10 +18,10 @@ node serve.mjs   # serve the browser port: http://localhost:8095/browser/ (?i = 
 The kernel is one platform-neutral module (`supervisor/kernel.mjs`, with `guestcore.mjs`
 for the guest runner); `supervisor/main.mjs` hosts it on Node and `browser/main.mjs`
 hosts it in a page — the console is a window in the DOM, and `serve.mjs` exists only to
-set the COOP/COEP headers SharedArrayBuffer requires. The same 130 tests pass in both
+set the COOP/COEP headers SharedArrayBuffer requires. The same 131 tests pass in both
 (measured in Chrome 148).
 
-The test boot prints 130 `PASS` lines — sixty-one from init (kernel, mount, exportfs,
+The test boot prints 131 `PASS` lines — sixty-one from init (kernel, mount, exportfs,
 the WASI second ABI with its three foreign citizens,
 uid, links, notes, unmount, rfork flags, and the harnesses), twelve from dtest (the
 window server and text), seven from drtest (the REAL libdraw: geninitdraw, getwindow,
@@ -30,7 +30,7 @@ that park a thread, not the process), two from samtest (the whole editor: sam ov
 samterm in a window, typed at through wctl, the reply's glyphs read from the raster),
 three from acmetest (the whole of acme: boot paint, button-2 execute of New, button-3
 look on rc/ — mouse chords injected through wctl, windows verified in the raster),
-four from forktest, thirty-six from `/rc/tests.rc` run by the REAL rc, the real sam
+four from forktest, thirty-seven from `/rc/tests.rc` run by the REAL rc, the real sam
 included — and exits 0, identically on Node and in the browser.
 
 ## What it proves
