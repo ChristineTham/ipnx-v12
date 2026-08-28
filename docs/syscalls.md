@@ -130,7 +130,7 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `seek` | A | `seek` | |
 | `getpid` | A | libc | no trap in Plan 9 either |
 | `dirread` | A | `pread` on the directory | stat records, converted |
-| `setuid` | C | libc: write `/proc/n/ctl` | the item APE called impossible — [uid.md](uid.md) |
+| `setuid` | C | libc: write `/proc/n/ctl` | the item APE called impossible — [identity.md](identity.md) |
 | `getuid` | C | libc: read `/dev/user`, map via passwd | |
 | `stime` | D | drop | the host owns the clock |
 | `fmount` | A | `mount` | |
@@ -152,8 +152,8 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `pipe` | A | `pipe` | |
 | `times` | B | read `/proc/n/status` | |
 | `profil` | D | drop | |
-| `setgid` | C | as `setuid` (uid.md D2) | |
-| `getgid` | C | as `getuid` (uid.md D2) | |
+| `setgid` | C | as `setuid` (identity.md D2) | |
+| `getgid` | C | as `getuid` (identity.md D2) | |
 | `ssig` | C | `notify`/`noted` | V7-style signals over notes; libc table |
 | `funmount` | A | `unmount` | |
 | `sysacct` | D | drop | |
@@ -161,7 +161,7 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `syslock` | D | drop | |
 | `ioctl` | C | `ctl` files | libc translation per device class |
 | `sysboot` | D | drop | |
-| `setruid` | C | libc: write `/proc/n/ctl` (uid.md D1) | |
+| `setruid` | C | libc: write `/proc/n/ctl` (identity.md D1) | |
 | `symlink` | C | kernel: trap 61, wire type 130 | qid carries 9P2000.u's QTSYMLINK |
 | `readlink` | C | kernel: trap 62, wire type 132 | |
 | `exece` | A | `exec` | |
@@ -172,15 +172,15 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `vfork` (slot 66 = `fork`) | A | `rfork(RFPROC\|RFMEM)` | the lazy path — vfork *is* the design, §5.2 |
 | `getlogname` | B | read `/dev/user` | |
 | `vadvise` | D | drop | |
-| `setgroups` | C | as `setuid` (uid.md D2) | |
-| `getgroups` | C | as `getuid` (uid.md D2) | |
+| `setgroups` | C | as `setuid` (identity.md D2) | |
+| `getgroups` | C | as `getuid` (identity.md D2) | |
 | `vlimit` | D | drop | |
 | `vswapon` | D | drop | |
 | `nap` | D | drop | `sleep` exists if ever wanted |
 | `vtimes` | D | drop | |
 
 **Landing census over the 68: 28 direct onto live calls (A) · 12 libc/namespace idioms (B)
-· 17 split as — the seven uid calls landed by [uid.md](uid.md), `umask` in the kernel,
+· 17 split as — the seven uid calls landed by [identity.md](identity.md), `umask` in the kernel,
 4 libc translations (`ioctl`, `select`, `kill`, `ssig`), `mknod` deliberately not
 restored, and the `link`/`symlink`/`lstat`/`readlink` four landed as the V12 additions
 (kernel traps 60–62 plus a stat flag; wire types 128/130/132, minted above every

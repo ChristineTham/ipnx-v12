@@ -271,8 +271,8 @@ mechanism for identity across machines. The full history and its lessons are in
  namespace map, and the deployment reviews.
 **[docs/syscalls.md](docs/syscalls.md)** — the derived call list: Plan 9's 40 live
  calls dispositioned, V10's 68 routines mapped onto them.
-**[docs/uid.md](docs/uid.md)** — the uid model: why the compatibility layer could
- not, and this kernel can.
+**[docs/identity.md](docs/identity.md)** — identity: what a user is here, and the
+ uid model the compatibility layer could not do, and this kernel can.
 **[docs/poc.md](docs/poc.md)** — the proof of concept's record, frozen: what three
  days built and what they proved.
 

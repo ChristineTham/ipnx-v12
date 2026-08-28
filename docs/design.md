@@ -7,7 +7,8 @@ answers, and put back the compatibility Plan 9 threw away?***
 *Role: the **why** — rationale and the decision log. What the system **is** is
 [architecture.md](architecture.md); **how** to work on it, [handbook.md](handbook.md);
 **when** it gets built, [implementation.md](implementation.md); **where** it runs and
-where things live, [platforms.md](platforms.md); what **was**, [poc.md](poc.md).*
+where things live, [platforms.md](platforms.md); **who** a user is,
+[identity.md](identity.md); what **was**, [poc.md](poc.md).*
 
 **The statement, once.** A **modified Plan 9 kernel hosted as an ordinary userspace
 process** — browser, macOS, iPadOS, OCI, eventually hypervisor-direct; **9P as the only
@@ -450,7 +451,7 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   (eve-ness does not serialize; each server applies its own policy to the
   attach-time `uname` — the superuser's reach ends where root's always did
   in practice, at the NFS boundary). `su` is identity transition under
-  docs/uid.md's two rules, never escalation: a personality-layer command
+  docs/identity.md's two rules, never escalation: a personality-layer command
   over `/proc/self/ctl`, no password, no setuid machinery; `su none` — the
   privilege-drop shell — is the celebrated direction and the per-agent
   primitive; kill comes free through note permissions (V10's euid rule).
@@ -891,7 +892,7 @@ Evidence for each is in RESEARCH.md at the cited section.
 
 ## Open questions
 
-- ~~The uid model~~ — **decided and running**: [docs/uid.md](uid.md). Per-process
+- ~~The uid model~~ — **decided and running**: [docs/identity.md](identity.md). Per-process
   credentials in the kernel, `/proc/<pid>/ctl` transitions with no new syscalls,
   9P2000.u's `DMSETUID` at exec, V10 enforcement in-process and per-attach identity on
   the wire. The answer to "is V10 compatibility real?" is yes.

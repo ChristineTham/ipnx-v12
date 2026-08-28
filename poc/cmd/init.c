@@ -477,7 +477,7 @@ main(int argc, char *argv[])
 	ok(n > 0 && atoi(buf) == pid && strstr(buf, "''") != nil,
 	   "exportfs: exec of a binary served over the export");
 
-	/* The uid model (docs/uid.md): per-process credentials in the kernel,
+	/* The uid model (docs/identity.md): per-process credentials in the kernel,
 	 * transitions through /proc/self/ctl, V10 enforcement in ramfs, and
 	 * the DMSETUID bit at exec. The thing APE called impossible. */
 	bind("#p", "/proc", MREPL);

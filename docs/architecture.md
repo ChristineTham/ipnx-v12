@@ -4,7 +4,8 @@
 is argued in [design.md](design.md); the *evidence* lives in
 [RESEARCH.md](../RESEARCH.md); the *sequence* is [implementation.md](implementation.md);
 the *practice* is [handbook.md](handbook.md); the *deployments and namespace map*
-are [platforms.md](platforms.md); the *history* is [poc.md](poc.md). This document carries no rationale and no
+are [platforms.md](platforms.md); *who a user is* — [identity.md](identity.md);
+the *history* is [poc.md](poc.md). This document carries no rationale and no
 chronology — if a sentence would start with "because," it belongs elsewhere and
 appears here as a link. It changes only when a contract changes, in the same
 commit as the change.
@@ -41,7 +42,7 @@ ABI. The conformance suite binds all three.
 ## The kernel's shape
 
 - **A process** is: a pid, a parent, credentials (uname/ruid pair —
-  [uid.md](uid.md)), a namespace, an fd table, a wait queue, a note queue.
+  [identity.md](identity.md)), a namespace, an fd table, a wait queue, a note queue.
 - **The namespace** is a per-process mount map walked by longest matching
   prefix. An entry is a **union list** (`bind -a/-b/-c` order); walks try
   elements in order, directory reads concatenate integrally, creates land in
@@ -77,7 +78,7 @@ ABI. The conformance suite binds all three.
 - **Symlinks resolve in the walking process's own namespace** — never on the
   server ([design.md](design.md), links decision).
 - **Notes** are delivered at the syscall boundary; kill rides note
-  permissions (V10's euid rule — [uid.md](uid.md)).
+  permissions (V10's euid rule — [identity.md](identity.md)).
 
 ## Contract: the guest ABI
 
@@ -144,7 +145,7 @@ host is written against this section and judged by the suite.
   `QTSYMLINK`/`DMSYMLINK`.
 - **Identity crosses at attach**: every wire mount carries the mounting
   process's `uname` in `Tattach`; the server applies its own policy to that
-  name ([uid.md](uid.md) — "the namespace unions services; it cannot union
+  name ([identity.md](identity.md) — "the namespace unions services; it cannot union
   their trust").
 
 ## Contract: the conformance suite

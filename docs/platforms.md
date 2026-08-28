@@ -50,7 +50,7 @@ the directory):
 | `/env` | `bind #e` | environment as files |
 | `/fd` | `bind #d` | dup by open |
 | `/srv` | `bind #s` | posted channels, alive by name |
-| `/proc` | `bind #p` | status, ctl (identity transitions — [uid.md](uid.md)), notes |
+| `/proc` | `bind #p` | status, ctl (identity transitions — [identity.md](identity.md)), notes |
 | `/net` | — | **does not exist yet** (M7); its absence is what the suite's future network tests will probe |
 
 Where the pieces live in the **repository** is the tree in

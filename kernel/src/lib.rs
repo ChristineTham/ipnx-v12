@@ -2778,7 +2778,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                     }
                     if !st.uid.is_empty() {
                         if cred.euid != eve {
-                            return Err("only the host owner may chown (docs/uid.md D3)".into());
+                            return Err("only the host owner may chown (docs/identity.md D3)".into());
                         }
                         node.borrow_mut().uid = st.uid.clone();
                     }
@@ -3095,7 +3095,7 @@ fn wstat_ram(node: &RamRef, parent: &DN, base: &str, st: &stat9::StatOut,
     }
     if !st.uid.is_empty() {
         if cred.euid != eve {
-            return Err("only the host owner may chown (docs/uid.md D3)".into());
+            return Err("only the host owner may chown (docs/identity.md D3)".into());
         }
         node.borrow_mut().uid = st.uid.clone();
     }

@@ -113,7 +113,7 @@ included — and exits 0, identically on Node and in the browser.
   symlink created through a mount into an exporter's tree reads back through the mount as
   the *client's* `/etc/motd`, not the exporter's. Hard links are two directory entries,
   one node; writes through either name land in the one file.
-- **The uid model runs — the thing APE called impossible** ([docs/uid.md](../docs/uid.md)).
+- **The uid model runs — the thing APE called impossible** ([docs/identity.md](../docs/identity.md)).
   Credentials are mutable per-process kernel state: `/dev/user` names the caller,
   `/proc/self/ctl` accepts `user <name>` under the transition rule (the host owner may
   become anyone; anyone may fall back to their real uid), ramfs enforces V10 rwx against
@@ -202,7 +202,7 @@ persist rather than scope to the command.
 argv arrives via a boot syscall rather than pre-placed on the stack; `brk` is guest-local
 (`memory.grow`); no `..`; `remove` inside a union picks no element (error); `errstr`
 reads but does not exchange; pipe writers never block (unbounded queue); gid/groups and
-the D1–D4 measurements are deferred per docs/uid.md; proc and wsys files have no stat or
+the D1–D4 measurements are deferred per docs/identity.md; proc and wsys files have no stat or
 directory reads; draw speaks `b d f L e E y i l s v` (`x`, arcs and compressed images absent; cons output
 is still host-rendered), masks apply only to glyphs, `rgb` is a v0 test file;
 windows persist until `wctl delete`; nested lazy fork within one Worker refused. On the wire: no `Tauth` (afid is always NOFID), no `Tflush`,

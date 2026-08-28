@@ -68,7 +68,7 @@ userspace/       (M0) the guest world, graduated from poc/: libc/ (lib9),
                  the build system (mk.sh and its tools)
 docs/            design.md (why), architecture.md (what), handbook.md (how),
                  implementation.md (when — this), platforms.md (where),
-                 poc.md (was), syscalls.md + uid.md (spec deep-dives)
+                 poc.md (was), identity.md (who), syscalls.md (the call census)
 poc/             FROZEN — the JS reference kernel and its two host shims.
                  Runs the floor suite forever; changes no more.
 ```
@@ -150,7 +150,7 @@ The network as files: `/net/tcp/clone`, per-connection `ctl`/`data`/`local`/
 (browser: a WebSocket relay — an engineering question below). Then the step
 that makes IPNX a distributed system: **exportfs over TCP** — one instance
 mounts another's namespace across machines, per-attach identity already
-stamped (uid.md).
+stamped (identity.md).
 **Acceptance:** two instances on one machine mount each other over TCP and run
 a cross-instance pipeline; the BSD-API surface deferred to the personality
 (M9) — `/net` itself is the kernel's whole contribution.

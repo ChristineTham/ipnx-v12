@@ -1,6 +1,6 @@
 /* su: identity transition under the ctl rules — never escalation.
  * There is no superuser to become and no password to check: the kernel's
- * two rules decide (docs/uid.md). If your ruid is eve you may become
+ * two rules decide (docs/identity.md). If your ruid is eve you may become
  * anyone (rule 1, both ids move — a full drop); anyone may climb back to
  * their own ruid (rule 2). `su none cmd` is the privilege-drop shell —
  * this system's daily direction. Authenticated transition (a third rule,

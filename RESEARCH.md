@@ -291,7 +291,7 @@ Taken against the parent repository's tree, and not re-derivable here:
   kernel would need a tagged personality as well as a second `a.out` format.
 - `sysent.c` slot 66 is `0, fork, /* 64 +2 = former vfork */` — vfork's number, aliased back
   to `fork` once the VAX had virtual memory to make copying cheap.
-- **The uid family, measured 2026-08-26** (closing docs/uid.md's D1–D4):
+- **The uid family, measured 2026-08-26** (closing docs/identity.md's D1–D4):
   - `os/sys4.c:74` `setuid`: permitted when `u.u_ruid == uid || u.u_uid == uid || suser()`,
     sets `u_uid`, `p_uid` **and** `u_ruid` — and on denial it **silently does nothing**
     (no `u_error`), V7's manner. `sys4.c:97` `setruid`: `suser()` only.
@@ -1133,7 +1133,7 @@ before code, not after.
   personality's libc aliases `/dev/tty` to it, and the fd-3 accident stays in the parent
   repository's notebook as history, not design.
 
-- **The uid model is designed and running** — [docs/uid.md](docs/uid.md), the item APE
+- **The uid model is designed and running** — [docs/identity.md](docs/identity.md), the item APE
   called impossible: mutable per-process credentials in the kernel (names canonical,
   numbers the personality's), transitions through `/proc/<pid>/ctl` with no new system
   calls, 9P2000.u's `DMSETUID` bit position at exec, V10 enforcement in the in-process

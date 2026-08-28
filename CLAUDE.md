@@ -27,7 +27,7 @@ The architecture runs, boots to a shell, forks both ways, and speaks its protoco
 both directions: `poc/` is a working slice (hosted kernel in Node and the browser from
 one neutral core, freestanding-C wasm guests, per-process namespaces with union
 directories, the lazy-fork resume *and* the asyncify bare fork, pipes, a writable ramfs
-with V10 permission enforcement, the uid model running (docs/uid.md), **the REAL
+with V10 permission enforcement, the uid model running (docs/identity.md), **the REAL
 `rc`** — bison over its own `syn.y`, asyncified, prompting when fd 0 is `/dev/cons` —
 wire 9P at the mount boundary, exportfs serving a guest's namespace
 back out, and the window server: `#w` mints windows, `bind '#w/N' /dev` makes a
@@ -130,7 +130,7 @@ is indistinguishable from a shipped one.
 | `docs/implementation.md` | **the living build plan** — milestones M0–M12 with dependencies, acceptance criteria, engineering questions; the sequence work follows |
 | `docs/poc.md` | **frozen** — the PoC's record and declaration (2026-08-26 → 2026-08-29): chronology, final state, what it proved |
 | `docs/syscalls.md` | **the derived call list** — Plan 9's 40 live calls dispositioned for V12; V10's 68 routines mapped onto them |
-| `docs/uid.md` | **the uid model** — the item APE called impossible, decided and running: kernel credentials, `/proc` ctl transitions, `DMSETUID`, the two enforcement regimes |
+| `docs/identity.md` | **the who** — what a user is (person, role, agent, network person), and the uid model — the item APE called impossible, decided and running: kernel credentials, `/proc` ctl transitions, `DMSETUID`, the two enforcement regimes |
 | `poc/README.md` | the frozen reference implementation's layout and its deliberate v0 deviations |
 
 Findings go in RESEARCH.md with provenance; decisions go in the design (docs/design.md);
@@ -208,11 +208,11 @@ evidence, not a fresh opinion.
   **Self-hosting is not a goal** (`/cc` as
   file server makes compilation a capability).
 
-- **The uid model is decided and running** (`docs/uid.md`): mutable per-process
+- **The uid model is decided and running** (`docs/identity.md`): mutable per-process
   credentials in the kernel, names canonical (numbers are the personality's, via
   `/etc/passwd`), transitions through `/proc/<pid>/ctl` under the eve/ruid rule — no new
   syscalls — 9P2000.u's `DMSETUID` bit at exec, V10 enforcement in in-process devices,
-  per-attach identity stamped on wire mounts. Open: uid.md's D1–D4 measurements in
+  per-attach identity stamped on wire mounts. Open: identity.md's D1–D4 measurements in
   `../ipnx`.
 - **Links landed as the V12 additions**: kernel traps 60–62 (`lstat` is a stat flag),
   minted wire types 128/130/132 above every dialect's range (strangers `Rerror`,
@@ -313,7 +313,7 @@ Running on it: the real Plan 9 userspace (rc, sam, samterm, acme, twenty-four
 commands over `libp9.a`), the V10 exhibit, and the WASI second ABI's three citizens
 (wasi-libc, Go `wasip1`, CPython 3.14). The identity architecture is decided and
 recorded (su, the user decomposition, the profile, the capability doctrine — all
-2026-08-29, zero kernel mechanism; `docs/uid.md` tells it as one story).
+2026-08-29, zero kernel mechanism; `docs/identity.md` tells it as one story).
 
 Work now follows `docs/implementation.md`: M0 graduates the guest world to
 `userspace/`; M1 is the `FROM scratch` OCI container; then the namespace-file boot,

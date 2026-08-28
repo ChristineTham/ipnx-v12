@@ -89,7 +89,7 @@ device `#d`, and `..` in walks. V10 growth waits, per direction, for the parent
 project's ANSI conversion of its userspace. Platform order ahead: **macOS native first,
 then iPadOS**, as a **Rust kernel core plus per-platform embedding shims** (decision
 below, 2026-08-27). The engineering lifts the plan named are done, the uid model is
-designed ([docs/uid.md](uid.md)) and running, the window server speaks the real draw
+designed ([docs/identity.md](identity.md)) and running, the window server speaks the real draw
 device protocol (screens, window views, clipping, channel-correct uploads,
 `b d f L e E y i l s x c A F t O v`), and **the whole editor runs**: the real `sam`
 over the real `samterm`, libframe over libdraw over the wasm libthread, typed at in a
@@ -143,7 +143,7 @@ The final additions before the declaration were not kernel mechanism but
 meaning: the five identity decisions (su as transition never escalation; the
 user decomposed into person, role, agent, and network person; the profile as a
 file tree; the capability doctrine from the graveyard — all dated 2026-08-29 in
-the decision log, told as one story in [uid.md](uid.md) and RESEARCH §12), and
+the decision log, told as one story in [identity.md](identity.md) and RESEARCH §12), and
 their one running artifact: `su` ([poc/cmd/su.c](../poc/cmd/su.c)), the
 privilege-*drop* shell, whose test made the suite **131** — the number the
 declaration freezes. The boot namespace gained `#p` at `/proc` so identity is

@@ -80,7 +80,7 @@ int   lstat(char *path, uchar *edir, int n);
 
 /* file modes */
 #define DMDIR    0x80000000
-#define DMSETUID 0x00080000	/* 9P2000.u's bit position (docs/uid.md) */
+#define DMSETUID 0x00080000	/* 9P2000.u's bit position (docs/identity.md) */
 #define DMSYMLINK 0x02000000	/* ditto */
 
 /* library: strings and prints are the REAL Plan 9 sources (libp9.a);

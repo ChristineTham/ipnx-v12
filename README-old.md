@@ -131,7 +131,7 @@ reimplementing it per-substrate is a milestone, not a lifetime.
   dates, open questions.
 - **[docs/syscalls.md](docs/syscalls.md)** — the derived call list: Plan 9's 40 live
   calls dispositioned, V10's 68 routines mapped onto them.
-- **[docs/uid.md](docs/uid.md)** — the uid model: why the compatibility layer could
+- **[docs/identity.md](docs/identity.md)** — the uid model: why the compatibility layer could
   not, and this kernel can.
 
 ## Licence and estate
