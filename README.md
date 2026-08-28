@@ -9,7 +9,7 @@ We all know the legendary story of how UNIX began, at Bell Labs. After the failu
 
 Unfortunately, much of this history is not pleasant. Although the system spread through universities, and generations of students (including me) were exposed to UNIX, there were issues distributing UNIX outside of academia. AT&T was initially prevented from freely selling UNIX because of an antitrust settlement, so many computer vendors created their own versions of UNIX. Later on, when UNIX became an open standard, attempts to resolve vendor differences led to POSIX, an unwieldy standard and a nightmare to implement.
 
-Today, versions of UNIX still exist. IBM, HP and Oracle still sell machines that run their versions of the operating system. Linux is (mostly) POSIX compliant. Apple macOS still holds the official UNIX 03 certification. This means macOS fully conforms to the standard version of the Single UNIX Specification (SUS). However, it is fair to say the world has moved on. Both Linux and macOS/iOS have evolved into operating systems that are very different from UNIX.
+Today, versions of UNIX still exist. IBM still sells machines running AIX, Oracle still supports Solaris, and HP-UX reached the end of its support life in 2025. Linux is (mostly) POSIX compliant. Apple macOS still holds the official UNIX 03 certification. This means macOS fully conforms to the standard version of the Single UNIX Specification (SUS). However, it is fair to say the world has moved on. Both Linux and macOS/iOS have evolved into operating systems that are very different from UNIX.
 
 I have always loved UNIX. And I have always been interested in operating systems. My first significant software project, created when I was in high school, was an operating system for my Commodore 64. It was heavily inspired by and modelled after the Apple \]\[ System Monitor, written by Steve Wozniak.
 
@@ -36,7 +36,7 @@ So IPNX v12 will run everywhere - in a browser on any machine, or using a WASM r
 
 IPNX v12 consists of:
 
-- a reimplementation of the Plan 9 kernel in Rust, as an ordinary userspace process on the host system, with
+- a reimplementation of the Plan 9 kernel in Rust, as an ordinary userspace process on the host system — with a JavaScript twin that runs the same kernel in any browser; the two implementations pass an identical conformance suite — and
 - both Plan 9 and UNIX v10 utilities and commands supported as WASM binaries in a per process namespace.
 - The kernel supports Plan 9 syscalls natively, and UNIX v10 via a personality layer (in progress — two V10 binaries run today on a thin libc).
 - The kernel is compiled using the host Rust toolchain.
