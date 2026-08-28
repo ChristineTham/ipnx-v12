@@ -3,9 +3,11 @@
 **Living document** (begun 2026-08-29, the day the PoC was declared complete).
 This is the build sequence for the real system. It consumes the
 [decision log](design.md) — decisions are made there, with dates and
-evidence, and *sequenced* here; nothing in this file reopens one. The PoC's
-record is frozen in [poc.md](poc.md); findings continue to land in
-[RESEARCH.md](../RESEARCH.md) as they are measured.
+evidence, and *sequenced* here; nothing in this file reopens one. What the
+system *is* — the invariants and contracts the milestones build against — is
+[architecture.md](architecture.md). The PoC's record is frozen in
+[poc.md](poc.md); findings continue to land in [RESEARCH.md](../RESEARCH.md)
+as they are measured.
 
 ## What exists on day one
 
@@ -40,6 +42,9 @@ The inheritance is unusually strong for a "start of implementation":
 - **Vendored sources stay verbatim** — the derivation layer (shim headers,
   `sed` into `build/`) is ours; `poc/plan9/`, `poc/v10/` and their successors
   are never edited. Provenance and notices travel with any new import.
+- **A contract change lands in [architecture.md](architecture.md) in the
+  same commit** — that document is present-tense by rule, so code and contract
+  never describe two different systems.
 - **Decisions are consumed, not re-derived.** Each milestone below names the
   dated decisions it implements. Reopening one requires new evidence, in the
   log, first.
@@ -59,8 +64,8 @@ hosts/
 userspace/       (M0) the guest world, graduated from poc/: libc/ (lib9),
                  plan9/ + v10/ (vendored, verbatim), cmd/, wasi/, rootfs seed,
                  the build system (mk.sh and its tools)
-docs/            design.md (design + decisions), implementation.md (this),
-                 poc.md (frozen), syscalls.md, uid.md
+docs/            design.md (why), architecture.md (what), implementation.md
+                 (when — this), poc.md (was), syscalls.md + uid.md (spec deep-dives)
 poc/             FROZEN — the JS reference kernel and its two host shims.
                  Runs the floor suite forever; changes no more.
 ```

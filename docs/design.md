@@ -4,6 +4,10 @@
 document exists to answer: **what is Unix if you write it afresh today, keep Plan 9's
 answers, and put back the compatibility Plan 9 threw away?***
 
+*Role: the **why** — rationale and the decision log. What the system **is** (present
+tense, contracts) is [architecture.md](architecture.md); the build sequence is
+[implementation.md](implementation.md); the PoC's frozen record is [poc.md](poc.md).*
+
 **The statement, once.** A **modified Plan 9 kernel hosted as an ordinary userspace
 process** — browser, macOS, iPadOS, OCI, eventually hypervisor-direct; **9P as the only
 IPC**; **per-process namespaces**; **everything exposed as a file**; **WebAssembly as

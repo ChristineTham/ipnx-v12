@@ -1,6 +1,6 @@
 # The kernel call list — derived
 
-*The first task, stated in both the plan and the research: derive, call by call, which
+*The first task, stated in both the design and the research: derive, call by call, which
 system calls survive as kernel calls and which become 9P messages. Derived 2026-08-26.
 The inputs are Plan 9's `/sys/src/libc/9syscall/sys.h` and V10's `os/sysent.c`, both
 recorded verbatim in [RESEARCH.md](../RESEARCH.md) §2–3.*

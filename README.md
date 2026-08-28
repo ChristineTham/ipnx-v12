@@ -258,12 +258,19 @@ mechanism for identity across machines. The full history and its lessons are in
 
 **[RESEARCH.md](RESEARCH.md)** — the living evidence base: every finding with
  provenance, from Plan 9's call table to the wasm toolchain's measured behaviors.
-**[docs/design.md](docs/design.md)** — the living spec: scope, decisions with
+**[docs/design.md](docs/design.md)** — the design: scope, rationale, decisions with
  dates, open questions.
+**[docs/architecture.md](docs/architecture.md)** — the architecture: what the system
+ is, present tense — the component map and the contracts a host, a guest, and the
+ wire must honour.
+**[docs/implementation.md](docs/implementation.md)** — the build plan: milestones
+ with dependencies and acceptance, from the tree to the microVM.
 **[docs/syscalls.md](docs/syscalls.md)** — the derived call list: Plan 9's 40 live
  calls dispositioned, V10's 68 routines mapped onto them.
 **[docs/uid.md](docs/uid.md)** — the uid model: why the compatibility layer could
  not, and this kernel can.
+**[docs/poc.md](docs/poc.md)** — the proof of concept's record, frozen: what three
+ days built and what they proved.
 
 ## Licence and estate
 
