@@ -9,6 +9,7 @@
 // syscalls in through `syscall`, replies out through per-call senders, and
 // everything platform-bound leaves as an `Effect`.
 
+pub mod draw;
 pub mod exec;
 pub mod stat9;
 
@@ -147,6 +148,7 @@ enum DevId {
     Union,
     Proc,
     Mnt,
+    Wsys,
 }
 
 #[derive(Clone)]
@@ -165,6 +167,28 @@ enum Node {
     Union(Rc<Vec<MountEl>>),
     Proc { kind: u8, pid: Pid }, // 0 root, 1 dir, 2 ctl, 3 status, 4 note, 5 notepg
     Mnt(MntRef),
+    Wsys { kind: WKind, win: Option<WinR>, conn: Option<DConnR> },
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum WKind {
+    Root,
+    Clone,
+    WinDir,
+    Cons,
+    Mouse,
+    Wctl,
+    Winid,
+    Label,
+    Rgb,
+    Consctl,
+    Cursor,
+    DrawDir,
+    DrawNew,
+    ConnDir,
+    DrawCtl,
+    DrawData,
+    DrawRefresh,
 }
 
 fn node_eq(a: &Node, b: &Node) -> bool {
@@ -371,6 +395,36 @@ impl<'a> R9<'a> {
     }
 }
 
+// ---- devwsys: '#w' — the window server's kernel half (rio's INTERFACE).
+// Reading clone mints a window; a window is a directory of cons, mouse,
+// wctl, winid, label, rgb — and draw/, an actual per-window /dev/draw.
+// Native v1 is headless: no host presentation effects; the suite reads
+// rasters back through rgb and injects input through wctl. ----
+struct Win {
+    wid: u32,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    label: String,
+    img: draw::ImageR,
+    conns: HashMap<u32, DConnR>,
+    nextconn: u32,
+    consbuf: Vec<u8>,
+    consparked: Vec<Waiter>,
+    mousebuf: VecDeque<Vec<u8>>,
+    mouseparked: Vec<Waiter>,
+    dead: bool,
+}
+type WinR = Rc<RefCell<Win>>;
+
+struct DConn {
+    id: u32,
+    images: HashMap<u32, draw::ImageR>,
+    screens: HashMap<u32, draw::ImageR>, // screen id -> the screen's image
+}
+type DConnR = Rc<RefCell<DConn>>;
+
 // ---- processes ----
 type NsR = Rc<RefCell<HashMap<String, Vec<MountEl>>>>;
 type EnvR = Rc<RefCell<HashMap<String, Vec<u8>>>>;
@@ -442,6 +496,8 @@ struct KState {
     next_token: u64,
     effects: Vec<Effect>,
     verbose: bool,
+    wins: HashMap<u32, WinR>,
+    nextwid: u32,
 }
 
 type K = Rc<RefCell<KState>>;
@@ -449,6 +505,533 @@ type K = Rc<RefCell<KState>>;
 enum WalkRes {
     Hit(DN),
     Redirect(String),
+}
+
+// ---- devwsys implementation ----
+fn wnode(kind: WKind, win: Option<WinR>, conn: Option<DConnR>) -> DN {
+    DN { dev: DevId::Wsys, node: Node::Wsys { kind, win, conn }, path: None }
+}
+
+fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, name: &str) -> Option<DN> {
+    match kind {
+        WKind::Root => {
+            if name == "clone" {
+                return Some(wnode(WKind::Clone, None, None));
+            }
+            let wid: u32 = name.parse().ok()?;
+            let w = k.borrow().wins.get(&wid).cloned()?;
+            Some(wnode(WKind::WinDir, Some(w), None))
+        }
+        WKind::WinDir => {
+            let w = win.clone()?;
+            let kd = match name {
+                "cons" => WKind::Cons,
+                "mouse" => WKind::Mouse,
+                "wctl" => WKind::Wctl,
+                "winid" => WKind::Winid,
+                "label" => WKind::Label,
+                "rgb" => WKind::Rgb,
+                "consctl" => WKind::Consctl,
+                "cursor" => WKind::Cursor,
+                "draw" => WKind::DrawDir,
+                _ => return None,
+            };
+            Some(wnode(kd, Some(w), None))
+        }
+        WKind::DrawDir => {
+            let w = win.clone()?;
+            if name == "new" {
+                return Some(wnode(WKind::DrawNew, Some(w), None));
+            }
+            let id: u32 = name.parse().ok()?;
+            let c = w.borrow().conns.get(&id).cloned()?;
+            Some(wnode(WKind::ConnDir, Some(w), Some(c)))
+        }
+        WKind::ConnDir => {
+            let kd = match name {
+                "ctl" => WKind::DrawCtl,
+                "data" => WKind::DrawData,
+                "refresh" => WKind::DrawRefresh,
+                _ => return None,
+            };
+            Some(wnode(kd, win.clone(), conn.clone()))
+        }
+        _ => None,
+    }
+}
+
+fn pad11(v: impl std::fmt::Display) -> String {
+    format!("{:>11} ", v)
+}
+
+fn new_window(k: &K) -> WinR {
+    let mut kb = k.borrow_mut();
+    let wid = kb.nextwid;
+    kb.nextwid += 1;
+    let (w, h) = (400, 300);
+    let win = Rc::new(RefCell::new(Win {
+        wid,
+        x: 40 + (wid as i32 * 24) % 200,
+        y: 40 + (wid as i32 * 24) % 140,
+        w, h,
+        label: format!("window {}", wid),
+        img: draw::new_image([0, 0, w, h], 0, 0x0818_2848, None, Some([255, 255, 255, 255]), None),
+        conns: HashMap::new(),
+        nextconn: 1,
+        consbuf: Vec::new(),
+        consparked: Vec::new(),
+        mousebuf: VecDeque::new(),
+        mouseparked: Vec::new(),
+        dead: false,
+    }));
+    kb.wins.insert(wid, win.clone());
+    win
+}
+
+fn serve_wcons(k: &K, win: &WinR) {
+    loop {
+        let fired = {
+            let mut w = win.borrow_mut();
+            if w.consparked.is_empty() || (w.consbuf.is_empty() && !w.dead) {
+                return;
+            }
+            let waiter = w.consparked.remove(0);
+            let take = waiter.n.min(w.consbuf.len());
+            let give: Vec<u8> = w.consbuf.drain(0..take).collect();
+            (waiter.kind, give)
+        };
+        wake(k, fired.0, fired.1);
+    }
+}
+
+fn serve_wmouse(k: &K, win: &WinR) {
+    loop {
+        let fired = {
+            let mut w = win.borrow_mut();
+            if w.mouseparked.is_empty() || (w.mousebuf.is_empty() && !w.dead) {
+                return;
+            }
+            let waiter = w.mouseparked.remove(0);
+            let give = if w.dead { Vec::new() } else { w.mousebuf.pop_front().unwrap_or_default() };
+            (waiter.kind, give)
+        };
+        wake(k, fired.0, fired.1);
+    }
+}
+
+// msec really advances, because double-click detection is msec arithmetic
+fn inject_mouse(k: &K, win: &WinR, x: i32, y: i32, buttons: i32) {
+    let msec = (now_nanos() / 1_000_000) & 0x3fff_ffff;
+    let msg = format!("m{}{}{}{}", pad11(x), pad11(y), pad11(buttons), pad11(msec));
+    {
+        let mut w = win.borrow_mut();
+        w.mousebuf.push_back(msg.into_bytes());
+        if w.mousebuf.len() > 256 {
+            w.mousebuf.pop_front();
+        }
+    }
+    serve_wmouse(k, win);
+}
+
+async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
+                   chan: &ChanR, n: usize, off: u64) -> Result<RRes, KErr> {
+    let one = |s: String| -> RRes {
+        RRes::Data(if off == 0 { s.into_bytes() } else { Vec::new() })
+    };
+    match kind {
+        WKind::Clone => {
+            // reading clone mints the window and pins it on this chan
+            let have = {
+                let cb = chan.borrow();
+                match &cb.node {
+                    Node::Wsys { win: Some(w), .. } => Some(w.clone()),
+                    _ => None,
+                }
+            };
+            let w = match have {
+                Some(w) => w,
+                None => {
+                    let w = new_window(k);
+                    let mut cb = chan.borrow_mut();
+                    cb.node = Node::Wsys { kind: WKind::Clone, win: Some(w.clone()), conn: None };
+                    w
+                }
+            };
+            let wid = w.borrow().wid;
+            Ok(one(format!("{}", wid)))
+        }
+        WKind::Winid => {
+            let w = win.as_ref().ok_or("no window")?;
+            let wid = w.borrow().wid;
+            Ok(one(format!("{}", wid)))
+        }
+        WKind::Label => {
+            let w = win.as_ref().ok_or("no window")?;
+            let l = w.borrow().label.clone();
+            Ok(one(l))
+        }
+        WKind::Wctl => {
+            let w = win.as_ref().ok_or("no window")?;
+            let wb = w.borrow();
+            Ok(one(format!("{} {} {} {} current visible
+", wb.x, wb.y, wb.w, wb.h)))
+        }
+        WKind::DrawNew | WKind::DrawCtl => {
+            let w = win.as_ref().ok_or("no window")?;
+            let wb = w.borrow();
+            let id = conn.as_ref().map(|c| c.borrow().id).unwrap_or(0);
+            Ok(one(format!(
+                "{}{}r8g8b8a8    {}{}{}{}{}{}{}{}{}
+",
+                pad11(id), pad11(0), pad11(0), pad11(0), pad11(0),
+                pad11(wb.w), pad11(wb.h), pad11(0), pad11(0), pad11(wb.w), pad11(wb.h)
+            )))
+        }
+        WKind::Rgb => {
+            let w = win.as_ref().ok_or("no window")?;
+            let img = w.borrow().img.clone();
+            let back = img.borrow().back.clone();
+            let b = back.borrow();
+            let start = (off as usize).min(b.data.len());
+            let end = (off as usize + n).min(b.data.len());
+            Ok(RRes::Data(b.data[start..end].to_vec()))
+        }
+        WKind::Cons => {
+            let w = win.as_ref().ok_or("no window")?;
+            let now = {
+                let mut wb = w.borrow_mut();
+                if !wb.consbuf.is_empty() || wb.dead {
+                    let take = n.min(wb.consbuf.len());
+                    Some(wb.consbuf.drain(0..take).collect::<Vec<u8>>())
+                } else {
+                    None
+                }
+            };
+            if let Some(give) = now {
+                return Ok(RRes::Data(give));
+            }
+            let (c, wt) = oneshot::<RRes>();
+            w.borrow_mut().consparked.push(Waiter { n, kind: WaitKind::Wake { pid: 0, c } });
+            Ok(wt.await)
+        }
+        WKind::Mouse => {
+            let w = win.as_ref().ok_or("no window")?;
+            let now = {
+                let mut wb = w.borrow_mut();
+                if let Some(m) = wb.mousebuf.pop_front() {
+                    Some(m)
+                } else if wb.dead {
+                    Some(Vec::new())
+                } else {
+                    None
+                }
+            };
+            if let Some(give) = now {
+                return Ok(RRes::Data(give));
+            }
+            let (c, wt) = oneshot::<RRes>();
+            w.borrow_mut().mouseparked.push(Waiter { n: 0, kind: WaitKind::Wake { pid: 0, c } });
+            Ok(wt.await)
+        }
+        WKind::DrawRefresh => {
+            // refresh events: none in v0; readers wait forever (the dropped
+            // completer never fires — deliberately)
+            let (_c, wt) = oneshot::<RRes>();
+            Ok(wt.await)
+        }
+        _ => Err(format!("no read on {:?}", kind)),
+    }
+}
+
+fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
+              data: &[u8]) -> Result<usize, KErr> {
+    match kind {
+        WKind::Cons => Ok(data.len()), // window text is host-rendered; headless drops it
+        WKind::Consctl | WKind::Cursor => Ok(data.len()),
+        WKind::Label => {
+            let w = win.as_ref().ok_or("no window")?;
+            w.borrow_mut().label = String::from_utf8_lossy(data).trim().to_string();
+            Ok(data.len())
+        }
+        WKind::Wctl => {
+            let w = win.as_ref().ok_or("no window")?;
+            let raw = String::from_utf8_lossy(data).into_owned();
+            if let Some(rest) = raw.strip_prefix("type ") {
+                let mut wb = w.borrow_mut();
+                wb.consbuf.extend_from_slice(rest.as_bytes());
+                drop(wb);
+                serve_wcons(k, w);
+                return Ok(data.len());
+            }
+            let t: Vec<&str> = raw.trim().split_whitespace().collect();
+            match t.as_slice() {
+                ["move", x, y] => {
+                    let mut wb = w.borrow_mut();
+                    wb.x = x.parse().unwrap_or(wb.x);
+                    wb.y = y.parse().unwrap_or(wb.y);
+                }
+                ["resize", nw, nh] => {
+                    let (nw, nh): (i32, i32) =
+                        (nw.parse().map_err(|_| "bad resize")?, nh.parse().map_err(|_| "bad resize")?);
+                    let img = draw::new_image([0, 0, nw, nh], 0, 0x0818_2848, None,
+                                              Some([255, 255, 255, 255]), None);
+                    let mut wb = w.borrow_mut();
+                    wb.w = nw;
+                    wb.h = nh;
+                    wb.img = img.clone();
+                    for c in wb.conns.values() {
+                        c.borrow_mut().images.insert(0, img.clone());
+                    }
+                }
+                ["mouse", x, y, b] => {
+                    inject_mouse(k, w,
+                        x.parse().map_err(|_| "bad mouse")?,
+                        y.parse().map_err(|_| "bad mouse")?,
+                        b.parse().map_err(|_| "bad mouse")?);
+                }
+                ["delete"] => {
+                    let wid = {
+                        let mut wb = w.borrow_mut();
+                        wb.dead = true;
+                        wb.wid
+                    };
+                    serve_wcons(k, w);
+                    serve_wmouse(k, w);
+                    k.borrow_mut().wins.remove(&wid);
+                }
+                _ => return Err(format!("wctl: bad message '{}'", raw.trim())),
+            }
+            Ok(data.len())
+        }
+        WKind::DrawData => {
+            let w = win.as_ref().ok_or("no window")?;
+            let c = conn.as_ref().ok_or("no draw connection")?;
+            drawmsgs(w, c, data)?;
+            Ok(data.len())
+        }
+        _ => Err(format!("no write on {:?}", kind)),
+    }
+}
+
+fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>) -> Vec<u8> {
+    let dir = matches!(kind, WKind::Root | WKind::WinDir | WKind::DrawDir | WKind::ConnDir);
+    let name = match kind {
+        WKind::Root => "wsys".to_string(),
+        WKind::WinDir => win.as_ref().map(|w| w.borrow().wid.to_string()).unwrap_or_default(),
+        WKind::DrawDir => "draw".to_string(),
+        WKind::ConnDir => conn.as_ref().map(|c| c.borrow().id.to_string()).unwrap_or_default(),
+        WKind::DrawNew => "new".to_string(),
+        WKind::DrawCtl => "ctl".to_string(),
+        WKind::DrawData => "data".to_string(),
+        WKind::DrawRefresh => "refresh".to_string(),
+        WKind::Clone => "clone".to_string(),
+        WKind::Cons => "cons".to_string(),
+        WKind::Mouse => "mouse".to_string(),
+        WKind::Wctl => "wctl".to_string(),
+        WKind::Winid => "winid".to_string(),
+        WKind::Label => "label".to_string(),
+        WKind::Rgb => "rgb".to_string(),
+        WKind::Consctl => "consctl".to_string(),
+        WKind::Cursor => "cursor".to_string(),
+    };
+    let wid = win.as_ref().map(|w| w.borrow().wid).unwrap_or(0) as u64;
+    let cid = conn.as_ref().map(|c| c.borrow().id).unwrap_or(0) as u64;
+    let length = if kind == WKind::Rgb {
+        win.as_ref()
+            .map(|w| {
+                let img = w.borrow().img.clone();
+                let back = img.borrow().back.clone();
+                let n = back.borrow().data.len() as u64;
+                n
+            })
+            .unwrap_or(0)
+    } else {
+        0
+    };
+    marshal_stat(&StatIn {
+        name: &name,
+        qtype: if dir { QTDIR } else { 0 },
+        qpath: wid * 1024 + cid * 16 + name.len() as u64,
+        mode: if dir { DMDIR | 0o555 } else { 0o666 },
+        length,
+        ..Default::default()
+    })
+}
+
+// the draw(3) message subset; values low-order byte first
+fn drawmsgs(win: &WinR, conn: &DConnR, b: &[u8]) -> Result<(), KErr> {
+    let u32a = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let s32 = |o: usize| i32::from_le_bytes(b[o..o + 4].try_into().unwrap());
+    let u16a = |o: usize| u16::from_le_bytes(b[o..o + 2].try_into().unwrap());
+    let img = |id: u32| -> Result<draw::ImageR, KErr> {
+        conn.borrow().images.get(&id).cloned().ok_or_else(|| format!("draw: no image {}", id))
+    };
+    let mut o = 0usize;
+    while o < b.len() {
+        let op = b[o] as char;
+        match op {
+            'b' => {
+                // id[4] screen[4] refresh[1] chan[4] repl[1] r[16] clipr[16] color[4]
+                let id = u32a(o + 1);
+                let screenid = u32a(o + 5);
+                let chan = u32a(o + 10);
+                let repl = b[o + 14];
+                let r = [s32(o + 15), s32(o + 19), s32(o + 23), s32(o + 27)];
+                let clipr = [s32(o + 31), s32(o + 35), s32(o + 39), s32(o + 43)];
+                let color = draw::rgba32(u32a(o + 47));
+                if screenid != 0 {
+                    let scr = conn.borrow().screens.get(&screenid).cloned()
+                        .ok_or_else(|| format!("draw: no screen {}", screenid))?;
+                    // a window on a screen: a view sharing the screen's backing
+                    let (schan, sback) = {
+                        let si = scr.borrow();
+                        (si.chan, si.back.clone())
+                    };
+                    let im = draw::new_image(r, repl, schan, Some(clipr), Some(color), Some(sback));
+                    conn.borrow_mut().images.insert(id, im);
+                } else {
+                    let im = draw::new_image(r, repl, chan, Some(clipr), Some(color), None);
+                    conn.borrow_mut().images.insert(id, im);
+                }
+                o += 51;
+            }
+            'A' => {
+                // allocscreen: id[4] image[4] fill[4] public[1]
+                let sid = u32a(o + 1);
+                let im = img(u32a(o + 5))?;
+                conn.borrow_mut().screens.insert(sid, im);
+                o += 14;
+            }
+            'F' => {
+                conn.borrow_mut().screens.remove(&u32a(o + 1));
+                o += 5;
+            }
+            'c' => {
+                // replclipr: id[4] repl[1] clipr[16]
+                let im = img(u32a(o + 1))?;
+                let mut ib = im.borrow_mut();
+                ib.repl = b[o + 5];
+                ib.clipr = [s32(o + 6), s32(o + 10), s32(o + 14), s32(o + 18)];
+                o += 22;
+            }
+            't' => {
+                o += 4 + 4 * u16a(o + 2) as usize; // top/bottom: one window per screen
+            }
+            'd' => {
+                // dst[4] src[4] mask[4] dstr[16] srcpt[8] maskpt[8]
+                let dst = img(u32a(o + 1))?;
+                let src = img(u32a(o + 5))?;
+                let dstr = [s32(o + 13), s32(o + 17), s32(o + 21), s32(o + 25)];
+                draw::draw_op(&dst, dstr, &src, [s32(o + 29), s32(o + 33)]);
+                o += 45;
+            }
+            'f' => {
+                conn.borrow_mut().images.remove(&u32a(o + 1));
+                o += 5;
+            }
+            'L' => {
+                // dst[4] p0[8] p1[8] end0[4] end1[4] thick[4] src[4] sp[8]
+                let dst = img(u32a(o + 1))?;
+                let src = img(u32a(o + 33))?;
+                draw::line(&dst, [s32(o + 5), s32(o + 9)], [s32(o + 13), s32(o + 17)],
+                           &src, [s32(o + 37), s32(o + 41)]);
+                o += 45;
+            }
+            'e' | 'E' => {
+                // dst[4] c[8] a[4] b[4] thick[4] src[4] sp[8]
+                let dst = img(u32a(o + 1))?;
+                let src = img(u32a(o + 25))?;
+                draw::ellipse(&dst, [s32(o + 5), s32(o + 9)], s32(o + 13), s32(o + 17),
+                              &src, [s32(o + 29), s32(o + 33)], op == 'E');
+                o += 37;
+            }
+            'y' => {
+                // id[4] r[16] data in the image's chan (draw(6))
+                let im = img(u32a(o + 1))?;
+                let r = [s32(o + 5), s32(o + 9), s32(o + 13), s32(o + 17)];
+                let nb = draw::load_rows(&im, r, &b[o + 21..]);
+                o += 21 + nb;
+            }
+            'i' => {
+                // id[4] nchars[4] ascent[1]: the image becomes a font
+                let im = img(u32a(o + 1))?;
+                im.borrow_mut().font = Some(draw::FontInfo {
+                    nchars: u32a(o + 5),
+                    ascent: b[o + 9],
+                    slots: HashMap::new(),
+                });
+                o += 10;
+            }
+            'l' => {
+                // cache[4] src[4] index[2] r[16] p[8] left[1] width[1]
+                let cache = img(u32a(o + 1))?;
+                let src = img(u32a(o + 5))?;
+                if cache.borrow().font.is_none() {
+                    return Err("draw: l on a non-font image (send i first)".into());
+                }
+                let index = u16a(o + 9);
+                let r = [s32(o + 11), s32(o + 15), s32(o + 19), s32(o + 23)];
+                draw::copy_rect(&cache, r, &src, [s32(o + 27), s32(o + 31)]);
+                cache.borrow_mut().font.as_mut().unwrap().slots.insert(index, draw::FontSlot {
+                    r,
+                    left: b[o + 35] as i8,
+                    width: b[o + 36],
+                });
+                o += 37;
+            }
+            's' | 'x' => {
+                // dst[4] src[4] font[4] p[8] clipr[16] sp[8] [x: bg[4] bgp[8]] ni[2] ni*index[2]
+                let dst = img(u32a(o + 1))?;
+                let src = img(u32a(o + 5))?;
+                let fontim = img(u32a(o + 9))?;
+                if fontim.borrow().font.is_none() {
+                    return Err(format!("draw: {} needs a font image", op));
+                }
+                let mut x = s32(o + 13);
+                let y = s32(o + 17);
+                let sp = [s32(o + 37), s32(o + 41)];
+                let ni = u16a(o + 45) as usize;
+                let (mut base, bg, mut bgp) = if op == 'x' {
+                    let bg = img(u32a(o + 47))?;
+                    (o + 59, Some(bg), [s32(o + 51), s32(o + 55)])
+                } else {
+                    (o + 47, None, [0, 0])
+                };
+                let font_h = fontim.borrow().h;
+                let ascent = fontim.borrow().font.as_ref().unwrap().ascent as i32;
+                for kx in 0..ni {
+                    let idx = u16a(base + 2 * kx);
+                    let slot = fontim.borrow().font.as_ref().unwrap().slots.get(&idx)
+                        .map(|s| (s.r, s.left as i32, s.width as i32));
+                    if let Some((sr, left, width)) = slot {
+                        if let Some(bgim) = &bg {
+                            draw::draw_op(&dst, [x, y - ascent, x + width, y - ascent + font_h],
+                                          bgim, bgp);
+                            bgp = [bgp[0] + width, bgp[1]];
+                        }
+                        draw::glyph(&dst, [x + left, y - ascent], &fontim, sr, &src, sp);
+                        x += width;
+                    }
+                }
+                base += 2 * ni;
+                o = base;
+            }
+            'O' => o += 2, // set compositing op: S-over-D is all v0 does
+            'v' => {
+                // present: headless native has no host surface; the raster
+                // stays readable through rgb
+                let _ = win;
+                o += 1;
+            }
+            other => {
+                return Err(format!(
+                    "draw: message '{}' not implemented (have b d f L e E y i l s x c A F t O v)",
+                    other
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 // ---- the public facade: the same surface the host already speaks ----
@@ -488,6 +1071,8 @@ impl Kernel {
                 next_token: 1,
                 effects: Vec::new(),
                 verbose: false,
+                wins: HashMap::new(),
+                nextwid: 1,
             })),
             ex: LocalExec::new(),
             interactive: false,
@@ -849,6 +1434,7 @@ fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
         'd' => Ok(DN { dev: DevId::Dup, node: Node::DupRoot, path: None }),
         'p' => Ok(DN { dev: DevId::Proc, node: Node::Proc { kind: 0, pid: 0 }, path: None }),
         'M' => Ok(DN { dev: DevId::Ram, node: Node::Ram(k.borrow().ram_root.clone()), path: None }),
+        'w' => Ok(DN { dev: DevId::Wsys, node: Node::Wsys { kind: WKind::Root, win: None, conn: None }, path: None }),
         _ => Err(format!("unknown device #{}", letter)),
     }
 }
@@ -903,6 +1489,7 @@ async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>
             };
             Ok(Some(DN { dev: DevId::Proc, node: Node::Proc { kind: kd, pid: *q }, path: None }))
         }
+        (DevId::Wsys, Node::Wsys { kind, win, conn }) => Ok(wsys_walk(k, *kind, win, conn, name)),
         (DevId::Mnt, Node::Mnt(m)) => {
             let conn = m.conn.clone();
             let newfid = {
@@ -1257,6 +1844,7 @@ async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
             r.u16(); // outer size, per stat(5)'s double count
             Ok(r.rest().to_vec())
         }
+        (DevId::Wsys, Node::Wsys { kind, win, conn }) => Ok(wsys_stat(*kind, win, conn)),
         _ => Err("no stat on this device (v0)".into()),
     }
 }
@@ -1431,6 +2019,13 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
         }
+        (DevId::Wsys, Node::Wsys { kind, win, conn }) => {
+            let out = wsys_read(k, kind, &win, &conn, chan, n, off).await?;
+            if let RRes::Data(d) = &out {
+                advance(chan, cur, d.len());
+            }
+            Ok(out)
+        }
         (DevId::Mnt, Node::Mnt(m)) => {
             let count = n.min(MSIZE - 24);
             let conn = m.conn.clone();
@@ -1582,6 +2177,9 @@ fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Re
         (DevId::Proc, Node::Proc { kind, pid: q }) if kind >= 2 => {
             proc_write(k, kind, q, data, pid)?
         }
+        (DevId::Wsys, Node::Wsys { kind, win, conn }) => {
+            wsys_write(k, kind, &win, &conn, data)?
+        }
         _ => return Err("write not supported here (v0)".into()),
     };
     if cur {
@@ -1669,6 +2267,12 @@ fn dev_len(chan: &ChanR) -> u64 {
         (DevId::Ram, Node::Ram(r)) => {
             let n = r.borrow();
             if n.dir { 0 } else { n.data.len() as u64 }
+        }
+        (DevId::Wsys, Node::Wsys { kind: WKind::Rgb, win: Some(w), .. }) => {
+            let img = w.borrow().img.clone();
+            let back = img.borrow().back.clone();
+            let n = back.borrow().data.len() as u64;
+            n
         }
         _ => 0,
     }
@@ -1920,6 +2524,27 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                 let fd = fd_alloc(k, pid, target.clone(), None);
                 return Ok(ok(fd));
             }
+            // wsys: opening draw/new mints a fresh connection; image 0 is
+            // the window itself
+            let dn = if let Node::Wsys { kind: WKind::DrawNew, win: Some(w), .. } = &dn.node {
+                let conn = {
+                    let mut wb = w.borrow_mut();
+                    let id = wb.nextconn;
+                    wb.nextconn += 1;
+                    let mut images = HashMap::new();
+                    images.insert(0u32, wb.img.clone());
+                    let c = Rc::new(RefCell::new(DConn { id, images, screens: HashMap::new() }));
+                    wb.conns.insert(id, c.clone());
+                    c
+                };
+                DN {
+                    dev: DevId::Wsys,
+                    node: Node::Wsys { kind: WKind::DrawNew, win: Some(w.clone()), conn: Some(conn) },
+                    path: dn.path.clone(),
+                }
+            } else {
+                dn
+            };
             // mnt: clone before open, so the attach fid is never consumed
             let dn = if let Node::Mnt(m) = &dn.node {
                 let m2 = if m.ephemeral.get() { m.clone() } else { mnt_clone(k, m).await? };

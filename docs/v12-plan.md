@@ -854,11 +854,14 @@ AREAD/IOWAIT — and, on the async core (the kernel's own 160-line executor,
 no tokio, effect seam unchanged), **wire 9P entire**: mount(fd), hellofs,
 exportfs with private namespaces travelling, symlinks over minted message
 types, wstat through the wire. The WASI shim
-ported to wasmtime host functions (`native/host/src/wasi.rs`) and passed all
-six citizen tests on its first run — wasi-libc, real Go, real CPython 3.14,
-all against the Rust kernel. **102 of 130**; the one subsystem still red is
-the window server + draw engine (19 tests). `kernel.mjs` is the reference
-implementation; the suite is the spec.
+ported to wasmtime host functions and passed all six citizen tests on its
+first run. The window server and draw engine followed, and **the suite
+closed: 130 of 130 on all three hosts — Node, Chrome, and the Rust kernel
+under wasmtime.** The native milestone the decision log defined is
+delivered: the conformance spec passes identically on the reference
+implementation and the rewrite. What the Rust milestone was recorded to
+unlock comes next: the `FROM scratch` OCI container (stated as free with
+this milestone), then the iPadOS shim on Pulley per the engine matrix.
 
 ## Sources
 

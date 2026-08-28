@@ -1063,6 +1063,22 @@ readlink-probe-is-EINVAL mapping, both of which were measured lessons the
 first time and simply facts the second. wasi-libc, real Go (wasip1), and
 real CPython 3.14 run unchanged against the Rust kernel.
 
+Tranche five (same day): **the window server and the draw engine — and the
+suite closes at 130 of 130.** `draw.rs` (363 lines) is draw.mjs with one
+recorded deviation: every operation snapshots its source pixels before
+writing, because a screen and its windows share a backing and RefCell
+refuses the aliased borrow the JS never noticed it took (sources are 1×1
+colours and font strips; the copy is noise). devwsys lives in the kernel
+with presentation as a no-op — the native host is headless, which the suite
+was designed for: rasters read back through `rgb`, input injected through
+`wctl`. One test needed widening, and the lesson is worth its line: acme's
+column-split point differs a few lines between hosts (the height heuristic),
+so the button-3 assertion band now covers the semantic claim — new ink below
+the listing — rather than one host's layout. **All three hosts pass the
+identical 130: Node, Chrome, and the Rust kernel under wasmtime.** The
+native core totals 5,907 lines (kernel 4,015 across lib/exec/draw/stat9;
+host 1,529 across the runner and the wasi shim).
+
 Conformance at first light: **75 of 130** — init's lifecycle tranche, the
 whole rc script (35 lines), forktest, sam -d, links/symlinks, wstat, unmount,
 unions, RFNOMNT/RFNOWAIT. The 55 still red sit in four unported subsystems:

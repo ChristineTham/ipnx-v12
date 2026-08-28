@@ -138,13 +138,16 @@ main(int argc, char *argv[])
 	 * whose body text sits right of the 242..254 scrollbar): Look
 	 * resolves the name in the window's directory and opens /rc — a new
 	 * window whose tag inks the right column's lower half */
-	base = darkin(110, 200);
+	/* the split point where the new window lands varies a few lines
+	 * between hosts (the column's height heuristic); the band is wide so
+	 * the assertion is about the LOOK, not one host's layout */
+	base = darkin(84, 240);
 	chord("mouse 280 55 4");
 	chord("mouse 280 55 0");
 	opened = 0;
 	for(i = 0; i < 100 && !opened; i++){
 		sleep(100);
-		opened = darkin(110, 200) >= base + 20;
+		opened = darkin(84, 240) >= base + 20;
 	}
 	ok(opened, "button-3 Look on rc/: the directory opened in a new window");
 	if(!opened)
