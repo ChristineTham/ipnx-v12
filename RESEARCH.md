@@ -1158,6 +1158,86 @@ before code, not after.
 
 ---
 
+## 12. Prior art: capability operating systems (researched 2026-08-29)
+
+The identity decisions (su, the user decomposition, the profile) rest on
+capability thinking, and capability operating systems have a fifty-year
+graveyard worth learning from. The census, with the honest post-mortems:
+
+**Hardware era.** Dennis & Van Horn coined capabilities (1966). The
+[Plessey System 250](https://en.wikipedia.org/wiki/Plessey_System_250)
+(1969–72) shipped and ran telephone switches. Cambridge CAP and CMU HYDRA
+proved the model in research. IBM's System/38 (1978) put
+[capability-based addressing in a commercial machine](https://www.semanticscholar.org/paper/IBM-System/38-support-for-capability-based-Houdek-Soltis/34e41ebc64b786e20efc490363aaeb5fa508866b).
+Intel's [iAPX 432](https://en.wikipedia.org/wiki/Intel_iAPX_432) (1981) ran
+capabilities in silicon at roughly a quarter of an 8086's speed and poisoned
+the well for a generation —
+[Colwell's autopsy](https://archive.org/details/432_complexity_paper) found
+most of the loss was implementation (an Ada compiler emitting poor code,
+25–35% alone; missing instruction-stream literals), not the capability
+model.
+
+**OS era.** Berkeley's CAL-TSS (1968–71) was among the first capability
+OSes; it ran for about a year and was abandoned —
+[Lampson & Sturgis's retrospective](https://dl.acm.org/doi/10.1145/360051.360074)
+(CACM 1976) is the honest post-mortem of paying for indirection everywhere
+on a machine that could not afford it. Tymshare's KeyKOS ran capabilities
+plus a checkpointed single-level store in commercial production.
+**[Amoeba](https://www.cs.vu.nl/pub/amoeba/Intro.pdf)** (Vrije Universiteit,
+Tanenbaum, 1981–96) was the distributed capability OS: a 128-bit SPARSE
+ticket — 48-bit server port, 24-bit object, 8-bit rights, 48-bit check
+field — protected by a one-way function rather than kernel tables, so a
+client could itself derive a reduced-rights capability, and capabilities
+were plain bits storable in files. The direct ancestor of the signed URL.
+[Shapiro's EROS](https://www.semanticscholar.org/paper/Eros:-a-capability-system-Shapiro-Farber/f7aa91b60a056594db8bc111d914746754b939e3)
+(1990s) inherited KeyKOS and demolished the performance myth (capability
+IPC comparable to conventional kernels). All of these are dead.
+
+**The survivors, all in disguise.** Mach ports — genuine capabilities —
+live inside every iPhone. seL4 is a verified capability microkernel
+succeeding in defence/automotive niches. FreeBSD's Capsicum bolted
+capability mode onto Unix by observing that file descriptors already are
+capabilities. Fuchsia ships on smart displays and never displaced Android.
+CHERI/Morello revives capability hardware for memory safety. The largest
+capability system ever deployed has no name: signed URLs, bearer tokens,
+JWTs.
+
+**The five recurring causes of death**, in descending lethality:
+
+1. **The compatibility cliff.** Amoeba (its Ajax POSIX emulation partial),
+   EROS (none), Fuchsia (Starnix late): users choose their software over
+   your security, every time. Killed more capability systems than
+   everything else combined.
+2. **Ambient authority is the incumbent's moat.** Unix programs open by
+   pathname from anywhere; capability discipline says pass handles; the
+   retrofit friction (Capsicum's cap_enter disabling global namespaces) is
+   semantic, not mechanical. Hardy's Confused Deputy (1988) is the standing
+   argument that ambient authority is the bug factory.
+3. **Performance folklore.** The 432's implementation failures were
+   attributed to the model and the myth outlived EROS's refutation by a
+   generation. Expect to fight folklore with measurement.
+4. **Revocation and legibility.** The System/38→AS/400 retreat: IBM
+   [found no way to revoke](https://en.wikipedia.org/wiki/IBM_System/38)
+   capabilities users could save to tape and restore, and moved authority
+   into user profiles, keeping the capability machinery invisible beneath.
+   KeyKOS's checkpointed single-level store was elegant and illegible to
+   operators. Administrators must be able to audit; held bits resist audit.
+5. **All-or-nothing adoption.** The 432 needed a new language, compilers,
+   OS. Every survivor hid inside something that already existed.
+
+**What this vindicates and what it directs** (the doctrine is in the
+decision log, 2026-08-29): the WASI-ABI-plus-benchmarks posture is the
+anti-Amoeba move and stays sacred; IPNX's capabilities stay invisible
+(namespace, fd, bind — no "capability" noun ever reaches a user, the
+System/38-in-AS/400 and Capsicum lesson); devcap's earmarked mechanism
+adopts Amoeba's sparse crypto-checked self-attenuating ticket with modern
+MACs; revocation is answered by expiry and re-attach and unmount, never a
+revocation registry; the storage invariant is the legible alternative to
+the single-level store; and the deployment story (tab, laptop, container,
+agent sandbox) gets re-examined periodically with the same honesty as the
+code — Amoeba and Plan 9 both died of their deployment wave, not their
+kernels.
+
 ## Appendix: primary sources
 
 **Plan 9** — [design paper](https://9p.io/sys/doc/9.html) ·

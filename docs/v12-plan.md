@@ -542,6 +542,32 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   sub-profiles included); the credential half needs /net to reach stores
   and services, and pairs with devcap.
 
+- **(2026-08-29) Capability doctrine, learned from the graveyard.** The
+  fifty-year history of capability operating systems (RESEARCH §12:
+  Plessey 250, CAL-TSS, HYDRA, System/38, the iAPX 432, KeyKOS, Amoeba,
+  EROS, and the disguised survivors — Mach ports, seL4, Capsicum, signed
+  URLs) yields five causes of death and this project's five answers,
+  recorded as doctrine: **(1) the compatibility cliff killed more
+  capability systems than everything else combined** — the WASI ABI and
+  the benchmark discipline are the anti-Amoeba posture and are never
+  compromised; **(2) capabilities stay invisible** — the capability IS the
+  namespace and LOOKS like a filesystem, the handle is an fd, the grant is
+  a bind, and no "capability" noun ever reaches a user (the System/38
+  lesson: caps succeeded while invisible, and the AS/400 kept them only
+  beneath the surface); **(3) devcap adopts Amoeba's mechanism** — the
+  sparse, cryptographically checked, self-attenuating ticket (Amoeba's
+  128-bit port/object/rights/check design, one-way-function protected, the
+  ancestor of the signed URL) with modern MACs, over kernel capability
+  tables; **(4) revocation is answered by expiry, re-attach, and unmount,
+  never a revocation registry** — the AS/400 retreat proved held bits
+  cannot be recalled, and modern practice (short-lived tokens) beat
+  revocation lists; audits stay possible because authority is legible in
+  the mount table, not scattered in held bits; **(5) the deployment story
+  is reviewed periodically with the same honesty as the code** — Amoeba
+  and Plan 9 died of their deployment wave (processor pools, CPU servers),
+  not their kernels; ours (tab, laptop, container, agent sandbox) is
+  today's wave, and the lesson is not "we are safe" but "re-examine."
+
 - **(2026-08-27) OCI is two targets, taken at two different weights.**
   *The scratch container is a stated target of the Rust milestone, for free*: the
   kernel as a static musl binary, PID 1 in a `FROM scratch` image — no distro, no
