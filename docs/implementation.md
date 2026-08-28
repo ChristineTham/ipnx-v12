@@ -33,23 +33,10 @@ The inheritance is unusually strong for a "start of implementation":
 
 ## How the work is run
 
-- **Every milestone ends in an artifact someone can hold** — a container image,
-  an app, a bootable profile — not a refactor. The PoC's cadence (each commit
-  demonstrably runs more of the world) continues.
-- **The suite is the merge bar.** The 131 are the permanent floor on every
-  host. Each milestone adds tests; new tests probe for the features they need
-  (a walk to `/net`, a `#`-device) and self-skip where absent, so one rootfs
-  serves every host including the frozen reference. A feature's tests are
-  written with the feature, never after.
-- **Vendored sources stay verbatim** — the derivation layer (shim headers,
-  `sed` into `build/`) is ours; `poc/plan9/`, `poc/v10/` and their successors
-  are never edited. Provenance and notices travel with any new import.
-- **A contract change lands in [architecture.md](architecture.md) in the
-  same commit** — that document is present-tense by rule, so code and contract
-  never describe two different systems.
-- **Decisions are consumed, not re-derived.** Each milestone below names the
-  dated decisions it implements. Reopening one requires new evidence, in the
-  log, first.
+Moved where *how* belongs: the working rules — artifact-per-milestone, the
+merge bar and the 131 floor, vendored-verbatim, the same-commit contract rule,
+decisions consumed not re-derived — are [handbook.md](handbook.md#the-working-rules).
+This document is sequence only.
 
 ## The tree
 

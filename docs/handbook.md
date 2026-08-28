@@ -32,6 +32,26 @@ cargo run --release -p host -- poc/rootfs  # the Rust core under wasmtime
 Green is: init (pid 1) prints the suite's `PASS` lines — the floor is 131 —
 and exits 0. Any other exit is a failure even if PASS lines appeared.
 
+## The working rules
+
+- **Every milestone ends in an artifact someone can hold** — a container
+  image, an app, a bootable profile — not a refactor. The PoC's cadence (each
+  commit demonstrably runs more of the world) continues.
+- **The suite is the merge bar.** The 131 are the permanent floor on every
+  host; the count only grows. New tests probe for the features they need and
+  self-skip where absent, so one rootfs serves every host including the
+  frozen reference. A feature's tests are written with the feature, never
+  after.
+- **Vendored sources stay verbatim** — the derivation layer (shim headers,
+  `sed` into `build/`) is ours; the vendored trees are never edited.
+  Provenance and notices travel with any new import.
+- **A contract change lands in [architecture.md](architecture.md) in the same
+  commit** — that document is present-tense by rule, so code and contract
+  never describe two different systems.
+- **Decisions are consumed, not re-derived.** They live in
+  [design.md](design.md) with dates; reopening one requires new evidence,
+  in the log, first.
+
 ## The build system's shape
 
 `mk.sh` compiles the userspace: our C (`libc/`, `cmd/`), the vendored trees
@@ -64,8 +84,7 @@ under `plan9/sys/src/…` with its batch NOTICE, shim headers beside it, and a
 kernel-level assertions in init's C; subsystem harnesses as their own
 `cmd/*test.c`. A test for a feature the frozen reference lacks must
 **self-skip by probing the namespace** (walk to the file or device it needs)
-so one rootfs serves every host including the oracle. The 131 floor never
-moves; the count only grows.
+so one rootfs serves every host including the oracle.
 
 **A vendored batch.** Verbatim, always — fixes happen in shim headers or the
 derivation `sed`, never in the tree. The batch carries a NOTICE with
@@ -109,5 +128,4 @@ contract to read alongside. A host is real when init exits 0.
 Prose is British-inflected, em-dashed; numbers are load-bearing and carry
 provenance; guest C is Plan 9 style (tabs, `nil`, no const clutter). The
 full working conventions — including the document roles and the
-same-commit rules — are in `CLAUDE.md`; the decisions themselves are in
-[design.md](design.md) and are consumed, never re-derived.
+same-commit rules — are in `CLAUDE.md`.
