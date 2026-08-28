@@ -460,6 +460,40 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   the entry: `cmd/su.c`, `#p` in the boot namespace, and the suite's 131st
   test (`su none id` → `none none`) green on all three hosts.
 
+- **(2026-08-29) What a "user" is — the conflation decomposed.** Unix's uid
+  merged four things: a person at a terminal (originally a *billing*
+  construct), a protection domain, a service principal (`lp`, `uucp` — the
+  daemon users, never logged into, the part that aged best), and root, the
+  anti-user. IPNX keeps the kernel's mechanism minimal (a name pair per
+  process, ownership, the transition rules, `DMSETUID`, the per-attach
+  `uname` — all already running) and resolves the CONCEPT four ways:
+  **(1) the person is eve, exactly one per kernel instance, many instances
+  per person** — timesharing is inverted, not restored: kernels cost a
+  browser tab, so multi-tenancy happens by instance and *the kernel
+  instance is the new uid*; "fast user switching" is a different instance;
+  in-kernel multi-user survives only where Plan 9 put it, at servers, per
+  attach. **(2) The role is the daemon user, kept deliberately and
+  ennobled**: a name that owns resources and is conferred, never logged
+  into — assumed by DMSETUID exec, eve's grant, or a future devcap ticket
+  — and where Unix daemons got only a uid, IPNX daemons get a reduced
+  namespace (systemd's forty sandboxing directives are a namespace system
+  described one flag at a time; here confinement is the binds a daemon
+  started with). **(3) The agent is a role plus a namespace** — the
+  genuinely new population, already the largest identity population in
+  the industry: the name is for the audit trail, the namespace is the
+  authority; `none` is the anonymous agent and `su none` its front door.
+  **(4) The network person is an authenticated claim, per connection** —
+  no global registry (NIS/LDAP sediment, refused); servers believe
+  proofs, today the attach-time uname, later factotum-shaped tickets
+  with /net; a person across their instances is their keyring. The
+  organising sentence: **names are for accounting; namespaces are for
+  authority.** Consequences at zero mechanism cost: `login` never exists
+  (no getty — a person does not log into their own instance),
+  `/etc/passwd` stays personality-side (V10 numbers, plus the curated
+  V10 role names as heritage), authentication stays sequenced with /net,
+  and groups (deferral D2) get less urgent because roles absorb most of
+  what groups did.
+
 - **(2026-08-27) OCI is two targets, taken at two different weights.**
   *The scratch container is a stated target of the Rust milestone, for free*: the
   kernel as a static musl binary, PID 1 in a `FROM scratch` image — no distro, no

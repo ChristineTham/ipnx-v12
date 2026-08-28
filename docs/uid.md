@@ -130,6 +130,43 @@ sequenced with `/net` and factotum-shaped authentication. Until then, uids
 remain per-server names: the attach-time `uname` records who a mount speaks
 for, and the personality owns any name↔number mapping.
 
+## What a "user" is (2026-08-29)
+
+The uid machinery above is mechanism; this section records what the names
+*mean*. Unix's uid conflated a person at a terminal (a billing construct
+before it was a security boundary), a protection domain, a service principal
+(the daemon users — `lp`, `uucp`, `bin` — never logged into, and the part of
+the design that aged best), and root. IPNX resolves the conflation without
+adding kernel mechanism:
+
+- **The person is eve** — exactly one per kernel instance, many instances
+  per person. The kernel instance is the modern terminal; timesharing is
+  inverted rather than restored, because kernels now cost a browser tab:
+  multi-tenancy happens by instance, and the kernel instance is the new
+  uid. Multi-user survives where Plan 9 put it — at servers, per attach.
+  There is no `login` and no getty: a person does not log into their own
+  instance.
+- **The role is the daemon user, kept and ennobled** — a name that owns
+  resources and is conferred, never authenticated: assumed by `DMSETUID`
+  exec, by eve's grant (rule 1), or by a devcap ticket when that lands.
+  Unix daemons got a uid; IPNX daemons get a reduced namespace — systemd's
+  forty sandboxing directives are a namespace system described one flag at
+  a time, and here a daemon's confinement is simply the binds it started
+  with.
+- **The agent is a role plus a namespace** — the name for the audit trail,
+  the namespace for the authority. `none` is the anonymous agent; `su
+  none` is its front door.
+- **The network person is an authenticated claim, per connection** — no
+  global registry; each server believes a proof. Today that is the
+  attach-time `uname`; with /net it becomes factotum-shaped tickets. A
+  person, across their fleet of instances, is their keyring.
+
+The organising sentence: **names are for accounting; namespaces are for
+authority.** `/etc/passwd` remains personality-side plumbing — V10's
+numbers, and the curated V10 role names as heritage — and groups (D2)
+matter less than they did, because roles absorb most of what groups were
+for.
+
 ## What this closes
 
 Of the ten identity-family calls docs/syscalls.md classed as *design*: the seven uid/gid
