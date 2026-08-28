@@ -103,10 +103,12 @@ COOP/COEP headers SharedArrayBuffer needs; `?i` boots interactive):
 node poc/serve.mjs
 ```
 
-The native host (the Rust core, RESEARCH §9.6; the full 131/131 conformance) builds and runs with cargo:
+The real implementation — the Rust kernel core (`kernel/`, RESEARCH §9.6) under the
+macOS wasmtime host (`hosts/macos/`; the full 131/131 conformance) — builds and runs
+from the root Cargo workspace:
 
 ```bash
-cargo run --release --manifest-path native/Cargo.toml -p host -- poc/rootfs
+cargo run --release -p host -- poc/rootfs
 ```
 
 Node ≥ 22 (`worker_threads`, SAB, wasm `try_table` exception handling — the legacy EH
@@ -121,10 +123,12 @@ is indistinguishable from a shipped one.
 |---|---|
 | `README.md` | public overview — why this repository is separate from the parent, the precedents, status |
 | `RESEARCH.md` | **living evidence base** — every finding with provenance: Plan 9's call list, `rfork` flags verbatim, APE's limits, the fork-resume mechanism and its measurements, WASI phases, the toolchain recipe (§9.4), V10 measurements |
-| `docs/v12-plan.md` | **the spec** — scope, decisions taken (with dates), open questions, PoC status |
+| `docs/v12-plan.md` | **the spec** — scope, design rationale, decisions taken (with dates), open questions |
+| `docs/implementation.md` | **the living build plan** — milestones M0–M12 with dependencies, acceptance criteria, engineering questions; the sequence work follows |
+| `docs/poc.md` | **frozen** — the PoC's record and declaration (2026-08-26 → 2026-08-29): chronology, final state, what it proved |
 | `docs/syscalls.md` | **the derived call list** — Plan 9's 40 live calls dispositioned for V12; V10's 68 routines mapped onto them |
 | `docs/uid.md` | **the uid model** — the item APE called impossible, decided and running: kernel credentials, `/proc` ctl transitions, `DMSETUID`, the two enforcement regimes |
-| `poc/README.md` | what the PoC proves, its layout, its deliberate v0 deviations |
+| `poc/README.md` | the frozen reference implementation's layout and its deliberate v0 deviations |
 
 Findings go in RESEARCH.md with provenance; decisions go in the plan; both are living.
 Keep them consistent — the architecture statement appears in RESEARCH's TL;DR and the
@@ -211,7 +215,20 @@ evidence, not a fresh opinion.
   kernel resolves symlinks in the walking process's namespace**, since no server knows
   the client's namespace.
 
-## The PoC's shape (poc/)
+## The tree (post-declaration, 2026-08-29)
+
+The PoC is **complete and frozen** (decision log, 2026-08-29): `poc/`'s JS supervisor
+is the reference implementation and conformance oracle — never modify it; `bash
+poc/run.sh` must stay green. The real implementation lives at the top level: `kernel/`
+(the Rust core), `hosts/macos/` (wasmtime host; the workspace root is `Cargo.toml`),
+with `hosts/{oci,ipados,browser}/` scaffolded per implementation.md's milestones. The
+guest world (`poc/libc`, `poc/plan9`, `poc/v10`, `poc/cmd`, `poc/wasi`, `poc/rootfs`,
+`poc/mk.sh`) is NOT frozen — it is the real userspace shared by every host, and
+graduates to `userspace/` as milestone M0. Work is sequenced by
+`docs/implementation.md`; new features add self-skipping tests so one rootfs serves
+every host including the frozen oracle, and the 131 stay the permanent floor.
+
+## The PoC's shape (poc/) — frozen reference
 
 **The userspace objective** (re-founded 2026-08-27): the real Plan 9 userspace entire —
 the designers' curation of Unix — plus a measured modern personality proven by three
@@ -281,61 +298,23 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
   Guest C is Plan 9 style (tabs, `nil`, no const clutter); the build silences the
   builtin-redeclaration warnings that style causes.
 
-## Current state (2026-08-27)
+## Current state (2026-08-29)
 
-131 acceptance tests pass on Node (`bash poc/run.sh`) **and in the browser**
-(`node poc/serve.mjs` → `/browser/`, measured in Chrome 148); `?i` boots to **the real
-Plan 9 rc** — pipelines, subshells, `` `{...} `` captures, `fn`, `while`, `switch` — and
-`win rc &` opens a shell window that prompts because rc's own `Isatty` finds
-`/dev/cons` by `fd2path`. Milestones on `main`: initial commit, rc, wire 9P, asyncify,
-the browser port, unions + exportfs, the uid model, the window server, text in draw,
-the link/symlink family, D1–D4 measured, the real Plan 9 userspace grown to a system,
-the real rc running the whole suite over a kernel readied for it (notes with
-V7-boundary delivery, `alarm`, `unmount`, honest rfork flags, `#d`, `..` in walks),
-**the real sam in terminal mode** — `sam -d` with structural regexps and `|`
-filters through real commands, carried by real `setjmp/longjmp` built on the asyncify
-machinery — and **the real libdraw** (with libframe compiled beside it) drawing
-through `#w`: the device grew screens (`A`), window views (`b` on a screen, one
-backing store), clipping (`c`), and channel-correct uploads (`y` decodes GREY1
-fonts per draw(6)), verified by drtest's seven pixel checks — and **libthread**:
-thread.h's API implemented as this platform's layer (its real core is per-arch
-scheduler assembly), coroutines as saved asyncify contexts (frames + stack pointer +
-shadow-stack region), `proccreate` collapsing to `threadcreate`, and the kernel's
-AREAD/IOWAIT letting a read park one thread while the scheduler runs the rest. The
-load-bearing rule, learned the hard way: a suspended coroutine's stack is dead
-storage, so channels register, stash send values, and deliver through off-stack
-per-thread slots (the V10 exhibit stays; its growth is no longer a goal).
-And on all of it, **both whole editors**: `win sam &` and `win acme &` in the
-browser, samtest and acmetest headlessly. Acme — the GUI decision's declared real
-test — runs from twenty verbatim sources over a derivation layer whose load-bearing
-find is that kencc adjusts pointers to unnamed substructures at call sites and
-clang does not (`frameadjust.h`, RESEARCH §9.5); it serves its own 9P over a pipe,
-executes by button 2 and looks by button 3 through wctl-injected mouse chords, and
-posts its error pipe to `#s`, the srv device, whose held reference is what lets a
-pipe reader park instead of EOF-spinning. The float door is open (`strtod`/`fltfmt`
-verbatim over the real `FPdbleword`), `#d` is bound at `/fd`, and the browser
-rootfs carries empty directories as explicit markers. **The PoC is complete —
-and the WASI shim, first in the post-PoC queue, already runs**: `wasi1.mjs`
-serves `wasi_snapshot_preview1` over the same mailbox (strings go straight
-into the transfer SAB; the preopen is the namespace root; rename is
-link+remove, V10's rule), and both foreign citizens — wasi-libc's wasitest
-and a real `GOOS=wasip1` Go binary — passed on the first Node run. The one
-browser divergence was §5.3's TextDecoder-vs-SAB rule recurring: decode only
-copies. **And REAL CPython 3.14.7 runs** — the wasi build boots by landmark
-stat, imports through a measured 21-file stdlib subset (wasi/pylib.txt; the
-rest is frozen in-binary), and its pyc writes exercise path_rename live. The
-carried lesson: preview1's fd_readdir ends the directory at bufused <
-buflen, so the final dirent must ship truncated (the 118-of-185 listing that
-convinced importlib the stdlib had no `re`). git is deferred to the
-modern personality (it gets built under it, not ported around it — decision
-log). The native host has begun: `native/` is the Rust kernel core (a pure
-state machine: syscalls in, effects out) plus the macOS wasmtime shim — the
-real rc, sam -d and forktest already pass there (now the full 131/131; §9.6 records why
-the native guard needs no hand-written wasm, why fork must SHARE the
-namespace — /bin/bind is the proof — why devmnt forced the core async,
-and how one missing trap-46 marshalling shadowed the root with a 9P
-server). The async core runs wire 9P entire, the WASI shim passed
-all six citizens first run, and the window server + draw engine closed
-the suite: **131/131 on all three hosts — Node, Chrome, and the Rust
-kernel under wasmtime**. Next per the decision log: the FROM-scratch
-OCI container, then the iPadOS shim on Pulley.
+**The PoC is complete — declared 2026-08-29** (decision log; full record in
+`docs/poc.md`). Final state: **131 acceptance tests green on three hosts** — the
+frozen JS reference on Node (`bash poc/run.sh`) and in Chrome (`node poc/serve.mjs`),
+and the Rust kernel core under wasmtime (`cargo run --release -p host -- poc/rootfs`).
+Running on it: the real Plan 9 userspace (rc, sam, samterm, acme, twenty-four
+commands over `libp9.a`), the V10 exhibit, and the WASI second ABI's three citizens
+(wasi-libc, Go `wasip1`, CPython 3.14). The identity architecture is decided and
+recorded (su, the user decomposition, the profile, the capability doctrine — all
+2026-08-29, zero kernel mechanism; `docs/uid.md` tells it as one story).
+
+Work now follows `docs/implementation.md`: M0 graduates the guest world to
+`userspace/`; M1 is the `FROM scratch` OCI container; then the namespace-file boot,
+the macOS app, host storage, the browser host on the Rust core, iPadOS on Pulley,
+`/net`, identity on the wire, the profile, the modern personality (where git gets
+built), the microVM — with curation sweeps continuous throughout. The load-bearing
+engineering lessons live where they always did: RESEARCH §5 (fork, transport, SAB
+TextDecoder), §9.4–9.6 (toolchain, kencc call-site adjustment, the native core's
+findings), and the decision log for everything chosen.

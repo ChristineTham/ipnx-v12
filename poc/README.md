@@ -1,5 +1,16 @@
 # poc — the proof of concept
 
+> **Complete and frozen (declared 2026-08-29).** The PoC finished at 131
+> acceptance tests green on three hosts; its record is
+> [docs/poc.md](../docs/poc.md), and the build sequence from here is
+> [docs/implementation.md](../docs/implementation.md). The JS supervisor in
+> this directory is now the **reference implementation and conformance
+> oracle** — it changes no more, and it must keep running: `bash poc/run.sh`
+> printing the floor suite is the standing check any new host is judged
+> against. The guest world here (`libc/`, `plan9/`, `v10/`, `cmd/`, `wasi/`,
+> `rootfs/`, `mk.sh`) is **not** frozen — it is the real userspace, shared by
+> every host, and graduates to `userspace/` as implementation milestone M0.
+
 A working slice of the architecture, small enough to read in a sitting: **a hosted kernel
 in Node executing freestanding-C WebAssembly guests in per-process namespaces**, booting
 to **`rc`** — with pipes, a writable ramfs, nine commands, and **wire 9P at a mount

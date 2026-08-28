@@ -986,6 +986,9 @@ finalisation exercises `path_rename` — V10's link+remove — in passing.
 
 ### 9.6 What the Rust kernel core measured (2026-08-27)
 
+> The `native/` tree these findings name became `kernel/` + `hosts/macos/` at the
+> PoC declaration (2026-08-29, decision log); the findings stand as measured.
+
 The native milestone opened the same day the WASI ABI closed: `native/` is a
 cargo workspace — `kernel` (the core, 1,900 lines, a structural port of
 kernel.mjs) and `host` (the macOS shim: wasmtime 37, one OS thread per guest,
