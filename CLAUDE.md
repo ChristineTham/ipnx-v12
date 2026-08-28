@@ -103,7 +103,7 @@ COOP/COEP headers SharedArrayBuffer needs; `?i` boots interactive):
 node poc/serve.mjs
 ```
 
-The native host (the Rust core, RESEARCH §9.6; 96/130 conformance and
+The native host (the Rust core, RESEARCH §9.6; 102/130 conformance and
 growing) builds and runs with cargo:
 
 ```bash
@@ -334,5 +334,6 @@ the native guard needs no hand-written wasm, why fork must SHARE the
 namespace — /bin/bind is the proof — why devmnt forced the core async,
 and how one missing trap-46 marshalling shadowed the root with a 9P
 server). The async core runs wire 9P entire: mount, hellofs, exportfs,
-wire symlinks. Remaining tranches: the window server + draw engine, and
-the WASI shim on wasmtime.
+wire symlinks — and the WASI shim on wasmtime passed all six citizen
+tests first run (wasi-libc, Go, CPython). Remaining tranche: the window
+server + draw engine.

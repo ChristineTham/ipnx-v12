@@ -1053,6 +1053,16 @@ per-connection reader task plus tag/expect maps port mnt9p.mjs directly,
 clone-before-open included — exportfs and wire symlinks passed unchanged
 once MOUNT marshalled.
 
+Tranche four (same day): **the WASI shim on wasmtime — all six citizen
+tests green on the first run.** `host/src/wasi.rs` is wasi1.mjs ported
+mechanically: the JS shim was already kernel-trap-shaped (sysTx strings in,
+reply bytes out), so the Rust version is the same table of small functions
+over the same traps, with the fd table and dirent-snapshot semantics
+carried whole — including the truncated-final-dirent rule and the
+readlink-probe-is-EINVAL mapping, both of which were measured lessons the
+first time and simply facts the second. wasi-libc, real Go (wasip1), and
+real CPython 3.14 run unchanged against the Rust kernel.
+
 Conformance at first light: **75 of 130** — init's lifecycle tranche, the
 whole rc script (35 lines), forktest, sam -d, links/symlinks, wstat, unmount,
 unions, RFNOMNT/RFNOWAIT. The 55 still red sit in four unported subsystems:

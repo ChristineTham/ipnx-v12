@@ -853,9 +853,12 @@ unmount, the note machinery, the uid suite via devproc, libthread on native
 AREAD/IOWAIT — and, on the async core (the kernel's own 160-line executor,
 no tokio, effect seam unchanged), **wire 9P entire**: mount(fd), hellofs,
 exportfs with private namespaces travelling, symlinks over minted message
-types, wstat through the wire. Still red, exactly two subsystems: the
-window server + draw engine (19) and the WASI shim on wasmtime (6).
-`kernel.mjs` is the reference implementation; the suite is the spec.
+types, wstat through the wire. The WASI shim
+ported to wasmtime host functions (`native/host/src/wasi.rs`) and passed all
+six citizen tests on its first run — wasi-libc, real Go, real CPython 3.14,
+all against the Rust kernel. **102 of 130**; the one subsystem still red is
+the window server + draw engine (19 tests). `kernel.mjs` is the reference
+implementation; the suite is the spec.
 
 ## Sources
 
