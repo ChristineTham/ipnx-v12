@@ -275,6 +275,8 @@ mechanism for identity across machines. The full history and its lessons are in
  uid model the compatibility layer could not do, and this kernel can.
 **[docs/personas.md](docs/personas.md)** — the personas: who this is for, and
  what each needs to see before believing.
+**[docs/design-thinking.md](docs/design-thinking.md)** — the design-thinking
+ record: how the personas were derived, what was considered, kept and refused.
 **[docs/poc.md](docs/poc.md)** — the proof of concept's record, frozen: what three
  days built and what they proved.
 

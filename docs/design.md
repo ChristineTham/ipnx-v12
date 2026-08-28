@@ -596,6 +596,27 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   not their kernels; ours (tab, laptop, container, agent sandbox) is
   today's wave, and the lesson is not "we are safe" but "re-examine."
 
+- **(2026-08-29) The first formal design-thinking iteration — scope
+  re-derived from personas, and the standing decisions survived it.** The
+  method (d.school five modes through the Double Diamond, adapted and cited)
+  and the full record are [design-thinking.md](design-thinking.md); the
+  empathy artifacts are [personas.md](personas.md). Its epistemology, made
+  standing: **P1 (the author) is live user research; P2–P5 are assumption
+  personas whose insights stay hypotheses until their named validation
+  events fire** — and design thinking is *evidence, not authority*: a
+  persona-derived conflict with a dated decision arrives as a proposal with
+  evidence attached, never a silent change. This iteration produced zero
+  such conflicts — every standing refusal was independently re-derived from
+  the personas — and five deltas, adopted: **the tour** (an rc script in the
+  demo rootfs; chapters double as the educator's seed exercises), **the M9
+  sandbox quickstart as a shipped artifact** (P4's belief test made
+  deliverable), **M3+M4 as a pair** (P1's journey: a screen without
+  persistence is a demo, not a home), and two explicit won'ts joining the
+  refusals: **no phone form factor** (no persona's journey contains one) and
+  **no Windows host** (until a persona demands it with evidence); courseware
+  beyond the tour's chapters is likewise declined. Cadence: an iteration
+  reruns with each deployment-ledger review and after any validation event.
+
 - **(2026-08-27) OCI is two targets, taken at two different weights.**
   *The scratch container is a stated target of the Rust milestone, for free*: the
   kernel as a static musl binary, PID 1 in a `FROM scratch` image — no distro, no

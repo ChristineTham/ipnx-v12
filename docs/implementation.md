@@ -102,7 +102,8 @@ presentation layer: one host window per `#w` window (rio's model), blitting
 the existing backing store (the same bytes the raster tests read), injecting
 mouse/keyboard through the same paths wctl tests use; wire `-i` to a real
 terminal. Package as a `.app`. This makes the native host daily-drivable and
-settles the presentation shape iPadOS inherits.
+settles the presentation shape iPadOS inherits. (P1's journey pairs this
+with M4 — a screen without persistence is a demo, not a home.)
 **Acceptance:** the floor suite headless, unchanged; `win rc`, `win sam`,
 `win acme` interactive on screen; a keystroke-to-glyph demo recorded.
 
@@ -129,7 +130,9 @@ journey ([personas.md](personas.md)) is "click a URL, type into rc". Host it:
 any static host that can set the COOP/COEP headers SharedArrayBuffer needs
 (Netlify/Cloudflare Pages via a `_headers` file; GitHub Pages only with the
 service-worker shim), the rootfs and binaries as static assets, a landing
-line and a two-minute tour beside it. No kernel work.
+line beside it — and **the tour**: an rc script in the rootfs (`tour` at the
+demo prompt), its chapters doubling as P3's seed exercises, runnable
+non-interactively by a self-skipping test. No kernel work.
 **Acceptance:** the floor suite green at the public URL in a fresh browser;
 `?i` boots rc; the README (hers) gains the link as a status fact.
 
@@ -169,7 +172,9 @@ repository is the recorded candidate), agent sub-profiles booting constrained
 instances — "the kernel instance is the new uid," productised.
 **Acceptance:** one profile boots the same working namespace on macOS and in
 the container; an agent sub-profile boots visibly narrower; enrolment
-documented as a user, not developer, procedure.
+documented as a user, not developer, procedure; **the five-line sandbox
+quickstart ships as an artifact** — P4's belief test, made deliverable
+([personas.md](personas.md)).
 
 ### M10 — the modern personality, then git *(L)* — consumes: benchmark discipline (founding), git deferral (2026-08-27)
 `libunix`: the measured C surface — derived from what git, CPython and Go
