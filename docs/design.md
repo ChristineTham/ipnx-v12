@@ -635,6 +635,26 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   (ledger + design-thinking + hats; after each shipped form, any validation
   event, or quarterly). The next commit builds.
 
+- **(2026-08-29) The virtue-ethics pass — character made explicit.** The
+  third lens ([virtue-ethics.md](virtue-ethics.md)): the telos named (the
+  counterfactual *inhabited*), the project read as a MacIntyrean practice
+  whose goods are internal, and eight virtues located as means between
+  vices with receipts from this log — the founding thesis restated as
+  ethics: **Plan 9's temperance tipped into excess at the compatibility
+  break, and this project is the recovered mean**; the log itself
+  recognised as a record of means being found (necrolatry↔vandalism at the
+  re-founding, cliff↔bloat in the measured personality, garden↔doormat in
+  typed-at-the-edges). Three dispositions adopted: the **external-goods
+  question** joins the ledger review (MacIntyre's corruption warning,
+  asked on the record before the demo brings an audience); **M5's
+  acceptance gains the text-mirrored console** (accessibility reframed
+  from feature to justice); and the working rules gain **"a commit message
+  claims only what its diff contains"** — habituated from the same day's
+  worked example, an overclaimed commit caught against the tree. The
+  practitioners section binds both practitioners, human and AI, and names
+  the AI's standing temptations: overclaim, flattery, performative
+  industry. The lens joins the consolidated review cadence.
+
 - **(2026-08-27) OCI is two targets, taken at two different weights.**
   *The scratch container is a stated target of the Rust milestone, for free*: the
   kernel as a static musl binary, PID 1 in a `FROM scratch` image — no distro, no

@@ -279,6 +279,8 @@ mechanism for identity across machines. The full history and its lessons are in
  record: how the personas were derived, what was considered, kept and refused.
 **[docs/six-hats.md](docs/six-hats.md)** — the completeness checks: dated
  sweeps for what the plans keep missing.
+**[docs/virtue-ethics.md](docs/virtue-ethics.md)** — the character record: the
+ virtues this work practises, each held between its two failure modes.
 **[docs/poc.md](docs/poc.md)** — the proof of concept's record, frozen: what three
  days built and what they proved.
 

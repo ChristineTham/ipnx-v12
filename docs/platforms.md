@@ -61,7 +61,10 @@ Where the pieces live in the **repository** is the tree in
 Doctrine #5's cadence: a dated, honest entry after each shipped form, and at
 least when a milestone changes the story. Amoeba and Plan 9 died of their
 deployment wave, not their kernels; the ledger exists so ours is examined on
-the record, not assumed.
+the record, not assumed. Each review also asks the **external-goods
+question** ([virtue-ethics.md](virtue-ethics.md)): has any external good —
+attention, adoption, a store's approval — begun steering a decision that
+belongs to the practice's internal goods?
 
 ### Review 2026-08-29 (at declaration — the baseline)
 

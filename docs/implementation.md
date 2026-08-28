@@ -129,7 +129,9 @@ built for this), embed it in a JS shim structurally parallel to
 `hosts/macos`: Workers as processes, the SAB mailbox, the existing browser
 plumbing. The JS kernel then serves as oracle only.
 **Acceptance:** the floor suite in Chrome on the Rust core; `?i` boots rc;
-the window server drawing through the same `#w`.
+the window server drawing through the same `#w`; console windows text-mirror
+into the DOM (the xterm.js path) so a screen reader can follow a shell —
+accessibility as justice, not a feature ([virtue-ethics.md](virtue-ethics.md)).
 
 ### The public demo *(S, standalone — any time)* — consumes: personas (2026-08-29)
 The browser port is finished, frozen, and unreachable — P2 and P3's whole

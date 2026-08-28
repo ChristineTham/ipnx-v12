@@ -51,6 +51,9 @@ and exits 0. Any other exit is a failure even if PASS lines appeared.
 - **Decisions are consumed, not re-derived.** They live in
   [design.md](design.md) with dates; reopening one requires new evidence,
   in the log, first.
+- **A commit message claims only what its diff contains** — checked against
+  the tree, not the intention ([virtue-ethics.md](virtue-ethics.md)'s worked
+  example: a failed patch script, a message that claimed it landed).
 
 ## The build system's shape
 
