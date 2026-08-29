@@ -323,6 +323,8 @@ echo "  bin/wasitest  $(wc -c < rootfs/bin/wasitest | tr -d ' ') bytes (wasi-lib
 # gotest is a REAL Go binary: the wasip1 target of the first benchmark's toolchain
 (cd wasi/gotest && GOOS=wasip1 GOARCH=wasm go build -trimpath -o ../../rootfs/bin/gotest .)
 echo "  bin/gotest  $(wc -c < rootfs/bin/gotest | tr -d ' ') bytes (REAL Go, wasip1)"
+(cd wasi/gohello && GOOS=wasip1 GOARCH=wasm go build -trimpath -o ../../rootfs/bin/gohello .)
+echo "  bin/gohello  $(wc -c < rootfs/bin/gohello | tr -d ' ') bytes (REAL Go, wasip1)"
 
 # The third citizen: REAL CPython, Brett Cannon's wasi_sdk build of 3.14.7,
 # cached in build/ (a 26MB download, once). The stdlib subset is measured,

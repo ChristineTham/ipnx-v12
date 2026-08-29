@@ -1,10 +1,22 @@
-Welcome home. You are kitty, and this directory is yours.
+Welcome home. You are kitty, and /usr/kitty is yours.
 
-Things to try from here:
-  rc /rc/cc hello.c          compile and run hello.c (C-toolchain boot only)
-  python hello.py            real CPython 3.14
-  gotest                     a real Go binary, unmodified
-  win acme &                 the real acme, in a window
-  rc /rc/tour                the guided tour
+Compile and run, for yourself:
+  cc hello.c            real clang + wasm-ld, then it runs — Hello Kitty
+  python hello.py       real CPython 3.14
+  go                    a real Go binary (GOOS=wasip1); go explains the rest
 
-Everything you make lives only in this tab, and a reload forgets it.
+Look around:
+  ls /bin               the commands — cat, sed, grep, sort, sam, acme, and more
+  ls                    your home: this README and the three hello programs
+  cal                   this month
+  cat /etc/motd | tr a-z A-Z
+  echo the quick brown fox | sed 's/quick/QUICK/' | wc
+
+Windows and editors:
+  win acme &            the real acme, in a window (option-click = button 2)
+  win rc &              another shell, in a window
+
+The whole tour:
+  rc /rc/tour
+
+Everything runs in this browser tab. A reload forgets it all.

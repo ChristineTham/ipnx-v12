@@ -21,3 +21,7 @@ itself keeps per-architecture), beneath the REAL /sys/include/libc.h.
 Plan 9 pwd.c added from 0intro/plan9 (github mirror of the 4th edition
 tree), MIT via the Plan 9 Foundation transfer — same provenance as this
 batch. Verbatim.
+
+More Plan 9 4th-edition commands added from 0intro/plan9 (cal, sum,
+strings, unicode, look, split, cleanname, pwd), MIT via the Foundation
+transfer. Verbatim.

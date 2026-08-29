@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 rm -rf dist
 mkdir -p dist/build
 cp -R ../poc/browser dist/browser
-cp -R ../poc/supervisor dist/supervisor
+cp -R supervisor dist/supervisor            # the demo's own kernel lineage
 cp ../userspace/build/rootfs.json dist/build/rootfs.json
 cp index.html NOTICES.html _headers coi-sw.js coi-register.js dist/
 cp -R shell dist/shell
@@ -117,65 +117,10 @@ fs.writeFileSync(f, t);
 '
 grep -q "__wgate" dist/browser/main.mjs || { echo "gate injection failed" >&2; exit 1; }
 node --check dist/browser/main.mjs 2>/dev/null || node -e 'require("fs"); try { new Function(require("fs").readFileSync("dist/browser/main.mjs","utf8")); } catch(e) { /* module syntax: parse via import */ }'
-# ---- the wasi_unstable adapter + unique inodes, derived into the dist
-# supervisor copies (the frozen originals never change): lets 2019-era LLVM
-# binaries (clang/lld) run under the preview1 shim ----
-node -e '
-const fs = require("fs");
-let g = fs.readFileSync("dist/supervisor/guestcore.mjs", "utf8");
-const a1 = `if (WebAssembly.Module.imports(mod).some((i) => i.module === "wasi_snapshot_preview1")) {`;
-if (!g.includes(a1)) { console.error("guestcore wasi anchor missing"); process.exit(1); }
-g = g.replace(a1, `if (WebAssembly.Module.imports(mod).some((i) => i.module === "wasi_snapshot_preview1" || i.module === "wasi_unstable")) {`);
-const a2 = `    const inst = new WebAssembly.Instance(mod, { wasi_snapshot_preview1: wasi.imports });`;
-if (!g.includes(a2)) { console.error("guestcore instantiate anchor missing"); process.exit(1); }
-g = g.replace(a2, `    const unstable = adaptUnstable(wasi.imports);
-    const inst = new WebAssembly.Instance(mod, { wasi_snapshot_preview1: wasi.imports, wasi_unstable: unstable });
-    unstable.__getmem = () => inst.exports.memory.buffer;`);
-g += `
-function adaptUnstable(p1) {
-  const wrap = { ...p1 };
-  const WMAP = [1, 2, 0];
-  wrap.fd_seek = (fd, off, whence, out) => p1.fd_seek(fd, off, WMAP[whence] ?? whence, out);
-  const repack = (buf) => {
-    const m = new DataView(wrap.__getmem());
-    const dev = m.getBigUint64(buf, true), ino = m.getBigUint64(buf + 8, true);
-    const ft = m.getUint8(buf + 16);
-    const nlink = m.getBigUint64(buf + 24, true), size = m.getBigUint64(buf + 32, true);
-    const at = m.getBigUint64(buf + 40, true), mt = m.getBigUint64(buf + 48, true), ct = m.getBigUint64(buf + 56, true);
-    m.setBigUint64(buf, dev, true); m.setBigUint64(buf + 8, ino, true);
-    m.setUint8(buf + 16, ft);
-    m.setUint32(buf + 20, Number(nlink & 0xffffffffn), true);
-    m.setBigUint64(buf + 24, size, true);
-    m.setBigUint64(buf + 32, at, true); m.setBigUint64(buf + 40, mt, true); m.setBigUint64(buf + 48, ct, true);
-  };
-  wrap.fd_filestat_get = (fd, buf) => { const r = p1.fd_filestat_get(fd, buf); if (r === 0) repack(buf); return r; };
-  wrap.path_filestat_get = (fd, fl, ptr, len, buf) => { const r = p1.path_filestat_get(fd, fl, ptr, len, buf); if (r === 0) repack(buf); return r; };
-  return wrap;
-}
-`;
-fs.writeFileSync("dist/supervisor/guestcore.mjs", g);
-let w = fs.readFileSync("dist/supervisor/wasi1.mjs", "utf8");
-const a3 = `  function putFilestat(ptr, st, path) {
-    const d = dv();
-    d.setBigUint64(ptr, 0n, true);
-    d.setBigUint64(ptr + 8, 0n, true);`;
-if (!w.includes(a3)) { console.error("wasi1 filestat anchor missing"); process.exit(1); }
-w = w.replace(a3, `  function pathIno(path) {
-    let h = 1469598103934665603n;
-    for (let i = 0; i < path.length; i++) { h ^= BigInt(path.charCodeAt(i)); h = (h * 1099511628211n) & 0xffffffffffffffffn; }
-    return h;
-  }
-  function putFilestat(ptr, st, path) {
-    const d = dv();
-    d.setBigUint64(ptr, 0n, true);
-    d.setBigUint64(ptr + 8, st.qpath !== undefined ? BigInt(st.qpath) : pathIno(path || ""), true);`);
-fs.writeFileSync("dist/supervisor/wasi1.mjs", w);
-'
-grep -q "adaptUnstable" dist/supervisor/guestcore.mjs && grep -q "pathIno" dist/supervisor/wasi1.mjs || { echo "toolchain shim derivation failed" >&2; exit 1; }
-# the demo instance names its person kitty (the frozen oracle keeps glenda;
-# the suite is name-agnostic — it reads /dev/user rather than asserting one)
-sed -i '' 's/"glenda"/"kitty"/g' dist/supervisor/kernel.mjs dist/supervisor/devs.mjs dist/supervisor/mnt9p.mjs dist/supervisor/stat9.mjs
-grep -q '"kitty"' dist/supervisor/kernel.mjs || { echo "kitty derivation failed" >&2; exit 1; }
+# the shim's wasi_unstable adapter, unique inodes, cwd resolution and the
+# kitty eve now live in demo/supervisor (the demo's kernel lineage) — no
+# derivations, so a demo kernel change is an ordinary edit, reviewable.
+grep -q "adaptUnstable" dist/supervisor/guestcore.mjs && grep -q "function cwd" dist/supervisor/wasi1.mjs && grep -q '"kitty"' dist/supervisor/kernel.mjs || { echo "demo/supervisor missing a demo mod" >&2; exit 1; }
 
 # ---- the opt-in C-toolchain manifest: base rootfs + clang/lld/sysroot ----
 if [ -s toolchain/cache/clang ]; then
@@ -183,10 +128,8 @@ if [ -s toolchain/cache/clang ]; then
 const fs = require("fs"), path = require("path"), cp = require("child_process");
 const base = {};                                   // overlay only: merged client-side
 const add = (p, buf) => { base[p] = buf.toString("base64"); };
-add("/bin/cc", fs.readFileSync("toolchain/cache/clang"));
+add("/bin/clang", fs.readFileSync("toolchain/cache/clang"));
 add("/bin/wasm-ld", fs.readFileSync("toolchain/cache/lld"));
-add("/rc/cc", fs.readFileSync("toolchain/cc.rc"));
-add("/tmp/hello.c", fs.readFileSync("toolchain/hello.c"));
 const tmp = fs.mkdtempSync("/tmp/sysroot-");
 cp.execSync(`tar xf toolchain/cache/sysroot.tar -C ${tmp}`);
 (function walk(d, pre) {

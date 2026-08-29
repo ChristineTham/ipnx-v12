@@ -51,8 +51,8 @@ binaries run against the same kernel through a WASI shim.</p>
 <pre>rc /rc/tour</pre>
 
 <p>You boot as <b>kitty</b>, at home in <code>/usr/kitty</code>, where
-<code>hello.c</code> and <code>hello.py</code> are waiting. With the
-toolchain aboard, <code>rc /rc/cc hello.c</code> runs real clang and wasm-ld
+<code><code>hello.c</code>, <code>hello.py</code> and <code>hello.go</code> are waiting. With the
+toolchain aboard, <code>cc hello.c</code> runs real clang and wasm-ld
 as guests and executes the binary they just made — Hello Kitty. Real Go and
 CPython run too (<code>python hello.py</code>); the tour shows everything.</p>
 

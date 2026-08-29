@@ -67,6 +67,9 @@ wasitest
 echo '$ gotest'
 gotest
 echo
+echo 'And the compiler moved IN — clang runs as a guest (toolchain boot):'
+echo '$ cc hello.c   (from your home /usr/kitty)'
+echo
 echo 'Real CPython 3.14 is here too — worth the moment it takes:'
 echo '$ python /tmp/pytest.py'
 echo
