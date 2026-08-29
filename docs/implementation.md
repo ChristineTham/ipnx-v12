@@ -138,10 +138,13 @@ accessibility as justice, not a feature ([virtue-ethics.md](virtue-ethics.md)).
 evidence): `demo/shell/` is the browser host's presentation layer ahead of
 M5 — xterm.js character windows typed in-window (the component design.md
 always named), macOS window chrome (close/drag/resize/zoom), a desktop with
-a menu bar, draw windows at 1.5× crisp scale. Remaining for v3: real larger
-Plan 9 faces for the draw windows, and per-window guest resize. The
-"modern draw" question her review raised is queued in design.md's open
-questions.
+a menu bar, draw windows at 1.5× crisp scale. **v3 same night**: the real Plan 9 fixed 9x18
+face in the editors (subfonts converted to uncompressed k1 at vendor time —
+the frozen engine has no compressed-'Y' op; the suite keeps the small default
+font, the demo launches with `-f`/`$font`), and the three-button answer:
+plan9port's convention (⌥-click=2, ⌘/ctrl-click=3, right-click=3) plus a
+1|2|3 titlebar switch for touch. Remaining: per-window guest resize, and the
+modern-draw question stays queued in design.md.
 GitHub Pages (her call — no new Netlify site), `gh-pages` branch assembled by
 `demo/build.sh`; COOP/COEP supplied by our own COI service worker, injected
 into the dist copy of the frozen browser page (the derivation-layer move;

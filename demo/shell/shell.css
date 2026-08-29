@@ -76,6 +76,15 @@ body {
   border-bottom-right-radius: 10px;
 }
 
+.mswitch { display: flex; gap: 2px; margin-right: 6px; }
+.mswitch button {
+  all: unset; cursor: pointer; width: 18px; height: 16px; text-align: center;
+  font-size: 10.5px; color: #93a5b8; background: rgba(255,255,255,0.06);
+  border-radius: 4px; line-height: 16px;
+}
+.mswitch button.on { background: #2d5f8f; color: #fff; }
+.mswitch button:hover { background: rgba(255,255,255,0.14); }
+
 .toast {
   position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
   background: rgba(20, 28, 38, 0.92); border: 1px solid rgba(255,255,255,0.1);

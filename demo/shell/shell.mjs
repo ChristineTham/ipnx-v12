@@ -230,7 +230,13 @@ function winCreate(id, x, y, w, h, title) {
     const sx = canvas.width / r.width, sy = canvas.height / r.height;
     wsys?.mouse(id, Math.round((e.clientX - r.left) * sx), Math.round((e.clientY - r.top) * sy), gw.buttons);
   };
-  const btnbits = (e) => (e.buttons & 1 ? 1 : 0) | (e.buttons & 4 ? 2 : 0) | (e.buttons & 2 ? 4 : 0);
+  // three buttons on modern devices, plan9port's convention: option-click=2,
+  // cmd/ctrl-click=3, right/two-finger=3; a forced 1|2|3 for touch
+  const btnbits = (e) => {
+    if (gw.forceBtn && (e.buttons & 1)) return gw.forceBtn === 2 ? 2 : gw.forceBtn === 3 ? 4 : 1;
+    if (e.buttons & 1) { if (e.altKey) return 2; if (e.metaKey || e.ctrlKey) return 4; return 1; }
+    return (e.buttons & 4 ? 2 : 0) | (e.buttons & 2 ? 4 : 0);
+  };
   canvas.addEventListener("pointerdown", (e) => { e.preventDefault(); canvas.focus(); mouse(e, btnbits(e)); });
   canvas.addEventListener("pointerup", (e) => mouse(e, btnbits(e)));
   canvas.addEventListener("pointermove", (e) => { if (gw.buttons) mouse(e); });
@@ -262,9 +268,29 @@ function sizeDrawWin(gw) {
   d.style.left = clampX(d.offsetLeft, d.offsetWidth) + "px";
   d.style.top = clampY(d.offsetTop) + "px";
 }
+function addMouseSwitch(gw) {
+  const bar = gw.win.div.querySelector(".tbar");
+  const sw = document.createElement("span");
+  sw.className = "mswitch";
+  sw.title = "which mouse button a plain click sends — 1 select · 2 execute · 3 look (or: ⌥-click = 2, ⌘/ctrl-click = 3, right-click = 3)";
+  for (const n of [1, 2, 3]) {
+    const b = document.createElement("button");
+    b.textContent = n;
+    if (n === 1) b.classList.add("on");
+    b.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      gw.forceBtn = n === 1 ? 0 : n;
+      sw.querySelectorAll("button").forEach((x) => x.classList.remove("on"));
+      b.classList.add("on");
+    });
+    sw.appendChild(b);
+  }
+  bar.insertBefore(sw, bar.querySelector(".pid"));
+}
 function enterDrawMode(gw) {
   if (gw.drawMode) return;
   gw.drawMode = true;
+  addMouseSwitch(gw);
   gw.termEl.style.display = "none";
   gw.canvas.style.display = "block";
   gw.win.div.classList.add("drawwin");
@@ -373,5 +399,8 @@ const feedCons = (line) => {
   cons.feed(enc.encode(line + "\n"));
   consT.term.focus();
 };
+const BIGFONT = "/lib/font/bit/fixed/unicode.9x18.font";
 document.getElementById("mNew").addEventListener("click", () => feedCons("win rc &"));
+document.getElementById("mAcme").addEventListener("click", () => feedCons("win acme -f " + BIGFONT + " &"));
+document.getElementById("mSam").addEventListener("click", () => feedCons("font=" + BIGFONT + " win sam &"));
 document.getElementById("mTour").addEventListener("click", () => feedCons("rc /rc/tour"));

@@ -1,0 +1,4 @@
+fixed/unicode.9x18 — the 9x18 fixed bitmap font, from plan9port
+(github.com/9fans/plan9port, font/fixed/), MIT via the Plan 9 Foundation
+transfer. The index is trimmed to the vendored latin subfonts; the subfont
+files are verbatim (compressed k1 Plan 9 images).
