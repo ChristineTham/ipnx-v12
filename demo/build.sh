@@ -172,6 +172,10 @@ w = w.replace(a3, `  function pathIno(path) {
 fs.writeFileSync("dist/supervisor/wasi1.mjs", w);
 '
 grep -q "adaptUnstable" dist/supervisor/guestcore.mjs && grep -q "pathIno" dist/supervisor/wasi1.mjs || { echo "toolchain shim derivation failed" >&2; exit 1; }
+# the demo instance names its person kitty (the frozen oracle keeps glenda;
+# the suite is name-agnostic — it reads /dev/user rather than asserting one)
+sed -i '' 's/"glenda"/"kitty"/g' dist/supervisor/kernel.mjs dist/supervisor/devs.mjs dist/supervisor/mnt9p.mjs dist/supervisor/stat9.mjs
+grep -q '"kitty"' dist/supervisor/kernel.mjs || { echo "kitty derivation failed" >&2; exit 1; }
 
 # ---- the opt-in C-toolchain manifest: base rootfs + clang/lld/sysroot ----
 if [ -s toolchain/cache/clang ]; then

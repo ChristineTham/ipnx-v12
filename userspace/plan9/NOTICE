@@ -17,3 +17,7 @@ each a single reviewed commit.
 The include/ directory beside this notice is NOT Plan 9 source: u.h there is
 this project's platform shim (types, varargs, USED/SET — the layer Plan 9
 itself keeps per-architecture), beneath the REAL /sys/include/libc.h.
+
+Plan 9 pwd.c added from 0intro/plan9 (github mirror of the 4th edition
+tree), MIT via the Plan 9 Foundation transfer — same provenance as this
+batch. Verbatim.

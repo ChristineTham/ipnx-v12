@@ -4,6 +4,7 @@
 #include "lib9.h"
 
 static int npass, nfail;
+static char evename[64] = "glenda";	/* read from /dev/user before the uid tests */
 static void ok(int cond, char *what){
 	if(cond){ npass++; print("PASS %s\n", what); }
 	else    { nfail++; print("FAIL %s\n", what); }
@@ -142,7 +143,7 @@ climbchild(void *v)
 	USED(v);
 	becomeuser("none");
 	fd = open("/proc/self/ctl", OWRITE);
-	exits(fprint(fd, "user glenda") < 0 ? nil : "climbed back to glenda");
+	exits(fprint(fd, "user %s", evename) < 0 ? nil : "climbed back to eve");
 }
 
 static void
@@ -332,7 +333,9 @@ rcinteractive(void)
 {
 	char *av[] = { "rc", "-i", nil };
 
+	chdir("/usr/kitty");			/* home: the person starts in their own tree */
 	print("ipnx-v12: interactive rc (EOF to shut down)\n");
+	print("          home is /usr/kitty — cat README to look around\n");
 	print("          the guided tour: rc /rc/tour\n");
 	exec("/bin/rc", av);
 	fprint(2, "init: exec /bin/rc: %r\n");
@@ -486,7 +489,8 @@ main(int argc, char *argv[])
 	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
 	buf[n > 0 ? n : 0] = 0;
 	close(fd);
-	ok(strcmp(buf, "glenda") == 0, "uid: /dev/user names the host owner");
+	strncpy(evename, buf, sizeof evename - 1);	/* whatever this instance calls its person */
+	ok(buf[0] != 0, "uid: /dev/user names the host owner");
 
 	pipe(idpipe);
 	pid = procrfork(RFFDG, idchild, nil);
@@ -501,7 +505,7 @@ main(int argc, char *argv[])
 	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
 	buf[n > 0 ? n : 0] = 0;
 	close(fd);
-	ok(strcmp(buf, "glenda") == 0, "uid: the parent's credential is untouched");
+	ok(strcmp(buf, evename) == 0, "uid: the parent's credential is untouched");
 
 	fd = create("/etc/secret", OWRITE, 0600);
 	fprint(fd, "the host owner's business\n");

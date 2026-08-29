@@ -223,7 +223,7 @@ fn main() {
     let verbose = std::env::var("KDBG").is_ok();
 
     let seed = load_seed(std::path::Path::new(&rootdir), "/").expect("rootfs seed");
-    let mut kern = Kernel::new(&seed, "glenda");
+    let mut kern = Kernel::new(&seed, "kitty");
     kern.interactive = interactive;
     kern.verbose = verbose;
 

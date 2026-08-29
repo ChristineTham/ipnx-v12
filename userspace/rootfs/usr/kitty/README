@@ -1,0 +1,10 @@
+Welcome home. You are kitty, and this directory is yours.
+
+Things to try from here:
+  rc /rc/cc hello.c          compile and run hello.c (C-toolchain boot only)
+  python hello.py            real CPython 3.14
+  gotest                     a real Go binary, unmodified
+  win acme &                 the real acme, in a window
+  rc /rc/tour                the guided tour
+
+Everything you make lives only in this tab, and a reload forgets it.

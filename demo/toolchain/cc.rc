@@ -2,6 +2,8 @@
 #   rc /rc/cc /tmp/hello.c [out]
 src=$1
 out=$2
+if(~ $#src 0) src=/usr/kitty/hello.c
+if(! ~ $src /*) src=`{pwd}^'/'^$src
 if(~ $#out 0) out=/tmp/a.out
 echo cc: compiling $src
 /bin/cc -cc1 -emit-obj -disable-free -isysroot / -internal-isystem /include/c++/v1 -internal-isystem /include -internal-isystem /lib/clang/8.0.1/include -ferror-limit 19 -O2 -o /tmp/_cc.o -x c $src

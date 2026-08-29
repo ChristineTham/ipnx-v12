@@ -26,7 +26,7 @@ pub struct StatIn<'a> {
 impl<'a> Default for StatIn<'a> {
     fn default() -> Self {
         StatIn { name: "", qtype: 0, qpath: 0, qvers: 0, mode: 0, atime: 0,
-                 mtime: 0, length: 0, uid: "glenda", gid: "glenda", muid: "glenda" }
+                 mtime: 0, length: 0, uid: "kitty", gid: "kitty", muid: "kitty" }
     }
 }
 
