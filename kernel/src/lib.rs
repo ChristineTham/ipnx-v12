@@ -91,7 +91,7 @@ pub enum Effect {
     // M3: the presentation layer's feed — a window's fresh pixels (r8g8b8a8,
     // w*h*4) or its departure. The host may show them, log them, or drop
     // them; the kernel never knows there is a screen.
-    WinUpdate { wid: u32, label: String, w: i32, h: i32, rgba: Vec<u8> },
+    WinUpdate { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, rgba: Vec<u8> },
     WinGone { wid: u32 },
     WinText { wid: u32, bytes: Vec<u8> },
     // '#H': the host performs the GET off-thread and answers with FetchDone
@@ -639,14 +639,14 @@ fn win_dirty(k: &K, win: &WinR) {
 }
 
 fn win_flush(k: &K, win: &WinR) {
-    let (wid, label, w, h, back) = {
+    let (wid, label, x, y, w, h, back) = {
         let wb = win.borrow();
         let img = wb.img.clone();
         let back = img.borrow().back.clone();
-        (wb.wid, wb.label.clone(), wb.w, wb.h, back)
+        (wb.wid, wb.label.clone(), wb.x, wb.y, wb.w, wb.h, back)
     };
     let rgba = back.borrow().data.clone();
-    k.borrow_mut().effects.push(Effect::WinUpdate { wid, label, w, h, rgba });
+    k.borrow_mut().effects.push(Effect::WinUpdate { wid, label, x, y, w, h, rgba });
 }
 
 fn serve_wcons(k: &K, win: &WinR) {

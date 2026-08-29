@@ -381,9 +381,9 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
                 std::io::stdout().flush().ok();
                 std::process::exit(code);
             }
-            Effect::WinUpdate { wid, label, w, h, rgba } => {
+            Effect::WinUpdate { wid, label, x, y, w, h, rgba } => {
                 if let Some(p) = ui {
-                    let _ = p.send_event(ui::UiMsg::Update { wid, label, w, h, rgba });
+                    let _ = p.send_event(ui::UiMsg::Update { wid, label, x, y, w, h, rgba });
                 }
             }
             Effect::WinText { wid, bytes } => {

@@ -238,38 +238,68 @@ recordinstall(char *name, char *ver)
 static int
 findinstall(char *name, char *ver, int max, int removeit)
 {
-	static char keep[64][LINELEN];
-	char line[LINELEN], *f[4];
-	int fd, n = 0, found = 0, i;
+	char line[LINELEN], *f[4], *all, *out, *p, *nl;
+	int fd, found = 0;
+	long len, cap;
 
 	fd = open("/pkg/.installed", OREAD);
 	if(fd < 0)
 		return 0;
-	while(getline9(fd, line, sizeof line) >= 0 && n < 64){
-		strecpy(keep[n], keep[n] + LINELEN, line);
+	/* slurp with a growing buffer: no fixed package-count cap */
+	cap = 4096;
+	len = 0;
+	all = malloc(cap);
+	for(;;){
+		long r;
+		if(len + 512 > cap){
+			char *g = malloc(cap * 2);
+			memmove(g, all, len);
+			free(all);
+			all = g;
+			cap *= 2;
+		}
+		r = read(fd, all + len, cap - len - 1);
+		if(r <= 0)
+			break;
+		len += r;
+	}
+	close(fd);
+	all[len] = 0;
+	out = removeit ? malloc(len + 1) : nil;
+	if(out)
+		out[0] = 0;
+	for(p = all; p && *p; p = nl){
+		long ll;
+		nl = strchr(p, '\n');
+		if(nl)
+			*nl++ = 0;
+		ll = strlen(p);
+		if(ll == 0)
+			continue;
+		strecpy(line, line + sizeof line, p);
 		if(fields(line, f, 4) >= 2 && strcmp(f[0], name) == 0){
 			if(ver)
 				strecpy(ver, ver + max, f[1]);
 			found = 1;
 			if(removeit)
-				continue;
+				continue;	/* filtered out of the rewrite */
 		}
-		n++;
-		if(!found || removeit)
-			continue;
+		if(out){
+			strcat(out, p);
+			strcat(out, "\n");
+		}
+		USED(ll);
 	}
-	close(fd);
-	if(removeit && found){
+	if(removeit && found && out){
 		fd = create("/pkg/.installed", OWRITE, 0644);
-		for(i = 0; i < n; i++){
-			char probe[LINELEN], *g[4];
-			strecpy(probe, probe + LINELEN, keep[i]);
-			if(fields(probe, g, 4) >= 2 && strcmp(g[0], name) == 0)
-				continue;
-			fprint(fd, "%s\n", keep[i]);
+		if(fd >= 0){
+			write(fd, out, strlen(out));
+			close(fd);
 		}
-		close(fd);
 	}
+	free(all);
+	if(out)
+		free(out);
 	return found;
 }
 

@@ -24,7 +24,7 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::{Window, WindowId};
 
 pub enum UiMsg {
-    Update { wid: u32, label: String, w: i32, h: i32, rgba: Vec<u8> },
+    Update { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, rgba: Vec<u8> },
     Text { wid: u32, bytes: Vec<u8> },
     Gone { wid: u32 },
     Shutdown,
@@ -245,10 +245,14 @@ impl ApplicationHandler<UiMsg> for App {
 
     fn user_event(&mut self, el: &ActiveEventLoop, msg: UiMsg) {
         match msg {
-            UiMsg::Update { wid, label, w, h, rgba } => {
+            UiMsg::Update { wid, label, x, y, w, h, rgba } => {
                 if !self.wins.contains_key(&wid) {
+                    // the kernel's cascade places new windows; a menu-bar
+                    // offset keeps window 1 out from under it
                     let attrs = Window::default_attributes()
                         .with_title(label.clone())
+                        .with_position(winit::dpi::LogicalPosition::new(
+                            (x + 60) as f64, (y + 60) as f64))
                         .with_inner_size(LogicalSize::new(w as f64, h as f64));
                     let Ok(window) = el.create_window(attrs) else { return };
                     let window = Rc::new(window);

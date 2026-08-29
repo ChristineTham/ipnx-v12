@@ -644,6 +644,38 @@ main(int argc, char *argv[])
 	n = await(buf, sizeof buf);
 	ok(n > 0 && strstr(buf, "''") != nil, "acme: boots, serves, and opens a window by mouse");
 
+	/* M2's mount verb, exercised: a hellofs pipe end posted at /srv, a
+	 * namespace FILE that says `mount /srv/m9 /n/m9`, and newns() building
+	 * the world from text — the file-boot's last unexercised verb. Runs in
+	 * a namespace copy: newns clears, so the file rebuilds the essentials. */
+	{
+		int mfd;
+
+		pipe(srvfds);
+		pid = procrfork(RFFDG, srvchild, nil);
+		close(srvfds[1]);
+		mfd = create("/srv/m9", OWRITE, 0600);
+		n = -1;
+		if(mfd >= 0){
+			fprint(mfd, "%d", srvfds[0]);
+			close(mfd);
+			close(srvfds[0]);
+			fd = create("/tmp/nsm", OWRITE, 0644);
+			fprint(fd, "bind #s /srv\nbind #c /dev\nmount /srv/m9 /n/m9\n");
+			close(fd);
+			if(newns("/tmp/nsm") == 0){
+				fd = open("/n/m9/motd", OREAD);
+				n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
+				if(n > 0) buf[n] = 0;
+				close(fd);
+			}
+			remove("/srv/m9");
+		}
+		ok(n > 0 && strstr(buf, "wire 9P") != nil,
+		   "namespace(6) mount: a file's text mounted a 9P server via /srv");
+		newns("/lib/namespace");	/* restore the boot namespace */
+	}
+
 	/* srv(3): post a pipe end under a name; the name keeps the channel
 	 * alive and opening it SHARES the channel itself. The kernel's last
 	 * PoC device, now suite-pinned on every host (the Rust kernel gained

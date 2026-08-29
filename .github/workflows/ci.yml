@@ -94,6 +94,33 @@ jobs:
           echo "host binary: $(stat -c %s hosts/oci/ctx/host) bytes"
           echo "rootfs: $(du -sb hosts/oci/ctx/rootfs | cut -f1) bytes"
 
+  container-arm64:
+    name: "M1 follow-up: the aarch64 image boots"
+    needs: world
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rootfs
+      - run: tar -C userspace -xzf rootfs.tgz
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cross
+      - name: cross-build the aarch64 musl host
+        run: cross build --release -p host --target aarch64-unknown-linux-musl
+      - name: qemu + arm64 image
+        run: |
+          docker run --privileged --rm tonistiigi/binfmt --install arm64
+          rm -rf hosts/oci/ctx && mkdir -p hosts/oci/ctx
+          cp target/aarch64-unknown-linux-musl/release/host hosts/oci/ctx/host
+          cp -R userspace/rootfs hosts/oci/ctx/rootfs
+          docker build --platform linux/arm64 -f hosts/oci/Dockerfile -t ipnx-arm64 hosts/oci/ctx
+      - name: "smoke: boots to rc under qemu (the full suite runs on amd64)"
+        run: |
+          echo 'echo arm64 boots to rc' | docker run --platform linux/arm64 --rm -i ipnx-arm64 -i | tee rc64.out
+          grep -q 'arm64 boots to rc' rc64.out
+
   oracle-amber:
     name: "the oracle in amber (pinned Node)"
     needs: world

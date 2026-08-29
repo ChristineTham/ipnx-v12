@@ -204,13 +204,13 @@ files, /net's forerunner), sha256-verified, on the full 529-file stdlib.
 Acceptance was external: python.org's example programs and gobyexample's
 run as written.** `demo/supervisor` is the demo's own kernel lineage
 (forked 2026-08-29; the oracle stays untouched); still queued there:
-**small open notes (2026-08-30 audit):** pkg(1)'s remove path tracks at most
-64 installed packages (a static table — trivial to lift when anyone nears
-it); M2's `mount` verb parses and runs but only bind/cd/clear are
-suite-exercised; the app ignores the kernel's window x/y (macOS places
-windows, so they stack until dragged) and one `-wi` console-EOF run left the
-host alive where pid-1 exit should shut down (unreproduced; possibly a pty
-artifact — worth a chase). Also queued from before:
+**audit notes, all closed 2026-08-30:** pkg's remove path now streams (no
+package-count cap); the `mount` verb is suite-exercised (a namespace file
+mounts a 9P server via /srv — 141); the app places windows by the kernel's
+cascade; and the pid-1 oddity was chased to a script(1) pty artifact — both
+the typed-exit and stdin-EOF shutdown paths verified clean. The aarch64
+image gained its CI job (cross-built musl host, qemu smoke boot; the full
+suite stays on amd64). Still queued:
 window-refresh events for TRUE guest resize and clean window-close
 semantics — judged by the same 132 plus its own tests. The modern-draw question stays queued in design.md.
 GitHub Pages (her call — no new Netlify site), `gh-pages` branch assembled by
