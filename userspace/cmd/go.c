@@ -70,10 +70,10 @@ version(void)
 	int fd, n;
 
 	fd = open("/go/VERSION", OREAD);
-	if(fd < 0) return "go1.25.6";
+	if(fd < 0) return "go1.27.0";
 	n = read(fd, v, sizeof v - 1);
 	close(fd);
-	if(n <= 0) return "go1.25.6";
+	if(n <= 0) return "go1.27.0";
 	while(n > 0 && (v[n-1] == '\n' || v[n-1] == '\r')) n--;
 	v[n] = 0;
 	return v;

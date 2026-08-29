@@ -7,7 +7,7 @@
 wasi-sdk-clang 23.1.0-wasi-sdk
 wasm-opt 132
 bison 2.3
-node v22.23.2
-go go1.25.6
+node v24.20.0
+go go1.27.0
 rustc 1.98.0
 wasmtime-crate 48.0.1

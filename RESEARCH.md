@@ -1190,6 +1190,17 @@ teeth:
   `cc z.c /lib/wasm32-wasi/zlib/*.o`. An `ar` for the guest would restore
   `-lz`; queued.
 
+- **Host toolchain re-measurement (2026-08-29, late): node v24.20.0, go
+  1.27.0.** Christine updated the host toolchains; per VERSIONS' rule the
+  full suite re-ran on all three hosts first — 135/135/135 — and the
+  records moved together: VERSIONS, the amber pin (the amber tracks the
+  measured engine, moving only deliberately), CI's go line, and the demo's
+  entire Go toolchain overlay regenerated at 1.27.0 (tools and stdlib
+  archives must share one go version; the gobyexample-derived set grew 115
+  → 124 packages under 1.27's dep tree). The 1.27 gc compiler, cross-built
+  and run as a guest, compiles and its output runs — re-proven headless
+  before deploy.
+
 - **M1 measured (2026-08-29): the whole operating system is a 62.2MB
   distroless image.** `FROM scratch` + two COPYs: the statically-linked musl
   host (16,789,232 bytes — wasmtime 48 slimmed to
