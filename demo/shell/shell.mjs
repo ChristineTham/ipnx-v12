@@ -388,7 +388,7 @@ function seedFromJson(files) {
 }
 
 setStatus("fetching rootfs…");
-const resp = await fetch("../build/rootfs.json");
+const resp = await fetch("../build/rootfs.json?v=BUILDSTAMP");
 const total = +resp.headers.get("content-length") || 0;
 let text;
 if (resp.body && total) {
@@ -421,7 +421,7 @@ const feedCons = (line) => {
   cons.feed(enc.encode(line + "\n"));
   consT.term.focus();
 };
-const BIGFONT = "/lib/font/bit/fixed/unicode.9x18.font";
+const BIGFONT = "/lib/font/bit/go/regular.13.font";
 document.getElementById("mNew").addEventListener("click", () => feedCons("win rc &"));
 document.getElementById("mAcme").addEventListener("click", () => feedCons("win acme -f " + BIGFONT + " &"));
 document.getElementById("mSam").addEventListener("click", () => feedCons("font=" + BIGFONT + " win sam &"));
