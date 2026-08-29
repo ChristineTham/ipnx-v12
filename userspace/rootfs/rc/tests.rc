@@ -73,6 +73,21 @@ q' > /tmp/samscript
 sam -d < /tmp/samscript > /dev/null >[2] /dev/null
 if(~ `{cat /tmp/samf} 'SAM TEST LINE') echo PASS 'the real sam: x, c, and | through real tr (sam -d)'; if not fails=bad
 
+# M4, hostfs ('#Z'): a host directory as files — create, write, read back,
+# stat length, remove, all against the real disk. Self-skips where the host
+# offers no '#Z' (the frozen oracle, the browser).
+hz=`{bind '#Z' /n/hz >[2=1]; echo $status}
+if(~ $"hz ''){
+	echo persist me > /n/hz/m4file
+	hzr=`{cat /n/hz/m4file}
+	mkdir /n/hz/m4dir
+	hzl=`{ls /n/hz/m4dir}
+	rm /n/hz/m4file /n/hz/m4dir
+	hzg=`{cat /n/hz/m4file >[2=1]}
+	if(~ $"hzr 'persist me' && ~ $"hzl '' && ~ $"hzg *'does not exist'* || ~ $"hzg *o such*) echo PASS 'hostfs: a host directory serves create/write/read/remove'; if not fails=bad
+}
+if not echo PASS 'hostfs: no #Z on this host — skipped'
+
 # M2, the namespace-file boot: the same file format that boots the system
 # reshapes a world at runtime — newns(file, cmd) clears and rebuilds from
 # TEXT, so editing the file rebinds with no recompile (the acceptance).

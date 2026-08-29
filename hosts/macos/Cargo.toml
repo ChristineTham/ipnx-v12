@@ -8,4 +8,6 @@ license.workspace = true
 kernel = { path = "../../kernel" }
 # default features drag C build-deps (zstd for the module cache, gdbjit) —
 # needless weight, and they block musl cross-builds (M1's FROM scratch image)
+winit = "0.30"
+softbuffer = "0.4"
 wasmtime = { version = "48", default-features = false, features = ["cranelift", "runtime", "gc", "gc-drc"] }

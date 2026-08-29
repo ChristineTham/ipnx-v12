@@ -14,3 +14,4 @@ demo/toolchain/cache/
 demo/toolchain/go/cache/
 demo/registry/cache/
 hosts/oci/ctx/
+hosts/macos/build/

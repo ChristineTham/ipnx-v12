@@ -329,6 +329,15 @@ catblocked(void *v)
 }
 
 static void
+winrcchild(void *v)
+{
+	char *a[] = { "win", "rc", nil };
+	USED(v);
+	exec("/bin/win", a);
+	exits("win");
+}
+
+static void
 rcinteractive(void)
 {
 	char *av[] = { "rc", "-i", nil };
@@ -362,6 +371,23 @@ main(int argc, char *argv[])
 
 	if(argc > 1 && strcmp(argv[1], "-i") == 0)
 		rcinteractive();	/* replaces this image; rc's exit shuts down */
+	if(argc > 1 && argv[1][0] == '-' && strchr(argv[1], 'w') != nil){
+		/* M3, the app's boot: a shell in a WINDOW. -wi (a terminal launch,
+		 * the host checked isatty) keeps a console rc too — the window and
+		 * the tty are just two namespaces on one kernel. */
+		if(strchr(argv[1], 'i') != nil){
+			char buf[128];
+			procrfork(RFFDG, winrcchild, nil);
+			rcinteractive();
+			USED(buf);
+		}
+		{
+			char *a[] = { "win", "rc", nil };
+			exec("/bin/win", a);
+			fprint(2, "init: cannot exec win: %r\n");
+			exits("win");
+		}
+	}
 
 	print("ipnx-v12 poc: hosted kernel up, init is pid 1\n");
 	ok(fd >= 0, "bind #c /dev and open /dev/cons");

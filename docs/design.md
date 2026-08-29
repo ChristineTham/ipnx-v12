@@ -617,6 +617,23 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-29) Immutable systems and time travel are namespace operations.**
+  Christine, in her words: "If files are tagged with version numbers, and
+  every write results in an incremental version, then backup is simply a
+  snapshot of a namespace at a given time, and can be restored simply by
+  binding the correct versions. We can truly roll back to any point of time
+  in the past." This is Plan 9's dump filesystem and Venti given the
+  general form: there, the snapshot was the file server's nightly gift and
+  yesterday(1) bound you into it; here it falls out of the same two
+  primitives everything else uses — versioned files are just files, a
+  snapshot is a recorded set of binds (a namespace fragment — M2's format
+  again), and restore/rollback is applying it. Immutability is the same
+  fact seen forward: a process bound to fixed versions cannot be changed
+  underneath. Sequenced, not built: this shapes M4's storage design
+  question (a content-addressed or versioning layer under hostfs) and the
+  profile milestone (a profile snapshot IS a backup of an identity); the
+  fragment format is already in the tree.
+
 - **(2026-08-29) Dependency hell and package conflicts dissolve in the
   namespace.** Christine's articulation, recorded in her words: "Since every
   process has its own namespace, and the package manager simply binds files,

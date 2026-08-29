@@ -88,6 +88,12 @@ pub struct AsySnap {
 
 pub enum Effect {
     Spawn { pid: Pid, image: Arc<Vec<u8>>, argv: Vec<String>, asy: Option<AsySnap> },
+    // M3: the presentation layer's feed — a window's fresh pixels (r8g8b8a8,
+    // w*h*4) or its departure. The host may show them, log them, or drop
+    // them; the kernel never knows there is a screen.
+    WinUpdate { wid: u32, label: String, w: i32, h: i32, rgba: Vec<u8> },
+    WinGone { wid: u32 },
+    WinText { wid: u32, bytes: Vec<u8> },
     ConsWrite(Vec<u8>),
     Timer { ms: u64, token: u64 },
     Shutdown(i32),
@@ -141,6 +147,7 @@ type ChanR = Rc<RefCell<Chan>>;
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum DevId {
     Ram,
+    Host,
     Cons,
     Pipe,
     Dup,
@@ -154,6 +161,7 @@ enum DevId {
 #[derive(Clone)]
 enum Node {
     Ram(RamRef),
+    Host(std::path::PathBuf),
     ConsRoot,
     ConsCons,
     ConsUser,
@@ -194,6 +202,7 @@ enum WKind {
 fn node_eq(a: &Node, b: &Node) -> bool {
     match (a, b) {
         (Node::Ram(x), Node::Ram(y)) => Rc::ptr_eq(x, y),
+        (Node::Host(x), Node::Host(y)) => x == y,
         (Node::ConsRoot, Node::ConsRoot)
         | (Node::ConsCons, Node::ConsCons)
         | (Node::ConsUser, Node::ConsUser)
@@ -488,10 +497,13 @@ struct KState {
     next_note_group: u32,
     eve: String,
     ram_root: RamRef,
+    hostfs_root: Option<std::path::PathBuf>,
+    live_root: bool,
     qgen: u64,
     cons_buf: Vec<u8>,
     cons_eof: bool,
     cons_parked: Vec<Waiter>,
+    win_dirty: std::collections::HashSet<u32>,
     timers: HashMap<u64, TimerKind>,
     next_token: u64,
     effects: Vec<Effect>,
@@ -585,7 +597,25 @@ fn new_window(k: &K) -> WinR {
         dead: false,
     }));
     kb.wins.insert(wid, win.clone());
+    drop(kb);
+    win_flush(k, &win);
     win
+}
+
+fn win_dirty(k: &K, win: &WinR) {
+    let wid = win.borrow().wid;
+    k.borrow_mut().win_dirty.insert(wid);
+}
+
+fn win_flush(k: &K, win: &WinR) {
+    let (wid, label, w, h, back) = {
+        let wb = win.borrow();
+        let img = wb.img.clone();
+        let back = img.borrow().back.clone();
+        (wb.wid, wb.label.clone(), wb.w, wb.h, back)
+    };
+    let rgba = back.borrow().data.clone();
+    k.borrow_mut().effects.push(Effect::WinUpdate { wid, label, w, h, rgba });
 }
 
 fn serve_wcons(k: &K, win: &WinR) {
@@ -746,11 +776,20 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
 fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
               data: &[u8]) -> Result<usize, KErr> {
     match kind {
-        WKind::Cons => Ok(data.len()), // window text is host-rendered; headless drops it
+        WKind::Cons => {
+            // window text: an effect for a presentation layer (M3); headless
+            // hosts drop it, the app renders it into the window's surface
+            if let Some(w) = win {
+                let wid = w.borrow().wid;
+                k.borrow_mut().effects.push(Effect::WinText { wid, bytes: data.to_vec() });
+            }
+            Ok(data.len())
+        }
         WKind::Consctl | WKind::Cursor => Ok(data.len()),
         WKind::Label => {
             let w = win.as_ref().ok_or("no window")?;
             w.borrow_mut().label = String::from_utf8_lossy(data).trim().to_string();
+            win_dirty(k, w);
             Ok(data.len())
         }
         WKind::Wctl => {
@@ -782,6 +821,8 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                     for c in wb.conns.values() {
                         c.borrow_mut().images.insert(0, img.clone());
                     }
+                    drop(wb);
+                    win_dirty(k, w);
                 }
                 ["mouse", x, y, b] => {
                     inject_mouse(k, w,
@@ -797,7 +838,9 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                     };
                     serve_wcons(k, w);
                     serve_wmouse(k, w);
-                    k.borrow_mut().wins.remove(&wid);
+                    let mut kb = k.borrow_mut();
+                    kb.wins.remove(&wid);
+                    kb.effects.push(Effect::WinGone { wid });
                 }
                 _ => return Err(format!("wctl: bad message '{}'", raw.trim())),
             }
@@ -807,6 +850,7 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
             let w = win.as_ref().ok_or("no window")?;
             let c = conn.as_ref().ok_or("no draw connection")?;
             drawmsgs(w, c, data)?;
+            win_dirty(k, w);
             Ok(data.len())
         }
         _ => Err(format!("no write on {:?}", kind)),
@@ -1043,6 +1087,63 @@ pub struct Kernel {
 }
 
 impl Kernel {
+    /// M4: expose a host directory as '#Z' (hostfs). With `live`, the
+    /// implicit root becomes that directory too — boot FROM the host tree,
+    /// writes persisting across restarts.
+    pub fn set_hostfs(&self, dir: std::path::PathBuf, live: bool) {
+        let mut kb = self.k.borrow_mut();
+        kb.hostfs_root = Some(dir);
+        kb.live_root = live;
+    }
+
+    /// M3: the presentation layer's input — keys into a window's cons,
+    /// mouse into its mouse file, a close request. wid from WinUpdate.
+    /// M3: the host's frame tick — emit ONE WinUpdate per dirty window.
+    /// Unbounded flush-per-draw-write was measured at 640GB of queued
+    /// frames during acme's boot; coalescing to the tick is the cure.
+    pub fn win_tick(&self) {
+        let dirty: Vec<u32> = self.k.borrow_mut().win_dirty.drain().collect();
+        for wid in dirty {
+            let w = self.k.borrow().wins.get(&wid).cloned();
+            if let Some(w) = w {
+                win_flush(&self.k, &w);
+            }
+        }
+    }
+
+    pub fn win_key(&self, wid: u32, bytes: &[u8]) {
+        let w = self.k.borrow().wins.get(&wid).cloned();
+        if let Some(w) = w {
+            w.borrow_mut().consbuf.extend_from_slice(bytes);
+            serve_wcons(&self.k, &w);
+        }
+        self.ex.run_until_stalled();
+    }
+
+    pub fn win_mouse(&self, wid: u32, x: i32, y: i32, buttons: i32) {
+        let w = self.k.borrow().wins.get(&wid).cloned();
+        if let Some(w) = w {
+            inject_mouse(&self.k, &w, x, y, buttons);
+        }
+        self.ex.run_until_stalled();
+    }
+
+    pub fn win_close(&self, wid: u32) {
+        let w = self.k.borrow().wins.get(&wid).cloned();
+        if let Some(w) = w {
+            {
+                let mut wb = w.borrow_mut();
+                wb.dead = true;
+            }
+            serve_wcons(&self.k, &w);
+            serve_wmouse(&self.k, &w);
+            let mut kb = self.k.borrow_mut();
+            kb.wins.remove(&wid);
+            kb.effects.push(Effect::WinGone { wid });
+        }
+        self.ex.run_until_stalled();
+    }
+
     pub fn new(seed: &Seed, eve: &str) -> Kernel {
         let boot = now_secs();
         let mut qgen = 1u64;
@@ -1063,10 +1164,13 @@ impl Kernel {
                 next_note_group: 1,
                 eve: eve.into(),
                 ram_root: root,
+                hostfs_root: None,
+                live_root: false,
                 qgen,
                 cons_buf: Vec::new(),
                 cons_eof: false,
                 cons_parked: Vec::new(),
+                win_dirty: std::collections::HashSet::new(),
                 timers: HashMap::new(),
                 next_token: 1,
                 effects: Vec::new(),
@@ -1435,6 +1539,11 @@ fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
         'p' => Ok(DN { dev: DevId::Proc, node: Node::Proc { kind: 0, pid: 0 }, path: None }),
         'M' => Ok(DN { dev: DevId::Ram, node: Node::Ram(k.borrow().ram_root.clone()), path: None }),
         'w' => Ok(DN { dev: DevId::Wsys, node: Node::Wsys { kind: WKind::Root, win: None, conn: None }, path: None }),
+        'Z' => {
+            let root = k.borrow().hostfs_root.clone()
+                .ok_or_else(|| "no host directory configured (#Z)".to_string())?;
+            Ok(DN { dev: DevId::Host, node: Node::Host(root), path: None })
+        }
         _ => Err(format!("unknown device #{}", letter)),
     }
 }
@@ -1442,6 +1551,14 @@ fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
 // walk one name on a CONCRETE (non-union) node
 async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>, KErr> {
     match (&dn.dev, &dn.node) {
+        (DevId::Host, Node::Host(hp)) => {
+            let root = k.borrow().hostfs_root.clone().ok_or("no host root")?;
+            let next = hp.join(name);
+            if !host_secure(&root, &next) || !next.exists() {
+                return Ok(None);
+            }
+            Ok(Some(DN { dev: DevId::Host, node: Node::Host(next), path: None }))
+        }
         (DevId::Ram, Node::Ram(r)) => {
             Ok(kid(r, name).map(|kd| DN { dev: DevId::Ram, node: Node::Ram(kd), path: None }))
         }
@@ -1618,7 +1735,23 @@ async fn walk_once(k: &K, pid: Pid, path: &str, nofollow_last: bool) -> Result<W
     let mut dn = match &list {
         Some(l) if l.len() == 1 => l[0].dn.clone(),
         Some(l) => DN { dev: DevId::Union, node: Node::Union(Rc::new(l.clone())), path: None },
-        None => DN { dev: DevId::Ram, node: Node::Ram(k.borrow().ram_root.clone()), path: None },
+        None => {
+            let kb = k.borrow();
+            if kb.live_root {
+                if let Some(root) = kb.hostfs_root.clone() {
+                    drop(kb);
+                    DN { dev: DevId::Host, node: Node::Host(root), path: None }
+                } else {
+                    let r = kb.ram_root.clone();
+                    drop(kb);
+                    DN { dev: DevId::Ram, node: Node::Ram(r), path: None }
+                }
+            } else {
+                let r = kb.ram_root.clone();
+                drop(kb);
+                DN { dev: DevId::Ram, node: Node::Ram(r), path: None }
+            }
+        }
     };
     let full_comps: Vec<String> =
         path.split('/').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
@@ -1808,6 +1941,7 @@ fn ram_access(k: &K, node: &RamRef, cred: &Cred, want: u32) -> Result<(), KErr> 
 async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
     match (&dn.dev, &dn.node) {
         (DevId::Ram, Node::Ram(r)) => Ok(ram_stat(r)),
+        (DevId::Host, Node::Host(hp)) => host_stat_bytes(k, hp),
         (DevId::Cons, n) => {
             let (name, dir) = match n {
                 Node::ConsRoot => ("/", true),
@@ -1864,6 +1998,21 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
         }
     }
     match (dev, node) {
+        (DevId::Host, Node::Host(hp)) => {
+            let out = if hp.is_dir() {
+                host_dir_read(k, &hp, n, off)?
+            } else {
+                use std::io::{Read, Seek, SeekFrom};
+                let mut f = std::fs::File::open(&hp).map_err(|e| format!("{}: {}", hp.display(), e))?;
+                f.seek(SeekFrom::Start(off)).map_err(|e| e.to_string())?;
+                let mut buf = vec![0u8; n];
+                let got = f.read(&mut buf).map_err(|e| e.to_string())?;
+                buf.truncate(got);
+                buf
+            };
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
         (DevId::Ram, Node::Ram(r)) => {
             let out = if r.borrow().dir {
                 let mut skip = off as usize;
@@ -2138,6 +2287,17 @@ fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Re
     let cur = off_in == u64::MAX;
     let off = if cur { cur_off } else { off_in };
     let wrote = match (dev, node) {
+        (DevId::Host, Node::Host(hp)) => {
+            use std::io::{Seek, SeekFrom, Write};
+            if hp.is_dir() {
+                return Err("write on directory".into());
+            }
+            let mut f = std::fs::OpenOptions::new().write(true).open(&hp)
+                .map_err(|e| format!("{}: {}", hp.display(), e))?;
+            f.seek(SeekFrom::Start(off)).map_err(|e| e.to_string())?;
+            f.write_all(data).map_err(|e| e.to_string())?;
+            data.len()
+        }
         (DevId::Ram, Node::Ram(r)) => {
             let off = off as usize;
             let mut n = r.borrow_mut();
@@ -2267,6 +2427,9 @@ fn dev_len(chan: &ChanR) -> u64 {
         (DevId::Ram, Node::Ram(r)) => {
             let n = r.borrow();
             if n.dir { 0 } else { n.data.len() as u64 }
+        }
+        (DevId::Host, Node::Host(hp)) => {
+            std::fs::metadata(hp).map(|m| if m.is_dir() { 0 } else { m.len() }).unwrap_or(0)
         }
         (DevId::Wsys, Node::Wsys { kind: WKind::Rgb, win: Some(w), .. }) => {
             let img = w.borrow().img.clone();
@@ -2627,6 +2790,26 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                 let p = kb.procs.get(&pid).unwrap();
                 (p.umask, p.cred.clone())
             };
+            if let Node::Host(hp) = &parent.node {
+                use std::os::unix::fs::PermissionsExt;
+                let root = k.borrow().hostfs_root.clone().ok_or("no host root")?;
+                let target = hp.join(&base);
+                if !host_secure(&root, &target) {
+                    return Err("create escapes the host root".into());
+                }
+                if isdir {
+                    std::fs::create_dir(&target).map_err(|e| e.to_string())?;
+                } else {
+                    std::fs::File::create(&target).map_err(|e| e.to_string())?;
+                }
+                let _ = std::fs::set_permissions(&target,
+                    std::fs::Permissions::from_mode(perm & !umask & 0o777));
+                let chan = Rc::new(RefCell::new(Chan {
+                    dev: DevId::Host, node: Node::Host(target), path: Some(cpath),
+                    mode, offset: 0, refs: 1,
+                }));
+                return Ok(ok(fd_alloc(k, pid, chan, None)));
+            }
             let node = ram_create(k, &parent, &base, perm & !umask, isdir, &cred)?;
             let chan = Rc::new(RefCell::new(Chan {
                 dev: DevId::Ram, node: Node::Ram(node), path: Some(cpath),
@@ -2651,6 +2834,15 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                     rpc(k, &conn, tv::REMOVE, W9::new().u32(tm.fid)).await?;
                 }
                 return Ok(ok(0));
+            }
+            if let Node::Host(hp) = &parent.node {
+                let target = hp.join(&base);
+                let r = if target.is_dir() { std::fs::remove_dir(&target) }
+                        else { std::fs::remove_file(&target) };
+                return match r {
+                    Ok(_) => Ok(ok(0)),
+                    Err(e) => Err(format!("{}: {}", base, e)),
+                };
             }
             let cred = k.borrow().procs.get(&pid).unwrap().cred.clone();
             if let Node::Ram(pr) = &parent.node {
@@ -3120,6 +3312,14 @@ fn wstat_ram(node: &RamRef, parent: &DN, base: &str, st: &stat9::StatOut,
 }
 
 fn open_perm(k: &K, dn: &DN, mode: u32, pid: Pid) -> Result<(), KErr> {
+    if let Node::Host(hp) = &dn.node {
+        let _ = pid;
+        if mode & OTRUNC != 0 && hp.is_file() {
+            std::fs::OpenOptions::new().write(true).truncate(true).open(hp)
+                .map_err(|e| format!("{}: {}", hp.display(), e))?;
+        }
+        return Ok(());
+    }
     if let Node::Ram(r) = &dn.node {
         let cred = k.borrow().procs.get(&pid).ok_or("no proc")?.cred.clone();
         let rw = mode & 3;
@@ -3171,6 +3371,60 @@ fn ram_create(k: &K, parent: &DN, name: &str, perm: u32, isdir: bool,
     pr.borrow_mut().kids.push((name.into(), node.clone()));
     pr.borrow_mut().mtime = now_secs();
     Ok(node)
+}
+
+// ---- hostfs: '#Z' — a host directory as files (M4) ----
+// uid mapping, decided 2026-08-29 (design.md): host files present as EVE's;
+// mode bits map 1:1 (perm & 0o777); sidecar metadata is deferred until the
+// profile milestone needs distinct on-disk roles. Symlinks are resolved by
+// the KERNEL in the walker's namespace (the V12 rule), so hostfs refuses to
+// follow host symlinks that escape the exposed root.
+fn host_secure(root: &std::path::Path, p: &std::path::Path) -> bool {
+    // an existing path must canonicalize under the root; a not-yet-existing
+    // one is judged by its parent (create targets)
+    let probe = if p.exists() { p.to_path_buf() } else {
+        match p.parent() { Some(pp) => pp.to_path_buf(), None => return false }
+    };
+    match (probe.canonicalize(), root.canonicalize()) {
+        (Ok(cp), Ok(cr)) => cp.starts_with(&cr),
+        _ => false,
+    }
+}
+
+fn host_stat_bytes(k: &K, path: &std::path::Path) -> Result<Vec<u8>, KErr> {
+    use std::os::unix::fs::MetadataExt;
+    let md = std::fs::metadata(path).map_err(|e| format!("{}: {}", path.display(), e))?;
+    let eve = k.borrow().eve.clone();
+    let name = path.file_name().map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "/".into());
+    let dir = md.is_dir();
+    Ok(marshal_stat(&StatIn {
+        name: &name,
+        qtype: if dir { QTDIR } else { QTFILE },
+        qpath: md.ino(),
+        mode: (md.mode() & 0o777) | if dir { DMDIR } else { 0 },
+        atime: md.mtime().max(0) as u32,
+        mtime: md.mtime().max(0) as u32,
+        length: if dir { 0 } else { md.len() },
+        uid: &eve, gid: &eve, muid: &eve,
+        ..Default::default()
+    }))
+}
+
+fn host_dir_read(k: &K, path: &std::path::Path, n: usize, off: u64) -> Result<Vec<u8>, KErr> {
+    let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(path)
+        .map_err(|e| format!("{}: {}", path.display(), e))?
+        .flatten().map(|e| e.path()).collect();
+    names.sort();
+    let mut skip = off as usize;
+    let mut out = Vec::new();
+    for kd in names {
+        let rec = match host_stat_bytes(k, &kd) { Ok(r) => r, Err(_) => continue };
+        if skip >= rec.len() { skip -= rec.len(); continue; }
+        if out.len() + rec.len() > n { break; }
+        out.extend_from_slice(&rec);
+    }
+    Ok(out)
 }
 
 // ---- rfork / exec / exits (the lifecycle) ----

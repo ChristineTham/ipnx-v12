@@ -1,6 +1,7 @@
-/* win: run a command in a fresh window — mint one from #w, bind it over
- * /dev in a namespace copy, wire cons to fds 0,1,2, exec. rio's spawn,
- * as a forty-line command. */
+/* win: run a command in a fresh window — mint one from #w, bind it BEFORE
+ * /dev in a namespace copy (the window's cons/mouse/draw shadow the
+ * console's, while the union keeps /dev/null — rc's `&` needs it; found
+ * the day the app booted), wire cons to fds 0,1,2, exec. rio's spawn. */
 #include "lib9.h"
 
 static char **cmdav;
@@ -22,7 +23,7 @@ child(void *v)
 	buf[n] = 0;
 	strcpy(path, "#w/");
 	strcpy(path+3, buf);
-	bind(path, "/dev", MREPL);
+	bind(path, "/dev", MBEFORE);
 	fd = open("/dev/cons", ORDWR);
 	dup(fd, 0);
 	dup(fd, 1);

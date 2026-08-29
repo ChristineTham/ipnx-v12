@@ -17,6 +17,8 @@ use std::sync::Arc;
 use wasmtime::{Caller, Config, Engine, Extern, Func, Instance, Linker, Memory, MemoryType, Module, Store, Val};
 
 // ---- events into the kernel loop ----
+mod ui;
+
 pub enum Ev {
     Sys { worker_pid: Pid, trap: i32, a: [i32; 5], tx: Vec<u8>, reply: Sender<KReply> },
     Started { pid: Pid, asyncified: bool },
@@ -25,6 +27,10 @@ pub enum Ev {
     Timer { token: u64 },
     Stdin(Vec<u8>),
     StdinClosed,
+    WinKey { wid: u32, bytes: Vec<u8> },
+    WinMouse { wid: u32, x: i32, y: i32, b: i32 },
+    WinClose { wid: u32 },
+    WinTick,
 }
 
 // ---- how a guest run ends (carried through wasmtime host errors) ----
@@ -220,10 +226,49 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     let rootdir = args.get(1).cloned().unwrap_or_else(|| "userspace/rootfs".into());
     let interactive = args.iter().any(|a| a == "-i");
+    let app_mode = args.iter().any(|a| a == "--app");
     let verbose = std::env::var("KDBG").is_ok();
 
+    if app_mode {
+        // M3: winit must own the MAIN thread on macOS, and the Kernel is
+        // Rc-built (!Send) — so the presentation layer runs here and the
+        // whole kernel world is constructed inside its own thread.
+        let (ev_tx, ev_rx) = channel::<Ev>();
+        let (el, mut app) = ui::run(ev_tx.clone(), &rootdir);
+        let proxy = el.create_proxy();
+        let rootdir2 = rootdir.clone();
+        std::thread::Builder::new().name("kernel".into()).stack_size(16 << 20)
+            .spawn(move || {
+                kernel_world(&rootdir2, interactive, verbose, true, ev_tx, ev_rx, Some(proxy));
+            })
+            .expect("kernel thread");
+        el.run_app(&mut app).expect("event loop");
+        return;
+    }
+
+    let (ev_tx, ev_rx) = channel::<Ev>();
+    kernel_world(&rootdir, interactive, verbose, false, ev_tx, ev_rx, None);
+}
+
+fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
+                ev_tx: Sender<Ev>, ev_rx: Receiver<Ev>,
+                ui: Option<winit::event_loop::EventLoopProxy<ui::UiMsg>>) {
+    let args: Vec<String> = std::env::args().collect();
+
+    let live = args.iter().any(|a| a == "--live");
     let seed = load_seed(std::path::Path::new(&rootdir), "/").expect("rootfs seed");
     let mut kern = Kernel::new(&seed, "kitty");
+    // M4: '#Z' serves a host directory. --live points it at the rootfs dir
+    // itself AND makes it the implicit root — boot from the real tree,
+    // writes persist. Otherwise a per-boot temp dir backs '#Z' so the
+    // suite's hostfs test has something real to exercise.
+    if live {
+        kern.set_hostfs(std::fs::canonicalize(&rootdir).expect("rootdir"), true);
+    } else {
+        let t = std::env::temp_dir().join(format!("ipnx-z-{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&t);
+        kern.set_hostfs(t, false);
+    }
     kern.interactive = interactive;
     kern.verbose = verbose;
 
@@ -231,9 +276,25 @@ fn main() {
     config.wasm_exceptions(true);
     let engine = Arc::new(Engine::new(&config).expect("engine"));
 
-    let (ev_tx, ev_rx) = channel::<Ev>();
+    if app_mode {
+        let tick = ev_tx.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(std::time::Duration::from_millis(33));
+            if tick.send(Ev::WinTick).is_err() {
+                break;
+            }
+        });
+    }
 
-    let init_argv = if interactive {
+    let tty = {
+        use std::io::IsTerminal;
+        std::io::stdin().is_terminal()
+    };
+    let init_argv = if app_mode && (tty || interactive) {
+        vec!["init".to_string(), "-wi".to_string()]
+    } else if app_mode {
+        vec!["init".to_string(), "-w".to_string()]
+    } else if interactive {
         vec!["init".to_string(), "-i".to_string()]
     } else {
         vec!["init".to_string()]
@@ -262,7 +323,7 @@ fn main() {
 
     // the kernel loop: pure state machine + effects
     loop {
-        run_effects(&mut kern, &engine, &ev_tx);
+        run_effects(&mut kern, &engine, &ev_tx, &ui);
         let ev = match ev_rx.recv() {
             Ok(e) => e,
             Err(_) => break,
@@ -275,11 +336,16 @@ fn main() {
             Ev::Timer { token } => kern.timer_fired(token),
             Ev::Stdin(b) => kern.cons_feed(&b),
             Ev::StdinClosed => kern.cons_end(),
+            Ev::WinKey { wid, bytes } => kern.win_key(wid, &bytes),
+            Ev::WinMouse { wid, x, y, b } => kern.win_mouse(wid, x, y, b),
+            Ev::WinClose { wid } => kern.win_close(wid),
+            Ev::WinTick => kern.win_tick(),
         }
     }
 }
 
-fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>) {
+fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
+               ui: &Option<winit::event_loop::EventLoopProxy<ui::UiMsg>>) {
     use std::io::Write;
     for e in kern.take_effects() {
         match e {
@@ -305,8 +371,26 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>) {
                 });
             }
             Effect::Shutdown(code) => {
+                if let Some(p) = ui {
+                    let _ = p.send_event(ui::UiMsg::Shutdown);
+                }
                 std::io::stdout().flush().ok();
                 std::process::exit(code);
+            }
+            Effect::WinUpdate { wid, label, w, h, rgba } => {
+                if let Some(p) = ui {
+                    let _ = p.send_event(ui::UiMsg::Update { wid, label, w, h, rgba });
+                }
+            }
+            Effect::WinText { wid, bytes } => {
+                if let Some(p) = ui {
+                    let _ = p.send_event(ui::UiMsg::Text { wid, bytes });
+                }
+            }
+            Effect::WinGone { wid } => {
+                if let Some(p) = ui {
+                    let _ = p.send_event(ui::UiMsg::Gone { wid });
+                }
             }
         }
     }

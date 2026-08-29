@@ -128,7 +128,7 @@ clear, `-abcC`, quoting, line-start comments; warn-and-continue so a boot
 never wedges on one bad line), and `newns(1)` runs any command in a
 file-built namespace — the profile's mechanism in miniature.
 
-### M3 — the macOS app *(M)* — consumes: GUI per-platform backing, native-host decisions
+### M3 — the macOS app *(M)* — **landed 2026-08-30** — consumes: GUI per-platform backing, native-host decisions
 The native host is headless; `win acme` paints into memory nobody shows. Add a
 presentation layer: one host window per `#w` window (rio's model), blitting
 the existing backing store (the same bytes the raster tests read), injecting
@@ -136,15 +136,35 @@ mouse/keyboard through the same paths wctl tests use; wire `-i` to a real
 terminal. Package as a `.app`. This makes the native host daily-drivable and
 settles the presentation shape iPadOS inherits. (P1's journey pairs this
 with M4 — a screen without persistence is a demo, not a home.)
-**Acceptance:** the floor suite headless, unchanged; `win rc`, `win sam`,
-`win acme` interactive on screen; a keystroke-to-glyph demo recorded.
+**Acceptance, met 2026-08-30:** the floor suite headless, unchanged (139);
+`win rc` interactive on screen (typed into the app window, echoed through
+the rootfs's own 9x18 subfont — the glass tty renders window-cons text over
+the frame); acme runs in its own titled app window (label written by the
+guest), proven twice — acmetest's full three-assert suite PASSES inside the
+running app, and the window's raster censuses 6,296 ink pixels,
+deterministic across runs (~90–150s to first paint: cranelift compiles the
+20MB module at spawn); keystroke-to-glyph recorded (docs/img/m3-app.png).
+The presentation layer is winit+softbuffer: one host window per `#w`
+window, frames as Effect::WinUpdate at a 30Hz coalescing tick — the first
+build flushed per draw-write and was measured at **640GB of queued frames**
+during acme's boot (RESEARCH; the dirty-set tick is the cure, RSS flat at
+~245MB under acme thereafter). Input goes back as Ev::{WinKey,WinMouse,
+WinClose} with the demo's chords (option-left=2, cmd-left=3). `-w` boots
+straight to a windowed shell; a terminal launch (isatty, or `--app -i`)
+keeps a console rc beside the windows. hosts/macos/mkapp.sh packages
+IPNX.app. Found and fixed on the way: win(1) now binds the window BEFORE
+/dev, so the union keeps /dev/null (rc's `&` needs it).
 
-### M4 — host storage *(M)* — consumes: storage decisions (2026-08-27)
+### M4 — host storage *(M)* — **landed 2026-08-29 (v1)** — consumes: storage decisions (2026-08-27)
 Persistence: a file server over a host directory, mounted where the namespace
 wants it — the rootfs becomes a real directory rather than a ramfs seed, a
 container gets volumes, the profile gets a local tree that survives reboot.
 Permission/uid mapping between host metadata and V10 enforcement is the design
-question to settle *at this milestone* (sidecar vs mode-bit mapping).
+question to settle *at this milestone* (sidecar vs mode-bit mapping) —
+settled for hostfs v1 (2026-08-29): mode bits map 1:1, files present as
+eve's, sidecar deferred. Still open here: the versioning layer (design
+2026-08-29, "immutable systems") — every write an incremental version, a
+snapshot a namespace fragment, rollback a bind.
 **Acceptance:** boot from a host-directory root; a write survives restart;
 V10 permission tests still enforce; the frozen reference still boots its ramfs.
 

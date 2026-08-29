@@ -1216,6 +1216,21 @@ teeth:
   and run as a guest, compiles and its output runs — re-proven headless
   before deploy.
 
+- **A presentation layer must coalesce frames (measured 2026-08-30: 640GB).**
+  M3's first build emitted a full-window RGBA frame per draw WRITE; acme's
+  boot makes thousands of small writes, the UI queue is unbounded, and macOS
+  paused the app at 640.79GB of compressed queued frames. The cure is the
+  classic one: a dirty set in the kernel and a host 30Hz tick draining ONE
+  frame per dirty window (RSS flat ~245MB under acme thereafter). Two more
+  M3/M4 measurements: `win acme` exposed that rc's `&` needs /dev/null —
+  win(1) now binds the window BEFORE /dev so the union keeps the console's
+  null; and first paint takes 90–150s on the native host because cranelift
+  compiles acme's 20MB module at spawn (KDBG multiplies everything ~100x —
+  a diagnosis run under it manufactured a wild-goose "hang"). Rust-host
+  parity gaps noted while diagnosing, none load-bearing: no '#s', no '#H',
+  no /proc root listing, and the WASI shim lacks the demo's '#'-path
+  passthrough.
+
 - **M1 measured (2026-08-29): the whole operating system is a 62.2MB
   distroless image.** `FROM scratch` + two COPYs: the statically-linked musl
   host (16,789,232 bytes — wasmtime 48 slimmed to
