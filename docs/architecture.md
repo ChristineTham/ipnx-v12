@@ -123,6 +123,27 @@ porting inversion ([design.md](design.md), 2026-08-29). The demo's in-tab `cc`
 compiles stock C against a wasi-libc/POSIX port environment, the first
 instance.
 
+A personality is *provided* at three layers, each cheap:
+
+1. **The ABI shim** (supervisor code) — the imports a running binary needs.
+   The WASI personality is `wasi1.mjs`; carrying both `wasi_snapshot_preview1`
+   and `wasi_unstable` makes it two dialects of one personality. A binary's
+   stat, inode, cwd and environ semantics live here too.
+2. **The target sysroot** (namespace files) — what *compiled* code links
+   against: `libc.a`, headers, crt objects in a subtree, pointed at by the
+   compiler (`-isysroot`, `-L`). A different port personality is a different
+   subtree (musl vs glibc vs BSD); nothing else changes.
+3. **The runtime support** (namespace files + environment) — what an
+   interpreter or runtime needs at run time: CPython's stdlib tree at
+   `/lib/python3.14` plus `PYTHONHOME`, for instance.
+
+Because layers 2 and 3 are *files in a namespace*, **a personality is a
+subtree you bind in, and a process chooses its personality by its namespace**
+— the founding idea, concrete. The provisioning method is measurement: run
+the real program, and each thing it fails on is a missing piece of its
+personality (the demo's `wasi_unstable` dialect, real inodes, cwd-aware
+paths, populated environ and `PYTHONHOME` were all found this way).
+
 Binaries carry no `.wasm` extension: `exec` walks the caller's namespace for
 the path and instantiates the bytes it finds — a freshly built module is
 indistinguishable from a shipped one.

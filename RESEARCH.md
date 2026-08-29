@@ -1178,6 +1178,27 @@ teeth:
   repack) over the preview1 shim runs them; the demo applies it as a dist
   derivation, the frozen reference untouched.
 
+- **What each demo citizen's personality wanted (measured 2026-08-29).**
+  The three benchmarks all *run* under one ABI personality — the WASI shim —
+  but each exposed different missing pieces, and completing them IS the
+  personality:
+  - **clang (cc):** the older `wasi_unstable` ABI dialect (whence-remap +
+    filestat repack); real inodes (its FileManager dedups by inode, so `ino=0`
+    made every file the same file); and, to compile *for* something, the
+    wasi-libc/POSIX target sysroot (`/include`, `/lib/wasm32-wasi`, crt1.o).
+  - **CPython (python):** `wasi_snapshot_preview1`; a cwd-honouring path
+    resolver (relative opens must find the process's directory); a populated
+    `environ` with `PYTHONHOME=/`; and its stdlib tree at `/lib/python3.14`.
+    Its personality is ABI + runtime-support files + environment.
+  - **Go (the binary):** `wasip1` and nothing more — a static binary. Its
+    *toolchain*, though, wants a personality ipnx does not yet offer: exec
+    exposed to the Go runtime. That is the wall, and the honest long-term
+    answer is an ipnx-native-Go port personality whose runtime targets ipnx's
+    fork/exec directly.
+  The lesson: a demo that runs real software is a personality-measurement
+  harness. Every failure names a missing piece; the fix completes the
+  personality; nothing patches the source.
+
 - **Why C compiles in the tab and Go does not — and what ipnx adds.**
   clang's wasm build (binji) cannot run in *driver* mode: the driver spawns
   `clang -cc1` and the linker as subprocesses, and WASI has no process
