@@ -88,6 +88,13 @@ case *
 	fails=bad
 }
 
+# the tour (the public demo's guided walk) runs non-interactively and
+# self-skips if the rootfs lacks it — one rootfs serves every host
+if(test -f /rc/tour){
+	rc /rc/tour > /tmp/tour.out >[2] /dev/null
+	if(~ `{grep -c '^tour: complete' /tmp/tour.out} 1 && ~ `{grep -c '^result: horses for COURSES' /tmp/tour.out} 1) echo PASS 'the tour runs end to end, sam edit verified (rc /rc/tour)'; if not fails=bad
+}
+
 if(~ $fails ok) echo rc: tests done
 if not echo rc: TESTS FAILED
 if(~ $fails ok) exit ''

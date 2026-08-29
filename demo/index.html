@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ipnx-v12 — a reimagining of Unix, in your browser</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; background: #0d1117; color: #d6dde4;
+         font: 16px/1.55 Georgia, 'Times New Roman', serif;
+         display: flex; justify-content: center; }
+  main { max-width: 44rem; padding: 3.5rem 1.25rem 4rem; }
+  h1 { font: 700 2rem/1.2 Georgia, serif; margin: 0 0 .4rem; color: #fff; }
+  .sub { color: #8b98a5; margin: 0 0 2rem; font-style: italic; }
+  p { margin: .8rem 0; }
+  a { color: #79b8ff; }
+  .go { display: inline-block; margin: 1.1rem 1rem 1.1rem 0; padding: .65rem 1.2rem;
+        border: 1px solid #2e4a66; border-radius: 6px; background: #16212e;
+        color: #cfe6ff; text-decoration: none; font-family: ui-monospace, Menlo, monospace; }
+  .go:hover { background: #1d2c3e; }
+  .go b { color: #fff; }
+  code, pre { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: .92em;
+        background: #161d26; border-radius: 4px; padding: .08em .35em; }
+  pre { padding: .7rem .9rem; overflow-x: auto; }
+  .fine { color: #8b98a5; font-size: .85rem; margin-top: 2.4rem;
+          border-top: 1px solid #222c37; padding-top: 1rem; }
+</style>
+</head>
+<body>
+<main>
+<h1>ipnx-v12</h1>
+<p class="sub">a reimagining of Unix — the counterfactual next Research edition,
+running in this tab</p>
+
+<p>A modified <b>Plan&nbsp;9 kernel</b> hosted as an ordinary process, with
+per-process namespaces, 9P as the only IPC, and WebAssembly as the executable
+format. What boots below is not a tribute: the shell is the <b>real
+4th-edition <code>rc</code></b>, the editors are the <b>real <code>sam</code>
+and <code>acme</code></b> (all twenty source files, verbatim), twenty-four
+real commands ride the real Plan&nbsp;9 libraries, V10 binaries from the TUHS
+tapes sit in <code>/v10/bin</code> — and real Go and CPython&nbsp;3.14
+binaries run against the same kernel through a WASI shim.</p>
+
+<p>
+<a class="go" href="browser/?i"><b>Boot it</b> — an interactive rc</a>
+<a class="go" href="browser/">Run the 132-test suite</a>
+</p>
+
+<p>Once the prompt appears, take the guided tour:</p>
+<pre>rc /rc/tour</pre>
+
+<p>Or go straight for the good parts: <code>win acme &amp;</code> opens the
+real acme in a window (button-2 executes, button-3 searches);
+<code>@{bind /lib/alt /etc; cat /etc/motd}</code> shows a subshell rearranging
+its own private namespace; <code>/v10/bin/echo -e 'a\nb' | wc</code> pipes
+1989 into 1992.</p>
+
+<p class="fine">
+Everything runs in your browser — nothing you type leaves this tab, and
+reloading forgets it all. Measured in Chrome-family browsers (needs
+SharedArrayBuffer via cross-origin isolation); Safari and Firefox are not yet
+measured, and may work or may not. The whole system — kernel, sources, the
+132-test conformance suite, and the documents that argue for it — is at
+<a href="https://github.com/ChristineTham/ipnx-v12">github.com/ChristineTham/ipnx-v12</a>.
+Third-party licences: <a href="NOTICES.html">NOTICES</a>.
+</p>
+</main>
+</body>
+</html>

@@ -16,9 +16,9 @@ engine change (the engine matrix is a dated decision in
 
 | form | host | engine (guests) | state (2026-08-29) |
 |---|---|---|---|
-| **Node** | `poc/supervisor` (frozen) | V8, Workers + SAB | **green, 131** — the oracle; also the dev loop |
-| **Browser tab** | `poc/browser` (frozen) → `hosts/browser` (M5) | the page's own JIT, Workers + SAB | **green, 131** in Chrome 148 on the reference; Rust core in wasm is M5 |
-| **macOS** | `hosts/macos` | wasmtime 37, Cranelift JIT | **green, 131**, headless; the app shell is M3 |
+| **Node** | `poc/supervisor` (frozen) | V8, Workers + SAB | **green, 132** (floor 131) — the oracle; also the dev loop |
+| **Browser tab** | `poc/browser` (frozen) → `hosts/browser` (M5) | the page's own JIT, Workers + SAB | **green, 132** (floor 131) in Chrome 148 on the reference; Rust core in wasm is M5 |
+| **macOS** | `hosts/macos` | wasmtime 37, Cranelift JIT | **green, 132** (floor 131), headless; the app shell is M3 |
 | **OCI container** | `hosts/oci` (M1) | wasmtime, Cranelift (or AOT `.cwasm`) | scaffolded — `FROM scratch`, musl-static, the CI machine |
 | **iPadOS** | `hosts/ipados` (M6) | wasmtime, **Pulley**, `signals_based_traps(false)` | scaffolded — no JIT, no runtime-AOT on iOS; WKWebView stopgap runs the browser port with full JIT today |
 | **microVM** | (M11) | wasmtime over Firecracker/virtio, 9P-over-vsock | aspiration, research-first — the second OCI weight |

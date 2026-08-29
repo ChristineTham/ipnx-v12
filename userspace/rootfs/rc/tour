@@ -1,0 +1,69 @@
+# tour — a guided walk through ipnx-v12, in the system's own shell.
+# Run it:  rc /rc/tour        (each chapter also names things to try yourself)
+
+echo '━━ ipnx-v12 — the tour ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
+echo 'You are inside a Plan 9-descended kernel running as a wasm process.'
+echo 'This shell is the REAL rc, compiled from 4th-edition source; every'
+echo 'command below is real Plan 9 or Research Unix code, unmodified.'
+echo
+
+echo '── 1 · everything is a file ─────────────────────────────────'
+echo '$ ls /'
+ls /
+echo
+echo '$ cat /etc/motd'
+cat /etc/motd
+echo
+echo 'Even processes are files — your shell'^:
+echo '$ cat /proc/self/status'
+cat /proc/self/status
+echo
+
+echo '── 2 · the namespace is per-process ─────────────────────────'
+echo 'A bind rearranges MY view of the tree — nobody else'^'s.'
+echo 'Watch a subshell replace its /etc and read a different motd:'
+echo '$ @{bind /lib/alt /etc; cat /etc/motd}'
+@{bind /lib/alt /etc; cat /etc/motd}
+echo 'And out here, unchanged:'
+echo '$ cat /etc/motd'
+cat /etc/motd
+echo '(try: bind -a, union directories — ls sees both)'
+echo
+
+echo '── 3 · real tools, real pipelines ───────────────────────────'
+echo '$ echo the quick brown fox | sed s/quick/QUICK/ | tr a-z A-Z'
+echo the quick brown fox | sed s/quick/QUICK/ | tr a-z A-Z
+echo
+echo 'grep is the real one, yacc grammar and all; sort|uniq work:'
+echo '$ ls /bin | grep ^s | sort'
+ls /bin | grep '^s' | sort
+echo
+
+echo '── 4 · two heritages, one pipeline ──────────────────────────'
+echo '/v10/bin holds Research Unix V10 binaries from the TUHS tapes;'
+echo '/bin is Plan 9. They pipe into each other:'
+echo '$ /v10/bin/echo -e hello^\\n^world | wc'
+/v10/bin/echo -e 'hello\nworld' | wc
+echo
+
+echo '── 5 · the editor is sam ────────────────────────────────────'
+echo 'Structural regexps, from the real source (sam -d, scripted):'
+echo horses for courses > /tmp/tourf
+echo 'e /tmp/tourf
+,x/courses/ c/COURSES/
+w /tmp/tourf
+q' > /tmp/tourscript
+sam -d < /tmp/tourscript > /dev/null >[2] /dev/null
+echo '$ ,x/courses/ c/COURSES/   applied to: horses for courses'
+echo -n 'result: '
+cat /tmp/tourf
+echo
+
+echo '── 6 · windows, editors, foreigners ─────────────────────────'
+echo 'In a browser or on a desktop: win rc, win sam, win acme — the'
+echo 'real acme, all twenty source files. And the system speaks WASI:'
+echo 'real Go binaries and real CPython 3.14 run against this kernel'
+echo '(try: python /tmp/pytest.py — it takes a moment to boot).'
+echo
+echo 'The whole system is open: https://github.com/ChristineTham/ipnx-v12'
+echo 'tour: complete'

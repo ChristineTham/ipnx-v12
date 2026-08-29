@@ -333,6 +333,7 @@ rcinteractive(void)
 	char *av[] = { "rc", "-i", nil };
 
 	print("ipnx-v12: interactive rc (EOF to shut down)\n");
+	print("          the guided tour: rc /rc/tour\n");
 	exec("/bin/rc", av);
 	fprint(2, "init: exec /bin/rc: %r\n");
 	exits("exec");
