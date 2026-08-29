@@ -146,8 +146,15 @@ const consT = makeTerm(consTermEl);
 consWin.setFocusInner(() => consT.term.focus());
 consWin.onResize(() => consT.fit.fit());
 consT.term.writeln("\x1b[38;5;110mipnx-v12 — a reimagining of Unix, booting in this tab\x1b[0m");
-if (new URLSearchParams(location.search).has("cc"))
-  consT.term.writeln("\x1b[38;5;110mC toolchain aboard — try: cc hello.c  then  ./a.out\x1b[0m");
+{
+  const q = new URLSearchParams(location.search);
+  const cc = q.has("cc"), go = q.has("go");
+  if (cc || go)
+    consT.term.writeln("\x1b[38;5;110m" + (cc && go
+      ? "C and Go toolchains aboard — try: cc hello.c   or   go run hello.go"
+      : go ? "Go toolchain aboard — try: go run hello.go"
+      : "C toolchain aboard — try: cc hello.c  then  ./a.out") + "\x1b[0m");
+}
 
 // cooked line discipline for /dev/cons (the kernel's cons expects fed lines;
 // the echo is the host's job, as on the Node host's tty)
@@ -435,7 +442,8 @@ function seedFromJson(files) {
 }
 
 setStatus("fetching rootfs…");
-const CCMODE = new URLSearchParams(location.search).has("cc");
+const params = new URLSearchParams(location.search);
+const PROFILES = ["cc", "go"].filter((k) => params.has(k));
 const resp = await fetch("../build/rootfs.json?v=BUILDSTAMP");
 const total = +resp.headers.get("content-length") || 0;
 let text;
@@ -455,10 +463,18 @@ if (resp.body && total) {
 setStatus("unpacking…");
 await new Promise((r) => setTimeout(r, 0));      // let the status paint
 const files = JSON.parse(text);
-if (CCMODE) {
-  setStatus("fetching the C toolchain…");
-  const ov = await (await fetch("../build/cc-overlay.json?v=BUILDSTAMP")).json();
-  Object.assign(files, ov);
+if (PROFILES.length) {
+  const man = await (await fetch("../build/overlays.json?v=BUILDSTAMP")).json();
+  for (const prof of PROFILES) {
+    const label = prof === "cc" ? "C" : "Go";
+    const parts = man[prof] ?? [];
+    for (let i = 0; i < parts.length; i++) {
+      setStatus(`fetching the ${label} toolchain… (${i + 1}/${parts.length})`);
+      const ov = await (await fetch(`../build/${parts[i]}?v=BUILDSTAMP`)).json();
+      Object.assign(files, ov);
+      await new Promise((r) => setTimeout(r, 0));
+    }
+  }
 }
 setStatus("booting…");
 const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: true });

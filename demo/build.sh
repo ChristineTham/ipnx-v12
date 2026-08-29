@@ -144,4 +144,47 @@ fs.writeFileSync("dist/build/cc-overlay.json", JSON.stringify(base));
 console.log("  cc-overlay.json", fs.statSync("dist/build/cc-overlay.json").size, "bytes (GitHub caps files at 100MB — the overlay merges onto the base in the shell)");
 '
 fi
+
+# ---- the opt-in Go-toolchain overlay: the real gc compiler/linker/gofmt
+# (cross-built wasip1) + the gobyexample-derived stdlib export set. Packed in
+# parts to stay under GitHub's 100MB file cap; overlays.json is the manifest
+# the shell reads. Regenerate the cache with toolchain/go/build.sh.
+if [ -s toolchain/go/cache/compile.wasm ]; then
+  node -e '
+const fs = require("fs"), path = require("path");
+const parts = [[], []];                            // [0]=compile, [1]=the rest
+const add = (i, p, file) => parts[i].push([p, fs.readFileSync(file).toString("base64")]);
+add(0, "/go/bin/compile", "toolchain/go/cache/compile.wasm");
+add(1, "/go/bin/link", "toolchain/go/cache/link.wasm");
+add(1, "/go/bin/gofmt", "toolchain/go/cache/gofmt.wasm");
+add(1, "/go/importcfg", "toolchain/go/cache/importcfg");
+add(1, "/go/VERSION", "toolchain/go/cache/VERSION");
+(function walk(d, pre) {
+  for (const e of fs.readdirSync(d)) {
+    const f = path.join(d, e), s = fs.statSync(f);
+    if (s.isDirectory()) walk(f, pre + e + "/");
+    else add(1, pre + e, f);
+  }
+})("toolchain/go/cache/pkg", "/go/pkg/");
+parts.forEach((entries, i) => {
+  const name = `go-overlay-${i}.json`;
+  fs.writeFileSync(`dist/build/${name}`, JSON.stringify(Object.fromEntries(entries)));
+  const sz = fs.statSync(`dist/build/${name}`).size;
+  if (sz > 99 * 1024 * 1024) { console.error(`${name} over the 100MB cap`); process.exit(1); }
+  console.log(`  ${name}`, sz, "bytes");
+});
+'
+fi
+
+# the overlay manifest reflects what this build actually packed
+node -e '
+const fs = require("fs");
+const man = {};
+if (fs.existsSync("dist/build/cc-overlay.json")) man.cc = ["cc-overlay.json"];
+const gos = fs.readdirSync("dist/build").filter((n) => /^go-overlay-\d+\.json$/.test(n)).sort();
+if (gos.length) man.go = gos;
+fs.writeFileSync("dist/build/overlays.json", JSON.stringify(man));
+console.log("  overlays.json", JSON.stringify(man));
+'
+
 echo "demo/dist: $(du -sh dist | awk '{print $1}') ($(find dist -type f | wc -l | tr -d ' ') files)"
