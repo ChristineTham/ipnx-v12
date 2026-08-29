@@ -108,6 +108,16 @@ snapshot, the guard, console, optional presentation), point it at the rootfs,
 and run the suite; `poc/supervisor/` is the executable statement of the
 contract to read alongside. A host is real when init exits 0.
 
+## Redeploying the demo
+
+The live demo ([christham.net/ipnx-v12](https://christham.net/ipnx-v12/)) is
+the `gh-pages` branch serving `demo/dist`. After a userspace change worth
+publishing: `bash userspace/mk.sh && bash demo/build.sh`, then copy `dist/`
+onto the `gh-pages` branch and push (an orphan worktree keeps it clean).
+Pages rebuilds in under a minute. The COI service worker in the bundle
+supplies COOP/COEP; verify in a real browser — embedded panes may refuse
+service workers.
+
 ## Debugging
 
 - **Start from the suite's own output**: every FAIL names its assertion; init's

@@ -222,6 +222,9 @@ the Rust kernel core under wasmtime: the same suite, identical on the reference
 implementation and the native rewrite. The proof of concept is complete, and the
 kernel has been built twice.** Alongside it, TUHS-tape V10 `cat` and `echo` run
 unmodified in `/v10/bin`, preserving the exhibit that started the project.
+**Try it: the whole system runs in your browser at
+[christham.net/ipnx-v12](https://christham.net/ipnx-v12/)** — boot to a shell,
+type `rc /rc/tour`.
 
 Before the build, four review lenses — the deployment ledger (where it runs),
 design thinking (who it is for), a six-hats pass (what we had missed), and

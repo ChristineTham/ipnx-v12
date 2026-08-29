@@ -133,7 +133,15 @@ the window server drawing through the same `#w`; console windows text-mirror
 into the DOM (the xterm.js path) so a screen reader can follow a shell —
 accessibility as justice, not a feature ([virtue-ethics.md](virtue-ethics.md)).
 
-### The public demo *(S, standalone — any time)* — consumes: personas (2026-08-29)
+### The public demo *(S, standalone)* — **landed 2026-08-29: [christham.net/ipnx-v12](https://christham.net/ipnx-v12/)**
+GitHub Pages (her call — no new Netlify site), `gh-pages` branch assembled by
+`demo/build.sh`; COOP/COEP supplied by our own COI service worker, injected
+into the dist copy of the frozen browser page (the derivation-layer move;
+self-skips where real headers exist). Verified live in a real Chrome — 132
+PASS, 0 FAIL, `crossOriginIsolated` true. Field note: this workstation's
+embedded browser pane refuses service-worker registration (measured over
+HTTP/1.0 and 1.1), so live verification needs a real browser. P2/P3's
+validation events are now armed. — *consumes: personas (2026-08-29)*
 The browser port is finished, frozen, and unreachable — P2 and P3's whole
 journey ([personas.md](personas.md)) is "click a URL, type into rc". Host it:
 any static host that can set the COOP/COEP headers SharedArrayBuffer needs

@@ -319,7 +319,9 @@ commands over `libp9.a`), the V10 exhibit, and the WASI second ABI's three citiz
 recorded (su, the user decomposition, the profile, the capability doctrine — all
 2026-08-29, zero kernel mechanism; `docs/identity.md` tells it as one story).
 
-Work now follows `docs/implementation.md`: M0 is landed (the guest world lives at
+**The public demo is live: <https://christham.net/ipnx-v12/>** — the frozen
+browser port on GitHub Pages behind a COI service worker; redeploy per the
+handbook. Work now follows `docs/implementation.md`: M0 is landed (the guest world lives at
 `userspace/`); M1 is the `FROM scratch` OCI container; then the namespace-file boot,
 the macOS app, host storage, the browser host on the Rust core, iPadOS on Pulley,
 `/net`, identity on the wire, the profile, the modern personality (where git gets

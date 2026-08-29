@@ -51,10 +51,10 @@ residents; they become the megaphone.
 - **Pains today**: every Plan 9 revival demands a VM or an ISO; web "Plan 9"
   toys are usually tributes, not the code; this project's browser port is
   real and has no URL.
-- **Journey**: sees a post (skeptical-curious) → clicks the demo *(today:
-  there is none — the 99% bounce)* → pokes rc and acme, runs their own
-  authenticity tests → follows the source link to the verbatim tree →
-  writes the post that brings the next thousand.
+- **Journey**: sees a post (skeptical-curious) → clicks the demo *(live:
+  [christham.net/ipnx-v12](https://christham.net/ipnx-v12/))* → pokes rc and
+  acme, runs their own authenticity tests → follows the source link to the
+  verbatim tree → writes the post that brings the next thousand.
 - **Believes when**: hosted `sed` in a pipeline matches their memory; the
   verbatim sources are one link away.
 - **Validation event**: the demo ships; unsolicited posts and issues arrive

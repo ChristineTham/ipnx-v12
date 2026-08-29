@@ -17,7 +17,7 @@ engine change (the engine matrix is a dated decision in
 | form | host | engine (guests) | state (2026-08-29) |
 |---|---|---|---|
 | **Node** | `poc/supervisor` (frozen) | V8, Workers + SAB | **green, 132** (floor 131) — the oracle; also the dev loop |
-| **Browser tab** | `poc/browser` (frozen) → `hosts/browser` (M5) | the page's own JIT, Workers + SAB | **green, 132** (floor 131) in Chrome 148 on the reference; Rust core in wasm is M5 |
+| **Browser tab** | `poc/browser` (frozen) → `hosts/browser` (M5) | the page's own JIT, Workers + SAB | **green, 132** (floor 131) in Chrome 148 on the reference; **live at [christham.net/ipnx-v12](https://christham.net/ipnx-v12/)**; Rust core in wasm is M5 |
 | **macOS** | `hosts/macos` | wasmtime 37, Cranelift JIT | **green, 132** (floor 131), headless; the app shell is M3 |
 | **OCI container** | `hosts/oci` (M1) | wasmtime, Cranelift (or AOT `.cwasm`) | scaffolded — `FROM scratch`, musl-static, the CI machine |
 | **iPadOS** | `hosts/ipados` (M6) | wasmtime, **Pulley**, `signals_based_traps(false)` | scaffolded — no JIT, no runtime-AOT on iOS; WKWebView stopgap runs the browser port with full JIT today |
@@ -80,3 +80,15 @@ CI?) and M3 (does the macOS app survive daily driving by its own author?).
 market-timing claim and the least built substance (it waits on M7–M9); if
 the wave passes before `/net` lands, that is this project's Amoeba scenario.
 **Next review**: after M1 and M3 land, or 2026-11 — whichever is first.
+
+### Review 2026-08-29 (evening) — the first shipped form
+
+Same day as the baseline: **the public demo shipped** —
+[christham.net/ipnx-v12](https://christham.net/ipnx-v12/), the frozen browser
+port on GitHub Pages behind a COI service worker, verified live at 132/0.
+"Zero end-user forms" is no longer true; one form is in the field, and it is
+the cheapest one, aimed at the megaphone personas. What it changes about the
+bet: nothing yet — it *arms the instruments* (P2's unsolicited-posts signal,
+P3's course-adoption signal). External-goods question, asked: the demo was
+built to the personas' needs, not to an audience metric; nothing steered.
+**Next review** unchanged.
