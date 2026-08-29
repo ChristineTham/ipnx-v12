@@ -157,8 +157,8 @@ isolate WebKit (our register script's reload race was bug one), the system
 is fully WebKit-clean (132/132 with real headers), and the last wall proved
 to be a **deterministic WebKit defect** — concurrent module-worker script
 loads through a service worker fail (second-in-flight always dies; minimal
-repro + file-ready report in `demo/webkit-repro/`, awaiting filing at
-bugs.webkit.org). The bundle serialises worker startup as the workaround,
+repro in `demo/webkit-repro/`; **filed as
+[WebKit bug 322883](https://bugs.webkit.org/show_bug.cgi?id=322883)**). The bundle serialises worker startup as the workaround,
 and **Safari runs the full 132 on this host** — verified live. The lesson
 is in the handbook: reduce before blaming upstream. P2/P3's
 validation events are now armed. — *consumes: personas (2026-08-29)*

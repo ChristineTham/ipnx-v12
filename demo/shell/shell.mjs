@@ -36,7 +36,7 @@ const vw = () => Math.max(innerWidth, 640);    // the pane can report 0 while hi
 const vh = () => Math.max(innerHeight, 480);
 const clampX = (x, w) => Math.max(4, Math.min(x, vw() - Math.min(w, vw()) + 40));
 const clampY = (y) => Math.max(4, Math.min(y, vh() - 80));
-const DSCALE = 1.5;                            // draw windows: crisp 1.5x until real fonts land
+const DSCALE = 1;                            // draw windows: crisp 1.5x until real fonts land
 const MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
 
 function makeTerm(el) {
@@ -374,9 +374,13 @@ function seedFromJson(files) {
   for (const [path, b64] of Object.entries(files)) {
     if (b64 === null) { ensure(path.replace(/^\//, "").replace(/\/$/, "")); continue; }
     const i = path.lastIndexOf("/");
-    const raw = atob(b64);
-    const data = new Uint8Array(raw.length);
-    for (let j = 0; j < raw.length; j++) data[j] = raw.charCodeAt(j);
+    let data;
+    if (Uint8Array.fromBase64) data = Uint8Array.fromBase64(b64);
+    else {
+      const raw = atob(b64);
+      data = new Uint8Array(raw.length);
+      for (let j = 0; j < raw.length; j++) data[j] = raw.charCodeAt(j);
+    }
     ensure(path.slice(0, Math.max(i, 0)).replace(/^\//, "") ? path.slice(1, i) : "")
       .kids.push({ name: path.slice(i + 1), dir: false, data });
   }
@@ -384,7 +388,25 @@ function seedFromJson(files) {
 }
 
 setStatus("fetching rootfs…");
-const files = await (await fetch("../build/rootfs.json")).json();
+const resp = await fetch("../build/rootfs.json");
+const total = +resp.headers.get("content-length") || 0;
+let text;
+if (resp.body && total) {
+  const reader = resp.body.getReader();
+  const chunks = []; let got = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value); got += value.length;
+    setStatus(`fetching rootfs… ${(got / 1048576).toFixed(0)} / ${(total / 1048576).toFixed(0)} MB`);
+  }
+  const all = new Uint8Array(got); let o = 0;
+  for (const c of chunks) { all.set(c, o); o += c.length; }
+  text = new TextDecoder().decode(all);
+} else text = await resp.text();
+setStatus("unpacking…");
+await new Promise((r) => setTimeout(r, 0));      // let the status paint
+const files = JSON.parse(text);
 setStatus("booting…");
 const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: true });
 cons = booted.cons;

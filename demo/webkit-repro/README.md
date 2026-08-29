@@ -1,6 +1,7 @@
 # WebKit repro: concurrent module-worker loads through a service worker fail
 
-**File-ready bug report** (bugs.webkit.org — component: Service Workers).
+**Filed: [WebKit bug 322883](https://bugs.webkit.org/show_bug.cgi?id=322883)**
+(2026-08-29, component Service Workers).
 Found 2026-08-29 while shipping <https://christham.net/ipnx-v12/> (a wasm
 system that spawns one module Worker per process) on GitHub Pages behind a
 COOP/COEP-injecting service worker.
