@@ -1,0 +1,27 @@
+<!doctype html><meta charset="utf-8"><title>SW module-worker repro</title>
+<pre id="log">starting</pre>
+<script>
+const log = (s) => { document.getElementById("log").textContent = s; window.__rr = s; };
+const N = 300;
+(async () => {
+  if (!navigator.serviceWorker) { log("no SW support"); return; }
+  if (!navigator.serviceWorker.controller) {
+    navigator.serviceWorker.addEventListener("controllerchange", () => location.reload(), { once: true });
+    await navigator.serviceWorker.register("./sw.js");
+    log("registering; will reload under SW control");
+    return;
+  }
+  let ok = 0, fail = 0, firstFail = -1;
+  for (let i = 0; i < N; i++) {
+    const r = await new Promise((res) => {
+      const w = new Worker("./w.mjs", { type: "module" });
+      const t = setTimeout(() => { res("timeout"); w.terminate(); }, 4000);
+      w.onmessage = () => { clearTimeout(t); w.terminate(); res("ok"); };
+      w.onerror = (e) => { clearTimeout(t); w.terminate(); res("err:" + (e.message || "generic")); };
+    });
+    if (r === "ok") ok++; else { fail++; if (firstFail < 0) firstFail = i; }
+    if (i % 25 === 0) log(`controlled; ${i + 1}/${N} ok=${ok} fail=${fail}`);
+  }
+  log(`DONE controlled=${!!navigator.serviceWorker.controller} N=${N} ok=${ok} fail=${fail} firstFail=${firstFail}`);
+})();
+</script>

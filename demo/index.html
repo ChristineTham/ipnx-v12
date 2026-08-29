@@ -57,13 +57,12 @@ its own private namespace; <code>/v10/bin/echo -e 'a\nb' | wc</code> pipes
 
 <p class="fine">
 Everything runs in your browser — nothing you type leaves this tab, and
-reloading forgets it all. <b>Reliable in Chromium browsers</b> — Chrome,
-Edge, Brave, Arc. Safari runs it (the whole 132-test suite passes on WebKit)
-but is <i>unreliable on this particular host</i>: GitHub Pages cannot send
-the isolation headers, the service-worker shim that supplies them sits in
-every worker's load path, and WebKit's service worker randomly drops about
-one process spawn in a hundred (measured). A host with real headers fixes
-Safari completely and is on the list. Firefox is untested. The whole system — kernel, sources, the
+reloading forgets it all. <b>Measured green in Chromium (Chrome, Edge,
+Brave, Arc) and in Safari</b> — the full 132-test suite passes in both.
+(Safari needed real engineering: WebKit deterministically fails concurrent
+module-worker loads through a service worker — minimal repro and file-ready
+report in the repository under <code>demo/webkit-repro/</code> — so this
+page serializes worker startup.) Firefox is untested. The whole system — kernel, sources, the
 132-test conformance suite, and the documents that argue for it — is at
 <a href="https://github.com/ChristineTham/ipnx-v12">github.com/ChristineTham/ipnx-v12</a>.
 Third-party licences: <a href="NOTICES.html">NOTICES</a>.

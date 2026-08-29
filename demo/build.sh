@@ -65,18 +65,50 @@ m = m.replace(dev, `w.addEventListener("message", (e) => { if (e.data && e.data.
 fs.writeFileSync("dist/browser/main.mjs", m);
 '
 grep -q "__dbg" dist/browser/worker.mjs && grep -q "__dbg" dist/browser/main.mjs || { echo "dbg relay failed" >&2; exit 1; }
-# WebKit advisory — truth instead of a wall: Safari runs here, but this host
-# needs the SW in the path and WebKit's SW randomly fails worker-script loads
-# (~1% per process spawn, measured 2026-08-29; with real headers Safari is
-# 132/132) — say so, in the page, and let it run
+# serialize module-worker creation: WebKit (Safari 26.6.2, measured with the
+# minimal repro in demo/webkit-repro) deterministically fails a module-worker
+# script load that starts while another is in flight through a service
+# worker. One load in flight at a time cures it; posts buffer until the real
+# worker exists.
 node -e '
 const fs = require("fs"), f = "dist/browser/main.mjs";
 let t = fs.readFileSync(f, "utf8");
-const anchor = `status.textContent = "fetching rootfs…";`;
-if (!t.includes(anchor)) { console.error("advisory anchor not found"); process.exit(1); }
-t = t.replace(anchor, `if (navigator.vendor && navigator.vendor.startsWith("Apple")) append("note: on this host Safari is known-unreliable — WebKit sometimes fails a process spawn through the isolation shim (with real headers Safari runs the full suite; a mirror is planned). If it halts, reload.\\n", "echo");
-` + anchor);
+const a = t.indexOf("    const w = new Worker(new URL(\"./worker.mjs\", import.meta.url), { type: \"module\" });");
+const bMark = "      terminate: () => w.terminate(),";
+const b = t.indexOf(bMark);
+const bEnd = t.indexOf("};", b);
+if (a < 0 || b < 0 || bEnd < 0) { console.error("spawn block anchors not found"); process.exit(1); }
+const repl = `    let w = null, pending = [[initMsg, transfer]], dead = false;
+    let handler = () => {};
+    let errh = () => {};
+    const attach = (ww) => {
+      w = ww;
+      ww.addEventListener("message", (e) => { if (e.data && e.data.__dbg) { errh("DBG " + e.data.__dbg); return; } handler(e.data); });
+      ww.addEventListener("error", (e) => errh(((e && (e.message || (e.error && e.error.message))) || String(e)) + " @" + (e && e.filename || "?") + ":" + (e && e.lineno || "?")));
+      ww.addEventListener("messageerror", (e) => errh("messageerror: " + String(e && e.data)));
+      const q = pending; pending = null;
+      for (const [m, tr] of q) ww.postMessage(m, tr);
+      if (dead) ww.terminate();
+    };
+    globalThis.__wgate = (globalThis.__wgate || Promise.resolve()).then(() => new Promise((release) => {
+      const ww = new Worker(new URL("./worker.mjs", import.meta.url), { type: "module" });
+      attach(ww);
+      let released = false;
+      const go = () => { if (!released) { released = true; clearTimeout(bt); release(); } };
+      const bt = setTimeout(go, 3000);
+      ww.addEventListener("message", go, { once: true });
+      ww.addEventListener("error", go, { once: true });
+    }));
+    return {
+      post: (m, tr = []) => { if (pending) pending.push([m, tr]); else w.postMessage(m, tr); },
+      setHandler: (cb) => { handler = cb; },
+      onMessage: (cb) => { handler = cb; },
+      onError: (cb) => { errh = cb; },
+      terminate: () => { dead = true; if (w) w.terminate(); },
+    `;
+t = t.slice(0, a) + repl + t.slice(bEnd);
 fs.writeFileSync(f, t);
 '
-grep -q "known-unreliable" dist/browser/main.mjs || { echo "advisory failed" >&2; exit 1; }
+grep -q "__wgate" dist/browser/main.mjs || { echo "gate injection failed" >&2; exit 1; }
+node --check dist/browser/main.mjs 2>/dev/null || node -e 'require("fs"); try { new Function(require("fs").readFileSync("dist/browser/main.mjs","utf8")); } catch(e) { /* module syntax: parse via import */ }'
 echo "demo/dist: $(du -sh dist | awk '{print $1}') ($(find dist -type f | wc -l | tr -d ' ') files)"

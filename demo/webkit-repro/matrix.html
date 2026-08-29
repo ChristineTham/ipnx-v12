@@ -1,0 +1,46 @@
+<!doctype html><meta charset="utf-8"><title>repro matrix</title>
+<pre id="log">starting</pre>
+<script>
+const log = (s) => { document.getElementById("log").textContent = s; window.__rr = s; };
+const q = new URLSearchParams(location.search);
+const CONC = +(q.get("conc") || 1), N = +(q.get("n") || 300),
+      SAB = q.get("sab") === "1", HOLD = +(q.get("hold") || 50),
+      KEEP = q.get("keep") === "1";
+(async () => {
+  if (q.get("nosw") === "1") {
+    const rs = await navigator.serviceWorker.getRegistrations();
+    for (const r of rs) await r.unregister();
+    if (navigator.serviceWorker.controller) { log("unregistered; reload once more"); location.reload(); return; }
+  } else if (!navigator.serviceWorker.controller) {
+    navigator.serviceWorker.addEventListener("controllerchange", () => location.reload(), { once: true });
+    await navigator.serviceWorker.register("./sw.js");
+    log("registering"); return;
+  }
+  let ok = 0, fail = 0, firstFail = -1, done = 0, launched = 0;
+  const kept = [];
+  const one = (i) => new Promise((res) => {
+    const w = new Worker("./w2.mjs", { type: "module" });
+    const t = setTimeout(() => { res("timeout@" + i); if (!KEEP) w.terminate(); }, 6000);
+    let up = false;
+    w.onmessage = (e) => {
+      if (e.data === "up") {
+        up = true;
+        const sab = SAB ? new SharedArrayBuffer(4) : null;
+        w.postMessage({ sab, hold: HOLD });
+      } else { clearTimeout(t); if (KEEP) kept.push(w); else w.terminate(); res("ok"); }
+    };
+    w.onerror = (e) => { clearTimeout(t); if (!KEEP) w.terminate(); res("err@" + i + (up ? "-late" : "-load")); };
+  });
+  const pump = async () => {
+    while (launched < N) {
+      const i = launched++;
+      const r = await one(i);
+      done++;
+      if (r === "ok") ok++; else { fail++; if (firstFail < 0) firstFail = i; window.__err = (window.__err || "") + " " + r; }
+      if (done % 25 === 0) log(`running ${done}/${N} ok=${ok} fail=${fail}`);
+    }
+  };
+  await Promise.all(Array.from({ length: CONC }, pump));
+  log(`DONE conc=${CONC} sab=${SAB} keep=${KEEP} N=${N} ok=${ok} fail=${fail} firstFail=${firstFail} errs=${(window.__err || "").slice(0, 200)}`);
+})();
+</script>

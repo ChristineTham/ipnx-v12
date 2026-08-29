@@ -137,6 +137,11 @@ service workers.
 - **Wire trouble**: `exportfs` + a second instance reproduces most devmnt
   issues without a network; tag/expect mismatches and un-cloned fids are the
   historical culprits.
+- **Before blaming a platform, reduce.** A claim of "engine bug" requires a
+  minimal repro that indicts them or you — the Safari case (2026-08-29) took
+  three walls: two were ours, and the third became file-ready only when a
+  70-line reduction (`demo/webkit-repro/`) showed the deterministic trigger
+  a whole-system symptom had hidden.
 
 ## Conventions
 

@@ -141,14 +141,15 @@ self-skips where real headers exist). Verified live in a real Chrome — 132
 PASS, 0 FAIL, `crossOriginIsolated` true. Field notes: this workstation's
 embedded browser pane refuses service-worker registration (measured over
 HTTP/1.0 and 1.1), so live verification needs a real browser; and the Safari story,
-measured to the bottom after a wrong first cause was written down and
-corrected: the shim DOES isolate WebKit (the original failure was our
-register script's reload race + a sessionStorage latch), **Safari runs the
-full 132 with real headers and no shim**, and the residual wall is WebKit's
-service worker randomly failing ~1% of worker-script loads — so this host is
-Safari-unreliable by mechanism, the page says so as an advisory rather than
-a wall, and a header-capable host (the `_headers` file already ships) fixes
-Safari completely. P2/P3's
+reduced to the bottom through two on-the-record corrections: the shim DOES
+isolate WebKit (our register script's reload race was bug one), the system
+is fully WebKit-clean (132/132 with real headers), and the last wall proved
+to be a **deterministic WebKit defect** — concurrent module-worker script
+loads through a service worker fail (second-in-flight always dies; minimal
+repro + file-ready report in `demo/webkit-repro/`, awaiting filing at
+bugs.webkit.org). The bundle serialises worker startup as the workaround,
+and **Safari runs the full 132 on this host** — verified live. The lesson
+is in the handbook: reduce before blaming upstream. P2/P3's
 validation events are now armed. — *consumes: personas (2026-08-29)*
 The browser port is finished, frozen, and unreachable — P2 and P3's whole
 journey ([personas.md](personas.md)) is "click a URL, type into rc". Host it:
