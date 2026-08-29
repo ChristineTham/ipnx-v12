@@ -158,8 +158,9 @@ The kernel is about 3,000 lines in JavaScript and 4,000 in Rust — small enough
 read in a sitting, twice over. It carries 61,000 lines of untouched Bell Labs
 userspace today, and Go binaries and Python already run beside them — with git
 repositories to come — through the same handful of operations on names. A hundred
-and thirty-one tests boot it, exercise everything from fork to fonts, and shut it
-down clean, identically on Node, in Chrome, and on the Rust kernel under wasmtime.
+and thirty-four tests boot it, exercise everything from fork to fonts to the
+compilers, and shut it down clean, identically on Node, in Chrome, and on the
+Rust kernel under wasmtime.
 
 ## The tricks are the architecture
 
@@ -217,15 +218,11 @@ The first proof that the modern world can coexist with this system is also worki
 real Go binary, compiled with ordinary `GOOS=wasip1 go build`, and real CPython 3.14**
 can read files, list directories, sleep on timers and run scripts against the kernel.
 They know nothing about Plan 9. They use a WASI shim whose single preopened directory is
-the process's namespace root. **131 acceptance tests pass on Node, in Chrome — and on
+the process's namespace root. **134 acceptance tests pass on Node, in Chrome — and on
 the Rust kernel core under wasmtime: the same suite, identical on the reference
 implementation and the native rewrite. The proof of concept is complete, and the
 kernel has been built twice.** Alongside it, TUHS-tape V10 `cat` and `echo` run
 unmodified in `/v10/bin`, preserving the exhibit that started the project.
-**Try it: the whole system runs in your browser at
-[christham.net/ipnx-v12](https://christham.net/ipnx-v12/)** — boot to a shell,
-type `rc /rc/tour`.
-
 Before the build, four review lenses — the deployment ledger (where it runs),
 design thinking (who it is for), a six-hats pass (what we had missed), and
 virtue ethics (what character the work keeps) — have each been applied and
@@ -240,6 +237,32 @@ stated as aspiration and admitted by one test — *does it become a file tree in
 namespace?* — the cloud and the cluster: your S3 bucket is a directory, the model is a
 file you write prompts into, the pod is a namespace, and the function is this machine,
 booted for one request and gone.
+
+## Try it
+
+**The whole system runs in your browser at
+[christham.net/ipnx-v12](https://christham.net/ipnx-v12/).** One button boots
+it: the desktop appears in a few seconds, and the toolchains — about 260 MB of
+them — stream in while you look around. Nothing installs and nothing persists:
+the entire machine lives in a tab's memory, and a reload forgets it ever
+existed.
+
+You arrive as `kitty`, in a home directory with programs waiting. `cc hello.c`
+then `./a.out` compiles with real clang and links with real wasm-ld, driven by
+a real `cc(1)` — flags, `-o`, `-c`, `-E` and all. `go run hello.go` compiles
+with **the actual Go compiler** — `cmd/compile`, cross-built to WebAssembly and
+running as an ordinary process on this kernel, which folklore says is
+impossible; the folklore was confusing the orchestrator with the tools.
+`python hello.py` is real CPython 3.14 with its full standard library, and
+`pip install cowsay` fetches a real wheel from the real PyPI, verifies it and
+installs it — the network arriving, naturally, as a file. The example programs
+from python.org's front page and the features gobyexample.com teaches run as
+written, from `examples/` in your home.
+
+The editors are there too: `win acme &` opens the real acme in a window
+(option-click is button 2, command- or right-click button 3), `rc /rc/tour`
+walks the whole system, and the Test suite button runs the full conformance
+suite in the tab you are sitting in.
 
 ## Standing on
 
