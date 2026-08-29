@@ -158,9 +158,10 @@ The kernel is about 3,000 lines in JavaScript and 4,000 in Rust — small enough
 read in a sitting, twice over. It carries 61,000 lines of untouched Bell Labs
 userspace today, and Go binaries and Python already run beside them — with git
 repositories to come — through the same handful of operations on names. A hundred
-and thirty-five tests boot it, exercise everything from fork to fonts to the
-compilers to the package manager, and shut it down clean, identically on
-Node, in Chrome, and on the Rust kernel under wasmtime.
+and thirty-eight tests boot it, exercise everything from fork to fonts to
+the compilers to the package manager, and shut it down clean, identically on
+Node, in Chrome, on the Rust kernel under wasmtime — and, on every push, in
+a 62&nbsp;MB `FROM scratch` container.
 
 ## The tricks are the architecture
 
@@ -185,6 +186,15 @@ a file, and every process composes its own world.
   `/bin`. The namespace is the installation record — there is no package
   database to corrupt — and because namespaces are per-process, a person, a
   role and an agent can each carry a different set of installed software.
+  The consequences reach further than convenience. Versions coexist under
+  `/pkg/<name>/<version>` and each process binds the ones it wants, so there
+  is no dependency solver and no dependency hell. A name that would bind
+  over different bytes is refused, so conflicts are caught at install time
+  rather than debugged afterwards. And a subshell that does `rfork n` and
+  installs its own packages *is* a development environment — private,
+  nestable, gone with the process. The tool families this replaces — venv,
+  nvm and rbenv on one side, flatpak and snap on the other — are namespace
+  emulations, built because their systems could not say `bind`.
 - **A computer can be treated as a function call.** The same kernel is intended to run
   in a microVM that boots in about 100 milliseconds, mounts what it needs, and then goes
   away. This is the sort of environment used by services such as Lambda, but with an
@@ -223,7 +233,7 @@ The first proof that the modern world can coexist with this system is also worki
 real Go binary, compiled with ordinary `GOOS=wasip1 go build`, and real CPython 3.14**
 can read files, list directories, sleep on timers and run scripts against the kernel.
 They know nothing about Plan 9. They use a WASI shim whose single preopened directory is
-the process's namespace root. **135 acceptance tests pass on Node, in Chrome — and on
+the process's namespace root. **138 acceptance tests pass on Node, in Chrome — and on
 the Rust kernel core under wasmtime: the same suite, identical on the reference
 implementation and the native rewrite. The proof of concept is complete, and the
 kernel has been built twice.** Alongside it, TUHS-tape V10 `cat` and `echo` run
