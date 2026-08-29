@@ -652,6 +652,71 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   universal; look = tapping the thing; execute = tapping the tag or
   ⌘Enter; the chords were always the clipboard.
 
+- **(2026-08-30) Containerisation and orchestration, planned: a Dockerfile
+  is a process file, the orchestrator is a file server, kubectl is `cat`
+  and `echo`.** Christine's directive, recorded in her words: "a
+  Dockerfile simply sets up what packages need to be installed for a
+  process and what commands needs to be executed - it is effectively a
+  process instantiation specification. we can implement an entire process
+  orchestration suite (in userspace). Effectively, we can do everything
+  kubernetes can do, within the constraints of our architecture." The
+  design, worked out from that observation:
+
+  **The spec is a directory — the process file.** M2 already made boot a
+  namespace file, and boot is just the instantiation of pid 1; the
+  general case is a spec directory: `namespace` (M2's dialect verbatim),
+  `packages` (name/version pairs — pkg verifies digests and refuses
+  conflicts), `user` (an identity.md transition), `env`, `cmd`, and
+  optionally `replicas` and `health` (a path to read — a liveness probe
+  is a file read). The structural claim under it: **a Dockerfile is a
+  script because installing is mutation; a process file is a declaration
+  because installing is a bind.** `RUN` steps and image baking exist to
+  cache filesystem mutation — with namespace assembly instant and
+  package trees immutable under `/pkg`, there is no build step to cache.
+  And the symmetry that makes it honest: a spec directory stands to a
+  live process as `/proc/<pid>` stands to it at runtime — instantiation
+  is introspection's mirror.
+
+  **`run(1)` is docker run** — ~a hundred lines of userspace: rfork,
+  install the declared packages, `newns()` the namespace file, set env,
+  transition the credential through `/proc/<pid>/ctl` (the eve/ruid rule
+  unchanged — no new mechanism), exec. Runs on today's kernel; nothing
+  is missing after M4.
+
+  **`svc(4)` is the control plane, as a file server.** Desired state is
+  files you write, observation is files you read: `/svc/ctl` takes
+  `start name spec` / `stop` / `scale name n`; `/svc/<name>/` holds
+  `spec`, `replicas`, `pids`, `status`, `log`. A reconciler keeps
+  desired and live equal with backoff — a Deployment is a directory
+  entry, and kubectl is `cat` and `echo`. **A Service is a `/srv`
+  post**: svc posts one name serving a 9P proxy that fans attaches
+  across replicas — a load balancer is a 9P multiplexer, and consumers
+  just `mount` it, oblivious. Rollout composes with what already
+  exists: blue-green is repointing the post; rollback is binding the
+  previous `/pkg` versions — or a `#V` snapshot.
+
+  **The cluster stage** consumes M7 (`/net`) and M8 (identity on the
+  wire), with `cpu(1)` as the precedent: a spec instantiated on a
+  remote kernel that imports the caller's namespace pieces back over
+  9P; a cluster's control plane is a union — `bind -a` each kernel's
+  `/svc` into one tree, and the scheduler is any userspace program
+  choosing which `ctl` to write. Policy lives in userspace; the
+  mechanism is file writes.
+
+  **What does not dissolve, kept on the record**: metering and quotas
+  (the standing open question from the third-dissolution entry);
+  bin-packing and affinity — genuinely policy, admissible as userspace
+  programs, never core; inter-kernel networking, which belongs to the
+  hosts. And the tripwire travels: if the spec dialect grows past its
+  few files, we have rebuilt YAML Kubernetes and must stop. One
+  pleasing inversion closes it: M1 ships the kernel *inside* a
+  `FROM scratch` container; this suite makes processes the contained
+  unit — and the two compose, a fleet manager running IPNX kernels,
+  each orchestrating thousands of processes, pods of pods with none of
+  the machinery. Sequenced at M12, re-aimed accordingly: the local
+  stage (spec, `run`, `svc` on one kernel) is pure userspace and may
+  interleave early; the cluster stage waits on M7+M8.
+
 - **(2026-08-30) The namespace's third dissolution: every process is a
   jail, a container and a microVM — "our computer is a network."**
   Christine's articulation, recorded in her words: "per process namespace

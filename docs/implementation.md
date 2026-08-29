@@ -350,11 +350,28 @@ enough to be a tenant. A research spike sizes it before code.
 **Acceptance (spike):** a written comparison with measurements; **(build):**
 the floor suite inside a microVM, boot time recorded.
 
-### M12 — the system in the world *(open-ended)* — consumes: cloud/AI aspirations (2026-08-27)
-The tranche that turns deployments into products: S3-shaped storage as a file
-server, lambda-shaped execution (a request is an exec in a fresh namespace),
-Kubernetes hosting notes, and the agent sandbox — M9's sub-profiles as the
-standing answer to "give an AI a computer without giving it the computer."
+### M12 — the system in the world *(open-ended)* — **re-aimed 2026-08-30: the orchestration suite** — consumes: cloud/AI aspirations (2026-08-27), the third dissolution + orchestration plan (design.md 2026-08-30)
+The spine is now the **process orchestration suite** (design.md 2026-08-30:
+"a Dockerfile is a process file, the orchestrator is a file server, kubectl
+is `cat` and `echo`"): the spec directory (`namespace`/`packages`/`user`/
+`env`/`cmd`/`replicas`/`health`), `run(1)` as docker run (~100 lines,
+nothing missing after M4 — the **local stage may interleave early**, it is
+pure userspace), `svc(4)` as the control plane file server (desired state
+written, observation read, a Service is a `/srv` post, a load balancer is
+a 9P multiplexer), and the **cluster stage** after M7+M8 — remote
+instantiation on `cpu(1)`'s precedent, a cluster's control plane as
+`bind -a` over kernels' `/svc` trees, scheduling as userspace policy.
+Lambda-shaped execution collapses into `run` of a spec in a fresh
+namespace; S3-shaped storage as a file server and the agent sandbox (M9's
+sub-profiles as "give an AI a computer without giving it the computer")
+remain in the tranche. The tripwire travels: a spec dialect grown past its
+few files means we have rebuilt YAML Kubernetes, and we stop.
+**Acceptance (local):** a spec directory instantiates a credentialed,
+namespaced process; `svc` holds replicas at N through kills, and `cat
+/svc/<name>/status` tells the truth; a posted service fans attaches across
+replicas. **(cluster):** one `svc` tree spans two kernels over TCP and a
+spec runs remotely with the caller's namespace imported — judged by the
+suite like everything else.
 Sequenced by demand once M7–M9 exist.
 
 ### Continuous — curation sweeps *(S each, standing)*
