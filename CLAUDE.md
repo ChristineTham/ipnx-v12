@@ -215,8 +215,9 @@ evidence, not a fresh opinion.
   credentials in the kernel, names canonical (numbers are the personality's, via
   `/etc/passwd`), transitions through `/proc/<pid>/ctl` under the eve/ruid rule — no new
   syscalls — 9P2000.u's `DMSETUID` bit at exec, V10 enforcement in in-process devices,
-  per-attach identity stamped on wire mounts. Open: identity.md's D1–D4 measurements in
-  `../ipnx`.
+  per-attach identity stamped on wire mounts. Identity.md's D1–D4 are measured and
+  dispositioned (D1/D3/D4 closed with `../ipnx` provenance; D2's group implementation
+  deferred by design, riding a later milestone).
 - **Links landed as the V12 additions**: kernel traps 60–62 (`lstat` is a stat flag),
   minted wire types 128/130/132 above every dialect's range (strangers `Rerror`,
   clients degrade), 9P2000.u's `QTSYMLINK`/`DMSYMLINK` bits, and V10's rule — **the

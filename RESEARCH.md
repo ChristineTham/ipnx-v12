@@ -1390,6 +1390,34 @@ teeth:
   frozen shim's honest 0 self-skips while a regression fails on any host.
   Verified: `distinct` on wasmtime, 134 PASS on all three hosts.**
 
+### 9.8 The versioning layer and ar: two measurements (2026-08-30)
+
+**A whole-root snapshot costs structure, never bytes.** The `#V` device
+freezes the ram root by structural clone: every node copied shallow, every
+data buffer shared (`Rc<Vec<u8>>` in the Rust core, a `dshared` mark in the
+demo kernel), the live side copying a buffer only on its next write to it —
+`Rc::make_mut` is the whole mechanism. Measured on the 710-node rootfs
+(macOS host, release build): baseline max RSS 120,864,768 bytes; after
+**twenty whole-root snapshots** 129,826,816 — **8,962,048 bytes for all
+twenty, ≈448 KiB per snapshot, ≈630 bytes per node**, wall clock under one
+second for the twenty (`date` unchanged across the loop). The rootfs
+carries ~50 MB of file data; a copying snapshot would have spent ~1 GB.
+Enforcement is one gate: `ram_access` refuses `want & 2` on an `ro` node
+*before* the eve bypass — nobody rewrites history, eve included. The
+follow-on caught in review: a device that synthesises directory listings
+must derive `walk` and `read` from one entry table — the first cut listed
+snapshots but not `ctl`, a ghost file (walkable, invisible to `ls`).
+
+**wasm-ld links index-less archives.** `llvm-ar rcS` (S: no symbol table)
+against `llvm-ar rc` on the same object: 532 vs 606 bytes; wasm-ld links
+both without complaint — lld scans archive members itself, so the ranlib
+table is optional. That measurement is the whole licence for `ar(1)` as a
+~200-line guest command writing the plain GNU format (`!<arch>\n`, 60-byte
+headers, even padding, no name table — members over 15 characters refused
+honestly). `ar r libx.a x.o` then `cc main.c -lx` is the complete static
+library story; pkg's `libX.objects` list convention stays for trees that
+ship loose objects.
+
 ## 12. Prior art: capability operating systems (researched 2026-08-29)
 
 The identity decisions (su, the user decomposition, the profile) rest on

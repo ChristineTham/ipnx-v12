@@ -37,6 +37,8 @@ export function makeRamfs(seed, eve = "kitty") {
     length: k.dir ? 0 : k.symlink !== undefined ? k.symlink.length : k.data.length,
   });
   const access = (node, cred, want) => {          // want: 4 read, 2 write
+    // the ro gate outranks even eve — nobody rewrites a snapshot
+    if ((want & 2) && node.ro) throw derr("read-only snapshot");
     if (!cred || cred.euid === eve) return;
     const bits = node.uid === cred.euid ? (node.mode >> 6) : node.mode;
     if ((bits & want) !== want)
@@ -73,6 +75,11 @@ export function makeRamfs(seed, eve = "kitty") {
     },
     write: (node, data, off) => {
       if (node.dir) throw derr("write on directory");
+      if (node.ro) throw derr("read-only snapshot");
+      if (node.dshared) {                         // a snapshot shares these bytes:
+        node.data = new Uint8Array(node.data);    // copy once, then write freely
+        delete node.dshared;
+      }
       const o = Number(off), end = o + data.length;
       if (end > node.data.length) {
         const grown = new Uint8Array(end);
@@ -130,6 +137,7 @@ export function makeRamfs(seed, eve = "kitty") {
       return node.symlink;
     },
     wstat: (node, ch, cred, rawRec, parent, base) => {  // chmod/chown/rename/touch
+      if (node.ro) throw derr("read-only snapshot");
       if (ch.mode !== undefined) {
         if (cred && cred.euid !== eve && cred.euid !== node.uid)
           throw derr(`not owner of '${node.name}'`);
@@ -153,6 +161,22 @@ export function makeRamfs(seed, eve = "kitty") {
     },
     truncate: (node) => { if (!node.dir) { node.data = empty; delete node._mod; } },
     stat: statNode,
+    root: () => root,
+    // a snapshot is a structural clone: O(nodes), zero bytes copied. Every
+    // clone is ro; the live file is marked dshared so its next write copies.
+    snapTree: function snapTree(n = root) {
+      const c = { name: n.name, qpath: n.qpath, dir: n.dir, uid: n.uid,
+        mode: n.mode, atime: n.atime, mtime: n.mtime, ro: true };
+      if (n.symlink !== undefined) c.symlink = n.symlink;
+      if (n.dir) {
+        c.kids = new Map();
+        for (const [k2, v] of n.kids) c.kids.set(k2, snapTree(v));
+      } else {
+        c.data = n.data;
+        n.dshared = true;
+      }
+      return c;
+    },
     len: (node) => (node.dir ? 0 : node.data.length),
     // graft: merge a seed-shaped tree into the LIVE root — how the demo
     // streams toolchain overlays in after boot (files land whole; a driver's
@@ -176,6 +200,83 @@ export function makeRamfs(seed, eve = "kitty") {
       };
       add(root, seed);
     },
+  };
+}
+
+// ---- snapfs: '#V' — the versioning layer. A snapshot is a tree, restore is
+// a bind. 'echo snap t1 > #V/ctl' freezes the ram root; '#V/t1/...' walks the
+// past read-only; 'bind #V/t1/dir /dir' is the rollback; 'del t1' frees it.
+export function makeSnapDev(ram) {
+  const now = () => Math.floor(Date.now() / 1000);
+  const snaps = [];                               // { name, t, root }
+  const ROOT = { snaproot: true, dir: true };
+  const CTL = { snapctl: true };
+  const rec = (name, t, isdir, i) => marshalStat({
+    name, uid: "eve", qpath: 0x560000 + i, atime: t, mtime: t,
+    qtype: isdir ? QTDIR : QTFILE, mode: ((isdir ? DMDIR : 0) | (isdir ? 0o555 : 0o666)) >>> 0,
+    length: 0,
+  });
+  return {
+    name: "snapfs",
+    attach: () => ROOT,
+    walk: (node, name) => {
+      if (node.snaproot) {
+        if (name === "ctl") return CTL;
+        return snaps.find((s2) => s2.name === name)?.root ?? null;
+      }
+      if (node.snapctl) return null;
+      return ram.walk(node, name);
+    },
+    open: (node, mode, cred) => {
+      if (node.snaproot || node.snapctl) return;
+      return ram.open(node, mode, cred);
+    },
+    read: (node, n, off) => {
+      if (node.snaproot) {
+        let skip = Number(off);
+        const out = [];
+        let total = 0;
+        const ents = [["ctl", 0, false], ...snaps.map((s2) => [s2.name, s2.t, true])];
+        for (let i = 0; i < ents.length; i++) {
+          const r = rec(ents[i][0], ents[i][1], ents[i][2], i);
+          if (skip >= r.length) { skip -= r.length; continue; }
+          if (total + r.length > n) break;
+          out.push(r); total += r.length;
+        }
+        return concat(out);
+      }
+      if (node.snapctl) {
+        const b = new TextEncoder().encode(snaps.map((s2) => `${s2.name} ${s2.t}\n`).join(""));
+        const o = Math.min(Number(off), b.length);
+        return b.subarray(o, Math.min(o + n, b.length));
+      }
+      return ram.read(node, n, off);
+    },
+    write: (node, data, off) => {
+      if (node.snapctl) {
+        const words = new TextDecoder().decode(data).trim().split(/\s+/);
+        if (words[0] === "snap") {
+          const name = words[1] ?? `s${snaps.length + 1}`;
+          if (snaps.some((s2) => s2.name === name)) throw derr(`snapshot '${name}' exists`);
+          snaps.push({ name, t: now(), root: ram.snapTree() });
+        } else if (words[0] === "del") {
+          if (!words[1]) throw derr("usage: del name");
+          const i = snaps.findIndex((s2) => s2.name === words[1]);
+          if (i < 0) throw derr(`no snapshot '${words[1]}'`);
+          snaps.splice(i, 1);
+        } else throw derr("usage: snap [name] | del name");
+        return data.length;
+      }
+      if (node.snaproot) throw derr("write on directory");
+      return ram.write(node, data, off);          // ro nodes refuse inside
+    },
+    stat: (node) => {
+      if (node.snaproot) return rec("V", 0, true, 0);
+      if (node.snapctl) return rec("ctl", 0, false, 0);
+      return ram.stat(node);
+    },
+    len: (node) => (node.snaproot || node.snapctl ? 0 : ram.len(node)),
+    readlink: (node) => ram.readlink(node),
   };
 }
 

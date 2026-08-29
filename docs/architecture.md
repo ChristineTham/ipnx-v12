@@ -65,6 +65,11 @@ ABI. The conformance suite binds all three.
         `bind` over `/dev` |
   | `d` | `/fd` — dup by open |
   | `s` | `/srv` — a posted fd's channel, kept alive by name |
+  | `H` | webfs — `#H/<hex-of-url>` reads an http(s) body (native + demo hosts) |
+  | `Z` | hostfs — a host directory as files, canonicalise-prefix guarded (native) |
+  | `V` | the versioning layer — `#V/ctl` takes `snap [name]` / `del name`;
+        `#V/<name>/…` walks the frozen root read-only; restore is a `bind`
+        (native + demo hosts; the frozen oracle self-skips) |
 
 - **Blocking without blocking**: the dispatcher is async end to end. A device
   read may *park* (complete later); in the Rust core a parked operation is a
@@ -193,6 +198,14 @@ host is written against this section and judged by the suite.
 
 ## Contract: the conformance suite
 
+- **A snapshot is a tree; restore is a bind.** `#V` freezes the ram root by
+  structural clone — data buffers shared, copied only when the live side next
+  writes (COW); a snapshot node refuses every write through the one
+  `ram_access` gate, **eve included**, and `wstat` is refused with it. The
+  `#V` listing carries `ctl` plus one directory per snapshot; snapshots are
+  kernel-resident and die with the boot (persistence is M4's remaining
+  storage question). Rollback of a subtree is `bind '#V/<name>/dir' /dir`;
+  a boot-time rollback is the same line in `/lib/namespace`.
 - **The 131 are the permanent floor.** `init` (pid 1) runs the suite from the
   rootfs; *a host is real when init exits 0*. The frozen reference must stay
   green forever: `bash poc/run.sh`.

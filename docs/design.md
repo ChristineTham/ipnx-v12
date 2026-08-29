@@ -652,6 +652,31 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   universal; look = tapping the thing; execute = tapping the tag or
   ⌘Enter; the chords were always the clipboard.
 
+- **(2026-08-30) The versioning layer, v1: a snapshot is a tree, restore
+  is a bind — landed as `#V`.** The immutable-systems doctrine
+  (2026-08-29) gets its first mechanism. `echo snap t1 > '#V/ctl'`
+  freezes the ram root by **structural clone**: nodes copied shallow,
+  every byte buffer shared, the live side copying a buffer only on its
+  next write to it (`Rc::make_mut` in the Rust core; a `dshared` mark in
+  the demo kernel — the frozen oracle self-skips). Measured: twenty
+  whole-root snapshots of the 710-node rootfs cost 8.9 MB and under a
+  second, against ~50 MB of file data a copying design would have
+  duplicated per snapshot (RESEARCH §9.8). The interface is three files
+  and a verb pair — `ctl` takes `snap [name]` and `del name`, `#V/<name>`
+  walks the past read-only, and **rollback is `bind '#V/t1/dir' /dir`**;
+  a whole-system rollback is the same line first in `/lib/namespace`,
+  which makes booting from a snapshot pure M2 machinery. Enforcement is
+  one gate: `ram_access` refuses writes on snapshot nodes *before* the
+  eve bypass — nobody rewrites history, eve included. Honest scope:
+  these are epoch snapshots (taken when asked), kernel-resident, gone at
+  shutdown. The doctrine's asymptote — *every write* an incremental
+  version — and persistence across boots are M4's remaining storage
+  question (a content-addressed store under hostfs); the interface is
+  designed so both slot in behind `#V` unchanged. Alongside it, `ar(1)`
+  landed on a measurement (wasm-ld links index-less archives, RESEARCH
+  §9.8), closing the static-library gap: `ar r libx.a x.o` then
+  `cc main.c -lx` now works end to end.
+
 - **(2026-08-30) Compatibility, kissed goodbye — the userland is
   reimagined, and the verbatim world becomes the exhibit.** Christine's
   call, in her words: "Let's redesign sam, acme and the rest of the Plan 9

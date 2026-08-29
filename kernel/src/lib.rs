@@ -160,6 +160,7 @@ enum DevId {
     Proc,
     Mnt,
     Wsys,
+    Snap,
 }
 
 #[derive(Clone)]
@@ -184,6 +185,8 @@ enum Node {
     Proc { kind: u8, pid: Pid }, // 0 root, 1 dir, 2 ctl, 3 status, 4 note, 5 notepg
     Mnt(MntRef),
     Wsys { kind: WKind, win: Option<WinR>, conn: Option<DConnR> },
+    SnapRoot,
+    SnapCtl,
 }
 
 #[derive(Clone, Copy, PartialEq, Debug)]
@@ -210,6 +213,8 @@ enum WKind {
 fn node_eq(a: &Node, b: &Node) -> bool {
     match (a, b) {
         (Node::Ram(x), Node::Ram(y)) => Rc::ptr_eq(x, y),
+        (Node::SnapRoot, Node::SnapRoot) => true,
+        (Node::SnapCtl, Node::SnapCtl) => true,
         (Node::Host(x), Node::Host(y)) => x == y,
         (Node::ConsRoot, Node::ConsRoot)
         | (Node::ConsCons, Node::ConsCons)
@@ -250,13 +255,14 @@ struct RNode {
     name: String,
     qpath: u64,
     dir: bool,
-    data: Vec<u8>,
+    data: Rc<Vec<u8>>, // Rc so a snapshot shares bytes; Rc::make_mut copies on first write
     kids: Vec<(String, RamRef)>, // insertion order, like the JS Map
     uid: String,
     mode: u32,
     atime: u32,
     mtime: u32,
     symlink: Option<String>,
+    ro: bool, // a snapshot node: every write path refuses through ram_access
 }
 type RamRef = Rc<RefCell<RNode>>;
 
@@ -524,6 +530,7 @@ struct KState {
     next_note_group: u32,
     eve: String,
     ram_root: RamRef,
+    snaps: Vec<(String, u32, RamRef)>, // name, snap time, frozen root — '#V'
     hostfs_root: Option<std::path::PathBuf>,
     live_root: bool,
     qgen: u64,
@@ -1237,9 +1244,9 @@ impl Kernel {
         let root = load_seed(seed, "/", eve, boot, &mut qgen);
         if kid(&root, "tmp").is_none() {
             let t = Rc::new(RefCell::new(RNode {
-                name: "tmp".into(), qpath: qgen, dir: true, data: Vec::new(),
+                name: "tmp".into(), qpath: qgen, dir: true, data: Rc::default(),
                 kids: Vec::new(), uid: eve.into(), mode: 0o777, atime: boot,
-                mtime: boot, symlink: None,
+                mtime: boot, symlink: None, ro: false,
             }));
             qgen += 1;
             root.borrow_mut().kids.push(("tmp".into(), t));
@@ -1251,6 +1258,7 @@ impl Kernel {
                 next_note_group: 1,
                 eve: eve.into(),
                 ram_root: root,
+                snaps: Vec::new(),
                 hostfs_root: None,
                 live_root: false,
                 qgen,
@@ -1436,9 +1444,9 @@ fn load_seed(s: &Seed, name: &str, eve: &str, boot: u32, qgen: &mut u64) -> RamR
     *qgen += 1;
     if s.dir {
         let node = Rc::new(RefCell::new(RNode {
-            name: name.into(), qpath: q, dir: true, data: Vec::new(),
+            name: name.into(), qpath: q, dir: true, data: Rc::default(),
             kids: Vec::new(), uid: eve.into(), mode: 0o755, atime: boot,
-            mtime: boot, symlink: None,
+            mtime: boot, symlink: None, ro: false,
         }));
         for k in &s.kids {
             let child = load_seed(k, &k.name, eve, boot, qgen);
@@ -1447,9 +1455,9 @@ fn load_seed(s: &Seed, name: &str, eve: &str, boot: u32, qgen: &mut u64) -> RamR
         node
     } else {
         Rc::new(RefCell::new(RNode {
-            name: name.into(), qpath: q, dir: false, data: s.data.clone(),
+            name: name.into(), qpath: q, dir: false, data: Rc::new(s.data.clone()),
             kids: Vec::new(), uid: eve.into(), mode: 0o644, atime: boot,
-            mtime: boot, symlink: None,
+            mtime: boot, symlink: None, ro: false,
         }))
     }
 }
@@ -1631,6 +1639,7 @@ fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
         'w' => Ok(DN { dev: DevId::Wsys, node: Node::Wsys { kind: WKind::Root, win: None, conn: None }, path: None }),
         's' => Ok(DN { dev: DevId::Srv, node: Node::SrvRoot, path: None }),
         'H' => Ok(DN { dev: DevId::Web, node: Node::WebRoot, path: None }),
+        'V' => Ok(DN { dev: DevId::Snap, node: Node::SnapRoot, path: None }),
         'Z' => {
             let root = k.borrow().hostfs_root.clone()
                 .ok_or_else(|| "no host directory configured (#Z)".to_string())?;
@@ -1671,6 +1680,16 @@ async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>
         }
         (DevId::Ram, Node::Ram(r)) => {
             Ok(kid(r, name).map(|kd| DN { dev: DevId::Ram, node: Node::Ram(kd), path: None }))
+        }
+        (DevId::Snap, Node::SnapRoot) => {
+            if name == "ctl" {
+                return Ok(Some(DN { dev: DevId::Snap, node: Node::SnapCtl, path: None }));
+            }
+            Ok(k.borrow().snaps.iter().find(|(nm, _, _)| nm == name).map(|(_, _, root)| {
+                // hand the walk to the ram dispatch: read/stat/walk come free,
+                // and the ro flag on every node refuses the rest
+                DN { dev: DevId::Ram, node: Node::Ram(root.clone()), path: None }
+            }))
         }
         (DevId::Cons, Node::ConsRoot) => Ok(match name {
             "cons" => Some(Node::ConsCons),
@@ -2033,7 +2052,25 @@ fn ram_stat(node: &RamRef) -> Vec<u8> {
     })
 }
 
+// A snapshot is a structural clone of the ram tree: O(nodes), zero bytes copied.
+// Every node is marked ro; every data Rc is shared. The live side's next write
+// to a shared buffer copies it (Rc::make_mut) — versioning by copy-on-write.
+fn snap_tree(n: &RamRef) -> RamRef {
+    let nb = n.borrow();
+    Rc::new(RefCell::new(RNode {
+        name: nb.name.clone(), qpath: nb.qpath, dir: nb.dir, data: nb.data.clone(),
+        kids: nb.kids.iter().map(|(k2, v)| (k2.clone(), snap_tree(v))).collect(),
+        uid: nb.uid.clone(), mode: nb.mode, atime: nb.atime, mtime: nb.mtime,
+        symlink: nb.symlink.clone(), ro: true,
+    }))
+}
+
 fn ram_access(k: &K, node: &RamRef, cred: &Cred, want: u32) -> Result<(), KErr> {
+    // V10's shape: policy concentrates here. The ro gate outranks even eve —
+    // nobody rewrites history, which is what makes a snapshot a snapshot.
+    if want & 2 != 0 && node.borrow().ro {
+        return Err("read-only snapshot".into());
+    }
     if cred.euid == k.borrow().eve {
         return Ok(());
     }
@@ -2051,6 +2088,13 @@ fn ram_access(k: &K, node: &RamRef, cred: &Cred, want: u32) -> Result<(), KErr> 
 async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
     match (&dn.dev, &dn.node) {
         (DevId::Ram, Node::Ram(r)) => Ok(ram_stat(r)),
+        (DevId::Snap, Node::SnapRoot) => Ok(marshal_stat(&StatIn {
+            name: "V", uid: "eve", gid: "eve", qtype: QTDIR, mode: DMDIR | 0o555,
+            ..Default::default()
+        })),
+        (DevId::Snap, Node::SnapCtl) => Ok(marshal_stat(&StatIn {
+            name: "ctl", uid: "eve", gid: "eve", mode: 0o666, ..Default::default()
+        })),
         (DevId::Host, Node::Host(hp)) => host_stat_bytes(k, hp),
         (DevId::Cons, n) => {
             let (name, dir) = match n {
@@ -2148,6 +2192,44 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
                 buf.truncate(got);
                 buf
             };
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Snap, Node::SnapRoot) => {
+            let mut skip = off as usize;
+            let mut out = Vec::new();
+            let mut ents: Vec<(String, u32, bool)> =
+                vec![("ctl".into(), 0, false)];
+            ents.extend(k.borrow().snaps.iter().map(|(nm, t, _)| (nm.clone(), *t, true)));
+            for (i, (nm, t, isdir)) in ents.iter().enumerate() {
+                let rec = marshal_stat(&StatIn {
+                    name: nm, uid: "eve", gid: "eve", qpath: 0x56_0000 + i as u64,
+                    atime: *t, mtime: *t,
+                    qtype: if *isdir { QTDIR } else { 0 },
+                    mode: if *isdir { DMDIR | 0o555 } else { 0o666 },
+                    ..Default::default()
+                });
+                if skip >= rec.len() {
+                    skip -= rec.len();
+                    continue;
+                }
+                if out.len() + rec.len() > n {
+                    break;
+                }
+                out.extend_from_slice(&rec);
+            }
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Snap, Node::SnapCtl) => {
+            let mut txt = String::new();
+            for (nm, t, _) in &k.borrow().snaps {
+                txt.push_str(&format!("{} {}\n", nm, t));
+            }
+            let b = txt.into_bytes();
+            let start = (off as usize).min(b.len());
+            let end = (off as usize + n).min(b.len());
+            let out = b[start..end].to_vec();
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
         }
@@ -2531,12 +2613,44 @@ fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Re
             if n.dir {
                 return Err("write on directory".into());
             }
-            let end = off + data.len();
-            if end > n.data.len() {
-                n.data.resize(end, 0);
+            if n.ro {
+                return Err("read-only snapshot".into());
             }
-            n.data[off..end].copy_from_slice(data);
+            let end = off + data.len();
+            let dat = Rc::make_mut(&mut n.data);
+            if end > dat.len() {
+                dat.resize(end, 0);
+            }
+            dat[off..end].copy_from_slice(data);
             n.mtime = now_secs();
+            data.len()
+        }
+        (DevId::Snap, Node::SnapCtl) => {
+            let txt = String::from_utf8_lossy(data);
+            let mut it = txt.split_whitespace();
+            match it.next() {
+                Some("snap") => {
+                    let nm = match it.next() {
+                        Some(x) => x.to_string(),
+                        None => format!("s{}", k.borrow().snaps.len() + 1),
+                    };
+                    if k.borrow().snaps.iter().any(|(n2, _, _)| n2 == &nm) {
+                        return Err(format!("snapshot '{}' exists", nm));
+                    }
+                    let root = k.borrow().ram_root.clone();
+                    let tree = snap_tree(&root);
+                    k.borrow_mut().snaps.push((nm, now_secs(), tree));
+                }
+                Some("del") => {
+                    let nm = it.next().ok_or("usage: del name")?.to_string();
+                    let before = k.borrow().snaps.len();
+                    k.borrow_mut().snaps.retain(|(n2, _, _)| n2 != &nm);
+                    if k.borrow().snaps.len() == before {
+                        return Err(format!("no snapshot '{}'", nm));
+                    }
+                }
+                _ => return Err("usage: snap [name] | del name".into()),
+            }
             data.len()
         }
         (DevId::Cons, Node::ConsNull) => data.len(),
@@ -2988,7 +3102,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                     }
                     open_perm(k, &dn, mode | OTRUNC, pid)?;
                     if let Node::Ram(r) = &dn.node {
-                        r.borrow_mut().data.clear();
+                        Rc::make_mut(&mut r.borrow_mut().data).clear();
                     }
                     let chan = Rc::new(RefCell::new(Chan {
                         dev: dn.dev, node: dn.node, path: Some(cpath.clone()),
@@ -3506,9 +3620,9 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                     q
                 };
                 let node = Rc::new(RefCell::new(RNode {
-                    name: base.clone(), qpath: q, dir: false, data: Vec::new(),
+                    name: base.clone(), qpath: q, dir: false, data: Rc::default(),
                     kids: Vec::new(), uid: cred.euid.clone(), mode: 0o777,
-                    atime: now_secs(), mtime: now_secs(), symlink: Some(target),
+                    atime: now_secs(), mtime: now_secs(), symlink: Some(target), ro: false,
                 }));
                 pr.borrow_mut().kids.push((base, node));
                 Ok(ok(0))
@@ -3548,6 +3662,9 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
 
 fn wstat_ram(node: &RamRef, parent: &DN, base: &str, st: &stat9::StatOut,
              cred: &Cred, eve: &str) -> Result<(), KErr> {
+    if node.borrow().ro {
+        return Err("read-only snapshot".into());
+    }
     if st.mode != 0xffff_ffff {
         if cred.euid != eve && cred.euid != node.borrow().uid {
             return Err(format!("not owner of '{}'", node.borrow().name));
@@ -3602,7 +3719,7 @@ fn open_perm(k: &K, dn: &DN, mode: u32, pid: Pid) -> Result<(), KErr> {
         }
         ram_access(k, r, &cred, want)?;
         if mode & OTRUNC != 0 && !r.borrow().dir {
-            r.borrow_mut().data.clear();
+            Rc::make_mut(&mut r.borrow_mut().data).clear();
         }
     }
     Ok(())
@@ -3623,7 +3740,7 @@ fn ram_create(k: &K, parent: &DN, name: &str, perm: u32, isdir: bool,
             return Err(format!("'{}' already exists", name));
         }
         ram_access(k, &old, cred, 2)?;
-        old.borrow_mut().data.clear();
+        Rc::make_mut(&mut old.borrow_mut().data).clear();
         return Ok(old);
     }
     let q = {
@@ -3633,9 +3750,9 @@ fn ram_create(k: &K, parent: &DN, name: &str, perm: u32, isdir: bool,
         q
     };
     let node = Rc::new(RefCell::new(RNode {
-        name: name.into(), qpath: q, dir: isdir, data: Vec::new(),
+        name: name.into(), qpath: q, dir: isdir, data: Rc::default(),
         kids: Vec::new(), uid: cred.euid.clone(), mode: perm & 0o7777,
-        atime: now_secs(), mtime: now_secs(), symlink: None,
+        atime: now_secs(), mtime: now_secs(), symlink: None, ro: false,
     }));
     pr.borrow_mut().kids.push((name.into(), node.clone()));
     pr.borrow_mut().mtime = now_secs();

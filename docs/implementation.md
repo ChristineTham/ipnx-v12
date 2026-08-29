@@ -162,9 +162,14 @@ container gets volumes, the profile gets a local tree that survives reboot.
 Permission/uid mapping between host metadata and V10 enforcement is the design
 question to settle *at this milestone* (sidecar vs mode-bit mapping) —
 settled for hostfs v1 (2026-08-29): mode bits map 1:1, files present as
-eve's, sidecar deferred. Still open here: the versioning layer (design
-2026-08-29, "immutable systems") — every write an incremental version, a
-snapshot a namespace fragment, rollback a bind.
+eve's, sidecar deferred. The versioning layer's v1 landed
+2026-08-30 as `#V` (design log; RESEARCH §9.8): epoch snapshots of the ram
+root by structural clone (COW via shared buffers — 448 KiB and <50 ms per
+whole-root snapshot, measured), read-only through the one `ram_access`
+gate eve included, restore by `bind`, suite-tested on the native and demo
+kernels (the oracle self-skips). Remaining here, sequenced: persistence —
+the content-addressed store under hostfs — and the doctrine's asymptote,
+per-write granularity; both slot in behind `#V` unchanged.
 **Acceptance:** boot from a host-directory root; a write survives restart;
 V10 permission tests still enforce; the frozen reference still boots its ramfs.
 
@@ -225,7 +230,15 @@ mounts a 9P server via /srv — 141); the app places windows by the kernel's
 cascade; and the pid-1 oddity was chased to a script(1) pty artifact — both
 the typed-exit and stdin-EOF shutdown paths verified clean. The aarch64
 image gained its CI job (cross-built musl host, qemu smoke boot; the full
-suite stays on amd64). Still queued:
+suite stays on amd64). The 2026-08-30 engineering round closed the rest:
+the versioning layer's v1 (`#V`, above), `ar(1)` on the index-less-archive
+measurement (RESEARCH §9.8), and identity.md's D1–D4 confirmed
+dispositioned (D1/D3/D4 closed with `../ipnx` provenance; D2's groups ride
+a later milestone by design). Shared guest memory stays a *deliberate*
+optimisation deferral (RESEARCH §5.3): unsharing keeps guest builds free
+of atomics/shared-memory flags on every host, and no transport cost has
+yet shown in a profile — the recorded trigger for revisiting is a measured
+profile where syscall copy time dominates, not a hunch. Still queued:
 window-refresh events for TRUE guest resize and clean window-close
 semantics — judged by the same 132 plus its own tests. The modern-draw question stays queued in design.md.
 GitHub Pages (her call — no new Netlify site), `gh-pages` branch assembled by

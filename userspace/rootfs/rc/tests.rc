@@ -88,6 +88,50 @@ if(~ $"hz ''){
 }
 if not echo PASS 'hostfs: no #Z on this host — skipped'
 
+# The versioning layer ('#V'): a snapshot is a tree, restore is a bind.
+# snap freezes the ram root by structural clone (bytes shared, COW on the
+# live side's next write); the past reads back verbatim, binds over the
+# present, and refuses every write — even eve's. Self-skips where the
+# kernel offers no '#V' (the frozen oracle).
+vs=`{bind '#V' /n/vs >[2=1]; echo $status}
+if(~ $"vs ''){
+	echo -n one > /tmp/vfile
+	echo snap t1 > /n/vs/ctl
+	echo -n two > /tmp/vfile
+	vpast=`{cat /n/vs/t1/tmp/vfile}
+	vnow=`{cat /tmp/vfile}
+	rm /n/vs/t1/tmp/vfile >[2]/dev/null
+	vheld=`{cat /n/vs/t1/tmp/vfile}
+	mkdir /tmp/rewind
+	bind /n/vs/t1/tmp /tmp/rewind
+	vrest=`{cat /tmp/rewind/vfile}
+	echo del t1 > /n/vs/ctl
+	vgone=`{ls /n/vs}
+	if(~ $"vpast one && ~ $"vnow two && ~ $"vheld one && ~ $"vrest one && ~ $"vgone *ctl*) echo PASS 'versioning: snap freezes the tree, bind restores it, history refuses writes'; if not fails=bad
+}
+if not echo PASS 'versioning: no #V on this host — skipped'
+
+# ar(1): the plain GNU archive without the ranlib table — wasm-ld links
+# index-less archives (measured, RESEARCH §9.8), so 'ar r' + 'cc -l' is the
+# whole static-library story. Round-trip r/t/x/d, replacement included.
+arres=`{@{
+	cd /tmp
+	echo -n alpha > af
+	echo -n beta > bf
+	ar r t.a af bf
+	art=`{ar t t.a}
+	echo -n ALPHA > af
+	ar r t.a af
+	rm af bf
+	ar x t.a
+	arx=`{cat af bf}
+	ar d t.a af
+	ard=`{ar t t.a}
+	rm t.a af bf
+	if(~ $"art 'af bf' && ~ $"arx ALPHAbeta && ~ $"ard bf) echo arok
+}}
+if(~ $"arres arok) echo PASS 'ar: archives round-trip r/t/x/d, replacement lands'; if not fails=bad
+
 # M2, the namespace-file boot: the same file format that boots the system
 # reshapes a world at runtime — newns(file, cmd) clears and rebuilds from
 # TEXT, so editing the file rebinds with no recompile (the acceptance).
