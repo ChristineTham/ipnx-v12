@@ -102,3 +102,24 @@ bet: nothing yet — it *arms the instruments* (P2's unsolicited-posts signal,
 P3's course-adoption signal). External-goods question, asked: the demo was
 built to the personas' needs, not to an audience metric; nothing steered.
 **Next review** unchanged.
+
+### Review 2026-08-29 (late) — the demo becomes the developer world
+
+The shipped form deepened past its own plan, driven by Christine's
+shims-are-over directive and confirmed by her own hands ("I've been trying
+it. seems to work"). **What the field form now is**: one door, the desktop
+in seconds, and three real toolchains streaming into the live namespace
+behind the visitor — a real cc(1) over clang, THE REAL gc compiler and
+linker as guests (the "Go cannot compile on wasm" folklore fell to the
+process model), pip installing sha256-verified wheels from the real PyPI
+over the `#H` webfs device, the full CPython stdlib, and runnable examples
+in the home (python.org's programs verbatim; gobyexample's features).
+**What it changes about the bet**: the browser-tab form now demonstrates
+the *thesis*, not just the kernel — personalities absorbing unmodified
+foreign software — so P2/P3 signals, when they come, will be about the
+idea and not the novelty. **Cost honestly named**: ~260MB streamed per
+boot; nothing persists (ramfs only — a virtue for a demo, the M4 storage
+question for a home). External-goods question, asked: the depth was built
+to the user's stated acceptance (python.org, gobyexample), not to
+impress-metrics; the one telemetry artifact found (a localStorage debug
+ring) was removed the day it was noticed. **Next review** unchanged.
