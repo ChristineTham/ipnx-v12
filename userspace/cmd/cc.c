@@ -37,9 +37,10 @@ static char *srcs[MAXARG];   static int nsrc;	/* .c sources */
 static char *objs[MAXARG];   static int nobj;	/* .o inputs + produced */
 static char *out;				/* -o */
 static int compileonly;				/* -c */
+static char *stopat;				/* -E or -S: stop before objects */
 
 static char *
-toobj(char *s)					/* foo.c -> /tmp/foo.o */
+tosuf(char *s, char *dir, char *suf)		/* foo.c -> <dir>foo<suf> */
 {
 	char base[256], *p, *q;
 
@@ -47,7 +48,7 @@ toobj(char *s)					/* foo.c -> /tmp/foo.o */
 	strncpy(base, q ? q + 1 : s, sizeof base - 1); base[sizeof base - 1] = 0;
 	p = strrchr(base, '.');
 	if(p) *p = 0;
-	return smprint("/tmp/%s.o", base);
+	return smprint("%s%s%s", dir, base, suf);
 }
 
 static char *
@@ -95,8 +96,11 @@ main(int argc, char *argv[])
 		int len = strlen(s);
 
 		if(strcmp(s, "-c") == 0) compileonly = 1;
+		else if(strcmp(s, "-E") == 0 || strcmp(s, "-S") == 0) stopat = s;
 		else if(strcmp(s, "-o") == 0 && i+1 < argc) out = argv[++i];
 		else if(strncmp(s, "-o", 2) == 0 && len > 2) out = s+2;
+		else if(strcmp(s, "-lm") == 0)
+			{}					/* wasi-libc folds libm into libc */
 		else if(strncmp(s, "-l", 2) == 0 || strncmp(s, "-L", 2) == 0)
 			lflags[nlf++] = s;			/* linker */
 		else if(len > 2 && strcmp(s+len-2, ".c") == 0)
@@ -122,17 +126,25 @@ main(int argc, char *argv[])
 
 	/* compile each source */
 	for(i = 0; i < nsrc; i++){
-		char *obj = compileonly && out ? out : toobj(srcs[i]);
+		char *obj = compileonly && out ? out : tosuf(srcs[i], "/tmp/", ".o");
 		na = 0;
-		for(j = 0; j < nelem(ccpre); j++) a[na++] = ccpre[j];
+		for(j = 0; j < nelem(ccpre); j++){
+			if(stopat && strcmp(ccpre[j], "-emit-obj") == 0)
+				continue;			/* -E/-S replace the object step */
+			a[na++] = ccpre[j];
+		}
+		if(stopat) a[na++] = stopat;
 		for(j = 0; j < ncf; j++) a[na++] = cflags[j];
-		a[na++] = "-o"; a[na++] = obj;
+		if(strcmp(stopat ? stopat : "", "-E") != 0){	/* -E prints to stdout */
+			a[na++] = "-o";
+			a[na++] = stopat ? (out ? absolutize(out) : absolutize(tosuf(srcs[i], "", ".s"))) : obj;
+		}
 		a[na++] = "-x"; a[na++] = "c"; a[na++] = absolutize(srcs[i]);
 		a[na] = nil;
 		if(!run(a)){ fprint(2, "cc: %s: compilation failed\n", srcs[i]); exits("compile"); }
 		objs[nobj++] = obj;
 	}
-	if(compileonly) exits(nil);
+	if(compileonly || stopat) exits(nil);
 
 	/* link */
 	na = 0;

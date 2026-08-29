@@ -1,29 +1,26 @@
 Welcome home. You are kitty, and /usr/kitty is yours.
 
-Compile and run — for real (the C toolchain boot):
-  cc hello.c           compile (produces a.out; silent, like real cc)
-  ./a.out              run it — Hello Kitty
-  cc -O2 -Wall -o hi hello.c ; ./hi     flags, -o, -c all work — it is
-                                        real clang and wasm-ld underneath
+Three real toolchains (boot the developer world for all of them):
+  cc hello.c ; ./a.out         real clang + wasm-ld — flags, -o, -c, -E, -S
+  go run hello.go              THE REAL Go compiler, running in this tab
+  go build hello.go ; ./hello  same, keeping the binary; go fmt works too
+  python hello.py              real CPython 3.14
 
-Run other languages:
-  python hello.py      real CPython 3.14
-  go version           go env GOOS ...  (Go's compiler is host-side; see below)
-  gohello              a real Go binary (GOOS=wasip1) — runs right here
+Install packages — pip speaks to the real PyPI:
+  pip install cowsay
+  python -c 'import cowsay; cowsay.cow("Hello Kitty")'
+  pip list / show / uninstall  (pure-Python wheels; python -m pip works)
 
-Why cc compiles here but `go build` does not: clang is one self-contained
-wasm binary, so ipnx's cc(1) drives it with real fork+exec. Go's toolchain
-orchestrates its compiler and linker through os/exec, which WASI does not
-provide — and Go's gc is not shipped as wasm. So C compiles in the tab;
-Go binaries run in the tab, but are built on the host.
+The example programs from python.org and gobyexample.com run as written —
+try goroutines, channels, generics, text/template, regexp, json.
 
 Look around:
-  ls /bin     the commands       cal        this month
-  ls          your home          cat /etc/motd | tr a-z A-Z
+  ls /bin        the commands            cal    this month
+  cat /etc/motd | tr a-z A-Z             ls /lib/python3.14 | wc -l
 
 Windows and editors:
-  win acme &       the real acme (option-click = button 2)
-  win rc &         another shell, in a window
+  win acme &     the real acme (option-click = button 2)
+  win rc &       another shell, in a window
 
 The whole tour:  rc /rc/tour
 Everything runs in this browser tab. A reload forgets it all.

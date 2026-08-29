@@ -67,10 +67,11 @@ wasitest
 echo '$ gotest'
 gotest
 echo
-echo 'And the compiler moved IN — real clang runs as a guest (toolchain boot):'
-echo '$ cc hello.c   then   ./a.out   — real cc(1): flags, -o, -c all work'
-echo '  (clang is one wasm binary, so ipnx cc drives it with real fork+exec;'
-echo '   go build cannot — its toolchain needs os/exec, which WASI omits.)'
+echo 'And the compilers moved IN (the developer-world boot):'
+echo '$ cc hello.c ; ./a.out     — real clang + wasm-ld, driven by a real cc(1)'
+echo '$ go run hello.go          — THE REAL Go compiler, cross-built to wasm,'
+echo '                             orchestrated by ipnx fork+exec (WASI has none)'
+echo '$ pip install cowsay       — real packages from the real PyPI'
 echo
 echo 'Real CPython 3.14 is here too — worth the moment it takes:'
 echo '$ python /tmp/pytest.py'

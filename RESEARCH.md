@@ -1178,6 +1178,31 @@ teeth:
   repack) over the preview1 shim runs them; the demo applies it as a dist
   derivation, the frozen reference untouched.
 
+- **The gc compiler hosts on ipnx (measured 2026-08-29).** `cmd/compile`,
+  `cmd/link` and `cmd/gofmt` are pure Go, so `GOOS=wasip1 GOARCH=wasm go
+  build cmd/compile` simply works (41.9MB, 11.0MB, 4.8MB wasm). Run as ipnx
+  guests they compile and link real programs: `compile -p main -importcfg
+  /go/importcfg -o x.o x.go` then `link -importcfg /go/importcfg -o x x.o`,
+  the export archives shipped at `/go/pkg/<import>.a` (the build cache's own
+  `.a`, via `go list -export -deps`; tools and archives must share one go
+  version). A binary the guest linker produced runs as a guest itself —
+  goroutine worker pools, channels, select all correct. The full std export
+  set is 117.5MB; the gobyexample-derived set is 115 packages / 35.3MB
+  (net/http alone +31MB, refused until /net). The folklore "Go cannot
+  compile on wasm" conflates the orchestrator with the tools: only `go
+  build`'s os/exec is missing, and ipnx's fork+exec supplies it.
+
+- **This CPython wasi build has no zlib (and pip needs none).** Measured:
+  `zlib` absent from `sys.builtin_module_names` (as are `_sqlite3`, `_ssl`,
+  `_lzma`, `_bz2`; present: `binascii` with crc32, `_struct`, `_json`,
+  `pyexpat`, the hash builtins). Wheels are DEFLATE, so the personality
+  ships a pure-Python `zlib.py` — a puff.c-shaped inflate, crc32 delegated
+  to binascii — and pip walks the zip central directory itself, one-shot
+  inflating each member (streaming decompressobj semantics are the hard
+  part of zlib's API; the personality sidesteps them). PyPI's JSON API and
+  files.pythonhosted.org send permissive CORS (the fact micropip relies
+  on), so the browser's own fetch serves `#H` unproxied.
+
 - **What each demo citizen's personality wanted (measured 2026-08-29).**
   The three benchmarks all *run* under one ABI personality — the WASI shim —
   but each exposed different missing pieces, and completing them IS the

@@ -617,6 +617,31 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-29) The toolchains are real — the time for shims is over.**
+  Christine's directive: "We need the toolchains to work, not demo shims…
+  this is for real. We need the ability to install packages, etc. so pip
+  needs to work as well. All this is what a user would expect from a demo."
+  Acceptance is external and measured: Python runs the example programs from
+  python.org; Go runs the examples from gobyexample.com (verified 2026-08-29:
+  the python.org front-page programs verbatim, and seventeen gobyexample
+  features — closures, generics, interfaces, goroutines, select, atomics,
+  regexp, text/template, base64, net/url — compiled in-guest and run).
+  What landed: the FULL 529-file CPython stdlib (the wasi build's own Lib) in
+  place of the PoC's 21-file subset; a pure-Python `zlib` (a puff-shaped
+  inflate; this CPython build has no zlib builtin — measured) as a
+  personality file; `pip` installing real pure-Python wheels from the real
+  PyPI — sha256-verified, RECORD-listed, `python -m pip` the same program —
+  over `#H`, a webfs-shaped kernel device (the network as files; the /net
+  milestone's forerunner); **the real gc compiler and linker cross-built to
+  wasip1 and run as guest processes**, orchestrated by a real `go` driver
+  (build/run/fmt/version/env) exactly as cc(1) drives clang, with the
+  stdlib's export archives for the gobyexample-derived package set (115
+  packages, 35.3MB; net/http refused at +31MB until sockets exist); and
+  cc(1) grown to -E/-S/-lm. Upstream pip itself still cannot run (it demands
+  C-level ssl+socket, absent from this CPython build) — pip here is ipnx's
+  own installer speaking the real protocol to the real index; when /net
+  lands, upstream pip becomes the target.
+
 - **(2026-08-29) The porting inversion — personalities carry the
   environment, not patches on the source.** Articulated by Christine after
   the demo's C toolchain landed. The universal way to port software is to

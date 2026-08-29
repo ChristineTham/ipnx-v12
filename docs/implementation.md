@@ -147,16 +147,20 @@ plan9port's convention (⌥-click=2, ⌘/ctrl-click=3, right-click=3) plus a
 wasitest and the real Go binary live; CPython runs by invitation
 (`python /tmp/pytest.py`); and the landing's second button boots **the C
 toolchain** — real clang + wasm-ld as guests (RESEARCH §9.7: the
-wasi_unstable adapter and the inode-dedup finding), `rc /rc/cc` compiling,
-linking and running hello.c inside the tab. Go compilation stays host-side
-by design (the gc toolchain does not exist as a wasm guest); compilation-as-
-capability for the real system remains the `/cc` milestone. **The demo-is-the-product decision
-(2026-08-29) upgrades what remains from polish to product work — next
-session: `demo/kernel`, the demo's own supervisor lineage forked from the
-frozen reference (the oracle stays untouched), landing window-refresh events
-for TRUE guest resize, clean window-close semantics, and the visitor
-experience's other kernel needs — judged by the same 132 plus its own
-tests.** The modern-draw question stays queued in design.md.
+wasi_unstable adapter and the inode-dedup finding). **The toolchains are
+real (2026-08-29, the shims-are-over decision, design.md): `cc(1)` is a
+genuine driver (flags, -o, -c, -E, -S, multiple files) over clang and
+wasm-ld; `go` is a genuine driver (build/run/fmt/version/env) over the REAL
+gc compiler and linker cross-built to wasip1 — the folklore's "Go cannot
+compile on wasm" fell to ipnx's process model (RESEARCH §9.7) — with the
+gobyexample-derived stdlib export set at /go/pkg; `pip` installs real
+pure-Python wheels from the real PyPI over `#H` (webfs — the network as
+files, /net's forerunner), sha256-verified, on the full 529-file stdlib.
+Acceptance was external: python.org's example programs and gobyexample's
+run as written.** `demo/supervisor` is the demo's own kernel lineage
+(forked 2026-08-29; the oracle stays untouched); still queued there:
+window-refresh events for TRUE guest resize and clean window-close
+semantics — judged by the same 132 plus its own tests. The modern-draw question stays queued in design.md.
 GitHub Pages (her call — no new Netlify site), `gh-pages` branch assembled by
 `demo/build.sh`; COOP/COEP supplied by our own COI service worker, injected
 into the dist copy of the frozen browser page (the derivation-layer move;
