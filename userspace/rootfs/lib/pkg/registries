@@ -1,0 +1,4 @@
+# pkg(1)'s registries, tried in order: "name baseurl" — a base may be an
+# http(s) origin (fetched over '#H') or a local path (a registry is just
+# a tree of files). The demo site is the first ipnx registry.
+ipnx https://christham.net/ipnx-v12/registry

@@ -27,5 +27,12 @@ Windows and editors:
   win acme &     the real acme (option-click = button 2)
   win rc &       another shell, in a window
 
+Install more software — the registry is part of the demo:
+  pkg install ruby           real Ruby 3.2.2, sha256-verified
+  ruby -e 'puts "hello"'
+  pkg install php ; php --version
+  pkg install zlib           a C library, compiled by this system's own cc
+  pkg list / verify / remove
+
 The whole tour:  rc /rc/tour
 Everything runs in this browser tab. A reload forgets it all.

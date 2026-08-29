@@ -47,6 +47,18 @@ long  write(int fd, void *buf, long n);
 vlong seek(int fd, vlong off, int type);
 int   dup(int oldfd, int newfd);
 int   bind(char *name, char *old, int flag);
+
+/* streaming SHA-256 (FIPS 180-4) — pkg(1) verifies registry fetches with it
+ * and guests have 2MB pooled memories, so hashing must never buffer a file */
+typedef struct SHA256state {
+	ulong h[8];
+	uchar buf[64];
+	ulong nbuf;
+	uvlong len;
+} SHA256state;
+void  sha256init(SHA256state*);
+void  sha256update(SHA256state*, uchar*, ulong);
+void  sha256final(SHA256state*, uchar out[32]);
 int   unmount(char *name, char *old);
 int   notify(void (*f)(void*, char*));
 int   noted(int v);
@@ -94,6 +106,8 @@ char* strrchr(char *s, int c);
 char* strstr(char *s, char *sub);
 char* strcat(char *dst, char *src);
 char* strdup(char *s);
+char* strecpy(char *dst, char *edst, char *src);	/* libp9.a's, real */
+int   cistrcmp(char *a, char *b);			/* libp9.a's, real */
 void* memcpy(void *dst, void *src, ulong n);
 void* memmove(void *dst, void *src, ulong n);
 void* memset(void *dst, int c, ulong n);

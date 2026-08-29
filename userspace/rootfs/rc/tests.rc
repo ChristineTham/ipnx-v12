@@ -16,7 +16,7 @@ if(~ `{cat /tmp/t1} written) echo PASS 'redirection > and ramfs write'; if not f
 echo more >> /tmp/t1
 if(~ `{wc /tmp/t1} 2' '*) echo PASS 'append >> (wc counts 2 lines)'; if not fails=bad
 if(~ `{cat < /etc/motd | wc} 1' '*) echo PASS 'input redirection <'; if not fails=bad
-if(~ `{ls /lib} '/lib/alt /lib/font /lib/python3.14') echo PASS 'ls reads directories'; if not fails=bad
+if(~ `{ls /lib} '/lib/alt /lib/font /lib/pkg /lib/python3.14') echo PASS 'ls reads directories'; if not fails=bad
 mkdir /tmp/d; cp /etc/motd /tmp/d/m
 if(~ `{wc /tmp/d/m} 1' '*) echo PASS 'mkdir and cp'; if not fails=bad
 rm /tmp/d/m /tmp/d
@@ -72,6 +72,20 @@ w /tmp/samf
 q' > /tmp/samscript
 sam -d < /tmp/samscript > /dev/null >[2] /dev/null
 if(~ `{cat /tmp/samf} 'SAM TEST LINE') echo PASS 'the real sam: x, c, and | through real tr (sam -d)'; if not fails=bad
+
+# pkg(1): the whole life of a package against an offline local registry —
+# a registry is just a tree of files, so the suite authors one, installs
+# from it (streamed, sha256-verified), runs the bound binary through the
+# /bin union, verifies digests, and removes. Network never involved.
+mkdir /tmp/reg
+cp /bin/echo /tmp/reg/pecho.wasm
+pd=`{sha256sum < /tmp/reg/pecho.wasm}
+echo pecho 1.0 bin /tmp/reg/pecho.wasm $pd > /tmp/reg/index
+pkg -r /tmp/reg install pecho > /dev/null
+pkv=`{pkg verify pecho}
+pkr=`{pecho pkg bound and running}
+pkg remove pecho > /dev/null
+if(~ $pkr 'pkg bound and running' && ~ $"pkv *clean*) echo PASS 'pkg: install from a registry tree, sha256-verified, bind, verify, remove'; if not fails=bad
 
 # regexp CLASSES WITH RANGES in x: the class-range sentinel is Runemax
 # stored in a Rune (sam/regexp.c bldcclass), so this is the one structural
