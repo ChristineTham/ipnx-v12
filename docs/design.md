@@ -617,6 +617,79 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-30) `/dev/canvas` — the display is a semantic file tree; the
+  modern-draw question, decided.** Settled in a five-round brainstorm
+  (Christine's adversarial pushes each carved a clause; the full iteration
+  record is in design-thinking.md). The decision, whole:
+  **The model.** A window is a filesystem of semantic nodes — acme's file
+  interface generalised, not libdraw modernised. Six node kinds in v0:
+  `stack · text · edit · image · path · frame`. Content is greppable plain
+  UTF-8 (styling in sidecar `attrs`; a live UI can be grepped, tested, and
+  read by an agent without any engine). `edit` lifts acme/sam's addr/data
+  buffer interface — the crown jewel; typing echo, selection, scrolling and
+  IME are presenter-local, apps observe via events (acme's own discipline).
+  `path` carries SVG path data verbatim; `frame` is pixels-in-a-grid,
+  honestly named and honestly opaque (video is a frame updated at cadence).
+  `draw` the name retires with its era. One `events` file per window
+  (resize · close · tap · execute · look · key) — resize/close as protocol
+  is the target that retires the demo's deferral. `sync` commits atomically.
+  **Surfaces.** A surface is anything that renders the tree, and it
+  NEGOTIATES capabilities (interactive/reflow/input/snapshot): browser, Mac
+  and iPad presenters; SVG, PDF, PostScript as write-only document surfaces
+  (layout resolution is a surface property — "print" is attaching a
+  document surface); virtual surfaces — a test asserts on the tree (pixel
+  censuses retire), the accessibility reader IS a render; remote surfaces
+  over 9P (exportfs a window = a semantic remote UI); multiple surfaces on
+  one canvas = mirroring for free. To the browser, the surface is ONE
+  universal SPA, ours and cached, consuming tree-files and emitting DOM —
+  apps never touch HTML/CSS/JS.
+  **The four clauses from the pushback rounds.** (1) *SVG*: for the marks
+  corner we ARE describing SVG and adopt it outright (path data, transform
+  and colour notation); the whole is not SVG — no flowed text, no editing,
+  no protocol (SVG 1.2's flowed text died; the web itself needed HTML+SVG).
+  Rule: adopt notation, own the model. (2) *HTML*: the semantic retained
+  tree is the web's discovery and we adopt it — re-housed: the tree as
+  files not a JS-API, events as files, no behaviour inside the surface,
+  and a vocabulary small enough that a phone, a PDF and a test are peer
+  surfaces (an HTML-subset model would make every surface a browser).
+  (3) *Borrowed engines*: the hard four-fifths of a visual surface is the
+  era's text engine, and we borrow the local one — WebKit on the web,
+  CoreText/TextKit on Apple — as RENDERERS, never runtimes; the canvas
+  protocol is the narrow waist above them, exactly as 9P is the waist above
+  V8/wasmtime (NeXT licensed Adobe's interpreter: "display is PostScript"
+  was always own-the-protocol, borrow-the-engine). Layout divergence
+  between engines is accepted and named; document surfaces choose their
+  authoritative resolver. (4) *The ecosystem statement*: **the web platform
+  is our VAX** — the modern stack (browser, WebKit, wasm, serverless) is
+  the hardware of the era; we port to hardware and do not adopt its
+  operating system, because we are the operating system. The invariant that
+  is IPNX: adopt substrates, engines and notations; refuse object models
+  (wasm yes, WIT no; sockets yes, POSIX no; V8 yes, JS-as-model no).
+  **Input: the verbs leave the buttons.** The three-button mouse encoded
+  verbs — b1 point/select, b2 execute, b3 look — and the verbs become
+  system-level: tap plumbs (look is the free gesture), tags are genuinely
+  tappable, selections raise the native popover (Execute · Look · Cut ·
+  Copy · Paste), ⌘Enter executes at the keyboard; chords die into the host
+  clipboard via /dev/snarf. Real button hardware maps straight onto the
+  verbs — the paradigm is discarded as a requirement, kept as an
+  accelerator. A compat layer may synthesize /dev/mouse for raster-era
+  clients.
+  **The reclassification.** Raster sam/acme stay runnable as they run
+  today, reclassified as heritage exhibit beside /v10 — not a constraint on
+  canvas. sam-today is its command language over the server's edit buffers
+  (libframe evaporates); acme-today is a policy client of stacks, edit
+  nodes and actionable tags, still serving its own 9P interface. Their
+  essences — structural regexps; everything-is-text-and-text-is-actionable
+  — intensify rather than survive.
+  **Commitments.** Canvas surfaces embeddable in web pages; a first-class
+  JS/TS client library; the six kinds learnable in an afternoon; a
+  quarantined `web` leaf stays a personality-shaped future door (not v0).
+  **The tripwire.** v0's vocabulary is measured against four benchmarks —
+  sam-today, acme-today, rio-today, one plot. If it ever grows past
+  roughly a dozen kinds, the HTML refusal is declared wrong and adoption
+  of a real subset is re-litigated. Open: whether `image` folds into
+  `frame`; edit's addr/data taken verbatim vs simplified.
+
 - **(2026-08-29) Immutable systems and time travel are namespace operations.**
   Christine, in her words: "If files are tagged with version numbers, and
   every write results in an incremental version, then backup is simply a

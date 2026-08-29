@@ -146,3 +146,47 @@ hypothesis to finding, and the scope diff reruns against real evidence.
   [The 5 Stages in the Design Thinking Process — IxDF](https://ixdf.org/literature/article/5-stages-in-the-design-thinking-process)
 - [The Double Diamond — Design Council](https://www.designcouncil.org.uk/resources/the-double-diamond/) ·
   [Framework for Innovation — Design Council](https://www.designcouncil.org.uk/resources/framework-for-innovation/)
+
+
+## Iteration record: the canvas brainstorm (2026-08-30)
+
+The modern-draw question sat queued for a day and was settled in one
+five-round adversarial session — recorded here because the METHOD carried
+it: Christine pushed the same challenge four times at increasing depth, and
+each push produced a clause the decision needed.
+
+1. **Opening reframe (hers):** abandon running raster sam/acme unmodified —
+   "we are not trying to preserve the past; the real answer is how sam and
+   acme would be implemented today." Cited NeXT: the display-is-PostScript
+   leap was right, PostScript the wrong vehicle. This dissolved the
+   compatibility-shaped three-tier hybrid of the first draft.
+2. **The answer from the other direction:** the modern consensus (browser,
+   SwiftUI) is a retained SEMANTIC tree + events — and Plan 9 already built
+   its file-native form once: acme, whose clients never draw. Generalise
+   acme, not libdraw. She named it: acme is less an editor than a canvas
+   manager; `/dev/canvas`; surfaces generalised to browser/Mac/iOS/SVG/PDF.
+3. **Push: "aren't we just describing SVG?"** → the flowed-text/editing/
+   protocol deltas; the web needing both HTML and SVG as the empirical
+   proof; the adopt-notation-own-model rule.
+4. **Push: "aren't we describing HTML+SVG? HTML already has canvas."** →
+   the concession made explicit (the tree is the web's discovery, adopted)
+   plus the re-housing (files not JS-API; no behaviour in the surface;
+   small enough that non-browser surfaces are peers); `frame` confirmed by
+   the web's own quarantine of `<canvas>`; the dozen-kinds tripwire.
+5. **Push: "isn't the surface basically WebKit?"** → yes, and that is the
+   founding pattern: borrow the era's engines through a narrow waist (V8/
+   wasmtime under the kernel; WebKit/TextKit under canvas; NeXT licensing
+   Adobe's interpreter). The subfont saga stands as the measured proof that
+   hand-rolling text stacks fails here.
+6. **Push, to the thesis: "the modern ecosystem IS HTML/CSS/JS + wasm —
+   are we not building for this world?"** → the ecosystem statement: the
+   web platform is our VAX; built ON it and FOR its people, not OF its
+   model; with the for-this-world commitments (embeddable surfaces, JS/TS
+   client library, afternoon-learnable vocabulary).
+7. **Her settlement**, agreed with two precisions: a protocol wearing the
+   feel of a framework; and the browser realisation is ONE universal SPA —
+   ours, singular, cached — apps never touching HTML/CSS/JS.
+
+Naming en route: `draw` rejected for the pixel leaf ("draw implies a
+pencil — a vector operation"); `frame` chosen (a framebuffer holds pixels
+in a grid; video falls out). The full decision: design.md 2026-08-30.

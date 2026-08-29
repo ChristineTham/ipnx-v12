@@ -168,7 +168,15 @@ snapshot a namespace fragment, rollback a bind.
 **Acceptance:** boot from a host-directory root; a write survives restart;
 V10 permission tests still enforce; the frozen reference still boots its ramfs.
 
-### M5 — the browser host on the Rust core *(M)*
+### M5 — the browser host on the Rust core *(M)* — **re-aimed 2026-08-30: lands `/dev/canvas`**
+**The canvas decision (design.md 2026-08-30) is this milestone's target**:
+the browser host's presenter is the ONE universal SPA rendering the semantic
+node tree (`stack·text·edit·image·path·frame`) to DOM and returning events;
+the `events` file's resize/close protocol retires the demo's deferred
+resize/close for real; v0 vocabulary is measured against sam-today,
+acme-today, rio-today and one plot before code. The demo kernel prototypes
+canvas first (demo-leads-discovery doctrine); the Mac app's presenter then
+maps the same tree to CoreText/AppKit, and iPadOS inherits the shape.
 Compile `kernel/` to wasm (the core is single-threaded, no OS dependencies —
 built for this), embed it in a JS shim structurally parallel to
 `hosts/macos`: Workers as processes, the SAB mailbox, the existing browser
