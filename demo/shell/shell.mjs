@@ -461,15 +461,27 @@ setStatus("running");
     for (const prof of profs) {
       const label = prof === "cc" ? "C" : "Go";
       const parts = man[prof] ?? [];
-      for (let i = 0; i < parts.length; i++) {
+      const pieces = {};                           // oversized files, split as
+      for (let i = 0; i < parts.length; i++) {     // b64 text across parts
         setStatus(`running · fetching the ${label} toolchain (${i + 1}/${parts.length})…`);
         window.__stream = `fetch ${prof} ${i}`;
         const ov = await (await fetch(`../build/${parts[i]}?v=BUILDSTAMP`)).json();
+        for (const k of Object.keys(ov)) {
+          const z = k.indexOf("\u0000");
+          if (z < 0) continue;
+          const path = k.slice(0, z), n = +k.slice(z + 1);
+          (pieces[path] ??= [])[n] = ov[k];
+          delete ov[k];
+        }
         window.__stream = `graft ${prof} ${i}`;
         booted.graft(seedFromJson(ov));
         window.__stream = `grafted ${prof} ${i}`;
         await new Promise((r) => setTimeout(r, 0));
       }
+      const folded = {};
+      for (const [path, segs] of Object.entries(pieces)) folded[path] = segs.join("");
+      if (Object.keys(folded).length) booted.graft(seedFromJson(folded));
+      window.__stream = `grafted ${prof} folded`;
       toast(prof === "cc" ? "C toolchain aboard — try: cc hello.c" : "Go toolchain aboard — try: go run hello.go");
     }
   } catch (e) {

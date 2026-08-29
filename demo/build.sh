@@ -122,13 +122,15 @@ node --check dist/browser/main.mjs 2>/dev/null || node -e 'require("fs"); try { 
 # derivations, so a demo kernel change is an ordinary edit, reviewable.
 grep -q "adaptUnstable" dist/supervisor/guestcore.mjs && grep -q "function cwd" dist/supervisor/wasi1.mjs && grep -q '"kitty"' dist/supervisor/kernel.mjs || { echo "demo/supervisor missing a demo mod" >&2; exit 1; }
 
-# ---- the opt-in C-toolchain manifest: base rootfs + clang/lld/sysroot ----
+# ---- overlays are packed in parts UNDER 50MB (GitHub warns above 50 and
+# caps at 100; Git LFS is NOT an option — GitHub Pages serves LFS pointer
+# files, not content). Each profile's driver-probed marker file ships in the
+# LAST part, so a passing probe means the whole toolchain is aboard. ----
 if [ -s toolchain/cache/clang ]; then
   node -e '
 const fs = require("fs"), path = require("path"), cp = require("child_process");
-const base = {};                                   // overlay only: merged client-side
-const add = (p, buf) => { base[p] = buf.toString("base64"); };
-add("/bin/clang", fs.readFileSync("toolchain/cache/clang"));
+const entries = [];                                // [path, b64], probe file LAST
+const add = (p, buf) => entries.push([p, buf.toString("base64")]);
 add("/bin/wasm-ld", fs.readFileSync("toolchain/cache/lld"));
 const tmp = fs.mkdtempSync("/tmp/sysroot-");
 cp.execSync(`tar xf toolchain/cache/sysroot.tar -C ${tmp}`);
@@ -140,42 +142,77 @@ cp.execSync(`tar xf toolchain/cache/sysroot.tar -C ${tmp}`);
   }
 })(tmp, "/");
 fs.rmSync(tmp, { recursive: true, force: true });
-fs.writeFileSync("dist/build/cc-overlay.json", JSON.stringify(base));
-console.log("  cc-overlay.json", fs.statSync("dist/build/cc-overlay.json").size, "bytes (GitHub caps files at 100MB — the overlay merges onto the base in the shell)");
+add("/bin/clang", fs.readFileSync("toolchain/cache/clang"));   // the probe
+const BUDGET = 45 * 1024 * 1024;
+let part = {}, size = 0, idx = 0;
+const flush = () => {
+  if (!size) return;
+  const name = `cc-overlay-${idx++}.json`;
+  fs.writeFileSync(`dist/build/${name}`, JSON.stringify(part));
+  console.log(`  ${name}`, fs.statSync(`dist/build/${name}`).size, "bytes");
+  part = {}; size = 0;
+};
+for (const [p, b64] of entries) {
+  if (b64.length > BUDGET) {                       // one FILE over budget: ship it
+    const step = Math.floor(BUDGET / 4) * 4;       // as b64 pieces (4-char blocks
+    let n = 0;                                     // concatenate losslessly)
+    for (let o = 0; o < b64.length; o += step, n++) {
+      const piece = b64.slice(o, o + step);
+      if (size && size + piece.length > BUDGET) flush();
+      part[`${p}\u0000${n}`] = piece; size += piece.length;
+    }
+    continue;
+  }
+  if (size && size + b64.length > BUDGET) flush();
+  part[p] = b64; size += b64.length;
+}
+flush();
 '
 fi
 
-# ---- the opt-in Go-toolchain overlay: the real gc compiler/linker/gofmt
-# (cross-built wasip1) + the gobyexample-derived stdlib export set. Packed in
-# parts to stay under GitHub's 100MB file cap; overlays.json is the manifest
-# the shell reads. Regenerate the cache with toolchain/go/build.sh.
+# the Go toolchain: real gc compiler/linker/gofmt (wasip1) + the
+# gobyexample-derived stdlib export set; regenerate with toolchain/go/build.sh
 if [ -s toolchain/go/cache/compile.wasm ]; then
   node -e '
 const fs = require("fs"), path = require("path");
-// [1] carries /go/bin/compile ALONE and ships last: the go driver probes
-// that file, so its arrival means the whole toolchain is aboard (the demo
-// streams overlays into the live namespace after boot).
-const parts = [[], []];
-const add = (i, p, file) => parts[i].push([p, fs.readFileSync(file).toString("base64")]);
-add(1, "/go/bin/compile", "toolchain/go/cache/compile.wasm");
-add(0, "/go/bin/link", "toolchain/go/cache/link.wasm");
-add(0, "/go/bin/gofmt", "toolchain/go/cache/gofmt.wasm");
-add(0, "/go/importcfg", "toolchain/go/cache/importcfg");
-add(0, "/go/VERSION", "toolchain/go/cache/VERSION");
+const entries = [];                                // probe (/go/bin/compile) LAST
+const add = (p, file) => entries.push([p, fs.readFileSync(file).toString("base64")]);
+add("/go/bin/link", "toolchain/go/cache/link.wasm");
+add("/go/bin/gofmt", "toolchain/go/cache/gofmt.wasm");
+add("/go/importcfg", "toolchain/go/cache/importcfg");
+add("/go/VERSION", "toolchain/go/cache/VERSION");
 (function walk(d, pre) {
   for (const e of fs.readdirSync(d)) {
     const f = path.join(d, e), s = fs.statSync(f);
     if (s.isDirectory()) walk(f, pre + e + "/");
-    else add(0, pre + e, f);
+    else add(pre + e, f);
   }
-})("toolchain/go/cache/pkg", "/go/pkg/");   // pkg rides part 0, before compile
-parts.forEach((entries, i) => {
-  const name = `go-overlay-${i}.json`;
-  fs.writeFileSync(`dist/build/${name}`, JSON.stringify(Object.fromEntries(entries)));
-  const sz = fs.statSync(`dist/build/${name}`).size;
-  if (sz > 99 * 1024 * 1024) { console.error(`${name} over the 100MB cap`); process.exit(1); }
-  console.log(`  ${name}`, sz, "bytes");
-});
+})("toolchain/go/cache/pkg", "/go/pkg/");
+add("/go/bin/compile", "toolchain/go/cache/compile.wasm");     // the probe
+const BUDGET = 45 * 1024 * 1024;
+let part = {}, size = 0, idx = 0;
+const flush = () => {
+  if (!size) return;
+  const name = `go-overlay-${idx++}.json`;
+  fs.writeFileSync(`dist/build/${name}`, JSON.stringify(part));
+  console.log(`  ${name}`, fs.statSync(`dist/build/${name}`).size, "bytes");
+  part = {}; size = 0;
+};
+for (const [p, b64] of entries) {
+  if (b64.length > BUDGET) {                       // one FILE over budget: ship it
+    const step = Math.floor(BUDGET / 4) * 4;       // as b64 pieces (4-char blocks
+    let n = 0;                                     // concatenate losslessly)
+    for (let o = 0; o < b64.length; o += step, n++) {
+      const piece = b64.slice(o, o + step);
+      if (size && size + piece.length > BUDGET) flush();
+      part[`${p}\u0000${n}`] = piece; size += piece.length;
+    }
+    continue;
+  }
+  if (size && size + b64.length > BUDGET) flush();
+  part[p] = b64; size += b64.length;
+}
+flush();
 '
 fi
 
@@ -183,9 +220,16 @@ fi
 node -e '
 const fs = require("fs");
 const man = {};
-if (fs.existsSync("dist/build/cc-overlay.json")) man.cc = ["cc-overlay.json"];
-const gos = fs.readdirSync("dist/build").filter((n) => /^go-overlay-\d+\.json$/.test(n)).sort();
-if (gos.length) man.go = gos;
+for (const prof of ["cc", "go"]) {
+  const parts = fs.readdirSync("dist/build")
+    .filter((n) => new RegExp(`^${prof}-overlay-\\d+\\.json$`).test(n))
+    .sort((a, b) => parseInt(a.match(/\d+/)) - parseInt(b.match(/\d+/)));
+  if (parts.length) man[prof] = parts;
+  for (const p of parts)
+    if (fs.statSync(`dist/build/${p}`).size > 50 * 1024 * 1024) {
+      console.error(`${p} exceeds the 50MB warning line`); process.exit(1);
+    }
+}
 fs.writeFileSync("dist/build/overlays.json", JSON.stringify(man));
 console.log("  overlays.json", JSON.stringify(man));
 '

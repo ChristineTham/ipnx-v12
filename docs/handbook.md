@@ -112,8 +112,17 @@ contract to read alongside. A host is real when init exits 0.
 
 The live demo ([christham.net/ipnx-v12](https://christham.net/ipnx-v12/)) is
 the `gh-pages` branch serving `demo/dist`. After a userspace change worth
-publishing: `bash userspace/mk.sh && bash demo/build.sh`, then copy `dist/`
-onto the `gh-pages` branch and push (an orphan worktree keeps it clean).
+publishing: `bash userspace/mk.sh && bash demo/build.sh`, then publish
+`dist/` as a SINGLE parentless commit — in a worktree: `git add -A`, then
+`git push -f origin $(git commit-tree $(git write-tree) -m "deploy"):gh-pages`
+— so gh-pages always holds exactly one snapshot (26 accumulated ~250MB
+snapshots were collapsed this way, 2026-08-29). Two size rules, both
+measured: **Git LFS is not an option** — GitHub Pages serves LFS *pointer
+files*, not content, so an LFS'd overlay would break the demo silently —
+and every published file stays under 50MB (GitHub's warning line;
+`demo/build.sh` packs overlays in size-budgeted parts, splits any single
+oversized file into base64 pieces the shell folds back, and fails the build
+if a part crosses the line).
 Pages rebuilds in under a minute. The COI service worker in the bundle
 supplies COOP/COEP; verify in a real browser — embedded panes may refuse
 service workers. **Wait out the CDN before testing**: Pages' edge can serve

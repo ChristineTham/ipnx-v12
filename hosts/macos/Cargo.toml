@@ -6,4 +6,4 @@ license.workspace = true
 
 [dependencies]
 kernel = { path = "../../kernel" }
-wasmtime = "37"
+wasmtime = "48"
