@@ -231,6 +231,15 @@ function winCreate(id, x, y, w, h, title) {
     e.preventDefault();
     for (const b of bytes) wsys.key(id, b);
   });
+  const mdbg = (kind, e, mapped) => {
+    try {
+      const log = JSON.parse(localStorage.getItem("ipnx-mdbg") || "[]");
+      log.push({ ts: Date.now(), win: id, kind, buttons: e.buttons, button: e.button,
+                 alt: e.altKey, meta: e.metaKey, ctrl: e.ctrlKey, mapped,
+                 x: Math.round(e.clientX), y: Math.round(e.clientY) });
+      localStorage.setItem("ipnx-mdbg", JSON.stringify(log.slice(-40)));
+    } catch (_) {}
+  };
   const mouse = (e, downs) => {
     if (downs !== undefined) gw.buttons = downs;
     const r = canvas.getBoundingClientRect();
@@ -244,8 +253,20 @@ function winCreate(id, x, y, w, h, title) {
     if (e.buttons & 1) { if (e.altKey) return 2; if (e.metaKey || e.ctrlKey) return 4; return 1; }
     return (e.buttons & 4 ? 2 : 0) | (e.buttons & 2 ? 4 : 0);
   };
-  canvas.addEventListener("pointerdown", (e) => { e.preventDefault(); canvas.focus(); mouse(e, btnbits(e)); });
-  canvas.addEventListener("pointerup", (e) => mouse(e, btnbits(e)));
+  canvas.addEventListener("pointerdown", (e) => {
+    e.preventDefault(); canvas.focus();
+    // capture: a release outside the canvas still reaches us — otherwise
+    // gw.buttons sticks and every later modifier-click silently CHORDS
+    // against a phantom held button (measured: b2 dead on any touched
+    // window, fine on a fresh one)
+    try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
+    const m = btnbits(e);
+    mdbg("down", e, m);
+    mouse(e, m);
+  });
+  canvas.addEventListener("pointerup", (e) => { const m = btnbits(e); mdbg("up", e, m); mouse(e, m); });
+  canvas.addEventListener("pointercancel", (e) => mouse(e, 0));
+  canvas.addEventListener("lostpointercapture", () => { if (gw.buttons) { gw.buttons = 0; wsys?.mouse(id, 0, 0, 0); } });
   canvas.addEventListener("pointermove", (e) => { if (gw.buttons) mouse(e); });
   canvas.addEventListener("contextmenu", (e) => e.preventDefault());
 
@@ -356,7 +377,20 @@ const host = {
     const gw = gwins.get(id);
     if (gw) gw.t.term.write(td.decode(bytes).replace(/\n/g, "\r\n"));
   },
-  winLabel: (id, label) => { const gw = gwins.get(id); if (gw) gw.win.setTitle(label); },
+  winLabel: (id, label) => {
+    const gw = gwins.get(id);
+    if (!gw) return;
+    const isDefault = /^window \d+$/.test(label);
+    if (gw.labeled && isDefault && gw.drawMode) {
+      // the app restored the default label on its way out (acme does);
+      // the v0 kernel sends no close for wrapper-held windows — close here
+      gw.win.setTitle(label + " — exited");
+      setTimeout(() => { gw.win.remove(); gwins.delete(id); }, 600);
+      return;
+    }
+    if (!isDefault) gw.labeled = true;
+    gw.win.setTitle(label);
+  },
   winGeom: (id, x, y, w, h) => {
     const gw = gwins.get(id);
     if (!gw) return;
