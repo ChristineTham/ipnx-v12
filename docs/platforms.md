@@ -14,12 +14,12 @@ One kernel, one rootfs, one suite — per platform, only the host shim and the
 engine change (the engine matrix is a dated decision in
 [design.md](design.md)):
 
-| form | host | engine (guests) | state (2026-08-29) |
+| form | host | engine (guests) | state (2026-08-30) |
 |---|---|---|---|
-| **Node** | `poc/supervisor` (frozen) | V8, Workers + SAB | **green, 139** (floor 131) — the oracle; also the dev loop |
-| **Browser tab** | `poc/browser` (frozen) → `hosts/browser` (M5) | the page's own JIT, Workers + SAB | **green, 139** (floor 131) in Chrome 148 on the reference; iPadOS 26.5 Safari (simulator) boots the desktop to rc, measured 2026-08-29; **live at [christham.net/ipnx-v12](https://christham.net/ipnx-v12/)**; Rust core in wasm is M5 |
-| **macOS** | `hosts/macos` | wasmtime 48, Cranelift JIT | **green, 139** (floor 131) headless; **IPNX.app runs** (M3): windows via winit/softbuffer, acme on screen, `--live` hostfs persistence (M4) |
-| **OCI container** | `hosts/oci` | wasmtime, Cranelift (or AOT `.cwasm`) | **green, 139** (floor 131) — `FROM scratch`, musl-static, 62.2MB image, proven on every push by CI (amd64; aarch64 target compiles) |
+| **Node** | `poc/supervisor` (frozen) | V8, Workers + SAB | **green, 143** (floor 131) — the oracle; also the dev loop; `#V` self-skips by design |
+| **Browser tab** | `poc/browser` (frozen) → `hosts/browser` (M5) | the page's own JIT, Workers + SAB | **green, 143** (floor 131) in Chrome 148 on the reference; iPadOS 26.5 Safari (simulator) boots the desktop to rc, measured 2026-08-29; **live at [christham.net/ipnx-v12](https://christham.net/ipnx-v12/)**; Rust core in wasm is M5 |
+| **macOS** | `hosts/macos` | wasmtime 48, Cranelift JIT | **green, 143** (floor 131) headless; **IPNX.app runs** (M3): windows via winit/softbuffer, acme on screen, `--live` hostfs persistence (M4), `#V` snapshots |
+| **OCI container** | `hosts/oci` | wasmtime, Cranelift (or AOT `.cwasm`) | **green, 143** (floor 131) — `FROM scratch`, musl-static, 62.2MB image, proven on every push by CI (amd64 full suite; the aarch64 image smoke-boots under qemu) |
 | **iPadOS** | `hosts/ipados` (M6) | wasmtime, **Pulley**, `signals_based_traps(false)` | scaffolded — no JIT, no runtime-AOT on iOS; WKWebView stopgap runs the browser port with full JIT today |
 | **microVM** | (M11) | wasmtime over Firecracker/virtio, 9P-over-vsock | aspiration, research-first — the second OCI weight |
 
@@ -125,3 +125,52 @@ question for a home). External-goods question, asked: the depth was built
 to the user's stated acceptance (python.org, gobyexample), not to
 impress-metrics; the one telemetry artifact found (a localStorage debug
 ring) was removed the day it was noticed. **Next review** unchanged.
+
+### Review 2026-08-30 — the scheduled review: M1 and M3 have landed
+
+The baseline scheduled this review "after M1 and M3 land, or 2026-11".
+M0–M4 landed within two days of the declaration, so it arrives early and
+answers the baseline's two named tests honestly.
+
+**What has actually shipped since the last entry**: the container form
+(M1 — `FROM scratch`, musl-static, 62.2MB, the floor gated on every push,
+an aarch64 image smoke-booting under qemu); boot as a namespace file (M2);
+the macOS app (M3); host storage (M4 — `#Z`, `--live`); pkg v1 with the
+demo doubling as a live registry and five language toolchains installable
+in the field form; the Safari failure root-caused to `http://` (Pages'
+`https_enforced` was off — forced on, both repositories); and the
+engineering round that closed every recorded deferral, the versioning
+layer `#V` and `ar(1)` among them. 143 on all three hosts; CI proves
+world, container, arm64 and the amber oracle on every push.
+
+**The baseline's two tests, answered.** *Does the container form find use
+beyond CI?* Not yet — CI is its only daily user, and that is the honest
+reading: the form exists, the evidence does not. *Does the macOS app
+survive daily driving by its own author?* Its first real session **killed
+the machine** — a 128GB Mac out of application memory, from unbounded
+frame flushes and an unbounded tty buffer — and the fix became
+architecture: the credit system, one frame in flight per window
+("coalescing changes the rate, only credit changes the bound"). That is
+what daily driving is *for*; the app survived its second session.
+Sustained daily use is still ahead of the evidence.
+
+**What this round changes about the bet**: three of the wave's four forms
+are now built and one is in the field. The canvas decision and the
+compatibility goodbye (design.md 2026-08-30) re-aim every form's product
+surface at `/dev/canvas` — the demo's tty and raster windows are now
+declared interim, which raises a named near-term risk: the shipped demo
+shows yesterday's surface while M5 builds tomorrow's. Accepted, because
+the exhibit keeps the floor green while the product userland is rebuilt.
+
+**Standing risk, unchanged**: the agent-sandbox form still has the
+strongest timing claim and the least substance (it waits on M7–M9). The
+versioning layer strengthens that story — snapshot per run, rollback per
+run, history unwritable even by eve — but `/net` remains the gate.
+
+**External-goods question, asked**: the round was steered by the author's
+directives and by recorded doctrine — the versioning layer exists because
+the doctrine said it should, not because a feature chart wanted a row.
+Nothing external steered.
+
+**Next review**: after M5 ships the canvas surface, or 2026-11 —
+whichever is first.
