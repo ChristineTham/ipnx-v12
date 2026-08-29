@@ -154,6 +154,28 @@ export function makeRamfs(seed, eve = "kitty") {
     truncate: (node) => { if (!node.dir) { node.data = empty; delete node._mod; } },
     stat: statNode,
     len: (node) => (node.dir ? 0 : node.data.length),
+    // graft: merge a seed-shaped tree into the LIVE root — how the demo
+    // streams toolchain overlays in after boot (files land whole; a driver's
+    // probe file ships in an overlay's last part, so probe-passing means the
+    // toolchain is entirely aboard)
+    graft: (seed) => {
+      const t = now();
+      const add = (node, sk) => {
+        for (const k of sk.kids ?? []) {
+          if (k.dir) {
+            let d = node.kids.get(k.name);
+            if (!d || !d.dir) {
+              d = { name: k.name, qpath: qgen++, dir: true, kids: new Map(), uid: node.uid, mode: 0o755, atime: t, mtime: t };
+              node.kids.set(k.name, d);
+            }
+            add(d, k);
+          } else {
+            node.kids.set(k.name, { name: k.name, qpath: qgen++, dir: false, data: k.data, uid: node.uid, mode: 0o755, atime: t, mtime: t });
+          }
+        }
+      };
+      add(root, seed);
+    },
   };
 }
 

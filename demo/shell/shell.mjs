@@ -146,15 +146,8 @@ const consT = makeTerm(consTermEl);
 consWin.setFocusInner(() => consT.term.focus());
 consWin.onResize(() => consT.fit.fit());
 consT.term.writeln("\x1b[38;5;110mipnx-v12 — a reimagining of Unix, booting in this tab\x1b[0m");
-{
-  const q = new URLSearchParams(location.search);
-  const cc = q.has("cc"), go = q.has("go");
-  if (cc || go)
-    consT.term.writeln("\x1b[38;5;110m" + (cc && go
-      ? "C and Go toolchains aboard — try: cc hello.c   or   go run hello.go"
-      : go ? "Go toolchain aboard — try: go run hello.go"
-      : "C toolchain aboard — try: cc hello.c  then  ./a.out") + "\x1b[0m");
-}
+if (!new URLSearchParams(location.search).has("lite"))
+  consT.term.writeln("\x1b[38;5;110mthe toolchains stream in behind — cc, go, python, pip (watch the corner)\x1b[0m");
 
 // cooked line discipline for /dev/cons (the kernel's cons expects fed lines;
 // the echo is the host's job, as on the Node host's tty)
@@ -240,15 +233,6 @@ function winCreate(id, x, y, w, h, title) {
     e.preventDefault();
     for (const b of bytes) wsys.key(id, b);
   });
-  const mdbg = (kind, e, mapped) => {
-    try {
-      const log = JSON.parse(localStorage.getItem("ipnx-mdbg") || "[]");
-      log.push({ ts: Date.now(), win: id, kind, buttons: e.buttons, button: e.button,
-                 alt: e.altKey, meta: e.metaKey, ctrl: e.ctrlKey, mapped,
-                 x: Math.round(e.clientX), y: Math.round(e.clientY) });
-      localStorage.setItem("ipnx-mdbg", JSON.stringify(log.slice(-40)));
-    } catch (_) {}
-  };
   const mouse = (e, downs) => {
     if (downs !== undefined) gw.buttons = downs;
     const r = canvas.getBoundingClientRect();
@@ -270,10 +254,9 @@ function winCreate(id, x, y, w, h, title) {
     // window, fine on a fresh one)
     try { canvas.setPointerCapture(e.pointerId); } catch (_) {}
     const m = btnbits(e);
-    mdbg("down", e, m);
     mouse(e, m);
   });
-  canvas.addEventListener("pointerup", (e) => { const m = btnbits(e); mdbg("up", e, m); mouse(e, m); });
+  canvas.addEventListener("pointerup", (e) => { const m = btnbits(e); mouse(e, m); });
   canvas.addEventListener("pointercancel", (e) => mouse(e, 0));
   canvas.addEventListener("lostpointercapture", () => { if (gw.buttons) { gw.buttons = 0; wsys?.mouse(id, 0, 0, 0); } });
   canvas.addEventListener("pointermove", (e) => { if (gw.buttons) mouse(e); });
@@ -443,7 +426,9 @@ function seedFromJson(files) {
 
 setStatus("fetching rootfs…");
 const params = new URLSearchParams(location.search);
-const PROFILES = ["cc", "go"].filter((k) => params.has(k));
+const explicit = ["cc", "go"].filter((k) => params.has(k));
+const PROFILES = params.has("lite") ? [] : explicit;   // empty + no lite = all
+const WANTALL = !params.has("lite") && explicit.length === 0;
 const resp = await fetch("../build/rootfs.json?v=BUILDSTAMP");
 const total = +resp.headers.get("content-length") || 0;
 let text;
@@ -463,24 +448,37 @@ if (resp.body && total) {
 setStatus("unpacking…");
 await new Promise((r) => setTimeout(r, 0));      // let the status paint
 const files = JSON.parse(text);
-if (PROFILES.length) {
-  const man = await (await fetch("../build/overlays.json?v=BUILDSTAMP")).json();
-  for (const prof of PROFILES) {
-    const label = prof === "cc" ? "C" : "Go";
-    const parts = man[prof] ?? [];
-    for (let i = 0; i < parts.length; i++) {
-      setStatus(`fetching the ${label} toolchain… (${i + 1}/${parts.length})`);
-      const ov = await (await fetch(`../build/${parts[i]}?v=BUILDSTAMP`)).json();
-      Object.assign(files, ov);
-      await new Promise((r) => setTimeout(r, 0));
-    }
-  }
-}
 setStatus("booting…");
 const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: true });
 cons = booted.cons;
 wsys = booted.wsys;
 setStatus("running");
+(async () => {                                    // the toolchains stream in
+  if (params.has("lite")) return;
+  try {
+    const man = await (await fetch("../build/overlays.json?v=BUILDSTAMP")).json();
+    const profs = WANTALL ? Object.keys(man) : PROFILES.filter((k) => man[k]);
+    for (const prof of profs) {
+      const label = prof === "cc" ? "C" : "Go";
+      const parts = man[prof] ?? [];
+      for (let i = 0; i < parts.length; i++) {
+        setStatus(`running · fetching the ${label} toolchain (${i + 1}/${parts.length})…`);
+        window.__stream = `fetch ${prof} ${i}`;
+        const ov = await (await fetch(`../build/${parts[i]}?v=BUILDSTAMP`)).json();
+        window.__stream = `graft ${prof} ${i}`;
+        booted.graft(seedFromJson(ov));
+        window.__stream = `grafted ${prof} ${i}`;
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      toast(prof === "cc" ? "C toolchain aboard — try: cc hello.c" : "Go toolchain aboard — try: go run hello.go");
+    }
+  } catch (e) {
+    window.__stream = "ERR " + (e && (e.stack || e.message) || e);
+    toast("a toolchain failed to load — reload to retry (" + (e && e.message || e) + ")", 8000);
+  }
+  window.__stream = window.__stream || "done";
+  setStatus("running");
+})();
 statusEl.title = "build BUILDSTAMP";
 document.getElementById("brand").title = "build BUILDSTAMP";
 const bs = document.createElement("button");

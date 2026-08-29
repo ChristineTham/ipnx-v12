@@ -152,20 +152,23 @@ fi
 if [ -s toolchain/go/cache/compile.wasm ]; then
   node -e '
 const fs = require("fs"), path = require("path");
-const parts = [[], []];                            // [0]=compile, [1]=the rest
+// [1] carries /go/bin/compile ALONE and ships last: the go driver probes
+// that file, so its arrival means the whole toolchain is aboard (the demo
+// streams overlays into the live namespace after boot).
+const parts = [[], []];
 const add = (i, p, file) => parts[i].push([p, fs.readFileSync(file).toString("base64")]);
-add(0, "/go/bin/compile", "toolchain/go/cache/compile.wasm");
-add(1, "/go/bin/link", "toolchain/go/cache/link.wasm");
-add(1, "/go/bin/gofmt", "toolchain/go/cache/gofmt.wasm");
-add(1, "/go/importcfg", "toolchain/go/cache/importcfg");
-add(1, "/go/VERSION", "toolchain/go/cache/VERSION");
+add(1, "/go/bin/compile", "toolchain/go/cache/compile.wasm");
+add(0, "/go/bin/link", "toolchain/go/cache/link.wasm");
+add(0, "/go/bin/gofmt", "toolchain/go/cache/gofmt.wasm");
+add(0, "/go/importcfg", "toolchain/go/cache/importcfg");
+add(0, "/go/VERSION", "toolchain/go/cache/VERSION");
 (function walk(d, pre) {
   for (const e of fs.readdirSync(d)) {
     const f = path.join(d, e), s = fs.statSync(f);
     if (s.isDirectory()) walk(f, pre + e + "/");
-    else add(1, pre + e, f);
+    else add(0, pre + e, f);
   }
-})("toolchain/go/cache/pkg", "/go/pkg/");
+})("toolchain/go/cache/pkg", "/go/pkg/");   // pkg rides part 0, before compile
 parts.forEach((entries, i) => {
   const name = `go-overlay-${i}.json`;
   fs.writeFileSync(`dist/build/${name}`, JSON.stringify(Object.fromEntries(entries)));
