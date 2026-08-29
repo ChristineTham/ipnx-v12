@@ -212,8 +212,11 @@ a file, and every process composes its own world.
 ## The principles
 
 - **Curation over completeness.** Plan 9's `/bin` is its designers' testimony about
-  which parts of UNIX were worth keeping. I am taking it whole: the filters, `cron`,
-  and the games, including its omissions. `sed 10q` remains the answer to `head`.
+  which parts of UNIX were worth keeping, and I am keeping the testimony. The filters
+  stay as they are — pipes and files are already this system's paradigm, and `sed 10q`
+  remains the answer to `head`. The screen programs are another matter: I have kissed
+  compatibility goodbye and am redesigning them for modern surfaces, while the
+  originals stay runnable as the exhibit, omissions and all.
 - **Measurement over standards.** The modern personality is derived rather than adopted.
   I will port git, CPython and Go, record the interfaces they actually require, and use
   that list as the specification. The useful part of POSIX is earned one interface at a
