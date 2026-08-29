@@ -7,3 +7,6 @@ userspace/rootfs/tmp/
 
 # cargo (workspace at repo root)
 /target/
+
+# demo build product (assembled by demo/build.sh)
+demo/dist/
