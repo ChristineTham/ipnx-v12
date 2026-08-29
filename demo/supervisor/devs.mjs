@@ -262,3 +262,55 @@ export function makePipeDev() {
   }
   return dev;
 }
+
+// ---- webfs: '#H' — the network as files, in webfs(4)'s spirit ----
+// '#H/<hex-of-utf8-url>' reads as the body of a GET of that URL. The fetch is
+// the host's (a browser fetch obeys CORS — PyPI permits it; Node's does not
+// care), starts at open, and reads slice the settled body — the read is
+// async, so a failed fetch surfaces as an ordinary guest error, not a hang.
+// Read-only, 64MB cap. This is the demo lineage's device; the /net milestone
+// (implementation.md) replaces it with wire-native networking.
+export function makeWebfs() {
+  const root = { name: "/", qpath: qgen++, dir: true };
+  const dec = (hex) => {
+    if (!/^[0-9a-f]+$/.test(hex) || hex.length % 2) throw derr("bad url encoding");
+    const b = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < b.length; i++) b[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    return new TextDecoder().decode(b);
+  };
+  return {
+    name: "webfs",
+    attach: () => root,
+    walk: (node, name) => {
+      if (node !== root) return null;
+      let url;
+      try { url = dec(name); } catch { return null; }
+      if (!/^https?:\/\//.test(url)) return null;
+      return { name, qpath: qgen++, dir: false, url };
+    },
+    open: (node) => {
+      if (node.dir) return;
+      node.body ??= (async () => {
+        const res = await fetch(node.url, { redirect: "follow" });
+        if (!res.ok) throw derr(`GET ${node.url}: ${res.status} ${res.statusText}`);
+        const buf = new Uint8Array(await res.arrayBuffer());
+        if (buf.length > 64 * 1024 * 1024) throw derr("response over 64MB");
+        return buf;
+      })();
+    },
+    read: async (node, n, off) => {
+      if (node.dir) return empty;
+      let body;
+      try { body = await node.body; }
+      catch (e) { throw e.guest ? e : derr(String(e.message ?? e)); }
+      const end = Math.min(Number(off) + n, body.length);
+      return body.subarray(Math.min(Number(off), body.length), end);
+    },
+    write: () => { throw derr("webfs is read-only"); },
+    stat: (node) => marshalStat({
+      name: node.name, qtype: node.dir ? QTDIR : QTFILE, qpath: node.qpath,
+      mode: node.dir ? DMDIR | 0o555 : 0o444, length: 0,
+    }),
+    len: () => 0,
+  };
+}

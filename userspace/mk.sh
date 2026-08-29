@@ -327,8 +327,10 @@ echo "  bin/gotest  $(wc -c < rootfs/bin/gotest | tr -d ' ') bytes (REAL Go, was
 echo "  bin/gohello  $(wc -c < rootfs/bin/gohello | tr -d ' ') bytes (REAL Go, wasip1)"
 
 # The third citizen: REAL CPython, Brett Cannon's wasi_sdk build of 3.14.7,
-# cached in build/ (a 26MB download, once). The stdlib subset is measured,
-# not guessed: wasi/pylib.txt is the closure the acceptance script opens.
+# cached in build/ (a 26MB download, once). The FULL stdlib ships (2026-08-29,
+# the toolchain-personality decision): the build's own 529-file Lib, matched
+# to the binary — a real Python personality, not a demo subset. pip installs
+# into site-packages; lib-dynload stays empty (no shared objects on wasm).
 PYZIP=build/python-wasi-3.14.7.zip
 if [ ! -f "$PYZIP" ]; then
   curl -fsSL -o "$PYZIP" https://github.com/brettcannon/cpython-wasi-build/releases/download/v3.14.7/python-3.14.7-wasi_sdk-24.zip
@@ -336,10 +338,8 @@ fi
 unzip -o -q "$PYZIP" python.wasm -d build/pyx
 cp build/pyx/python.wasm rootfs/bin/python
 mkdir -p rootfs/lib/python3.14/lib-dynload rootfs/lib/python3.14/site-packages
-grep -v '^#' wasi/pylib.txt | while read -r f; do
-  mkdir -p "rootfs/$(dirname "$f")"
-  unzip -o -q "$PYZIP" "$f" -d rootfs/
-done
+unzip -o -q "$PYZIP" "lib/*" -d rootfs/
+cp wasi/pyshim/*.py rootfs/lib/python3.14/   # personality files (pure-Python zlib &c)
 cp wasi/pytest.py rootfs/tmp/pytest.py
 echo "  bin/python  $(wc -c < rootfs/bin/python | tr -d ' ') bytes (REAL CPython 3.14.7, wasi)"
 

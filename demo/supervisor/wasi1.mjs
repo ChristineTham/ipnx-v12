@@ -98,6 +98,7 @@ export function makeWasi(ctx) {
     const f = fds.get(dirfd);
     if (!f) return null;
     const raw = new TextDecoder().decode(m8().subarray(ptr, ptr + len));
+    if (raw.startsWith("#")) return raw;           // kernel device names walk as-is
     if (raw.startsWith("/")) return norm(raw);
     if (!f.preopen) return norm((f.path === "/" ? "" : f.path) + "/" + raw);
     const c = cwd();

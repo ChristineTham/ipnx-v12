@@ -10,7 +10,7 @@
 //   exit(code)         the machine halts
 // and calls boot(host, { rootSeed, interactive }), receiving { cons } to
 // feed console input into.
-import { makeRamfs, makeCons, makePipeDev } from "./devs.mjs";
+import { makeRamfs, makeCons, makePipeDev, makeWebfs } from "./devs.mjs";
 import { makeMntDev, mountConn } from "./mnt9p.mjs";
 import { parseStat, marshalStat, DMSETUID, QTDIR } from "./stat9.mjs";
 import { makeWsys } from "./devwsys.mjs";
@@ -1012,7 +1012,8 @@ export async function boot(theHost, { rootSeed, interactive }) {
   const hostRef = { host };
   const wsys = makeWsys(hostRef);
   devs = { M: makeRamfs(rootSeed, EVE), c: cons, "|": makePipeDev(), m: makeMntDev(),
-    p: makeProcDev(), e: makeEnvDev(), w: wsys, d: makeDupDev(), s: makeSrvDev() };
+    p: makeProcDev(), e: makeEnvDev(), w: wsys, d: makeDupDev(), s: makeSrvDev(),
+    H: makeWebfs() };
   const init = newProc(0, { ns: new Map(), fdt: newFdt(), cwd: "/",
     cred: { euid: EVE, ruid: EVE } });
   const image = await readAll(await walk(init, "/bin/init"));
