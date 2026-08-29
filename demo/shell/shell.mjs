@@ -29,8 +29,12 @@ if (!crossOriginIsolated) {
   let advice = "Reload the page normally — and avoid hard reloads (\u2318\u21e7R), " +
     "which deliberately bypass the isolation worker.";
   if (!hasSW)
-    advice = "Service workers are unavailable in this profile — Lockdown Mode " +
-      "and some private windows do this, and the demo cannot isolate without them.";
+    advice = "Service workers are unavailable in this Safari profile, and the " +
+      "demo cannot isolate without them. Three settings do this: a Private " +
+      "Browsing window; Lockdown Mode (system-wide or per-site); or " +
+      "Safari \u2192 Settings \u2192 Privacy \u2192 \u201cBlock all " +
+      "cookies\u201d, which also removes the worker API. A normal window " +
+      "with cookies allowed runs the demo.";
   d.textContent = line1 + " " + advice +
     " If it persists: Safari \u2192 Settings \u2192 Privacy \u2192 Manage Website " +
     "Data \u2192 remove christham.net, then visit again.";

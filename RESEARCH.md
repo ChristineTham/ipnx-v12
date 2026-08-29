@@ -1190,6 +1190,21 @@ teeth:
   `cc z.c /lib/wasm32-wasi/zlib/*.o`. An `ar` for the guest would restore
   `-lz`; queued.
 
+- **A Safari profile can lack the ServiceWorker API entirely (measured in
+  the field, 2026-08-29).** Christine's Safari showed the isolation guard on
+  a build fresh WebKit (iPadOS simulator) booted clean; two register
+  hardenings changed nothing. The diagnostic guard settled it in one paste:
+  `sw-api=false` — `navigator.serviceWorker` absent, so no registration
+  dance was ever possible. Three Safari switches remove the API: Private
+  Browsing windows, Lockdown Mode, and Privacy → "Block all cookies". On
+  GitHub Pages the worker is the only source of COOP/COEP, so an SW-less
+  profile cannot run the demo there at all — the guard now names the three
+  switches; the only complete cure would be a host that sends real headers
+  (a standing hosting decision, not a code fix). The method note: the fix
+  that worked was making the ERROR SCREEN report its evidence — one paste
+  then carried sw-api, controller state, registration state, and the build
+  stamp, ending a three-round guessing game.
+
 - **Host toolchain re-measurement (2026-08-29, late): node v24.20.0, go
   1.27.0.** Christine updated the host toolchains; per VERSIONS' rule the
   full suite re-ran on all three hosts first — 135/135/135 — and the
