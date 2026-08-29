@@ -106,8 +106,11 @@ jobs:
       - run: tar -C userspace -xzf rootfs.tgz
       - uses: actions/setup-node@v4
         with:
-          # PINNED, deliberately — never "latest". A failure here is ours.
-          node-version: "22.12.0"
+          # PINNED to the MEASURED engine (userspace/VERSIONS) — never
+          # "latest". The first run proved the point: 22.12.0's V8 has
+          # try_table behind a flag ("Invalid opcode 0x1f"), the very
+          # boundary RESEARCH measured. A failure here is ours.
+          node-version: "22.23.2"
       - name: the frozen reference runs the floor
         run: |
           bash poc/run.sh | tee oracle.out
