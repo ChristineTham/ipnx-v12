@@ -641,8 +641,12 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   censuses retire), the accessibility reader IS a render; remote surfaces
   over 9P (exportfs a window = a semantic remote UI); multiple surfaces on
   one canvas = mirroring for free. To the browser, the surface is ONE
-  universal SPA, ours and cached, consuming tree-files and emitting DOM —
-  apps never touch HTML/CSS/JS.
+  universal SPA, ours and cached, consuming tree-files and emitting DOM.
+  The scope of the refusal is the PROTOCOL, not the apps' knowledge
+  (corrected 2026-08-30): an ipnx app may of course understand the web —
+  fetch HTML over '#H', parse it, generate it, even be a browser — but
+  markup never crosses /dev/canvas; the display protocol speaks the six
+  kinds regardless of what the app knows.
   **The four clauses from the pushback rounds.** (1) *SVG*: for the marks
   corner we ARE describing SVG and adopt it outright (path data, transform
   and colour notation); the whole is not SVG — no flowed text, no editing,

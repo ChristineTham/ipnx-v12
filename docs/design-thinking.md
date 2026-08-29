@@ -185,7 +185,9 @@ each push produced a clause the decision needed.
    client library, afternoon-learnable vocabulary).
 7. **Her settlement**, agreed with two precisions: a protocol wearing the
    feel of a framework; and the browser realisation is ONE universal SPA —
-   ours, singular, cached — apps never touching HTML/CSS/JS.
+   ours, singular, cached. Her closing correction scoped the refusal
+   precisely: apps may understand the web (fetch, parse, generate HTML);
+   it is /dev/canvas that never carries markup.
 
 Naming en route: `draw` rejected for the pixel leaf ("draw implies a
 pencil — a vector operation"); `frame` chosen (a framebuffer holds pixels
