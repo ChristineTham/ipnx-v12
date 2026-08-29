@@ -118,8 +118,8 @@ main(int argc, char *argv[])
 		exits("usage");
 	}
 	if((fd = open("/bin/clang", OREAD)) < 0){
-		fprint(2, "cc: the C toolchain is not loaded — boot the demo with the\n");
-		fprint(2, "    \"C toolchain\" button (the plain desktop has no compiler).\n");
+		fprint(2, "cc: the C toolchain has not finished arriving — it streams in\n");
+		fprint(2, "    after boot (watch the top-right corner); try again shortly.\n");
 		exits("no toolchain");
 	}
 	close(fd);

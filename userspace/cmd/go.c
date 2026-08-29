@@ -58,9 +58,8 @@ needtoolchain(void)
 	int fd;
 
 	if((fd = open("/go/bin/compile", OREAD)) >= 0){ close(fd); return; }
-	fprint(2, "go: the Go toolchain is not loaded — boot the demo with the\n");
-	fprint(2, "    \"Go toolchain\" button (it adds the real compiler and linker,\n");
-	fprint(2, "    cross-built to wasm, plus the standard library).\n");
+	fprint(2, "go: the Go toolchain has not finished arriving — it streams in\n");
+	fprint(2, "    after boot (watch the top-right corner); try again shortly.\n");
 	exits("no toolchain");
 }
 

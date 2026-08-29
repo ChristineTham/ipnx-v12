@@ -11,8 +11,13 @@ Install packages — pip speaks to the real PyPI:
   python -c 'import cowsay; cowsay.cow("Hello Kitty")'
   pip list / show / uninstall  (pure-Python wheels; python -m pip works)
 
-The example programs from python.org and gobyexample.com run as written —
-try goroutines, channels, generics, text/template, regexp, json.
+The examples/ directory holds runnable proof — python.org's front-page
+programs and the features gobyexample.com walks through:
+  python examples/pythonorg.py
+  go run examples/basics.go          closures, generics, interfaces
+  go run examples/concurrency.go     goroutines, select, atomics
+  go run examples/text.go a b        regexp, templates, base64, URLs
+  go build examples/workers.go ; ./workers
 
 Look around:
   ls /bin        the commands            cal    this month
