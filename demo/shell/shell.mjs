@@ -23,9 +23,10 @@ if (!crossOriginIsolated) {
   setStatus("not isolated");
   const d = document.createElement("div");
   d.style.cssText = "padding:60px;max-width:34rem;margin:auto;user-select:text";
-  d.textContent = "This demo needs cross-origin isolation and the page did not " +
-    "get it — a hard reload usually fixes it (the isolation shim takes control " +
-    "on the second load).";
+  d.textContent = "This demo needs cross-origin isolation and this load did not " +
+    "get it. Reload the page normally — and avoid hard reloads (\u2318\u21e7R): " +
+    "they deliberately bypass the isolation worker, which guarantees this " +
+    "screen. (build BUILDSTAMP)";
   desktop.appendChild(d);
   throw new Error("no SAB");
 }
@@ -424,9 +425,13 @@ wsys = booted.wsys;
 setStatus("running");
 statusEl.title = "build BUILDSTAMP";
 document.getElementById("brand").title = "build BUILDSTAMP";
-const bs = document.createElement("span");
-bs.style.cssText = "color:#4a5866;font-size:10.5px;margin-left:8px";
+const bs = document.createElement("button");
+bs.style.cssText = "all:unset;cursor:pointer;color:#4a5866;font-size:10.5px;margin-left:8px;user-select:text";
 bs.textContent = "bBUILDSTAMP";
+bs.title = "the build stamp — click to copy";
+bs.addEventListener("click", () => {
+  navigator.clipboard?.writeText("bBUILDSTAMP").then(() => toast("build stamp copied: bBUILDSTAMP"));
+});
 statusEl.after(bs);
 consT.term.focus();
 window.__consT = consT;   // debug affordance

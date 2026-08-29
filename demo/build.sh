@@ -18,6 +18,8 @@ STAMP=$(date +%s)
 sed -i '' "s/coi-v3/coi-$STAMP/" dist/coi-sw.js
 sed -i '' "s/BUILDSTAMP/$STAMP/g" dist/shell/shell.mjs
 grep -q "v=$STAMP" dist/shell/shell.mjs || { echo "stamp inject failed" >&2; exit 1; }
+sed -i '' "s|src=\"shell.mjs\"|src=\"shell.mjs?v=$STAMP\"|" dist/shell/index.html
+grep -q "shell.mjs?v=$STAMP" dist/shell/index.html || { echo "entry bust failed" >&2; exit 1; }
 grep -q "coi-$STAMP" dist/coi-sw.js || { echo "cache stamp failed" >&2; exit 1; }
 touch dist/.nojekyll
 # inject the isolation shim into the dist COPY of the frozen browser page —

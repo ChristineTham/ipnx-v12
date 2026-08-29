@@ -19,14 +19,16 @@ const stamp = (resp) => {
 };
 self.addEventListener("fetch", (e) => {
   const r = e.request;
-  if (r.mode === "navigate") { e.respondWith(fetch(r).then(stamp)); return; }
+  // no-cache: revalidate with the CDN (fast 304s) so a deploy reaches every
+  // visitor on one plain reload — the HTTP cache never pins a stale build
+  if (r.mode === "navigate") { e.respondWith(fetch(r, { cache: "no-cache" }).then(stamp)); return; }
   const u = new URL(r.url);
   if (u.origin !== self.location.origin || r.method !== "GET") return;
   e.respondWith((async () => {
     const c = await caches.open(CACHE);
     const hit = await c.match(r);
     if (hit) return hit;
-    const resp = await fetch(r);
+    const resp = await fetch(r, { cache: "no-cache" });
     const stamped = stamp(resp);
     if (stamped.status === 200) {
       const copy = stamped.clone();
