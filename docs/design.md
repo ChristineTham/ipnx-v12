@@ -652,6 +652,45 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   universal; look = tapping the thing; execute = tapping the tag or
   ⌘Enter; the chords were always the clipboard.
 
+- **(2026-08-30) The namespace's third dissolution: every process is a
+  jail, a container and a microVM — "our computer is a network."**
+  Christine's articulation, recorded in her words: "per process namespace
+  solves not only package dependency management and backups, it also
+  significantly lessens the need for jails, containers, even kubernetes.
+  every process is a jail, and a container, and a microvm. processes are
+  isolated from each other, and it is possible to run a whole cluster of
+  processes with different roles, network interfaces, sockets etc. side
+  by side… Our computer is a network." (Sun's exact motto, inverted:
+  "The network is the computer" — John Gage.) The argument, built out:
+  isolation here is not a product but what a process *is*, and it is
+  **double-walled by construction** — the namespace bounds what a process
+  can *name* (its visible universe is its mount table, nothing else
+  reachable), and the wasm instance bounds what it can *do* (no ambient
+  syscalls, no ambient memory; only the mailbox). And because **9P is the
+  only IPC**, every process boundary is already a wire boundary: two
+  processes on one kernel differ from two machines on a network only in
+  latency — `exportfs` demonstrates the equivalence, serving one
+  process's world to another across any wire. That is what makes the
+  inversion literal rather than rhetorical: one computer decomposes into
+  a network of small machines, each with its own filesystem view, its
+  own posted services (`/srv`), its own credentials (identity.md's
+  roles), and — when M7 lands `/net` — its own network interfaces and
+  socket space, Plan 9's own trick (bind a different `/net` and you are
+  on a different network). Against each tool, honestly: chroot and the
+  jail are one-shot, root-only namespaces without composition — ours is
+  the general case of what they special-case. The container's isolation
+  half dissolves (the image is a pkg subtree; isolating is just process
+  creation), but its *metering* half — cgroups' cpu/memory quotas — does
+  not, and stays a named open question (whether per-process quotas
+  belong in this kernel, or whether the host OS metering the one kernel
+  process suffices per deployment form). Kubernetes' service discovery
+  is `/srv` plus binds; its scheduling and replication remain genuinely
+  orchestration — "lessens," her verb, kept deliberately over
+  "replaces." Status and standing test: the file half runs today
+  (`rfork n`, private binds, pkg, `#V`); the network half is M7's
+  mechanism, and this entry is measured the day two processes hold
+  different `/net` binds side by side.
+
 - **(2026-08-30) The versioning layer, v1: a snapshot is a tree, restore
   is a bind — landed as `#V`.** The immutable-systems doctrine
   (2026-08-29) gets its first mechanism. `echo snap t1 > '#V/ctl'`
