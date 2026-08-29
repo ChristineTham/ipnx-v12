@@ -28,7 +28,12 @@ if (!crossOriginIsolated) {
   const line1 = "This demo needs cross-origin isolation and this load did not get it.";
   let advice = "Reload the page normally — and avoid hard reloads (\u2318\u21e7R), " +
     "which deliberately bypass the isolation worker.";
-  if (!hasSW)
+  if (!isSecureContext)
+    advice = "This page loaded over plain http:// — an insecure context, where " +
+      "browsers remove the worker API entirely (the address bar says Not " +
+      "Secure). Use https://" + location.host + location.pathname +
+      " — the site now redirects http there.";
+  else if (!hasSW)
     advice = "Service workers are unavailable in this Safari profile, and the " +
       "demo cannot isolate without them. Three settings do this: a Private " +
       "Browsing window; Lockdown Mode (system-wide or per-site); or " +
@@ -40,7 +45,7 @@ if (!crossOriginIsolated) {
     "Data \u2192 remove christham.net, then visit again.";
   const diag = document.createElement("div");
   diag.style.cssText = "margin-top:14px;color:#7f8ea0;font-size:12px;user-select:text";
-  diag.textContent = `state: sw-api=${hasSW} page=${ctl} build=BUILDSTAMP`;
+  diag.textContent = `state: secure=${isSecureContext} proto=${location.protocol} sw-api=${hasSW} page=${ctl} build=BUILDSTAMP`;
   d.appendChild(diag);
   if (hasSW)
     navigator.serviceWorker.getRegistration().then((r) => {
