@@ -57,9 +57,11 @@ its own private namespace; <code>/v10/bin/echo -e 'a\nb' | wc</code> pipes
 
 <p class="fine">
 Everything runs in your browser — nothing you type leaves this tab, and
-reloading forgets it all. Measured in Chrome-family browsers (needs
-SharedArrayBuffer via cross-origin isolation); Safari and Firefox are not yet
-measured, and may work or may not. The whole system — kernel, sources, the
+reloading forgets it all. <b>Works in Chromium browsers</b> — Chrome, Edge,
+Brave, Arc. Safari cannot run it here (measured): SharedArrayBuffer needs
+cross-origin isolation, WebKit accepts the isolation headers only from the
+real response, and this host cannot send them — a header-capable host is on
+the list. Firefox is untested. The whole system — kernel, sources, the
 132-test conformance suite, and the documents that argue for it — is at
 <a href="https://github.com/ChristineTham/ipnx-v12">github.com/ChristineTham/ipnx-v12</a>.
 Third-party licences: <a href="NOTICES.html">NOTICES</a>.

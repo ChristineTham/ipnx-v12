@@ -138,9 +138,13 @@ GitHub Pages (her call — no new Netlify site), `gh-pages` branch assembled by
 `demo/build.sh`; COOP/COEP supplied by our own COI service worker, injected
 into the dist copy of the frozen browser page (the derivation-layer move;
 self-skips where real headers exist). Verified live in a real Chrome — 132
-PASS, 0 FAIL, `crossOriginIsolated` true. Field note: this workstation's
+PASS, 0 FAIL, `crossOriginIsolated` true. Field notes: this workstation's
 embedded browser pane refuses service-worker registration (measured over
-HTTP/1.0 and 1.1), so live verification needs a real browser. P2/P3's
+HTTP/1.0 and 1.1), so live verification needs a real browser; and **Safari
+cannot run the demo on this host** (measured live: WebKit takes COOP/COEP
+only from the real response, so the shim isolates Chromium only — the guard
+and landing say so in visitor terms; a header-capable host is the fix and
+feeds M6's gate). P2/P3's
 validation events are now armed. — *consumes: personas (2026-08-29)*
 The browser port is finished, frozen, and unreachable — P2 and P3's whole
 journey ([personas.md](personas.md)) is "click a URL, type into rc". Host it:
