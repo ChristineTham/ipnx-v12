@@ -118,6 +118,14 @@ own chosen surface. A *port* personality supplies a foreign environment —
 compiles against it (a GNU/glibc personality, a musl personality, a BSD
 personality). The port personality is where the adaptation lives: the source
 is never patched to match IPNX; the environment is built to match the source.
+The same construction dissolves the package layer's two classic problems:
+versions coexist under `/pkg/<name>/<version>` and namespaces choose, so
+there is no dependency solver at the OS layer; and a conflict — a name about
+to be bound over DIFFERENT bytes — is checkable at install, and pkg refuses
+it (identical bytes are idempotent; deliberate shadowing remains expressible
+through union order). Per-process installs follow: an `rfork n` child that
+pkg-installs has its own package set — coexisting development environments
+are processes, with no activation machinery.
 Both kinds are ordinary userspace over the unchanged kernel — the design's
 porting inversion ([design.md](design.md), 2026-08-29). The demo's in-tab `cc`
 compiles stock C against a wasi-libc/POSIX port environment, the first

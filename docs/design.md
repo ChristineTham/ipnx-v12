@@ -617,6 +617,34 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-29) Dependency hell and package conflicts dissolve in the
+  namespace.** Christine's articulation, recorded in her words: "Since every
+  process has its own namespace, and the package manager simply binds files,
+  we don't have to do dependency management — every package installs exactly
+  the files it needs. We can also resolve package conflicts: if a package
+  binds a different file to the same name, we can reject the install." The
+  two classic package-manager problems are artifacts of a GLOBAL filesystem,
+  and this system does not have one: (1) versions coexist by construction —
+  /pkg/<name>/<version> keeps every version's subtree, and a namespace binds
+  the one it wants, so "A needs libfoo 1, B needs libfoo 2" is two binds in
+  two worlds, not a solver problem. The OS layer therefore carries NO
+  dependency machinery (language ecosystems keep their own graphs — pip
+  still walks Requires-Dist — but that is the personality's business, not
+  the package layer's). (2) A conflict is well-defined and CHECKABLE: a name
+  about to be bound that already resolves to DIFFERENT bytes is a genuine
+  collision, and pkg refuses the install (same bytes = idempotent, allowed).
+  Union order already makes deliberate shadowing expressible (bind -b);
+  refusal guards only the accidental case. And the third consequence, hers
+  in the same breath: "it also means we can have multiple dev environments
+  coexisting as different processes — each process can manage its own
+  package versions." What venv, nvm, rbenv and every toolchain manager
+  simulate with PATH shims and activation scripts, the namespace gives
+  natively: `rfork n` (or newns with a fragment) and install — the
+  environment IS the process's namespace, it nests, it composes with
+  everything else namespaces do, and it vanishes with the process. All
+  three consequences implemented and pinned in pkg(1) and the suite the
+  same day.
+
 - **(2026-08-29) The package model — a package is a subtree, installing is
   binding.** Investigated at Christine's direction before M1 ("genericise
   this personality to allow us to import from external registries"), with

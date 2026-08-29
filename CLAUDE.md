@@ -83,7 +83,7 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 bash userspace/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints the suite's PASS lines (floor 131; 134 with the tour, the sam class-range test and the wasi-inode test), exits 0:
+Boot the kernel — init (pid 1) runs the acceptance tests, prints the suite's PASS lines (floor 131; currently 138 — the count grows as features add self-skipping tests), exits 0:
 
 ```bash
 bash poc/run.sh

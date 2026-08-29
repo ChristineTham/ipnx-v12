@@ -97,6 +97,26 @@ mkdirs(char *path)			/* create each missing component */
 	}
 }
 
+/* hex sha256 of an existing file; 0 on success */
+static int
+hashfile(char *path, char *digest)
+{
+	SHA256state st;
+	uchar buf[CHUNK], sum[32];
+	int fd, n;
+
+	fd = open(path, OREAD);
+	if(fd < 0)
+		return -1;
+	sha256init(&st);
+	while((n = read(fd, buf, sizeof buf)) > 0)
+		sha256update(&st, buf, n);
+	close(fd);
+	sha256final(&st, sum);
+	hex(sum, 32, digest);
+	return 0;
+}
+
 /* stream src fd into dst path, hashing; returns bytes, hex in digest */
 static vlong
 sink(int sfd, char *dst, char *digest)
@@ -360,6 +380,15 @@ install(char *spec)
 			mkdirs(dig);
 			fdig = create(dig, OWRITE, 0644);
 			if(strcmp(f[2], "bin") == 0){
+				char existing[LINELEN], have[65];
+				snprint(existing, sizeof existing, "/bin/%s", name);
+				if(hashfile(existing, have) == 0 && cistrcmp(have, f[4]) != 0){
+					fprint(2, "pkg: CONFLICT — /bin/%s already exists with different\n", name);
+					fprint(2, "     content (namespace doctrine: same name, different bytes\n");
+					fprint(2, "     is a collision; same bytes would be idempotent).\n");
+					fprint(2, "     have %s\n     pkg  %s\n", have, f[4]);
+					exits("conflict");
+				}
 				snprint(dst, sizeof dst, "%s/bin/%s", root, name);
 				fetchone(base, f[3], dst, f[4], fdig);
 			} else if(strcmp(f[2], "tree") == 0){

@@ -96,6 +96,22 @@ pkr=`{pecho pkg bound and running}
 pkg remove pecho > /dev/null
 if(~ $pkr 'pkg bound and running' && ~ $"pkv *clean*) echo PASS 'pkg: install from a registry tree, sha256-verified, bind, verify, remove'; if not fails=bad
 
+# the namespace dissolves package conflicts (design 2026-08-29): a name that
+# already resolves to DIFFERENT bytes refuses the install; nothing global to
+# corrupt, nothing silently shadowed by accident
+mkdir /tmp/reg2
+cp /bin/cat /tmp/reg2/echo.wasm
+cd2=`{sha256sum < /tmp/reg2/echo.wasm}
+echo echo 9.9 bin /tmp/reg2/echo.wasm $cd2 > /tmp/reg2/index
+pkc=`{pkg -r /tmp/reg2 install echo >[2=1]}
+if(~ $"pkc *CONFLICT* && ~ `{pkg list} '') echo PASS 'pkg: same name, different bytes — the install is refused'; if not fails=bad
+
+# dev environments are processes (design 2026-08-29): an rfork n subshell
+# installs its own package; the parent never sees it — venv with no venv
+penv=`{rc -c 'rfork n; pkg -r /tmp/reg install pecho > /dev/null; pecho env-private'}
+pgone=`{pecho after >[2=1]}
+if(~ $penv 'env-private' && ~ $"pgone *'does not exist'*) echo PASS 'pkg in rfork n: a private dev environment, gone with the process'; if not fails=bad
+
 # regexp CLASSES WITH RANGES in x: the class-range sentinel is Runemax
 # stored in a Rune (sam/regexp.c bldcclass), so this is the one structural
 # pattern that catches a Rune narrower than libc.h's 21-bit era — a 16-bit
