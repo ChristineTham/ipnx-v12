@@ -24,6 +24,10 @@ self.addEventListener("fetch", (e) => {
   if (r.mode === "navigate") { e.respondWith(fetch(r, { cache: "no-cache" }).then(stamp)); return; }
   const u = new URL(r.url);
   if (u.origin !== self.location.origin || r.method !== "GET") return;
+  // the big manifests stream straight from the network: same-origin needs no
+  // COEP stamp, ?v= busting handles freshness, and buffering 46-80MB inside
+  // the SW kills the page's download progress (measured: an opaque stall)
+  if (u.pathname.includes("/build/")) return;
   e.respondWith((async () => {
     const c = await caches.open(CACHE);
     const hit = await c.match(r);
