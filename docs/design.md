@@ -617,6 +617,57 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-29) The package model — a package is a subtree, installing is
+  binding.** Investigated at Christine's direction before M1 ("genericise
+  this personality to allow us to import from external registries"), with
+  the survey and the proof in RESEARCH (WLR's ruby-3.2.2.wasm, fetched,
+  digest-verified, ran on the unmodified WASI personality — the import
+  machinery is already generic for well-behaved preview1 commands). The
+  design, in six commitments:
+  1. **No package database.** A package is a file tree under
+     `/pkg/<name>/<version>/`; installing binds it (`bind -a …/bin /bin` —
+     the union directory is the merge mechanism); uninstalling unbinds. The
+     namespace is the installation record, which makes installs per-process
+     by construction and per-identity via the profile: "installed software"
+     persists as a profile namespace fragment (identity.md), so a person, a
+     role and an agent each carry their own package set. An agent can have
+     packages its person does not.
+  2. **The personality declaration rides the package**: a `meta` file in the
+     namespace-fragment dialect (bind lines, plus small extensions: `abi
+     wasip1|wasi_unstable|plan9`, `env K=V`). The three provisioning layers
+     map onto package content — the ABI names the shim; `libs/` packages
+     land as layer-2 sysroot trees (`/lib/wasm32-wasi`, `/include`) that
+     `cc -l` links; runtime-support trees and env are layer 3.
+  3. **`pkg(1)` is the v1**: `pkg install <registry>/<name>[@ver]`, `list`,
+     `remove`, `verify`. Fetch over `#H` (later `/net`); **sha256 verified
+     always** (every surveyed registry publishes digests; refusal on
+     mismatch, as pip already does); unpack; bind per `meta`. pip remains
+     the Python ecosystem's arm; pkg handles wasm commands and sysroots.
+  4. **Registries as filesystems is the end-state**: a registryfs (a
+     userspace 9P server per registry, the hellofs/exportfs lineage)
+     translating walks into API calls — then installation decays into
+     `cp -r /n/wlr/ruby/latest /pkg/… ` plus a bind, and the package
+     manager nearly disappears into the file model. Where the wasm world
+     links components, ipnx mounts servers; WIT/warg stay refused per the
+     founding decision.
+  5. **The demo ships a curated same-origin mirror** — GitHub asset
+     downloads send no CORS (measured), so the browser host cannot fetch
+     them directly; a small `/registry/` on the demo site (verified
+     runtimes plus digests, each under the 50MB line) makes `pkg install
+     ruby` work in the tab, makes the demo the first ipnx registry, and is
+     the curation principle applied to acquisition. Native hosts reach the
+     real registries unconstrained.
+  6. **Trust is digests now, identity later**: v1 pins sha256; signature
+     schemes (warg's logs, sigstore) wait until the identity milestone
+     gives them an anchor. The capability doctrine already does the heavy
+     lifting — an installed binary gets nothing but the namespace it is
+     started with, so trying untrusted software is safer here by
+     construction than on any system where install grants ambient
+     authority.
+  Open, deliberately: the command's name (`pkg` is the placeholder); the
+  wasix personality (plausible — ipnx has real fork/exec — but unplanned);
+  OCI artifacts as a registry (aligns with M1, native-first).
+
 - **(2026-08-29) The toolchains are real — the time for shims is over.**
   Christine's directive: "We need the toolchains to work, not demo shims…
   this is for real. We need the ability to install packages, etc. so pip

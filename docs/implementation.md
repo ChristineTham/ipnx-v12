@@ -81,6 +81,19 @@ measured toolchain (wasi-sdk, binaryen, bison, Node, Rust) that `mk.sh` warns
 against on drift (six-hats catch: the §9.4–9.5 findings are version-dependent
 and the versions were recorded nowhere).
 
+### The package manager, v1 *(S, independent — may run before or beside M1)* — consumes: the package model (design.md 2026-08-29), the registry survey (RESEARCH)
+
+`pkg(1)` in userspace: install/list/remove/verify; fetch over `#H`, sha256
+always, unpack to `/pkg/<name>/<ver>`, bind per the package `meta`
+(namespace-fragment dialect + `abi` + `env`). The demo gains a curated
+same-origin `/registry/` (browser CORS reality, measured) with two or three
+verified runtimes — acceptance: **`pkg install ruby` in the public demo's
+tab, then `ruby -e` runs**; on the native host the same command against the
+real WLR release URLs. A `libs/` package (zlib) lands as a layer-2 sysroot
+and `cc -lz` links — the porting inversion made purchasable. Suite: a
+self-skipping test where `#H` exists. Feeds M10 (port personalities) and the
+profile milestone (installs as namespace fragments).
+
 ### M1 — the `FROM scratch` container *(S–M)* — consumes: OCI decision (2026-08-27)
 The first OCI weight: cross-compile the macOS host's code for
 `x86_64/aarch64-unknown-linux-musl` (wasmtime supports both; Cranelift JITs

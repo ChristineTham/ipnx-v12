@@ -1178,6 +1178,38 @@ teeth:
   repack) over the preview1 shim runs them; the demo applies it as a dist
   derivation, the frozen reference untouched.
 
+- **The registry survey (measured 2026-08-29): external wasm binaries run
+  today, and the acquisition constraints are known.** The probe: WLR's
+  `ruby-3.2.2.wasm` (23.3MB, single file) fetched from GitHub releases,
+  sha256-verified against the registry's own `.sha256sum` sibling, dropped
+  into `/bin` — **ran on the existing WASI personality with zero shim
+  changes** (`ruby 3.2.2 … [wasm32-wasi]`; expressions, blocks, sort/map all
+  correct). The generic import machinery already exists: exec selects the
+  dialect by the module's imports. Registry facts, each probed:
+  - **WLR** (vmware-labs/webassembly-language-runtimes; assets still on the
+    original org, continued by the webassemblylabs fork): GitHub releases;
+    single-file runtimes (ruby 23.3MB, ruby-slim 7.9MB, php-cgi-slim 6.0MB,
+    python as tar.gz) **plus a `libs/` catalogue — zlib, sqlite, libpng,
+    libxml2, oniguruma as wasi-sdk sysroot tarballs: layer-2 personality
+    material our in-tab `cc` could link against**. Every asset has a
+    `.sha256sum` sibling. CORS, measured: the GitHub API sends
+    `access-control-allow-origin: *`; **asset downloads (302 →
+    objects.githubusercontent.com, GET/206) send none** — so browser-hosted
+    installs from GitHub need an intermediary (a same-origin mirror, or
+    /net); the Node and native hosts are unconstrained.
+  - **Wasmer** (wasmer.io): GraphQL API; packages ship as `.webc` (their
+    own container format bundling module+fs+metadata); a large share of the
+    catalogue is **WASIX** — fork/exec/threads/sockets extensions this
+    system does not shim. Noted, not planned: ipnx has real fork/exec, so a
+    wasix personality is plausible later; webc parsing plus GraphQL makes
+    wasmer a phase-2 registry either way.
+  - **PyPI**: the CORS-friendly one, already live (pip over `#H`).
+  - **Component registries (warg) and WIT worlds**: out of scope by the
+    founding decision — typed component interfaces do not compose with 9P's
+    uniform untyped one; ipnx imports *commands*. Where the wasm world links
+    components, ipnx mounts servers. OCI-hosted wasm artifacts align with
+    M1's infrastructure and stay native-host-first (no CORS).
+
 - **Rune width must match the vendored snapshot's era — and the shim's own
   helpers must use Rune, never a hardcoded width (measured 2026-08-29).**
   The u.h shim declared `Rune` as `unsigned short` ("the 4th edition's"),
