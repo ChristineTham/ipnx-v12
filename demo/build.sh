@@ -10,6 +10,8 @@ cp -R ../poc/browser dist/browser
 cp -R ../poc/supervisor dist/supervisor
 cp ../userspace/build/rootfs.json dist/build/rootfs.json
 cp index.html NOTICES.html _headers coi-sw.js coi-register.js dist/
+cp -R shell dist/shell
+cp -R vendor dist/vendor
 # stamp the SW cache name per build: a stale CacheStorage must never serve a
 # previous build's modules (measured: it silently did, mid-debug)
 STAMP=$(date +%s)

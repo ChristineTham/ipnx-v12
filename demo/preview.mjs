@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join, normalize, extname } from "node:path";
 const root = join(dirname(fileURLToPath(import.meta.url)), "dist");
 const types = { ".html": "text/html", ".mjs": "text/javascript",
-  ".js": "text/javascript", ".json": "application/json", ".wasm": "application/wasm" };
+  ".js": "text/javascript", ".css": "text/css", ".json": "application/json", ".wasm": "application/wasm" };
 createServer(async (req, res) => {
   let p = decodeURIComponent(new URL(req.url, "http://x").pathname);
   if (p.endsWith("/")) p += "index.html";

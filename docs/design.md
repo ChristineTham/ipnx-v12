@@ -967,6 +967,15 @@ Evidence for each is in RESEARCH.md at the cited section.
   the client's namespace, which is why this cannot be delegated. A symlink created
   through a mount into an exporter's tree, read back through the mount, resolves to the
   *client's* `/etc/motd` — the acceptance test that settles it.
+- **The modern-draw question** (raised by the author's demo review,
+  2026-08-29): character windows are DOM-first (xterm.js — settled and now
+  shipped in the demo shell); should draw(3) itself gain a modern backend —
+  the `d`/`L`/`e` ops mapped to canvas/SVG/SwiftUI vectors rather than a
+  raster — or a modern *dialect* for future personality apps, while the
+  verbatim editors keep the raster path their code emits? Bitmapped displays
+  are not how UIs are built now; the file-server *interface* is the
+  invariant, the backend is per-platform by decision. Needs a dated decision
+  before M3's presentation layer hardens.
 - kencc or clang for the *ported* userspace, given `extern register` and anonymous struct
   members? Fresh code is clang (§9.4 is the measured recipe).
 - Does the `d` message's alpha compositing map cleanly onto canvas and Metal, or does the
