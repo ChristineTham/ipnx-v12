@@ -1190,6 +1190,18 @@ teeth:
   `cc z.c /lib/wasm32-wasi/zlib/*.o`. An `ar` for the guest would restore
   `-lz`; queued.
 
+- **M1 measured (2026-08-29): the whole operating system is a 62.2MB
+  distroless image.** `FROM scratch` + two COPYs: the statically-linked musl
+  host (16,789,232 bytes — wasmtime 48 slimmed to
+  cranelift/runtime/gc, the default features' zstd/gdbjit C deps refused as
+  dead weight) and the shared rootfs (48,467,666 bytes, CPython the bulk).
+  Total image 65,256,898 bytes; 135 PASS inside it, `-i` boots to rc —
+  proven in CI on every push. The oracle-in-amber job earned its name on
+  its first run: an arbitrary Node 22.12.0 pin failed with "Invalid opcode
+  0x1f (enable with --experimental-wasm-exnref)" — try_table is default-on
+  by 22.23.2 (VERSIONS' measured engine, now the pin) but flagged at
+  22.12.0, a sharper bound on the §2 engine table than folklore had.
+
 - **The registry survey (measured 2026-08-29): external wasm binaries run
   today, and the acquisition constraints are known.** The probe: WLR's
   `ruby-3.2.2.wasm` (23.3MB, single file) fetched from GitHub releases,

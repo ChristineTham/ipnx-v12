@@ -98,17 +98,19 @@ LLVM-16 objects the LLVM-8 linker rejects; a guest `ar` would restore
 self-skipping test where `#H` exists. Feeds M10 (port personalities) and the
 profile milestone (installs as namespace fragments).
 
-### M1 — the `FROM scratch` container *(S–M)* — consumes: OCI decision (2026-08-27)
+### M1 — the `FROM scratch` container *(S–M)* — **landed 2026-08-29** — consumes: OCI decision (2026-08-27)
 The first OCI weight: cross-compile the macOS host's code for
 `x86_64/aarch64-unknown-linux-musl` (wasmtime supports both; Cranelift JITs
 fine inside a container), static binary, `FROM scratch`, `COPY` the host and
 the rootfs. The whole operating system as a distroless image measured in
-megabytes. **Acceptance:** `docker run ipnx` prints the floor suite and exits
-0; `docker run -it ipnx -i` boots to rc; image size recorded in RESEARCH;
-**CI on push** runs the suite in this container (the floor stops being a
-manual discipline), and a second pinned-Node image preserves **the oracle in
-amber** — the frozen reference guarded against host drift (both six-hats
-catches).
+megabytes. **Acceptance, all met 2026-08-29:** the suite runs in the container at
+135 PASS and exits 0; `-i` boots to rc (both proven in CI — this Mac has no
+container runtime, measured); the 62.2MB image size is in RESEARCH; **CI on
+push** builds the world and proves it in the container and on the amber
+oracle (Node pinned to VERSIONS' v22.23.2 — the amber's FIRST run caught an
+arbitrary 22.12.0 pin lacking default try_table, validating the idea on day
+one). amd64 is the built image; the aarch64-musl target compiles clean and
+its image is a small follow-up. Both six-hats catches closed.
 
 ### M2 — the namespace-file boot *(S)* — consumes: profile decision stage 1 (2026-08-29)
 The decision log has said from the start that *boot is rc plus a namespace
