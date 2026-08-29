@@ -473,3 +473,123 @@ sha256final(SHA256state *s, uchar out[32])
 		out[i*4+3] = s->h[i];
 	}
 }
+
+/* ---- newns: the namespace(6) little language, the M2 subset ----
+ * Verbs: bind [-abcC] new old | mount [-abcC] srvfile old | cd dir | clear.
+ * '#' starts a comment only at line start (device names appear as args);
+ * single quotes group words rc-style. The namespace is CLEARED first
+ * (RFCNAMEG) and rebuilt from the file — boot's empty namespace makes that
+ * a no-op there, and the root stays implicit (an empty namespace resolves
+ * absolute paths through #M). Errors warn on fd 2 and continue: a boot must
+ * not wedge on one bad line. This file format IS the profile's namespace
+ * fragment format (identity.md) — stage one, landed. */
+static int
+nstok(char *p, char **tok, int max)
+{
+	int n = 0;
+
+	for(;;){
+		while(*p == ' ' || *p == '\t')
+			p++;
+		if(*p == 0 || n == max)
+			return n;
+		if(*p == '\''){
+			tok[n++] = ++p;
+			while(*p && *p != '\'')
+				p++;
+		} else {
+			tok[n++] = p;
+			while(*p && *p != ' ' && *p != '\t')
+				p++;
+		}
+		if(*p)
+			*p++ = 0;
+	}
+}
+
+int
+newns(char *file)
+{
+	static char buf[8192];
+	char *tok[8], **t, *line, *next, *newp, *oldp;
+	int fd, n, ntok, flag, lineno, bad;
+
+	fd = open(file, OREAD);
+	if(fd < 0){
+		fprint(2, "newns: cannot open %s: %r\n", file);
+		return -1;
+	}
+	n = 0;
+	while(n < sizeof buf - 1){
+		int r = read(fd, buf + n, sizeof buf - 1 - n);
+		if(r <= 0)
+			break;
+		n += r;
+	}
+	close(fd);
+	buf[n] = 0;
+	rfork(RFCNAMEG);
+	bad = 0;
+	lineno = 0;
+	for(line = buf; line != nil; line = next){
+		next = strchr(line, '\n');
+		if(next)
+			*next++ = 0;
+		lineno++;
+		if(line[0] == 0 || line[0] == '#')
+			continue;
+		ntok = nstok(line, tok, 8);
+		if(ntok == 0)
+			continue;
+		flag = 0;
+		t = tok;
+		if(ntok >= 2 && t[1][0] == '-'){
+			char *f;
+			for(f = t[1] + 1; *f; f++){
+				if(*f == 'a') flag |= MAFTER;
+				else if(*f == 'b') flag |= MBEFORE;
+				else if(*f == 'c') flag |= MCREATE;
+				/* C (MCACHE): accepted, meaningless here */
+			}
+			t[1] = t[0];	/* shift the verb over the flags */
+			t++;
+			ntok--;
+		}
+		if(strcmp(t[0], "clear") == 0){
+			rfork(RFCNAMEG);
+			continue;
+		}
+		if(strcmp(t[0], "cd") == 0 && ntok >= 2){
+			if(chdir(t[1]) < 0){
+				fprint(2, "newns: %s:%d: cd %s: %r\n", file, lineno, t[1]);
+				bad++;
+			}
+			continue;
+		}
+		if(ntok < 3){
+			fprint(2, "newns: %s:%d: malformed line\n", file, lineno);
+			bad++;
+			continue;
+		}
+		newp = t[1];
+		oldp = t[2];
+		if(strcmp(t[0], "bind") == 0){
+			if(bind(newp, oldp, flag) < 0){
+				fprint(2, "newns: %s:%d: bind %s %s: %r\n", file, lineno, newp, oldp);
+				bad++;
+			}
+		} else if(strcmp(t[0], "mount") == 0){
+			int sfd = open(newp, ORDWR);
+			if(sfd < 0 || mount(sfd, -1, oldp, flag, "") < 0){
+				fprint(2, "newns: %s:%d: mount %s %s: %r\n", file, lineno, newp, oldp);
+				bad++;
+			}
+			if(sfd >= 0)
+				close(sfd);	/* the kernel holds its own reference */
+		} else {
+			fprint(2, "newns: %s:%d: unknown verb '%s'\n", file, lineno, t[0]);
+			bad++;
+		}
+	}
+	return bad ? -1 : 0;
+}

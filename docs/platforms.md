@@ -41,8 +41,10 @@ evictable, so real user files arrive only through granted subtrees
 
 ## Where everything lives — the canonical namespace
 
-The boot namespace, as init assembles it today (and as `/lib/namespace` will
-declare it after M2). Mount points are prefix-map entries and need not exist
+The boot namespace, **as `/lib/namespace` declares it** (M2, landed
+2026-08-29: init carries no bind list — boot is the file's text, read
+through `newns()`; the root is implicit). Mount points are prefix-map
+entries and need not exist
 in any underlying tree (`/proc` has no directory in the rootfs; the bind is
 the directory):
 
@@ -51,7 +53,7 @@ the directory):
 | `/` | ramfs (`#M`), seeded from `rootfs/` | V10 permissions enforced |
 | `/bin` | seed | the Plan 9 userland — rc, sam, acme, the twenty-four, the harnesses |
 | `/rc` | seed | rc's library and `tests.rc`, the shell half of the suite |
-| `/lib` | seed | `font/` (real subfonts + `*default*`), `python3.14/` (the measured 21-file stdlib), `alt/` (union-test fixture) |
+| `/lib` | seed | `namespace` (the boot file itself), `pkg/` (registries), `font/` (real subfonts + `*default*`), `python3.14/` (the full stdlib + personality files), `alt/` (union-test fixture) |
 | `/etc` | seed | personality-side files as they land (`/etc/passwd` is future, personality-owned) |
 | `/tmp` | seed | scratch; wiped per boot |
 | `/v10/bin` | seed | the V10 exhibit — TUHS-tape `cat`, `echo` on `libv10` |

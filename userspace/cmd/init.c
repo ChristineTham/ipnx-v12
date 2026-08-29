@@ -350,13 +350,11 @@ main(int argc, char *argv[])
 	int fd, n, i, pid;
 	volatile int canary;
 
-	/* The namespace starts with only the root. Assemble /dev ourselves,
-	 * the way a Plan 9 init does: bind the console device into place. */
-	bind("#c", "/dev", MREPL);
-	bind("#e", "/env", MREPL);
-	bind("#d", "/fd", MREPL);
-	bind("#s", "/srv", MREPL);
-	bind("#p", "/proc", MREPL);
+	/* Boot is a namespace file (M2, 2026-08-29): the decision log has said
+	 * from the start that boot is rc plus a namespace file, and this is the
+	 * file half. The root is implicit; everything else is /lib/namespace's
+	 * text — no bind list lives in C any more. */
+	newns("/lib/namespace");
 	fd = open("/dev/cons", ORDWR);
 	dup(fd, 0);
 	dup(fd, 1);

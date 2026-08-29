@@ -1,0 +1,9 @@
+# /lib/namespace — the canonical boot namespace (namespace(6) subset, M2).
+# Read by init through newns(); the root is implicit — an empty namespace
+# resolves absolute paths through the ramfs (#M). This file format is also
+# the profile's namespace-fragment format (identity.md), stage one.
+bind #c /dev
+bind #e /env
+bind #d /fd
+bind #s /srv
+bind #p /proc

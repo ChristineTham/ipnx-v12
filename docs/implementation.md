@@ -112,15 +112,21 @@ arbitrary 22.12.0 pin lacking default try_table, validating the idea on day
 one). amd64 is the built image; the aarch64-musl target compiles clean and
 its image is a small follow-up. Both six-hats catches closed.
 
-### M2 — the namespace-file boot *(S)* — consumes: profile decision stage 1 (2026-08-29)
+### M2 — the namespace-file boot *(S)* — **landed 2026-08-29** — consumes: profile decision stage 1 (2026-08-29)
 The decision log has said from the start that *boot is rc plus a namespace
 file*; boot today is compiled C. Implement the namespace(6) little language
 (subset: `bind`/`mount`/`cd`/`clear`, flags `-abcC`, `#`-device names,
 comments), a `newns()` constructor in lib9, and shrink init to: build the
 namespace from `/lib/namespace`, then run the suite or rc. This is also stage
 one of the profile — the namespace fragment format *is* this file format.
-**Acceptance:** boot namespaces identical before/after; a test rebinds via an
-edited file with no recompile; init.c contains no hardcoded bind list.
+**Acceptance, all met 2026-08-29:** boot namespaces identical before/after
+(the full 136 pass on all three hosts through the file boot — the Rust
+kernel included, with zero Rust changes); the suite's newns test rebinds via
+an edited file with no recompile; init.c carries no bind list — five lines
+of C became five lines of text. `newns()` lives in lib9 (bind/mount/cd/
+clear, `-abcC`, quoting, line-start comments; warn-and-continue so a boot
+never wedges on one bad line), and `newns(1)` runs any command in a
+file-built namespace — the profile's mechanism in miniature.
 
 ### M3 — the macOS app *(M)* — consumes: GUI per-platform backing, native-host decisions
 The native host is headless; `win acme` paints into memory nobody shows. Add a

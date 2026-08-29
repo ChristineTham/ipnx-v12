@@ -47,6 +47,7 @@ long  write(int fd, void *buf, long n);
 vlong seek(int fd, vlong off, int type);
 int   dup(int oldfd, int newfd);
 int   bind(char *name, char *old, int flag);
+int   newns(char *file);	/* namespace(6) subset: clear, then apply */
 
 /* streaming SHA-256 (FIPS 180-4) — pkg(1) verifies registry fetches with it
  * and guests have 2MB pooled memories, so hashing must never buffer a file */
