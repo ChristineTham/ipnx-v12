@@ -421,6 +421,7 @@ struct Win {
     nextconn: u32,
     consbuf: Vec<u8>,
     consparked: Vec<Waiter>,
+    uitext: Vec<u8>,
     mousebuf: VecDeque<Vec<u8>>,
     mouseparked: Vec<Waiter>,
     dead: bool,
@@ -504,6 +505,7 @@ struct KState {
     cons_eof: bool,
     cons_parked: Vec<Waiter>,
     win_dirty: std::collections::HashSet<u32>,
+    win_inflight: std::collections::HashSet<u32>,
     timers: HashMap<u64, TimerKind>,
     next_token: u64,
     effects: Vec<Effect>,
@@ -591,6 +593,7 @@ fn new_window(k: &K) -> WinR {
         conns: HashMap::new(),
         nextconn: 1,
         consbuf: Vec::new(),
+        uitext: Vec::new(),
         consparked: Vec::new(),
         mousebuf: VecDeque::new(),
         mouseparked: Vec::new(),
@@ -777,11 +780,18 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
               data: &[u8]) -> Result<usize, KErr> {
     match kind {
         WKind::Cons => {
-            // window text: an effect for a presentation layer (M3); headless
-            // hosts drop it, the app renders it into the window's surface
+            // window text: buffered per window, emitted at the credited tick
+            // (a direct effect per write is unbounded when the UI stalls —
+            // macOS drags run a modal loop; measured as the second OOM path)
             if let Some(w) = win {
-                let wid = w.borrow().wid;
-                k.borrow_mut().effects.push(Effect::WinText { wid, bytes: data.to_vec() });
+                let mut wb = w.borrow_mut();
+                wb.uitext.extend_from_slice(data);
+                let over = wb.uitext.len().saturating_sub(1 << 20);
+                if over > 0 {
+                    wb.uitext.drain(0..over);   // keep the newest 1MB
+                }
+                drop(wb);
+                win_dirty(k, w);
             }
             Ok(data.len())
         }
@@ -840,6 +850,8 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                     serve_wmouse(k, w);
                     let mut kb = k.borrow_mut();
                     kb.wins.remove(&wid);
+                    kb.win_dirty.remove(&wid);
+                    kb.win_inflight.remove(&wid);
                     kb.effects.push(Effect::WinGone { wid });
                 }
                 _ => return Err(format!("wctl: bad message '{}'", raw.trim())),
@@ -1102,13 +1114,28 @@ impl Kernel {
     /// Unbounded flush-per-draw-write was measured at 640GB of queued
     /// frames during acme's boot; coalescing to the tick is the cure.
     pub fn win_tick(&self) {
-        let dirty: Vec<u32> = self.k.borrow_mut().win_dirty.drain().collect();
+        let dirty: Vec<u32> = self.k.borrow().win_dirty.iter().cloned().collect();
         for wid in dirty {
+            if self.k.borrow().win_inflight.contains(&wid) {
+                continue;                     // credit spent: retry next tick
+            }
+            self.k.borrow_mut().win_dirty.remove(&wid);
             let w = self.k.borrow().wins.get(&wid).cloned();
             if let Some(w) = w {
+                let text: Vec<u8> = std::mem::take(&mut w.borrow_mut().uitext);
+                if !text.is_empty() {
+                    self.k.borrow_mut().effects.push(Effect::WinText { wid, bytes: text });
+                }
                 win_flush(&self.k, &w);
+                self.k.borrow_mut().win_inflight.insert(wid);
             }
         }
+    }
+
+    /// the UI painted this window's last batch: restore its credit
+    pub fn win_ack(&self, wid: u32) {
+        self.k.borrow_mut().win_inflight.remove(&wid);
+        self.ex.run_until_stalled();
     }
 
     pub fn win_key(&self, wid: u32, bytes: &[u8]) {
@@ -1139,6 +1166,8 @@ impl Kernel {
             serve_wmouse(&self.k, &w);
             let mut kb = self.k.borrow_mut();
             kb.wins.remove(&wid);
+            kb.win_dirty.remove(&wid);
+            kb.win_inflight.remove(&wid);
             kb.effects.push(Effect::WinGone { wid });
         }
         self.ex.run_until_stalled();
@@ -1171,6 +1200,7 @@ impl Kernel {
                 cons_eof: false,
                 cons_parked: Vec::new(),
                 win_dirty: std::collections::HashSet::new(),
+                win_inflight: std::collections::HashSet::new(),
                 timers: HashMap::new(),
                 next_token: 1,
                 effects: Vec::new(),

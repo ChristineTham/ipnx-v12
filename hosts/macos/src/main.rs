@@ -31,6 +31,7 @@ pub enum Ev {
     WinMouse { wid: u32, x: i32, y: i32, b: i32 },
     WinClose { wid: u32 },
     WinTick,
+    WinAck { wid: u32 },
 }
 
 // ---- how a guest run ends (carried through wasmtime host errors) ----
@@ -340,6 +341,7 @@ fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
             Ev::WinMouse { wid, x, y, b } => kern.win_mouse(wid, x, y, b),
             Ev::WinClose { wid } => kern.win_close(wid),
             Ev::WinTick => kern.win_tick(),
+            Ev::WinAck { wid } => kern.win_ack(wid),
         }
     }
 }

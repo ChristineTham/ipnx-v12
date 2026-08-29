@@ -117,6 +117,10 @@ struct Tty {
 
 impl Tty {
     fn feed(&mut self, bytes: &[u8]) {
+        if self.lines.len() > 2000 {
+            let cut = self.lines.len() - 2000;
+            self.lines.drain(0..cut);        // the glass tty is not a log
+        }
         for &c in bytes {
             match c {
                 b'\n' => self.lines.push(String::new()),
@@ -269,6 +273,7 @@ impl ApplicationHandler<UiMsg> for App {
                     ws.frame = rgba;
                 }
                 self.paint(wid);
+                let _ = self.ev.send(Ev::WinAck { wid });
             }
             UiMsg::Text { wid, bytes } => {
                 if let Some(ws) = self.wins.get_mut(&wid) {
