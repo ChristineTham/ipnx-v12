@@ -1,68 +1,118 @@
-/* cc: a C compiler driver for the demo toolchain. Compiles with clang,
- * links with wasm-ld against the wasi sysroot, and runs the result.
- * Relative sources resolve against the cwd (the shim now honours it).
- *   cc [file.c]      default: hello.c
- * The heavy guests (/bin/clang, /bin/wasm-ld) ride the toolchain boot
- * profile; without them cc says how to get them. */
+/* cc: a real C compiler driver for ipnx.
+ *
+ * WASI has no way to spawn a subprocess, so clang's own driver cannot run
+ * here (nor can `go build` — same wall). ipnx does have fork+exec, so this
+ * driver — an ordinary ipnx process — orchestrates clang's pieces the way
+ * clang's driver would on a normal Unix: it runs `clang -cc1` to compile each
+ * source, then `wasm-ld` to link. What binji's wasm-clang does in JavaScript,
+ * ipnx does with a real process model.
+ *
+ * Behaves like cc(1): silent on success; `cc f.c` makes a.out; -o names the
+ * output; -c stops at the object; -O/-I/-D/-W/-std/-f/-g and friends pass
+ * through to the compiler; -l/-L pass through to the linker; multiple sources
+ * and .o inputs work. It does NOT run the program — run ./a.out yourself.
+ */
 #include "lib9.h"
 
 #define nelem(x) (sizeof(x)/sizeof((x)[0]))
+enum { MAXARG = 256 };
 
-static char *src;
-static char obj[] = "/tmp/_cc.o";
-static char out[] = "/tmp/a.out";
-
-static char *ccargv[] = {
-	"clang", "-cc1", "-emit-obj", "-disable-free",
-	"-isysroot", "/", "-internal-isystem", "/include/c++/v1",
-	"-internal-isystem", "/include", "-internal-isystem", "/lib/clang/8.0.1/include",
-	"-ferror-limit", "19", "-O2", "-o", obj, "-x", "c", nil, nil,
+/* the fixed clang -cc1 preamble: freestanding target, the wasi sysroot */
+static char *ccpre[] = {
+	"clang", "-cc1", "-triple", "wasm32-unknown-wasi", "-emit-obj",
+	"-disable-free", "-isysroot", "/",
+	"-internal-isystem", "/include/c++/v1",
+	"-internal-isystem", "/include",
+	"-internal-isystem", "/lib/clang/8.0.1/include",
+	"-ferror-limit", "19",
 };
-static char *ldargv[] = {
-	"wasm-ld", "--no-threads", "--export-dynamic", "-z", "stack-size=1048576",
-	"-L/lib/wasm32-wasi", "/lib/wasm32-wasi/crt1.o", obj, "-lc", "-o", out, nil,
+static char *ldpre[] = {
+	"wasm-ld", "--no-threads", "-z", "stack-size=1048576",
+	"-L/lib/wasm32-wasi", "/lib/wasm32-wasi/crt1.o",
 };
 
-static void ccchild(void *v) { USED(v); exec("/bin/clang", ccargv); exits("exec"); }
-static void ldchild(void *v) { USED(v); exec("/bin/wasm-ld", ldargv); exits("exec"); }
-static void runchild(void *v) { char *a[] = { out, nil }; USED(v); exec(out, a); exits("exec"); }
+static char *cflags[MAXARG]; static int ncf;	/* extra compile flags */
+static char *lflags[MAXARG]; static int nlf;	/* extra link flags */
+static char *srcs[MAXARG];   static int nsrc;	/* .c sources */
+static char *objs[MAXARG];   static int nobj;	/* .o inputs + produced */
+static char *out;				/* -o */
+static int compileonly;				/* -c */
 
-/* await one child; return 1 on clean exit (status '' between the quotes) */
+static char *
+toobj(char *s)					/* foo.c -> /tmp/foo.o */
+{
+	char base[256], *p, *q;
+
+	q = strrchr(s, '/');
+	strncpy(base, q ? q + 1 : s, sizeof base - 1); base[sizeof base - 1] = 0;
+	p = strrchr(base, '.');
+	if(p) *p = 0;
+	return smprint("/tmp/%s.o", base);
+}
+
+static char *
+absolutize(char *s)				/* clang shouldn't guess the cwd */
+{
+	static char cwd[512];
+	int d, l;
+
+	if(s[0] == '/') return s;
+	d = open(".", OREAD);
+	if(d < 0 || fd2path(d, cwd, sizeof cwd) < 0){ if(d>=0) close(d); return s; }
+	close(d);
+	l = strlen(cwd);
+	if(l == 1 && cwd[0] == '/') l = 0;
+	return smprint("%s/%s", cwd, s);
+}
+
+static void child(void *v){ char **b = v; exec(smprint("/bin/%s", b[0]), b); exits("exec"); }
+
+/* fork b, wait, return 1 on clean exit (empty '' status) */
 static int
-reap(void)
+run(char **b)
 {
 	char buf[128], *q;
 	int n;
 
+	procrfork(RFFDG, child, b);
 	n = await(buf, sizeof buf - 1);
 	if(n <= 0) return 0;
 	buf[n] = 0;
-	q = strrchr(buf, '\'');		/* ...'status' -> last quote closes it */
+	q = strrchr(buf, '\'');
 	if(q == nil) return 0;
 	*q = 0;
-	q = strrchr(buf, '\'');		/* opening quote; empty between = success */
+	q = strrchr(buf, '\'');
 	return q != nil && q[1] == 0;
 }
 
 int
 main(int argc, char *argv[])
 {
-	int fd;
+	char *a[MAXARG]; int na, i, j, fd;
 
-	src = argc > 1 ? argv[1] : "hello.c";
-	if(src[0] != '/'){			/* resolve against cwd so clang needn't guess */
-		static char abs[512];
-		int d = open(".", OREAD);
-		if(d >= 0 && fd2path(d, abs, sizeof abs) >= 0){
-			int l = strlen(abs);
-			if(l == 1 && abs[0] == '/') l = 0;	/* root: avoid // */
-			snprint(abs + l, sizeof abs - l, "/%s", src);
-			src = abs;
-		}
-		if(d >= 0) close(d);
+	for(i = 1; i < argc; i++){
+		char *s = argv[i];
+		int len = strlen(s);
+
+		if(strcmp(s, "-c") == 0) compileonly = 1;
+		else if(strcmp(s, "-o") == 0 && i+1 < argc) out = argv[++i];
+		else if(strncmp(s, "-o", 2) == 0 && len > 2) out = s+2;
+		else if(strncmp(s, "-l", 2) == 0 || strncmp(s, "-L", 2) == 0)
+			lflags[nlf++] = s;			/* linker */
+		else if(len > 2 && strcmp(s+len-2, ".c") == 0)
+			srcs[nsrc++] = s;			/* a source */
+		else if(len > 2 && strcmp(s+len-2, ".o") == 0)
+			objs[nobj++] = absolutize(s);		/* an object to link */
+		else if(s[0] == '-')
+			cflags[ncf++] = s;			/* forward to the compiler */
+		else
+			srcs[nsrc++] = s;			/* bare word: treat as source */
 	}
-	ccargv[nelem(ccargv) - 2] = src;
 
+	if(nsrc == 0 && nobj == 0){
+		fprint(2, "usage: cc [-c] [-o out] [flags] file.c ...\n");
+		exits("usage");
+	}
 	if((fd = open("/bin/clang", OREAD)) < 0){
 		fprint(2, "cc: the C toolchain is not loaded — boot the demo with the\n");
 		fprint(2, "    \"C toolchain\" button (the plain desktop has no compiler).\n");
@@ -70,16 +120,29 @@ main(int argc, char *argv[])
 	}
 	close(fd);
 
-	print("cc: compiling %s\n", src);
-	procrfork(RFFDG, ccchild, nil);
-	if(!reap()){ fprint(2, "cc: compile failed\n"); exits("compile"); }
+	/* compile each source */
+	for(i = 0; i < nsrc; i++){
+		char *obj = compileonly && out ? out : toobj(srcs[i]);
+		na = 0;
+		for(j = 0; j < nelem(ccpre); j++) a[na++] = ccpre[j];
+		for(j = 0; j < ncf; j++) a[na++] = cflags[j];
+		a[na++] = "-o"; a[na++] = obj;
+		a[na++] = "-x"; a[na++] = "c"; a[na++] = absolutize(srcs[i]);
+		a[na] = nil;
+		if(!run(a)){ fprint(2, "cc: %s: compilation failed\n", srcs[i]); exits("compile"); }
+		objs[nobj++] = obj;
+	}
+	if(compileonly) exits(nil);
 
-	print("cc: linking %s\n", out);
-	procrfork(RFFDG, ldchild, nil);
-	if(!reap()){ fprint(2, "cc: link failed\n"); exits("link"); }
-
-	procrfork(RFFDG, runchild, nil);
-	reap();
+	/* link */
+	na = 0;
+	for(j = 0; j < nelem(ldpre); j++) a[na++] = ldpre[j];
+	for(j = 0; j < nobj; j++) a[na++] = objs[j];
+	a[na++] = "-lc";
+	for(j = 0; j < nlf; j++) a[na++] = lflags[j];
+	a[na++] = "-o"; a[na++] = out ? absolutize(out) : absolutize("a.out");
+	a[na] = nil;
+	if(!run(a)){ fprint(2, "cc: link failed\n"); exits("link"); }
 	exits(nil);
 	return 0;
 }

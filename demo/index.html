@@ -52,9 +52,12 @@ binaries run against the same kernel through a WASI shim.</p>
 
 <p>You boot as <b>kitty</b>, at home in <code>/usr/kitty</code>, where
 <code><code>hello.c</code>, <code>hello.py</code> and <code>hello.go</code> are waiting. With the
-toolchain aboard, <code>cc hello.c</code> runs real clang and wasm-ld
-as guests and executes the binary they just made — Hello Kitty. Real Go and
-CPython run too (<code>python hello.py</code>); the tour shows everything.</p>
+toolchain aboard, <code>cc hello.c</code> then <code>./a.out</code> runs real
+clang and wasm-ld as guests, then the binary you built — Hello Kitty. It is a
+real <code>cc(1)</code>: flags, <code>-o</code>, <code>-c</code> and multiple
+files all work. Python interprets in the tab too
+(<code>python hello.py</code>); real Go binaries run, though Go's compiler is
+host-side (<code>go</code> explains why). The tour shows everything.</p>
 
 <p>Or go straight for the good parts: <code>win acme &amp;</code> opens the
 real acme in a window (button-2 executes, button-3 searches);

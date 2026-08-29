@@ -147,7 +147,7 @@ consWin.setFocusInner(() => consT.term.focus());
 consWin.onResize(() => consT.fit.fit());
 consT.term.writeln("\x1b[38;5;110mipnx-v12 — a reimagining of Unix, booting in this tab\x1b[0m");
 if (new URLSearchParams(location.search).has("cc"))
-  consT.term.writeln("\x1b[38;5;110mC toolchain aboard — try: cc hello.c\x1b[0m");
+  consT.term.writeln("\x1b[38;5;110mC toolchain aboard — try: cc hello.c  then  ./a.out\x1b[0m");
 
 // cooked line discipline for /dev/cons (the kernel's cons expects fed lines;
 // the echo is the host's job, as on the Node host's tty)

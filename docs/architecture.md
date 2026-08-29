@@ -106,9 +106,22 @@ Fork obligations, chosen per call site:
   memory and both sides rewind.
 
 A WASI-dialect binary is selected by its imports: a module importing
-`wasi_snapshot_preview1` gets the WASI shim instead — it exports its own
-memory, fd 3 is the single preopen and it is the namespace root, `rename` is
-link-plus-remove, and the personality is `wasi:cli/command` and nothing more.
+`wasi_snapshot_preview1` (or `wasi_unstable`) gets the WASI shim instead — it
+exports its own memory, fd 3 is the single preopen and it is the namespace
+root, `rename` is link-plus-remove, and the personality is
+`wasi:cli/command` and nothing more.
+
+**A personality is a libc dialect over this one ABI, and there are two kinds.**
+A *native* personality (lib9, libv10, the measured `libunix`) presents IPNX's
+own chosen surface. A *port* personality supplies a foreign environment —
+`libc.a`, its headers, its runtime — so that **unmodified** third-party source
+compiles against it (a GNU/glibc personality, a musl personality, a BSD
+personality). The port personality is where the adaptation lives: the source
+is never patched to match IPNX; the environment is built to match the source.
+Both kinds are ordinary userspace over the unchanged kernel — the design's
+porting inversion ([design.md](design.md), 2026-08-29). The demo's in-tab `cc`
+compiles stock C against a wasi-libc/POSIX port environment, the first
+instance.
 
 Binaries carry no `.wasm` extension: `exec` walks the caller's namespace for
 the path and instantiates the bytes it finds — a freshly built module is

@@ -241,7 +241,7 @@ documented as a user, not developer, procedure; **the five-line sandbox
 quickstart ships as an artifact** — P4's belief test, made deliverable
 ([personas.md](personas.md)).
 
-### M10 — the modern personality, then git *(L)* — consumes: benchmark discipline (founding), git deferral (2026-08-27)
+### M10 — the modern personality, then git; and the first port personality *(L)* — consumes: benchmark discipline (founding), git deferral (2026-08-27), the porting inversion (2026-08-29)
 `libunix`: the measured C surface — derived from what git, CPython and Go
 actually call, never adopted from POSIX — as a personality libc over the
 kernel: errno at the boundary, numeric uids via `/etc/passwd` (names stay
@@ -250,7 +250,13 @@ deferral resolves: **git is built under the personality** and becomes its
 conformance test, the way acme was the GUI's.
 **Acceptance:** `git init/add/commit/log/diff` in an IPNX shell on IPNX files;
 every libunix entry point traceable to a benchmark's demand (the measurement
-table in RESEARCH).
+table in RESEARCH). **And the porting inversion becomes concrete here**: git
+builds against libunix if the measured surface suffices, but the general
+mechanism is a *port personality* — a foreign `libc.a`+headers environment
+(musl-shaped first, since the wasi-libc sysroot already in the demo is the
+seed) that compiles unmodified upstream source. The acceptance widens over
+time from "git builds" to "an unmodified upstream package builds against a
+port personality with no source edits."
 
 ### M11 — the microVM *(L, research-first)* — consumes: OCI second weight (2026-08-27)
 The second OCI weight and the hypervisor-direct aspiration: the host as PID 1

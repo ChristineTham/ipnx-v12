@@ -1,22 +1,29 @@
 Welcome home. You are kitty, and /usr/kitty is yours.
 
-Compile and run, for yourself:
-  cc hello.c            real clang + wasm-ld, then it runs — Hello Kitty
-  python hello.py       real CPython 3.14
-  go                    a real Go binary (GOOS=wasip1); go explains the rest
+Compile and run — for real (the C toolchain boot):
+  cc hello.c           compile (produces a.out; silent, like real cc)
+  ./a.out              run it — Hello Kitty
+  cc -O2 -Wall -o hi hello.c ; ./hi     flags, -o, -c all work — it is
+                                        real clang and wasm-ld underneath
+
+Run other languages:
+  python hello.py      real CPython 3.14
+  go version           go env GOOS ...  (Go's compiler is host-side; see below)
+  gohello              a real Go binary (GOOS=wasip1) — runs right here
+
+Why cc compiles here but `go build` does not: clang is one self-contained
+wasm binary, so ipnx's cc(1) drives it with real fork+exec. Go's toolchain
+orchestrates its compiler and linker through os/exec, which WASI does not
+provide — and Go's gc is not shipped as wasm. So C compiles in the tab;
+Go binaries run in the tab, but are built on the host.
 
 Look around:
-  ls /bin               the commands — cat, sed, grep, sort, sam, acme, and more
-  ls                    your home: this README and the three hello programs
-  cal                   this month
-  cat /etc/motd | tr a-z A-Z
-  echo the quick brown fox | sed 's/quick/QUICK/' | wc
+  ls /bin     the commands       cal        this month
+  ls          your home          cat /etc/motd | tr a-z A-Z
 
 Windows and editors:
-  win acme &            the real acme, in a window (option-click = button 2)
-  win rc &              another shell, in a window
+  win acme &       the real acme (option-click = button 2)
+  win rc &         another shell, in a window
 
-The whole tour:
-  rc /rc/tour
-
+The whole tour:  rc /rc/tour
 Everything runs in this browser tab. A reload forgets it all.

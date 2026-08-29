@@ -1178,6 +1178,25 @@ teeth:
   repack) over the preview1 shim runs them; the demo applies it as a dist
   derivation, the frozen reference untouched.
 
+- **Why C compiles in the tab and Go does not — and what ipnx adds.**
+  clang's wasm build (binji) cannot run in *driver* mode: the driver spawns
+  `clang -cc1` and the linker as subprocesses, and WASI has no process
+  spawning, so binji's harness orchestrates the pieces from JavaScript. ipnx
+  removes that limitation from a *different* direction: it has real fork+exec,
+  so an ordinary ipnx process — `cc(1)`, `userspace/cmd/cc.c` — drives
+  `clang -cc1` and `wasm-ld` itself. The demo's `cc` is therefore a genuine
+  compiler driver (flags, `-o`, `-c`, multiple files) rather than a wrapper.
+  The **Go toolchain hits the same wall with no such exit**: `go build`
+  orchestrates compile/assemble/link through `os/exec`, and Go's `wasip1`
+  runtime returns `ENOSYS` for exec (WASI omits processes); the individual
+  tools are not shipped as wasm and are large. So C compiles in-tab (clang is
+  one self-contained wasm binary an external driver can invoke per step), Go
+  binaries *run* in-tab but are *built* on the host, and Python interprets
+  in-tab (compiled once, interprets anything). The three benchmarks turn out
+  to have three different relationships to "runs in the tab," and the
+  difference is exactly the process model — the thing ipnx supplies and WASI
+  omits.
+
 - **A WASI shim must give every file a distinct inode.** The shim reported
   `ino = 0` universally; clang's FileManager deduplicates headers by
   (dev, ino) and therefore treated *every file as the same file* — it

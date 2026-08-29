@@ -617,6 +617,34 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-29) The porting inversion — personalities carry the
+  environment, not patches on the source.** Articulated by Christine after
+  the demo's C toolchain landed. The universal way to port software is to
+  change the *source* until it matches the target's environment (its libc,
+  its headers, its syscalls). **IPNX inverts this: build a port *personality*
+  — a libc.a, its headers, and the runtime environment — so that the
+  *unmodified* source compiles and runs.** Personalities are cheap here (they
+  are libc dialects over the one kernel — the founding decision), so IPNX can
+  afford a whole shelf of them: a GNU/glibc personality, a musl personality, a
+  Linux personality, a BSD personality — each an environment against which
+  real-world packages build with no edits. This is strictly more useful than
+  any single Linux or BSD distribution, which binds you to one libc and one
+  ABI: IPNX presents whichever environment the source expects, per process,
+  by namespace. The demo already contains the first instance — a wasi-libc /
+  POSIX personality (the wasi sysroot the in-tab `cc` compiles against): stock
+  C compiles unmodified because the *environment* was supplied, not because
+  the source was bent. Relationship to the measured modern personality
+  (2026-08-27): the two compose and do not conflict. **`libunix` is the
+  *native* modern-Unix personality, derived by measurement** (the 20% of
+  POSIX that git/CPython/Go actually call) — the surface IPNX offers as *its
+  own* Unix. **The port personalities are fuller environments whose telos is
+  compiling foreign source unmodified** — measured by "does the package
+  build," not by taste. A program picks its personality the way it picks its
+  libc; the kernel underneath is unchanged. This is the deep reason
+  compilation-as-a-capability (`/cc`) and the toolchain work matter beyond the
+  demo: each port personality plus a compiler is a machine for absorbing the
+  existing software world without forking it.
+
 - **(2026-08-29) The demo is the product.** Christine's formulation, verbatim
   doctrine: *"It's like a game demo. A lousy game demo means no one will buy
   the game."* The public demo is every visitor's one and only encounter with
