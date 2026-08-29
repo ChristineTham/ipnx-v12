@@ -204,6 +204,17 @@ a file, and every process composes its own world.
   writes from everyone, eve — the host owner — included. Snapshot volumes,
   backup daemons and immutable-distro machinery are what systems grow when
   the filesystem cannot say `snap` and the namespace cannot say `bind`.
+- **Every process is a jail, a container and a microVM.** Isolation is not a
+  product here; it is what a process *is*. Each process composes its own
+  filesystem view, posts its own services, carries its own credentials, and —
+  once `/net` lands — binds its own network interfaces, so a whole cluster of
+  processes with different roles can run side by side on one kernel. The
+  walls are double by construction: the namespace bounds what a process can
+  name, and the WebAssembly instance bounds what it can do. And because 9P is
+  the only IPC, two processes on one machine already talk the way two
+  machines on a wire do; jails, containers and much of the orchestration
+  around them are what systems build when isolation is bolted on afterwards.
+  Sun's motto was "The network is the computer." Our computer is a network.
 - **A computer can be treated as a function call.** The same kernel is intended to run
   in a microVM that boots in about 100 milliseconds, mounts what it needs, and then goes
   away. This is the sort of environment used by services such as Lambda, but with an
