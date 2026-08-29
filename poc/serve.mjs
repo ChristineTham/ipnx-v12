@@ -13,8 +13,12 @@ const types = { ".html": "text/html", ".mjs": "text/javascript",
 createServer(async (req, res) => {
   let path = decodeURIComponent(new URL(req.url, "http://x").pathname);
   if (path.endsWith("/")) path += "index.html";
-  const file = normalize(join(here, path));
-  if (!file.startsWith(here)) { res.writeHead(403).end(); return; }
+  // the guest world graduated to userspace/ (M0): the frozen browser code
+  // fetches /build/rootfs.json, which now lives beside the sources it packs
+  const uroot = normalize(join(here, "..", "userspace"));
+  const base = path.startsWith("/build/") ? uroot : here;
+  const file = normalize(join(base, path));
+  if (!file.startsWith(base)) { res.writeHead(403).end(); return; }
   try {
     const body = await readFile(file);
     res.writeHead(200, {

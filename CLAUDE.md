@@ -80,7 +80,7 @@ definitions — the wasm backend refuses `-fcommon` and wasm-ld's
 initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 
 ```bash
-bash poc/mk.sh
+bash userspace/mk.sh
 ```
 
 Boot the kernel — init (pid 1) runs the acceptance tests, prints 131 PASS lines,
@@ -108,12 +108,12 @@ macOS wasmtime host (`hosts/macos/`; the full 131/131 conformance) — builds an
 from the root Cargo workspace:
 
 ```bash
-cargo run --release -p host -- poc/rootfs
+cargo run --release -p host -- userspace/rootfs
 ```
 
 Node ≥ 22 (`worker_threads`, SAB, wasm `try_table` exception handling — the legacy EH
 encoding is *rejected* by these engines, so any new wasm emission must use `try_table`).
-`poc/build/` and `poc/rootfs/bin/` are generated and gitignored. Guest binaries carry no
+`userspace/build/` and `userspace/rootfs/bin/` are generated and gitignored; `userspace/VERSIONS` records the measured toolchain and `mk.sh` warns on drift. Guest binaries carry no
 `.wasm` extension: exec walks the namespace for `/bin/cat`, and a freshly produced module
 is indistinguishable from a shipped one.
 
@@ -231,9 +231,10 @@ is the reference implementation and conformance oracle — never modify it; `bas
 poc/run.sh` must stay green. The real implementation lives at the top level: `kernel/`
 (the Rust core), `hosts/macos/` (wasmtime host; the workspace root is `Cargo.toml`),
 with `hosts/{oci,ipados,browser}/` scaffolded per implementation.md's milestones. The
-guest world (`poc/libc`, `poc/plan9`, `poc/v10`, `poc/cmd`, `poc/wasi`, `poc/rootfs`,
-`poc/mk.sh`) is NOT frozen — it is the real userspace shared by every host, and
-graduates to `userspace/` as milestone M0. Work is sequenced by
+guest world lives at `userspace/` (graduated from poc/ as M0, 2026-08-29): the
+libcs, the vendored trees (verbatim), `cmd/`, `wasi/`, the rootfs seed, `mk.sh`
+and `VERSIONS` — the real userspace shared by every host, not frozen. Work is
+sequenced by
 `docs/implementation.md`; new features add self-skipping tests so one rootfs serves
 every host including the frozen oracle, and the 131 stay the permanent floor.
 
@@ -264,7 +265,7 @@ protocol, and the fork guard — **the only hand-written wasm in the system**, e
 bytes with computed section sizes. `supervisor/devs.mjs` holds the devices (writable
 ramfs, cons wired to host stdio, bidirectional pipes); a device read may **park** (return
 undefined, complete later via `ctx.done`) — that is how pipe and console reads block their
-caller without blocking the kernel. `libc/` is Plan 9-shaped freestanding C (Plan 9's own
+caller without blocking the kernel. `userspace/libc/` is Plan 9-shaped freestanding C (Plan 9's own
 trap numbers; `read`/`write` are `pread`/`pwrite` at offset −1). Syscalls carrying
 strings/buffers copy through a per-proc transfer SAB. A lazy-fork child *borrows the
 parent's Worker*: the supervisor routes syscalls arriving on the parent's mailbox to the
@@ -312,15 +313,15 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 **The PoC is complete — declared 2026-08-29** (decision log; full record in
 `docs/poc.md`). Final state: **131 acceptance tests green on three hosts** — the
 frozen JS reference on Node (`bash poc/run.sh`) and in Chrome (`node poc/serve.mjs`),
-and the Rust kernel core under wasmtime (`cargo run --release -p host -- poc/rootfs`).
+and the Rust kernel core under wasmtime (`cargo run --release -p host -- userspace/rootfs`).
 Running on it: the real Plan 9 userspace (rc, sam, samterm, acme, twenty-four
 commands over `libp9.a`), the V10 exhibit, and the WASI second ABI's three citizens
 (wasi-libc, Go `wasip1`, CPython 3.14). The identity architecture is decided and
 recorded (su, the user decomposition, the profile, the capability doctrine — all
 2026-08-29, zero kernel mechanism; `docs/identity.md` tells it as one story).
 
-Work now follows `docs/implementation.md`: M0 graduates the guest world to
-`userspace/`; M1 is the `FROM scratch` OCI container; then the namespace-file boot,
+Work now follows `docs/implementation.md`: M0 is landed (the guest world lives at
+`userspace/`); M1 is the `FROM scratch` OCI container; then the namespace-file boot,
 the macOS app, host storage, the browser host on the Rust core, iPadOS on Pulley,
 `/net`, identity on the wire, the profile, the modern personality (where git gets
 built), the microVM — with curation sweeps continuous throughout. The load-bearing

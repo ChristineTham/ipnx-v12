@@ -50,7 +50,7 @@ hosts/
   oci/           FROM-scratch container build (M1)
   ipados/        wasmtime host on Pulley + SwiftUI shell (M6)
   browser/       the Rust core compiled to wasm, JS embedding (M5)
-userspace/       (M0) the guest world, graduated from poc/: libc/ (lib9),
+userspace/       the guest world (graduated at M0): libc/ (lib9),
                  plan9/ + v10/ (vendored, verbatim), cmd/, wasi/, rootfs seed,
                  the build system (mk.sh and its tools)
 docs/            design.md (why), architecture.md (what), handbook.md (how),
@@ -61,15 +61,15 @@ poc/             FROZEN — the JS reference kernel and its two host shims.
                  Runs the floor suite forever; changes no more.
 ```
 
-Until M0 lands, the hosts consume `poc/rootfs` and `poc/mk.sh` builds the
-guests — correct, and temporary.
+M0 landed 2026-08-29: the hosts consume `userspace/rootfs`, `userspace/mk.sh`
+builds the guests, and `poc/` holds exactly what is frozen.
 
 ## Milestones
 
 Sizes: **S** a session, **M** a few sessions, **L** a phase. Order is the
 default path; dependencies are stated so opportunistic reordering stays honest.
 
-### M0 — the tree completes *(S–M)*
+### M0 — the tree completes *(S–M)* — **landed 2026-08-29**
 Graduate the guest world out of `poc/`: `git mv` of `libc/ plan9/ v10/ cmd/
 wasi/ rootfs/ mk.sh weaken.mjs` to `userspace/`, path fixes in `mk.sh`,
 `run.sh`, `serve.mjs`, the hosts' default rootfs path, `.gitignore`, and the

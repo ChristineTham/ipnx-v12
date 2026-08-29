@@ -10,6 +10,21 @@ LD="$SDK/bin/wasm-ld --no-entry --import-memory --stack-first -z stack-size=2621
 # The per-binary flag (never system-wide): programs whose fork sites do not
 # all exec. Instrumentation is confined to call paths reaching env.forka.
 ASYNCIFY="forktest forkind forkvm"   # bare forkers; the real rc rule asyncifies itself
+
+# VERSIONS drift check: the measured findings are version-dependent (six-hats
+# catch, 2026-08-29). Warn — never fail — when the found toolchain differs.
+vcheck() { # vcheck key found
+  exp=$(awk -v k="$1" '$1==k{print $2}' VERSIONS)
+  if [ -n "$exp" ] && [ "$exp" != "$2" ]; then
+    echo "mk.sh: WARNING: $1 is $2, VERSIONS records $exp (findings are version-dependent; re-verify, then update VERSIONS)" >&2
+  fi
+}
+vcheck wasi-sdk-clang "$("$SDK/bin/clang" --version | sed -n '1s/clang version \([^ ]*\).*/\1/p')"
+vcheck wasm-opt "$("$BINARYEN/bin/wasm-opt" --version | awk '{print $3}')"
+vcheck bison "$(bison --version | sed -n '1s/.* \([0-9.]*\)$/\1/p')"
+vcheck node "$(node --version)"
+vcheck go "$(go version | awk '{print $3}')"
+
 mkdir -p build rootfs/bin rootfs/srv rootfs/mnt rootfs/tmp
 $CC -c libc/crt0.c -o build/crt0.o
 $CC -c libc/crt9.c -o build/crt9.o

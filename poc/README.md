@@ -7,9 +7,9 @@
 > this directory is now the **reference implementation and conformance
 > oracle** — it changes no more, and it must keep running: `bash poc/run.sh`
 > printing the floor suite is the standing check any new host is judged
-> against. The guest world here (`libc/`, `plan9/`, `v10/`, `cmd/`, `wasi/`,
-> `rootfs/`, `mk.sh`) is **not** frozen — it is the real userspace, shared by
-> every host, and graduates to `userspace/` as implementation milestone M0.
+> against. The guest world graduated to `userspace/`
+> (M0, 2026-08-29); this directory now holds exactly what is frozen, plus the
+> two entry scripts that point at the graduated tree.
 
 A working slice of the architecture, small enough to read in a sitting: **a hosted kernel
 in Node executing freestanding-C WebAssembly guests in per-process namespaces**, booting
@@ -20,7 +20,7 @@ fork's resume mechanism (RESEARCH.md §5.2) and the Worker/SAB syscall transport
 carry all of it.
 
 ```sh
-bash mk.sh       # build guests — needs wasi-sdk and binaryen at ~/.local/opt/
+bash ../userspace/mk.sh   # build guests — needs wasi-sdk and binaryen at ~/.local/opt/
 bash run.sh      # boot on Node; init (pid 1) runs the acceptance tests
 bash run.sh -i   # boot on Node to an interactive rc (EOF to shut down)
 node serve.mjs   # serve the browser port: http://localhost:8095/browser/ (?i = interactive)

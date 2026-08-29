@@ -218,7 +218,7 @@ fn get_sp(caller: &mut Caller<'_, RState>) -> u32 {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let rootdir = args.get(1).cloned().unwrap_or_else(|| "../poc/rootfs".into());
+    let rootdir = args.get(1).cloned().unwrap_or_else(|| "userspace/rootfs".into());
     let interactive = args.iter().any(|a| a == "-i");
     let verbose = std::env::var("KDBG").is_ok();
 

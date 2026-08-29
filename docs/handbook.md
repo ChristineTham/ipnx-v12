@@ -17,16 +17,16 @@ When they disagree, one of them has a bug — fix it in the same commit.)
 | go | host | the `GOOS=wasip1` citizen |
 | Node ≥ 22 | host | `worker_threads`, SAB, `try_table` |
 | Rust (stable) | host | the kernel core and hosts; workspace at the repo root |
-| network, once | — | the CPython wasi build (26 MB), cached in `build/` |
+| network, once | — | the CPython wasi build (26 MB), cached in `userspace/build/` |
 
 ## Build and run
 
 ```sh
-bash poc/mk.sh                             # build every guest binary
+bash userspace/mk.sh                       # build every guest binary
 bash poc/run.sh                            # boot the frozen reference on Node
 bash poc/run.sh -i                         # …to an interactive rc (EOF ends)
 node poc/serve.mjs                         # the same kernel in a page (?i = interactive)
-cargo run --release -p host -- poc/rootfs  # the Rust core under wasmtime
+cargo run --release -p host -- userspace/rootfs  # the Rust core under wasmtime
 ```
 
 Green is: init (pid 1) prints the suite's `PASS` lines — the floor is 131 —
@@ -73,8 +73,10 @@ follow the links before touching them:
   ~2× size on that binary (rc measured +103%) and is never system-wide.
 - V10 compiles are `-std=c89 -fno-builtin`, K&R implicitness left authentic.
 
-Binaries land in `poc/rootfs/bin` (and `/v10/bin`) with **no `.wasm`
-extension**. `poc/build/` and the generated rootfs subtrees are gitignored.
+Binaries land in `userspace/rootfs/bin` (and `/v10/bin`) with **no `.wasm`
+extension**. `userspace/build/` and the generated rootfs subtrees are
+gitignored. `userspace/VERSIONS` records the measured toolchain; `mk.sh`
+warns (never fails) when what it finds has drifted.
 
 ## How to add things
 
@@ -83,7 +85,7 @@ under `plan9/sys/src/…` with its batch NOTICE, shim headers beside it, and a
 `mk.sh` stanza (copy the nearest existing one). If it forks bare, add it to
 `ASYNCIFY`. Ship a test in the same commit.
 
-**A test.** Shell-visible behaviour goes in `poc/rootfs/rc/tests.rc`;
+**A test.** Shell-visible behaviour goes in `userspace/rootfs/rc/tests.rc`;
 kernel-level assertions in init's C; subsystem harnesses as their own
 `cmd/*test.c`. A test for a feature the frozen reference lacks must
 **self-skip by probing the namespace** (walk to the file or device it needs)

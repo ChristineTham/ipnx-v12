@@ -31,8 +31,9 @@ hosts/macos/       embeds the core over wasmtime/Cranelift; threads as processes
 hosts/{oci,ipados,browser}/   the same contract, per implementation.md milestones
 poc/supervisor/    the FROZEN JS twin of core + host: the reference
                    implementation and conformance oracle
-poc/{libc,plan9,v10,cmd,wasi,rootfs,mk.sh}   the userspace (graduates as M0):
-                   libcs, vendored sources (verbatim), commands, citizens, seed
+userspace/         the userspace (graduated at M0): libcs, vendored sources
+                   (verbatim), commands, citizens, the rootfs seed, mk.sh,
+                   VERSIONS (the measured toolchain, drift-warned)
 ```
 
 The kernel core and the JS reference implement the same kernel; a host
