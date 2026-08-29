@@ -1,0 +1,116 @@
+# M1's second half: the floor stops being a manual discipline. Every push
+# builds the guest world once, then proves it twice — inside the FROM scratch
+# container (the Rust core on wasmtime, musl-static), and on the frozen JS
+# reference under a PINNED Node ("the oracle in amber": the engine version
+# never drifts, so a break here is a change in US, never in V8).
+name: ci
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+env:
+  WASI_SDK_RELEASE: "34.0"
+  BINARYEN_RELEASE: "132"
+
+jobs:
+  world:
+    name: build the guest world
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.x"
+      - name: cache the wasm toolchain
+        id: toolcache
+        uses: actions/cache@v4
+        with:
+          path: ~/opt
+          key: wasi-sdk-${{ env.WASI_SDK_RELEASE }}-binaryen-${{ env.BINARYEN_RELEASE }}
+      - name: install wasi-sdk + binaryen
+        if: steps.toolcache.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p ~/opt && cd ~/opt
+          curl -sL "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_RELEASE%%.*}/wasi-sdk-${WASI_SDK_RELEASE}-x86_64-linux.tar.gz" | tar xz
+          curl -sL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_RELEASE}/binaryen-version_${BINARYEN_RELEASE}-x86_64-linux.tar.gz" | tar xz
+      - name: cache the CPython wasi build
+        uses: actions/cache@v4
+        with:
+          path: userspace/build/python-wasi-3.14.7.zip
+          key: python-wasi-3.14.7
+      - name: build the world
+        run: |
+          export WASI_SDK=$HOME/opt/wasi-sdk-${WASI_SDK_RELEASE}-x86_64-linux
+          export BINARYEN=$HOME/opt/binaryen-version_${BINARYEN_RELEASE}
+          bash userspace/mk.sh
+      - name: pack the rootfs
+        run: tar -C userspace -czf rootfs.tgz rootfs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rootfs
+          path: rootfs.tgz
+          retention-days: 3
+
+  container:
+    name: "M1: FROM scratch runs the floor"
+    needs: world
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rootfs
+      - run: tar -C userspace -xzf rootfs.tgz
+      - name: musl toolchain
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q musl-tools
+          rustup target add x86_64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: musl
+      - name: build the static host
+        run: cargo build --release -p host --target x86_64-unknown-linux-musl
+      - name: build the image
+        run: |
+          rm -rf hosts/oci/ctx && mkdir -p hosts/oci/ctx
+          cp target/x86_64-unknown-linux-musl/release/host hosts/oci/ctx/host
+          cp -R userspace/rootfs hosts/oci/ctx/rootfs
+          docker build -f hosts/oci/Dockerfile -t ipnx hosts/oci/ctx
+      - name: "acceptance: the suite in the container, exit 0"
+        run: |
+          docker run --rm ipnx | tee suite.out
+          test "$(grep -c '^PASS' suite.out)" -ge 131
+          ! grep -q '^FAIL' suite.out
+          echo "floor: $(grep -c '^PASS' suite.out) PASS (floor 131)"
+      - name: "acceptance: -i boots to rc"
+        run: |
+          echo 'echo M1 boots to rc' | docker run --rm -i ipnx -i | tee rc.out
+          grep -q 'M1 boots to rc' rc.out
+      - name: measurements (for RESEARCH)
+        run: |
+          echo "image: $(docker image inspect -f '{{.Size}}' ipnx) bytes"
+          echo "host binary: $(stat -c %s hosts/oci/ctx/host) bytes"
+          echo "rootfs: $(du -sb hosts/oci/ctx/rootfs | cut -f1) bytes"
+
+  oracle-amber:
+    name: "the oracle in amber (pinned Node)"
+    needs: world
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: rootfs
+      - run: tar -C userspace -xzf rootfs.tgz
+      - uses: actions/setup-node@v4
+        with:
+          # PINNED, deliberately — never "latest". A failure here is ours.
+          node-version: "22.12.0"
+      - name: the frozen reference runs the floor
+        run: |
+          bash poc/run.sh | tee oracle.out
+          test "$(grep -c '^PASS' oracle.out)" -ge 131
+          ! grep -q '^FAIL' oracle.out
+          echo "oracle: $(grep -c '^PASS' oracle.out) PASS on pinned Node $(node --version)"
