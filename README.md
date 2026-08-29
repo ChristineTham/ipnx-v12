@@ -158,9 +158,9 @@ The kernel is about 3,000 lines in JavaScript and 4,000 in Rust — small enough
 read in a sitting, twice over. It carries 61,000 lines of untouched Bell Labs
 userspace today, and Go binaries and Python already run beside them — with git
 repositories to come — through the same handful of operations on names. A hundred
-and thirty-four tests boot it, exercise everything from fork to fonts to the
-compilers, and shut it down clean, identically on Node, in Chrome, and on the
-Rust kernel under wasmtime.
+and thirty-five tests boot it, exercise everything from fork to fonts to the
+compilers to the package manager, and shut it down clean, identically on
+Node, in Chrome, and on the Rust kernel under wasmtime.
 
 ## The tricks are the architecture
 
@@ -180,6 +180,11 @@ a file, and every process composes its own world.
   modern UNIX interface are libc dialects over the same file protocol. The personalities
   can multiply in userspace while the kernel remains small and understandable. There is
   no ioctl interface because there is no separate mechanism to add one.
+- **Installing software is a bind.** A package is a subtree under `/pkg`;
+  `pkg install` verifies its digests and binds its `bin` into the union
+  `/bin`. The namespace is the installation record — there is no package
+  database to corrupt — and because namespaces are per-process, a person, a
+  role and an agent can each carry a different set of installed software.
 - **A computer can be treated as a function call.** The same kernel is intended to run
   in a microVM that boots in about 100 milliseconds, mounts what it needs, and then goes
   away. This is the sort of environment used by services such as Lambda, but with an
@@ -218,7 +223,7 @@ The first proof that the modern world can coexist with this system is also worki
 real Go binary, compiled with ordinary `GOOS=wasip1 go build`, and real CPython 3.14**
 can read files, list directories, sleep on timers and run scripts against the kernel.
 They know nothing about Plan 9. They use a WASI shim whose single preopened directory is
-the process's namespace root. **134 acceptance tests pass on Node, in Chrome — and on
+the process's namespace root. **135 acceptance tests pass on Node, in Chrome — and on
 the Rust kernel core under wasmtime: the same suite, identical on the reference
 implementation and the native rewrite. The proof of concept is complete, and the
 kernel has been built twice.** Alongside it, TUHS-tape V10 `cat` and `echo` run
@@ -258,6 +263,17 @@ impossible; the folklore was confusing the orchestrator with the tools.
 installs it — the network arriving, naturally, as a file. The example programs
 from python.org's front page and the features gobyexample.com teaches run as
 written, from `examples/` in your home.
+
+There is a package manager, and the demo is its first registry.
+`pkg install ruby` fetches real Ruby 3.2.2 from the site you are already on,
+verifies it against a pinned sha256, and binds it into `/bin` — installing
+here is a bind, not a copy into global state, and `pkg remove` is an unbind.
+`pkg install php` works the same way. `pkg install zlib` is the interesting
+one: the registry's zlib was compiled from pinned source by this system's
+own `cc`, because the upstream binary came from a newer LLVM than the one in
+the tab — a sysroot must match its toolchain's era, and this registry
+answers by building with the toolchain it serves. Then
+`cc z.c /lib/wasm32-wasi/zlib/*.o` links it, and your program compresses.
 
 The editors are there too: `win acme &` opens the real acme in a window
 (option-click is button 2, command- or right-click button 3), `rc /rc/tour`
