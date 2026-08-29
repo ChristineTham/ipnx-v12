@@ -169,7 +169,8 @@ snapshot a namespace fragment, rollback a bind.
 V10 permission tests still enforce; the frozen reference still boots its ramfs.
 
 ### M5 — the browser host on the Rust core *(M)* — **re-aimed 2026-08-30: lands `/dev/canvas`**
-**The canvas decision (design.md 2026-08-30) is this milestone's target**:
+**The canvas decision and the userland reimagining (design.md 2026-08-30,
+docs/userland.md) are this milestone's target**:
 the browser host's presenter is the ONE universal SPA rendering the semantic
 node tree (`stack·text·edit·image·path·frame`) to DOM and returning events;
 the `events` file's resize/close protocol retires the demo's deferred
@@ -177,6 +178,12 @@ resize/close for real; v0 vocabulary is measured against sam-today,
 acme-today, rio-today and one plot before code. The demo kernel prototypes
 canvas first (demo-leads-discovery doctrine); the Mac app's presenter then
 maps the same tree to CoreText/AppKit, and iPadOS inherits the shape.
+Build order per userland.md: measure → console-today (the editable
+transcript — the first canvas client; xterm.js and the glass tty retire
+when it lands) → acme-today absorbing sam's Edit language (one editor plus
+a language; raster sam/acme retire to the exhibit with the suite floor
+intact) → rio-today policy files. The plumber's rules and message shape
+are designed inside the measurement pass — the look verb needs them.
 Compile `kernel/` to wasm (the core is single-threaded, no OS dependencies —
 built for this), embed it in a JS shim structurally parallel to
 `hosts/macos`: Workers as processes, the SAB mailbox, the existing browser

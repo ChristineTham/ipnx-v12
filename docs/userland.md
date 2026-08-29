@@ -1,0 +1,105 @@
+# The userland, reimagined
+
+The design record for the 2026-08-30 decision: *redesign sam, acme and the
+rest of the Plan 9 utilities to use our new paradigms — it's time to kiss
+compatibility goodbye.* The curation survives; the verbatim does not. Each
+program's **essence** is named and carried into a native design on the new
+paradigms — `/dev/canvas` (design.md 2026-08-30), the verb convention, the
+namespace, pkg, and the plumber. The vendored raster world reclassifies as
+the **heritage exhibit** beside `/v10`: still built, still run, still
+holding the conformance floor — load-bearing for the suite, never for
+design.
+
+## The three classes
+
+**1. Filters — already native.** `cat`, `grep`, `sed`, `sort`, `wc`, `tr`,
+`ls`, `sum`, `look`, `split`, `cal`, and the rest of the pipe-and-file
+world. Their paradigm is files and pipes, which *is* this system's
+paradigm; there is nothing to redesign and no compatibility being kept —
+they are simply correct. They stay as they are (vendored source and all;
+lineage is not the issue, interface is), and get re-sourced only if a
+concrete reason ever appears.
+
+**2. Screen programs — redesigned onto canvas.** The whole raster stack
+(libdraw, libframe, the wsys raster path, the 5620 grammar) evaporates
+from the product and survives in the exhibit. The designs below.
+
+**3. The support cast.** `win` becomes trivial (a canvas window IS a
+namespace; the console design below absorbs its job). The plumber returns
+to the centre. `pkg`, `pip`, `cc`, `go` are already native — they were
+born here.
+
+## The console: an editable transcript
+
+The terminal emulator dies. A console is an `edit` node with a **prompt
+discipline**: the transcript is one editable buffer; a mark separates
+history from the input region; Enter in the input region sends the line;
+everything above is ordinary editable, searchable, selectable text.
+acme's `win(1)` was this design's prototype twenty years early — we make
+it the *only* console. Consequences, all free: infinite scrollback that is
+just a buffer; copy/paste that is just selection; search that is just the
+editor; no escape-sequence emulation, ever (programs that want structure
+have canvas; programs that write bytes get a transcript). The glass tty
+and xterm.js retire when this lands.
+
+## One editor: acme-today absorbs sam
+
+Acme always contained sam — the `Edit` command speaks sam's language. So
+the redesign completes the merger the originals gestured at:
+
+- **acme-today** is a *policy client* of canvas: columns and rows are
+  `stack` nodes, bodies are `edit` nodes, tags are text spans with
+  `action=execute` (honest buttons at last), file names and addresses are
+  `action=look` spans (the plumber activates). Layout, fonts, wrapping,
+  scrolling, selection, IME: the presenter's, native on every surface.
+  Its 9P file interface (`/mnt/acme`-shaped: `body`, `tag`, `addr`,
+  `data`, `event`) is **kept and strengthened** — that interface was
+  never raster; it is the part of acme that was always the future, and
+  external tooling keeps working against it.
+- **sam survives as a language and a filter**: the structural-regexp
+  command language is the spec (acme-today's `Edit` implements it whole),
+  and a batch CLI — working title `ed`'s true heir, `sam -d`'s job —
+  applies it to files and edit nodes from scripts and the tour. The
+  interactive raster sam retires to the exhibit with honours.
+- Open question, deliberately: whether the command language is also
+  exposed as a control file on every `edit` node (write commands, the
+  node edits itself) — which would make "sam" a property of text in this
+  system rather than a program. Decide during M5's measurement pass.
+
+## rio-today: policy as a file server
+
+rio-today owns *policy*, presenters own *pixels*. It is a userspace file
+server: windows are namespaces (unchanged — the one rio idea that needed
+no modernising), `wctl` stays text, layout policy (tiling, stacking,
+focus) is files, and any program can be a window manager, recursion
+included. The host presenter — the universal SPA in a browser, the
+SwiftUI app on Apple platforms — renders frames and chrome natively and
+feeds the `events` files. Resize and close are protocol lines, which is
+what retires the demo's old deferral.
+
+## The plumber, central again
+
+Every `look` is a plumb: the tap on a path, URL, error line, or
+identifier becomes a typed message through rules — the file that decides
+"what does looking at this mean here". The plumber is the verb
+convention's engine and gets designed (rules format, message shape,
+port namespace) as part of canvas v0's measurement pass, because
+acme-today's right-click… — no: acme-today's *tap* — is unimplementable
+without it.
+
+## What the exhibit keeps
+
+The vendored Plan 9 tree (sam, acme, samterm, libdraw, libframe, the
+raster wsys path), the V10 binaries, and their tests. They build in every
+world, run in every suite, and hold the floor. Nothing is deleted;
+nothing gets a vote.
+
+## Sequencing (mirrored in implementation.md, M5)
+
+1. **Measure**: canvas v0 vocabulary derived from acme-today, the
+   console, rio-today, one plot. The plumber's message shape rides along.
+2. **Console-today + the universal SPA presenter** on the demo kernel —
+   the first canvas client is the console, because everything else is
+   tested through it.
+3. **acme-today** (absorbing sam's language), then **rio-today** policy.
+4. The Mac presenter maps the same tree to native views; iPadOS inherits.

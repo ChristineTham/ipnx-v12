@@ -617,6 +617,65 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-30) The input convention: roles in the tree, native grammar
+  per platform, verbs never in the hardware.** The three-button replacement,
+  articulated (the canvas decision's input addendum). The canvas declares
+  SEMANTICS — spans with `action=look target=…`, `action=execute`, nodes
+  with `menu=…` — and each presenter activates them with its platform's
+  own grammar; apps receive verb events only (`look`, `execute`, `menu`,
+  and edit verbs), never gestures (one scoped exception: `frame`/`path`
+  leaves may opt into a raw pointer stream, Pointer-Events-shaped, for
+  games). **Web bindings — web best practice literally**: look-spans are
+  real `role=link`, execute-spans real `role=button`, so click/Tab/Enter/
+  focus-rings/screen-readers arrive free because the things ARE native;
+  context menus from `contextmenu`; selection verbs on the selection;
+  ⌘-click a look target = look in a new window (the browsers' own grammar,
+  inherited). **Apple bindings — HIG literally**: SwiftUI `Button`/`Link`/
+  `.contextMenu` (touch-and-hold with preview on iPad; right-click/⌃-click
+  on Mac); selection verbs in the NATIVE edit menu beside Cut/Copy/Paste;
+  `.keyboardShortcut` ⌘-conventions; and HIG's own rule honoured — no
+  action lives only in a context menu, so the Mac presenter surfaces menus
+  in the real menu bar. **Hardware mouse, modern not nostalgic**: left
+  activates, right menus, middle looks-in-new-window; the Plan 9 b2/b3
+  semantics survive only in the raster exhibit's input synthesis —
+  "buttons as accelerators" is REFUSED as convention pollution.
+  **Keyboard**: Tab traverses, Enter/Space activate, ⌘Enter executes the
+  selection or word at caret (acme-today's tempo), hold-⌘ shows the iPad
+  shortcuts HUD. **The laws, lifted not composed**: keyboard-complete
+  (WCAG 2.1.1); hover decorates, never gates; activation on release with
+  slide-off cancel (2.5.2); no gesture-only functions (2.5.1); target
+  sizes max(44pt HIG, 24px WCAG); destructive actions confirm. And the
+  structural claim: accessibility is enforced BY CONSTRUCTION — apps never
+  render controls, presenters always render them natively, so an
+  inaccessible button cannot ship. Refused: custom gestures in v0; the
+  nostalgic button mapping. The verbs in one line: b1 was always
+  universal; look = tapping the thing; execute = tapping the tag or
+  ⌘Enter; the chords were always the clipboard.
+
+- **(2026-08-30) Compatibility, kissed goodbye — the userland is
+  reimagined, and the verbatim world becomes the exhibit.** Christine's
+  call, in her words: "Let's redesign sam, acme and the rest of the Plan 9
+  utilities to use our new paradigms. It's time to kiss compatibility
+  goodbye." This SUPERSEDES half of the re-founded userspace objective
+  (2026-08-27): "the real Plan 9 userspace entire — the designers'
+  curation of Unix" ends as a product goal. What replaces it: the
+  CURATION survives, the VERBATIM does not — the essences are carried
+  forward into native designs (docs/userland.md) and the vendored raster
+  world reclassifies wholesale as heritage exhibit beside /v10 (still
+  building, still running, still holding the suite's floor — the exhibit
+  is load-bearing for conformance, never for design). The three classes:
+  filters (cat, grep, sed, sort…) were ALWAYS native — their paradigm is
+  files and pipes, which is our paradigm; nothing to redesign. Screen
+  programs redesign onto canvas: ONE editor — acme-today absorbs sam
+  wholesale (acme always contained sam's Edit language; two editors
+  become one editor plus a language, with sam surviving as the language
+  spec and a batch CLI); the console becomes an editable transcript (an
+  edit node with a prompt discipline — acme's win(1) was the prototype;
+  tty emulation retires); rio-today is the window-policy file server over
+  host presenters; the plumber returns to the centre as the look verb's
+  engine. Full designs and sequencing: docs/userland.md; M5 carries the
+  build order.
+
 - **(2026-08-30) `/dev/canvas` — the display is a semantic file tree; the
   modern-draw question, decided.** Settled in a five-round brainstorm
   (Christine's adversarial pushes each carved a clause; the full iteration

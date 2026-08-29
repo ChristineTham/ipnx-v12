@@ -239,7 +239,12 @@ every host including the frozen oracle, and the 131 stay the permanent floor.
 
 ## The PoC's shape (poc/) — frozen reference
 
-**The userspace objective** (re-founded 2026-08-27): the real Plan 9 userspace entire —
+**The userspace objective** (re-founded 2026-08-27; **half-superseded
+2026-08-30** — design.md "compatibility kissed goodbye" + docs/userland.md:
+the curation survives, the verbatim does not; the vendored raster world is
+now the heritage exhibit holding the suite floor, and the product userland
+is redesigned native to /dev/canvas — one editor, an editable-transcript
+console, rio-today as policy files): the real Plan 9 userspace entire —
 the designers' curation of Unix — plus a measured modern personality proven by three
 benchmarks (git via a `libunix` source port, CPython and Go via the WASI ABI). The V10
 binaries stay as the exhibit, each userspace on its own libc over the kernel (`libc/`
