@@ -1227,9 +1227,20 @@ teeth:
   null; and first paint takes 90–150s on the native host because cranelift
   compiles acme's 20MB module at spawn (KDBG multiplies everything ~100x —
   a diagnosis run under it manufactured a wild-goose "hang"). Rust-host
-  parity gaps noted while diagnosing, none load-bearing: no '#s', no '#H',
-  no /proc root listing, and the WASI shim lacks the demo's '#'-path
-  passthrough.
+  parity gaps noted while diagnosing — **all closed 2026-08-30**: '#s'
+  (srv(3), JS-parity semantics, now suite-pinned on every host — before it,
+  acme's post landed on a plain ramfs dir and nothing noticed), '#H' (the
+  GET runs on a host thread via ureq/rustls with bundled roots, completing
+  parked readers through the Effect/Ev shape timers use — `pkg install
+  ruby` verified on the native host against the real registry over HTTPS),
+  /proc root listing, and the WASI '#'-passthrough. Two more caveats closed
+  the same pass: a content-keyed .cwasm cache (suite 7s cold → 2s warm;
+  acme's 60–150s first paint becomes milliseconds on relaunch; deserialize
+  is trusted because the cache holds only this binary's own writes), and
+  `-lz` — no guest ar yet, so a package of bare objects ships a
+  `libX.objects` list beside where libX.a would sit and cc(1) expands it
+  (archive → objects-list → linker, in that order); `cc z.c -lz` links the
+  registry's zlib.
 
 - **M1 measured (2026-08-29): the whole operating system is a 62.2MB
   distroless image.** `FROM scratch` + two COPYs: the statically-linked musl

@@ -180,6 +180,9 @@ fn u32g(caller: &Caller<'_, WasiState>, ptr: u32) -> u32 {
 fn resolve(caller: &Caller<'_, WasiState>, dirfd: i32, ptr: u32, len: u32) -> Option<String> {
     let base = caller.data().fds.borrow().get(&dirfd)?.path.clone();
     let mut p = String::from_utf8_lossy(&read_guest(caller, ptr, len)).into_owned();
+    if p.starts_with('#') {
+        return Some(p);                    // kernel device names walk as-is
+    }
     if !p.starts_with('/') {
         p = if base == "/" { format!("/{}", p) } else { format!("{}/{}", base, p) };
     }

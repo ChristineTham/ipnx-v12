@@ -81,10 +81,12 @@ if count != 10:
     raise SystemExit(f"expected 10 objects, got {count}")
 print(f"  zlib: {count} era-matched objects extracted")
 PYX
+( cd cache/zlib-1.2.13/lib/wasm32-wasi/zlib && ls *.o | sed 's|^|/lib/wasm32-wasi/zlib/|' ) \
+  > cache/zlib-1.2.13/lib/wasm32-wasi/libz.objects
 cp cache/zbuild/src/zlib.h cache/zbuild/src/zconf.h cache/zlib-1.2.13/include/
 cat > cache/zlib-1.2.13/meta <<'EOF'
 # zlib 1.2.13, compiled from pinned source by the system's own cc —
-# link with: cc yourfile.c /lib/wasm32-wasi/zlib/*.o
+# link with: cc yourfile.c -lz   (cc expands the objects list)
 bind -a ./lib/wasm32-wasi /lib/wasm32-wasi
 bind -a ./include /include
 EOF

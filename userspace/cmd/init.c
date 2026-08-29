@@ -644,6 +644,35 @@ main(int argc, char *argv[])
 	n = await(buf, sizeof buf);
 	ok(n > 0 && strstr(buf, "''") != nil, "acme: boots, serves, and opens a window by mouse");
 
+	/* srv(3): post a pipe end under a name; the name keeps the channel
+	 * alive and opening it SHARES the channel itself. The kernel's last
+	 * PoC device, now suite-pinned on every host (the Rust kernel gained
+	 * it 2026-08-30 — before that, acme's post landed on a plain ramfs
+	 * dir and nothing noticed). */
+	{
+		int sp[2], sfd, nfd;
+		char sb[16];
+
+		pipe(sp);
+		sfd = create("/srv/t9", OWRITE, 0600);
+		n = -1;
+		if(sfd >= 0){
+			fprint(sfd, "%d", sp[0]);
+			close(sfd);
+			close(sp[0]);		/* the name holds the reference */
+			nfd = open("/srv/t9", ORDWR);
+			if(nfd >= 0){
+				write(nfd, "hi", 2);
+				n = read(sp[1], sb, sizeof sb);
+				close(nfd);
+			}
+			close(sp[1]);
+			remove("/srv/t9");
+		}
+		ok(n == 2 && sb[0] == 'h' && sb[1] == 'i',
+		   "srv(3): a posted channel, kept alive and shared by name");
+	}
+
 	/* ---- the WASI second ABI: foreign citizens on the same kernel.
 	 * wasitest is wasi-libc through the full sysroot; gotest is a REAL
 	 * Go binary (GOOS=wasip1). Their one preopen is the namespace root —

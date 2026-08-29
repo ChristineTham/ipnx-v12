@@ -101,7 +101,36 @@ main(int argc, char *argv[])
 		else if(strncmp(s, "-o", 2) == 0 && len > 2) out = s+2;
 		else if(strcmp(s, "-lm") == 0)
 			{}					/* wasi-libc folds libm into libc */
-		else if(strncmp(s, "-l", 2) == 0 || strncmp(s, "-L", 2) == 0)
+		else if(strncmp(s, "-l", 2) == 0 && len > 2){
+			/* -lX: an archive passes through; a package that ships bare
+			 * objects (no guest ar yet) carries an 'objects' list — the
+			 * registry's zlib does — and cc expands it */
+			char probe[512], line[512];
+			int pfd;
+			snprint(probe, sizeof probe, "/lib/wasm32-wasi/lib%s.a", s+2);
+			if((pfd = open(probe, OREAD)) >= 0){
+				close(pfd);
+				lflags[nlf++] = s;
+			} else {
+				snprint(probe, sizeof probe, "/lib/wasm32-wasi/lib%s.objects", s+2);
+				if((pfd = open(probe, OREAD)) >= 0){
+					int li = 0, rn;
+					char ch;
+					while((rn = read(pfd, &ch, 1)) > 0){
+						if(ch == '\n'){
+							line[li] = 0;
+							if(li > 0 && nobj < MAXARG)
+								objs[nobj++] = strdup(line);
+							li = 0;
+						} else if(li < (int)sizeof line - 1)
+							line[li++] = ch;
+					}
+					close(pfd);
+				} else
+					lflags[nlf++] = s;	/* let the linker say so */
+			}
+		}
+		else if(strncmp(s, "-L", 2) == 0)
 			lflags[nlf++] = s;			/* linker */
 		else if(len > 2 && strcmp(s+len-2, ".c") == 0)
 			srcs[nsrc++] = s;			/* a source */

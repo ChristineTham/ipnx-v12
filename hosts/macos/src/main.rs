@@ -32,6 +32,7 @@ pub enum Ev {
     WinClose { wid: u32 },
     WinTick,
     WinAck { wid: u32 },
+    FetchDone { url: String, result: Result<Vec<u8>, String> },
 }
 
 // ---- how a guest run ends (carried through wasmtime host errors) ----
@@ -342,6 +343,7 @@ fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
             Ev::WinClose { wid } => kern.win_close(wid),
             Ev::WinTick => kern.win_tick(),
             Ev::WinAck { wid } => kern.win_ack(wid),
+            Ev::FetchDone { url, result } => kern.fetch_done(&url, result),
         }
     }
 }
@@ -394,8 +396,60 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
                     let _ = p.send_event(ui::UiMsg::Gone { wid });
                 }
             }
+            Effect::Fetch { url } => {
+                let ev = ev_tx.clone();
+                std::thread::spawn(move || {
+                    let result = (|| -> Result<Vec<u8>, String> {
+                        let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(120))
+                            .call().map_err(|e| format!("GET {}: {}", url, e))?;
+                        let mut body = Vec::new();
+                        use std::io::Read;
+                        resp.into_reader().take(64 << 20).read_to_end(&mut body)
+                            .map_err(|e| e.to_string())?;
+                        Ok(body)
+                    })();
+                    let _ = ev.send(Ev::FetchDone { url, result });
+                });
+            }
         }
     }
+}
+
+// A content-keyed .cwasm cache: cranelift compiles acme's 20MB module in
+// 60-150s cold; a cache hit deserializes in milliseconds. The key is an
+// FNV-1a of the bytes plus length plus the wasmtime major, the directory is
+// the platform cache dir (falling back to the temp dir; a scratch container
+// with neither just compiles). Module::deserialize_file is unsafe by
+// contract — the cache holds only files this same binary wrote.
+fn module_cached(engine: &Engine, image: &[u8]) -> Result<Module, wasmtime::Error> {
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in image {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    let dir = std::env::var_os("HOME")
+        .map(|home| std::path::PathBuf::from(home).join("Library/Caches/ipnx-v12"))
+        .filter(|d| std::fs::create_dir_all(d).is_ok())
+        .or_else(|| {
+            let t = std::env::temp_dir().join("ipnx-cwasm");
+            std::fs::create_dir_all(&t).ok().map(|_| t)
+        });
+    let path = dir.as_ref().map(|d| d.join(format!("{:016x}-{}-wt48.cwasm", h, image.len())));
+    if let Some(pth) = &path {
+        if pth.exists() {
+            if let Ok(m) = unsafe { Module::deserialize_file(engine, pth) } {
+                return Ok(m);
+            }
+        }
+    }
+    let m = Module::new(engine, image)?;
+    if let (Some(pth), Ok(bytes)) = (&path, m.serialize()) {
+        let tmp = pth.with_extension("tmp");
+        if std::fs::write(&tmp, bytes).is_ok() {
+            let _ = std::fs::rename(&tmp, pth);
+        }
+    }
+    Ok(m)
 }
 
 fn load_seed(path: &std::path::Path, name: &str) -> std::io::Result<Seed> {
@@ -490,7 +544,7 @@ fn run_wasi(engine: &Arc<Engine>, ev: &Sender<Ev>, pid: Pid, module: &Module) ->
 
 fn run_one(engine: &Arc<Engine>, ev: &Sender<Ev>, pid: Pid, image: &Arc<Vec<u8>>,
            asy: Option<AsySnap>) -> RunEnd {
-    let module = match Module::new(engine, image.as_slice()) {
+    let module = match module_cached(engine, image.as_slice()) {
         Ok(m) => m,
         Err(e) => return RunEnd::Crash(format!("exec format error: {}", e)),
     };
