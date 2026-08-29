@@ -189,10 +189,16 @@ function winCreate(id, x, y, w, h, title) {
   win.body.appendChild(canvas);
 
   const gw = { id, win, canvas, ctx: canvas.getContext("2d"),
-               t, termEl, drawMode: false, buttons: 0, line: "" };
+               t, termEl, drawMode: false, buttons: 0, line: "", scale: DSCALE };
   gwins.set(id, gw);
   win.setFocusInner(() => (gw.drawMode ? gw.canvas : t.term).focus());
-  win.onResize(() => { if (!gw.drawMode) t.fit.fit(); });
+  win.onResize(() => {
+    if (!gw.drawMode) { t.fit.fit(); return; }
+    // draw windows: the grip scales the view of the fixed raster
+    const availW = win.div.offsetWidth - 2, availH = win.div.offsetHeight - 32;
+    const k = Math.max(0.5, Math.min(availW / gw.canvas.width, availH / gw.canvas.height));
+    sizeDrawWin(gw, Math.round(k * 4) / 4);
+  });
 
   // keyboard: bytes to the window's cons via wsys.key; host-side echo, cooked
   t.term.onData((d) => {
@@ -258,12 +264,16 @@ function closeGuest(gw) {
   }
 }
 
-function sizeDrawWin(gw) {
+function sizeDrawWin(gw, scale) {
   const w = gw.canvas.width, h = gw.canvas.height;
-  gw.canvas.style.width = Math.round(w * DSCALE) + "px";
-  gw.canvas.style.height = Math.round(h * DSCALE) + "px";
-  gw.win.div.style.width = (Math.round(w * DSCALE) + 2) + "px";
-  gw.win.div.style.height = (Math.round(h * DSCALE) + 32) + "px";
+  const k = scale || gw.scale || DSCALE;
+  gw.scale = k;
+  gw.canvas.style.width = Math.round(w * k) + "px";
+  gw.canvas.style.height = Math.round(h * k) + "px";
+  // integer scales stay pixel-crisp; fractional ones smooth
+  gw.canvas.style.imageRendering = Number.isInteger(k) ? "pixelated" : "auto";
+  gw.win.div.style.width = (Math.round(w * k) + 2) + "px";
+  gw.win.div.style.height = (Math.round(h * k) + 32) + "px";
   const d = gw.win.div;
   d.style.left = clampX(d.offsetLeft, d.offsetWidth) + "px";
   d.style.top = clampY(d.offsetTop) + "px";
@@ -412,6 +422,12 @@ const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: tr
 cons = booted.cons;
 wsys = booted.wsys;
 setStatus("running");
+statusEl.title = "build BUILDSTAMP";
+document.getElementById("brand").title = "build BUILDSTAMP";
+const bs = document.createElement("span");
+bs.style.cssText = "color:#4a5866;font-size:10.5px;margin-left:8px";
+bs.textContent = "bBUILDSTAMP";
+statusEl.after(bs);
 consT.term.focus();
 window.__consT = consT;   // debug affordance
 
