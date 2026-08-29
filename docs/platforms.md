@@ -24,10 +24,16 @@ engine change (the engine matrix is a dated decision in
 | **microVM** | (M11) | wasmtime over Firecracker/virtio, 9P-over-vsock | aspiration, research-first — the second OCI weight |
 
 Platform constraints that shape everything: the browser needs COOP/COEP for
-SharedArrayBuffer (that is `serve.mjs`'s whole job) — and **WebKit accepts
-those headers only from the real response** (measured live, 2026-08-29: the
-demo's service-worker shim isolates Chromium and cannot isolate Safari, so
-Safari needs a header-capable host — evidence now behind M6's WebKit gate);
+SharedArrayBuffer (that is `serve.mjs`'s whole job) — and the full WebKit
+story is now measured (2026-08-29, corrected the same day it was first
+mis-recorded): **service-worker-supplied COOP/COEP does isolate Safari** (the
+first failure was our register script racing WebKit's slower controller
+takeover), **the whole system is WebKit-clean — 132/132 with real headers,
+no shim** — but **WebKit's service worker randomly fails ~1% of
+module-worker script loads**, so any host that needs the shim in the path
+(GitHub Pages) is unreliable on Safari; a header-capable host serves Safari
+perfectly (evidence behind M6's WebKit gate, which now reads as passed for
+the engine and failed for the shim-dependent host);
 iOS forbids JIT *and* runtime-loaded AOT (hence Pulley); iPad-Safari's OPFS world is private and
 evictable, so real user files arrive only through granted subtrees
 (a security-scoped bookmark **is** a bind).

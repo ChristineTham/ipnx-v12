@@ -140,11 +140,15 @@ into the dist copy of the frozen browser page (the derivation-layer move;
 self-skips where real headers exist). Verified live in a real Chrome — 132
 PASS, 0 FAIL, `crossOriginIsolated` true. Field notes: this workstation's
 embedded browser pane refuses service-worker registration (measured over
-HTTP/1.0 and 1.1), so live verification needs a real browser; and **Safari
-cannot run the demo on this host** (measured live: WebKit takes COOP/COEP
-only from the real response, so the shim isolates Chromium only — the guard
-and landing say so in visitor terms; a header-capable host is the fix and
-feeds M6's gate). P2/P3's
+HTTP/1.0 and 1.1), so live verification needs a real browser; and the Safari story,
+measured to the bottom after a wrong first cause was written down and
+corrected: the shim DOES isolate WebKit (the original failure was our
+register script's reload race + a sessionStorage latch), **Safari runs the
+full 132 with real headers and no shim**, and the residual wall is WebKit's
+service worker randomly failing ~1% of worker-script loads — so this host is
+Safari-unreliable by mechanism, the page says so as an advisory rather than
+a wall, and a header-capable host (the `_headers` file already ships) fixes
+Safari completely. P2/P3's
 validation events are now armed. — *consumes: personas (2026-08-29)*
 The browser port is finished, frozen, and unreachable — P2 and P3's whole
 journey ([personas.md](personas.md)) is "click a URL, type into rc". Host it:
