@@ -81,7 +81,7 @@ measured toolchain (wasi-sdk, binaryen, bison, Node, Rust) that `mk.sh` warns
 against on drift (six-hats catch: the §9.4–9.5 findings are version-dependent
 and the versions were recorded nowhere).
 
-### The package manager, v1 *(S, independent — may run before or beside M1)* — consumes: the package model (design.md 2026-08-29), the registry survey (RESEARCH)
+### The package manager, v1 *(S)* — **landed 2026-08-29** — consumes: the package model (design.md 2026-08-29), the registry survey (RESEARCH)
 
 `pkg(1)` in userspace: install/list/remove/verify; fetch over `#H`, sha256
 always, unpack to `/pkg/<name>/<ver>`, bind per the package `meta`
@@ -90,7 +90,11 @@ same-origin `/registry/` (browser CORS reality, measured) with two or three
 verified runtimes — acceptance: **`pkg install ruby` in the public demo's
 tab, then `ruby -e` runs**; on the native host the same command against the
 real WLR release URLs. A `libs/` package (zlib) lands as a layer-2 sysroot
-and `cc -lz` links — the porting inversion made purchasable. Suite: a
+and links by glob (`cc z.c /lib/wasm32-wasi/zlib/*.o`) — the porting
+inversion made purchasable; the objects are era-matched because the registry
+build compiles them with the tab's own cc (RESEARCH: WLR's prebuilt .a is
+LLVM-16 objects the LLVM-8 linker rejects; a guest `ar` would restore
+`-lz`). Suite: a
 self-skipping test where `#H` exists. Feeds M10 (port personalities) and the
 profile milestone (installs as namespace fragments).
 

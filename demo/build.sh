@@ -21,6 +21,18 @@ grep -q "v=$STAMP" dist/shell/shell.mjs || { echo "stamp inject failed" >&2; exi
 sed -i '' "s|src=\"shell.mjs\"|src=\"shell.mjs?v=$STAMP\"|" dist/shell/index.html
 grep -q "shell.mjs?v=$STAMP" dist/shell/index.html || { echo "entry bust failed" >&2; exit 1; }
 grep -q "coi-$STAMP" dist/coi-sw.js || { echo "cache stamp failed" >&2; exit 1; }
+# the demo's package registry (regenerate with registry/fetch.sh): the
+# browser host installs from here — same origin, so no CORS wall
+if [ -f registry/cache/index ]; then
+  mkdir -p dist/registry
+  cp registry/cache/index registry/cache/*.wasm registry/cache/*.manifest dist/registry/
+  cp -R registry/cache/zlib-1.2.13 dist/registry/
+  for f in $(find dist/registry -type f); do
+    sz=$(wc -c < "$f")
+    [ "$sz" -lt 52428800 ] || { echo "$f over the 50MB line" >&2; exit 1; }
+  done
+  echo "  registry: $(du -sh dist/registry | awk '{print $1}') ($(find dist/registry -type f | wc -l | tr -d ' ') files)"
+fi
 touch dist/.nojekyll
 # inject the isolation shim into the dist COPY of the frozen browser page —
 # the derivation-layer move: the source is never edited, the bundle is derived

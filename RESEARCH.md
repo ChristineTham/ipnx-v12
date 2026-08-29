@@ -1178,6 +1178,18 @@ teeth:
   repack) over the preview1 shim runs them; the demo applies it as a dist
   derivation, the frozen reference untouched.
 
+- **Layer-2 sysroots must match the toolchain's ERA, not just the target
+  (measured 2026-08-29).** WLR's prebuilt `libz.a` (wasi-sdk-20, LLVM 16
+  objects) is rejected by the in-tab LLVM-8 `wasm-ld`: "Bad section type."
+  The registry's answer became the system's own dogfood: the demo registry's
+  zlib package is **compiled from pinned source by the tab's own cc** at
+  registry-build time (ten per-file compiles in a headless boot — zlib's
+  K&R parameter names collide with its own `code` typedef under
+  amalgamation, so one TU is not an option — the objects base64'd out
+  through the console since ramfs is memory-only), and linked by glob:
+  `cc z.c /lib/wasm32-wasi/zlib/*.o`. An `ar` for the guest would restore
+  `-lz`; queued.
+
 - **The registry survey (measured 2026-08-29): external wasm binaries run
   today, and the acquisition constraints are known.** The probe: WLR's
   `ruby-3.2.2.wasm` (23.3MB, single file) fetched from GitHub releases,
