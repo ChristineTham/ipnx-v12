@@ -116,7 +116,13 @@ publishing: `bash userspace/mk.sh && bash demo/build.sh`, then copy `dist/`
 onto the `gh-pages` branch and push (an orphan worktree keeps it clean).
 Pages rebuilds in under a minute. The COI service worker in the bundle
 supplies COOP/COEP; verify in a real browser — embedded panes may refuse
-service workers.
+service workers. **Wait out the CDN before testing**: Pages' edge can serve
+the previous deploy for a minute or two after the build reports green, and a
+page loaded in that window poisons the service worker's fresh per-stamp cache
+with the stale modules (measured 2026-08-29: a boot mixed the new shell with
+the old kernel — "unknown device #H"). Before driving the live site, curl a
+just-changed file and grep for a marker from the new deploy; a plain reload
+heals an already-poisoned tab once the edge settles.
 
 ## Debugging
 
