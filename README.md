@@ -195,6 +195,15 @@ a file, and every process composes its own world.
   nestable, gone with the process. The tool families this replaces — venv,
   nvm and rbenv on one side, flatpak and snap on the other — are namespace
   emulations, built because their systems could not say `bind`.
+- **Every system is a time machine.** A snapshot is a tree and rollback is a
+  bind: `echo snap t1 > '#V/ctl'` freezes the running root by structural
+  clone — twenty snapshots of the whole filesystem cost nine megabytes and
+  under a second, because unchanged bytes are shared rather than copied —
+  and `bind '#V/t1/dir' /dir` restores. Put the same line first in a boot
+  namespace file and the system boots from its own past. History refuses
+  writes from everyone, eve — the host owner — included. Snapshot volumes,
+  backup daemons and immutable-distro machinery are what systems grow when
+  the filesystem cannot say `snap` and the namespace cannot say `bind`.
 - **A computer can be treated as a function call.** The same kernel is intended to run
   in a microVM that boots in about 100 milliseconds, mounts what it needs, and then goes
   away. This is the sort of environment used by services such as Lambda, but with an
