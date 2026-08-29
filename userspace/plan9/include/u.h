@@ -1,7 +1,12 @@
 /* shim u.h — the platform layer beneath the REAL /sys/include/libc.h
  * (which is vendored, verbatim, at ../sys/include/libc.h). Exactly the
  * split Plan 9 itself uses: u.h is per-platform, libc.h is the system.
- * This platform is wasm32 under clang; Rune is 16-bit, the 4th edition's. */
+ * This platform is wasm32 under clang. Rune is 32-bit: the vendored
+ * snapshot is the LATE 4th edition (libc.h: Runemax = 0x10FFFF, UTFmax = 4;
+ * rune.c does surrogates), and one place needs Runemax to round-trip
+ * through a Rune — sam's class-range sentinel (regexp.c: classp[n] =
+ * Runemax) — which a 16-bit Rune truncates, silently killing every [a-z]
+ * range (measured 2026-08-29, RESEARCH §9.4). */
 typedef unsigned char	uchar;
 typedef signed char	schar;
 typedef unsigned short	ushort;
@@ -14,7 +19,7 @@ typedef unsigned short	u16int;
 typedef unsigned int	u32int;
 typedef unsigned long long u64int;
 typedef unsigned int	uintptr;
-typedef unsigned short	Rune;
+typedef unsigned int	Rune;
 typedef ulong		mpdigit;	/* referenced by libc.h decls; unused */
 typedef char		s8int;
 typedef short		s16int;

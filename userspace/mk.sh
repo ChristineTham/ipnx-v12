@@ -35,7 +35,7 @@ $CC -c libc/draw9.c -o build/draw9.o
 # libregexp — compiled from verbatim 4th-edition source. Floats excluded
 # for now (fltfmt/strtod need libm); -fms-extensions carries kencc's
 # anonymous struct members (Biobufhdr in Biobuf).
-P9CC="$SDK/bin/clang --target=wasm32 -nostdlib -O1 -fno-builtin -fms-extensions -Wno-incompatible-pointer-types -Wno-int-conversion -Iplan9/include -Iplan9/sys/include -Wno-unknown-pragmas -Wno-unused-variable -Wno-unused-parameter -Wno-parentheses -Wno-empty-body -Wno-comment -Wno-deprecated-non-prototype -Wno-implicit-int -Wno-return-type -Wno-main-return-type"
+P9CC="$SDK/bin/clang --target=wasm32 -nostdlib -O1 -fno-builtin -fms-extensions -Xclang -fwchar-type=int -Xclang -fno-signed-wchar -Wno-incompatible-pointer-types -Wno-int-conversion -Iplan9/include -Iplan9/sys/include -Wno-unknown-pragmas -Wno-unused-variable -Wno-unused-parameter -Wno-parentheses -Wno-empty-body -Wno-comment -Wno-deprecated-non-prototype -Wno-implicit-int -Wno-return-type -Wno-main-return-type"
 P9EXCLUDE="execl"   # execl: &f+1 assumes stack varargs; lib9 has a va_arg one. The float door is open: wasm has native f64.
 : > build/p9lib.list
 for c in plan9/sys/src/libc/port/*.c plan9/sys/src/libc/fmt/*.c plan9/sys/src/libc/9sys/*.c plan9/sys/src/libbio/*.c plan9/sys/src/libregexp/*.c plan9/sys/src/libString/*.c; do
@@ -156,11 +156,13 @@ echo "  bin/drtest  $(wc -c < rootfs/bin/drtest | tr -d ' ') bytes (REAL libdraw
 
 # sam: the real editor's backend — `sam -d` is ed-with-structural-regexps
 # on the console; the samterm protocol (mesg.c) compiles along, quiet until
-# a terminal exists. L"..." literals are 16-bit Runes, hence -fshort-wchar;
+# a terminal exists. L"..." literals are 32-bit UNSIGNED Runes: P9CC sets
+# -fwchar-type=int -fno-signed-wchar so wide literals match u.h's
+# late-4th-edition 21-bit Rune (typedef uint) exactly;
 # `!` shell escapes fork bare, hence asyncify.
 for c in plan9/sys/src/cmd/sam/*.c; do
   b=$(basename "$c" .c)
-  $P9CC -fshort-wchar -Iplan9/sys/src/cmd/sam -c "$c" -o "build/p9-sam-$b.o"
+  $P9CC -Iplan9/sys/src/cmd/sam -c "$c" -o "build/p9-sam-$b.o"
 done
 # parse.h tentatively defines cmdtab[] in every TU; cmd.c owns the real one
 for o in build/p9-sam-*.o; do
@@ -200,7 +202,7 @@ for c in plan9/sys/src/cmd/samterm/*.c; do
   b=$(basename "$c" .c)
   src="$c"
   case "$b" in io) src=build/samterm-io.c;; esac
-  $P9CC -fshort-wchar -Iplan9/sys/src/cmd/samterm -Iplan9/sys/src/cmd/sam -c "$src" -o "build/p9-samterm-$b.o"
+  $P9CC -Iplan9/sys/src/cmd/samterm -Iplan9/sys/src/cmd/sam -c "$src" -o "build/p9-samterm-$b.o"
 done
 $P9CC -c libc/mousekbd.c -o build/mousekbd.o
 $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/p9-samterm-*.o build/libthread.o build/mousekbd.o build/p9-plumb-mesg.o build/p9-plumb-sendtext.o build/libdraw.a build/libp9.a -o rootfs/bin/aux/samterm
@@ -252,7 +254,7 @@ for c in plan9/sys/src/cmd/acme/*.c; do
 done
 for c in build/acme-src/*.c; do
   b=$(basename "$c" .c)
-  $P9CC -fshort-wchar -Iplan9/sys/src/cmd/acme -c "$c" -o "build/p9-acme-$b.o"
+  $P9CC -Iplan9/sys/src/cmd/acme -c "$c" -o "build/p9-acme-$b.o"
 done
 # dat.h carries pre-ANSI tentative definitions in every TU (rc's disease,
 # rc's cure): weaken every duplicated symbol except its initializing owner

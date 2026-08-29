@@ -268,9 +268,13 @@ int setjmp(long *env){
 	_sjbuf((int)_asydata);
 	return _setj((int)env);
 }
-/* the rune-range binary search runetype.c leans on */
-unsigned short *_runebsearch(unsigned short c, unsigned short *t, int n, int ne){
-	unsigned short *p;
+/* the rune-range binary search runetype.c leans on — element type MUST
+ * match the platform Rune (u.h: unsigned int, the 21-bit era): the callers
+ * pass Rune tables, and a narrower type here half-strides them silently
+ * (wasm promotes both to i32, so the link never complains — measured
+ * 2026-08-29 as wc counting zero words) */
+unsigned int *_runebsearch(unsigned int c, unsigned int *t, int n, int ne){
+	unsigned int *p;
 	int m;
 
 	while(n > 1){

@@ -73,6 +73,19 @@ q' > /tmp/samscript
 sam -d < /tmp/samscript > /dev/null >[2] /dev/null
 if(~ `{cat /tmp/samf} 'SAM TEST LINE') echo PASS 'the real sam: x, c, and | through real tr (sam -d)'; if not fails=bad
 
+# regexp CLASSES WITH RANGES in x: the class-range sentinel is Runemax
+# stored in a Rune (sam/regexp.c bldcclass), so this is the one structural
+# pattern that catches a Rune narrower than libc.h's 21-bit era — a 16-bit
+# Rune truncates the sentinel and every [a-z] silently stops matching
+# (measured 2026-08-29; fixed by u.h's 32-bit Rune, RESEARCH §9.4)
+echo 'horses for courses' > /tmp/samr
+echo 'e /tmp/samr
+,x/[a-z]+es/ g/co/ c/COURSES/
+w /tmp/samr
+q' > /tmp/samrscript
+sam -d < /tmp/samrscript > /dev/null >[2] /dev/null
+if(~ `{cat /tmp/samr} 'horses for COURSES') echo PASS 'sam x with class ranges: ,x/[a-z]+es/ g// c// lands'; if not fails=bad
+
 # real-rc capabilities the mini shell refused outright
 fn twice {echo $1 $1}
 if(~ `{twice hey} 'hey hey') echo PASS 'fn: functions define and take arguments'; if not fails=bad

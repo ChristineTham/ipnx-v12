@@ -1178,6 +1178,29 @@ teeth:
   repack) over the preview1 shim runs them; the demo applies it as a dist
   derivation, the frozen reference untouched.
 
+- **Rune width must match the vendored snapshot's era — and the shim's own
+  helpers must use Rune, never a hardcoded width (measured 2026-08-29).**
+  The u.h shim declared `Rune` as `unsigned short` ("the 4th edition's"),
+  but the vendored tree is the LATE 4th edition — `libc.h` says `Runemax =
+  0x10FFFF`, `UTFmax = 4`, and `rune.c` checks surrogates. Almost nothing
+  notices 16-bit truncation of ASCII-era data; the one construct that does
+  is sam's class-range sentinel (`regexp.c` `bldcclass`: `classp[n] =
+  Runemax`, matched by `*p == Runemax`) — a 16-bit Rune truncates the store
+  to 0xFFFF, the compare never fires, and every `[a-z]` range silently
+  becomes the literal set {0xFFFF, lo, hi}. Measured: `,x/[a-z]+es/` no-ops
+  while `[abco]`, `[^x]`, closures and alternation all work. Fixes, all
+  shim/derivation: `Rune` is now `unsigned int`; `L"…"` literals match via
+  P9CC's `-Xclang -fwchar-type=int -Xclang -fno-signed-wchar` (wasm32's
+  default wchar_t is a SIGNED int, and clang rejects initialising an
+  unsigned array from a signed wide literal; there is no driver-level
+  `-funsigned-wchar`); and lib9.c's `_runebsearch` — our platform helper
+  behind the vendored `runetype.c` — had `unsigned short` hardcoded, which
+  half-strided every 32-bit classification table. That last one links
+  silently: wasm promotes u16 and u32 alike to i32, so mismatched C
+  signatures produce identical wasm signatures — the failure surfaced as
+  `wc` counting zero words (`isspacerune` over garbage). The suite's new
+  class-range test (`,x/[a-z]+es/ g// c//`) pins all three.
+
 - **The gc compiler hosts on ipnx (measured 2026-08-29).** `cmd/compile`,
   `cmd/link` and `cmd/gofmt` are pure Go, so `GOOS=wasip1 GOARCH=wasm go
   build cmd/compile` simply works (41.9MB, 11.0MB, 4.8MB wasm). Run as ipnx
