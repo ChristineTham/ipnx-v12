@@ -11,9 +11,19 @@
 (() => {
   if (crossOriginIsolated || !("serviceWorker" in navigator)) return;
   if (navigator.serviceWorker.controller) return;
+  const sw = new URL("coi-sw.js", document.currentScript.src);
   navigator.serviceWorker.addEventListener("controllerchange",
     () => location.reload(), { once: true });
-  const sw = new URL("coi-sw.js", document.currentScript.src);
   navigator.serviceWorker.register(sw, { scope: new URL("./", sw).pathname })
+    .then(async (reg) => {
+      // a hard reload bypasses the SW: the registration is active but the
+      // page is uncontrolled and controllerchange will never fire — one
+      // plain reload restores control (one-shot; the guard catches the rest)
+      await navigator.serviceWorker.ready;
+      if (!navigator.serviceWorker.controller && !sessionStorage.getItem("coi-retry")) {
+        sessionStorage.setItem("coi-retry", "1");
+        location.reload();
+      } else sessionStorage.removeItem("coi-retry");
+    })
     .catch((e) => console.warn("coi: registration failed", e));
 })();

@@ -32,11 +32,11 @@ node -e '
 const fs = require("fs"), f = "dist/browser/main.mjs";
 let t = fs.readFileSync(f, "utf8");
 const dev = `append("not cross-origin isolated — serve this page with poc/serve.mjs\\n", "err");`;
-const vis = `document.getElementById("status").textContent = "not isolated"; append("This demo needs cross-origin isolation and this page did not get it — a hard reload sometimes helps (the isolation shim needs one reload to take control). Chromium browsers (Chrome, Edge, Brave, Arc) are the measured-reliable path on this host.\\n", "err");`;
+const vis = `document.getElementById("status").textContent = "not isolated"; append("This demo needs cross-origin isolation and this load did not get it. Reload normally — hard reloads bypass the isolation worker and guarantee this screen.\\n", "err");`;
 if (!t.includes(dev)) { console.error("guard line not found"); process.exit(1); }
 fs.writeFileSync(f, t.replace(dev, vis));
 '
-grep -q "Chromium browser" dist/browser/main.mjs || { echo "guard rewrite failed" >&2; exit 1; }
+grep -q "hard reloads bypass" dist/browser/main.mjs || { echo "guard rewrite failed" >&2; exit 1; }
 # surface real worker errors (the frozen handler prints the bare event; on an
 # engine we have no inspector automation for, the message must reach the page)
 node -e '

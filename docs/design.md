@@ -617,6 +617,22 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-29) The demo is the product.** Christine's formulation, verbatim
+  doctrine: *"It's like a game demo. A lousy game demo means no one will buy
+  the game."* The public demo is every visitor's one and only encounter with
+  the system — for them it IS the implementation, and it has to work BETTER
+  than what ships later, because a visitor who sees faults leaves and never
+  returns. Consequences: **(1)** demo quality items (genuine guest window
+  resize, clean close, first-five-minutes polish) are product work, never
+  deferred as "waiting for the real implementation"; **(2)** the demo stops
+  being confined to page-level derivations of the frozen kernel — `poc/`
+  remains the untouchable conformance oracle, but the demo ships its own
+  supervisor lineage (forked from the reference) where visitor-facing kernel
+  needs land first: window-refresh events for true guest resize, close
+  semantics, and whatever the experience demands; the fork is judged by the
+  same suite plus its own additions. **(3)** The deployment ledger's review
+  treats demo-quality regressions as shipped-form failures, not cosmetics.
+
 - **(2026-08-29) The six-hats pass — the blind spots, caught and adopted.**
   De Bono's parallel-thinking sweep run over the whole project at the
   declaration; the record is [six-hats.md](six-hats.md). The catches, each

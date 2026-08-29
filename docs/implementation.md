@@ -143,8 +143,13 @@ face in the editors (subfonts converted to uncompressed k1 at vendor time —
 the frozen engine has no compressed-'Y' op; the suite keeps the small default
 font, the demo launches with `-f`/`$font`), and the three-button answer:
 plan9port's convention (⌥-click=2, ⌘/ctrl-click=3, right-click=3) plus a
-1|2|3 titlebar switch for touch. Remaining: per-window guest resize, and the
-modern-draw question stays queued in design.md.
+1|2|3 titlebar switch for touch. **The demo-is-the-product decision
+(2026-08-29) upgrades what remains from polish to product work — next
+session: `demo/kernel`, the demo's own supervisor lineage forked from the
+frozen reference (the oracle stays untouched), landing window-refresh events
+for TRUE guest resize, clean window-close semantics, and the visitor
+experience's other kernel needs — judged by the same 132 plus its own
+tests.** The modern-draw question stays queued in design.md.
 GitHub Pages (her call — no new Netlify site), `gh-pages` branch assembled by
 `demo/build.sh`; COOP/COEP supplied by our own COI service worker, injected
 into the dist copy of the frozen browser page (the derivation-layer move;
