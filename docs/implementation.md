@@ -143,7 +143,14 @@ face in the editors (subfonts converted to uncompressed k1 at vendor time —
 the frozen engine has no compressed-'Y' op; the suite keeps the small default
 font, the demo launches with `-f`/`$font`), and the three-button answer:
 plan9port's convention (⌥-click=2, ⌘/ctrl-click=3, right-click=3) plus a
-1|2|3 titlebar switch for touch. **The demo-is-the-product decision
+1|2|3 titlebar switch for touch. **The WASI interop proof is on stage (2026-08-29 late)**: the tour runs
+wasitest and the real Go binary live; CPython runs by invitation
+(`python /tmp/pytest.py`); and the landing's second button boots **the C
+toolchain** — real clang + wasm-ld as guests (RESEARCH §9.7: the
+wasi_unstable adapter and the inode-dedup finding), `rc /rc/cc` compiling,
+linking and running hello.c inside the tab. Go compilation stays host-side
+by design (the gc toolchain does not exist as a wasm guest); compilation-as-
+capability for the real system remains the `/cc` milestone. **The demo-is-the-product decision
 (2026-08-29) upgrades what remains from polish to product work — next
 session: `demo/kernel`, the demo's own supervisor lineage forked from the
 frozen reference (the oracle stays untouched), landing window-refresh events

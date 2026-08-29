@@ -1,0 +1,11 @@
+# cc — compile, link, and run a C file inside ipnx.
+#   rc /rc/cc /tmp/hello.c [out]
+src=$1
+out=$2
+if(~ $#out 0) out=/tmp/a.out
+echo cc: compiling $src
+/bin/cc -cc1 -emit-obj -disable-free -isysroot / -internal-isystem /include/c++/v1 -internal-isystem /include -internal-isystem /lib/clang/8.0.1/include -ferror-limit 19 -O2 -o /tmp/_cc.o -x c $src
+echo cc: linking $out
+/bin/wasm-ld --no-threads --export-dynamic -z 'stack-size=1048576' -L/lib/wasm32-wasi /lib/wasm32-wasi/crt1.o /tmp/_cc.o -lc -o $out
+echo cc: running $out
+$out

@@ -1161,6 +1161,32 @@ before code, not after.
 
 ---
 
+### 9.7 The toolchain moves in: clang as a guest (measured 2026-08-29)
+
+The demo's C-toolchain profile runs LLVM-8 clang and lld (binji/wasm-clang's
+wasm/WASI builds) as ordinary guests under the WASI shim, compiling and
+linking against a wasi sysroot in the namespace and exec'ing the result —
+the design's "move the toolchain in" option, working. Two findings with
+teeth:
+
+- **`wasi_unstable` is preview1 with two traps.** The 2019 binaries import
+  `wasi_unstable`: identical function names, but `fd_seek`'s whence enum is
+  reordered (unstable CUR=0,END=1,SET=2; preview1 SET=0,CUR=1,END=2 — every
+  object-file seek corrupts without a remap) and `filestat` packs `nlink`
+  as u32 at offset 20 (56-byte struct) where preview1 has u64 at 24
+  (64 bytes). A ~30-line adapter (module aliasing + whence map + struct
+  repack) over the preview1 shim runs them; the demo applies it as a dist
+  derivation, the frozen reference untouched.
+
+- **A WASI shim must give every file a distinct inode.** The shim reported
+  `ino = 0` universally; clang's FileManager deduplicates headers by
+  (dev, ino) and therefore treated *every file as the same file* — it
+  cached hello.c as the content of `stdio.h` and diagnosed "redefinition
+  of 'main'" *inside the header*, seven include levels deep. Plumbing the
+  9P qid.path (falling back to a path hash) as the inode fixes it. The
+  Rust host's shim (`hosts/macos/src/wasi.rs`) has the same `ino = 0` and
+  needs the same fix before it meets a compiler.
+
 ## 12. Prior art: capability operating systems (researched 2026-08-29)
 
 The identity decisions (su, the user decomposition, the profile) rest on

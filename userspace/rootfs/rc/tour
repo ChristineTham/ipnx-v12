@@ -59,11 +59,21 @@ echo -n 'result: '
 cat /tmp/tourf
 echo
 
-echo '── 6 · windows, editors, foreigners ─────────────────────────'
-echo 'In a browser or on a desktop: win rc, win sam, win acme — the'
-echo 'real acme, all twenty source files. And the system speaks WASI:'
-echo 'real Go binaries and real CPython 3.14 run against this kernel'
-echo '(try: python /tmp/pytest.py — it takes a moment to boot).'
+echo '── 6 · the system speaks WASI: strangers run here ───────────'
+echo 'These are not ports. wasitest is wasi-libc C; gotest is a real'
+echo 'Go binary (GOOS=wasip1 go build, unmodified). Watch them run:'
+echo '$ wasitest'
+wasitest
+echo '$ gotest'
+gotest
+echo
+echo 'Real CPython 3.14 is here too — worth the moment it takes:'
+echo '$ python /tmp/pytest.py'
+echo
+echo '── 7 · windows and editors ──────────────────────────────────'
+echo 'win rc opens a shell window; win sam and win acme are THE real'
+echo 'editors, all verbatim source. (In acme: button 2 executes,'
+echo 'button 3 looks — on a trackpad, option-click and cmd-click.)'
 echo
 echo 'The whole system is open: https://github.com/ChristineTham/ipnx-v12'
 echo 'tour: complete'

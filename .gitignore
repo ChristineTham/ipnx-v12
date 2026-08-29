@@ -10,3 +10,4 @@ userspace/rootfs/tmp/
 
 # demo build product (assembled by demo/build.sh)
 demo/dist/
+demo/toolchain/cache/

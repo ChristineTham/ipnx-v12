@@ -146,6 +146,8 @@ const consT = makeTerm(consTermEl);
 consWin.setFocusInner(() => consT.term.focus());
 consWin.onResize(() => consT.fit.fit());
 consT.term.writeln("\x1b[38;5;110mipnx-v12 — a reimagining of Unix, booting in this tab\x1b[0m");
+if (new URLSearchParams(location.search).has("cc"))
+  consT.term.writeln("\x1b[38;5;110mC toolchain aboard — try: rc /rc/cc /tmp/hello.c\x1b[0m");
 
 // cooked line discipline for /dev/cons (the kernel's cons expects fed lines;
 // the echo is the host's job, as on the Node host's tty)
@@ -433,6 +435,7 @@ function seedFromJson(files) {
 }
 
 setStatus("fetching rootfs…");
+const CCMODE = new URLSearchParams(location.search).has("cc");
 const resp = await fetch("../build/rootfs.json?v=BUILDSTAMP");
 const total = +resp.headers.get("content-length") || 0;
 let text;
@@ -452,6 +455,11 @@ if (resp.body && total) {
 setStatus("unpacking…");
 await new Promise((r) => setTimeout(r, 0));      // let the status paint
 const files = JSON.parse(text);
+if (CCMODE) {
+  setStatus("fetching the C toolchain…");
+  const ov = await (await fetch("../build/cc-overlay.json?v=BUILDSTAMP")).json();
+  Object.assign(files, ov);
+}
 setStatus("booting…");
 const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: true });
 cons = booted.cons;

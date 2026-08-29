@@ -43,11 +43,17 @@ binaries run against the same kernel through a WASI shim.</p>
 
 <p>
 <a class="go" href="shell/"><b>Boot the desktop</b> — shells, sam, acme</a>
+<a class="go" href="shell/?cc"><b>Boot with the C toolchain</b> — clang in the tab (+80&nbsp;MB)</a>
 <a class="go" href="browser/">Run the 132-test suite</a>
 </p>
 
 <p>Once the prompt appears, take the guided tour:</p>
 <pre>rc /rc/tour</pre>
+
+<p>With the toolchain aboard, the system compiles C inside itself:
+<code>rc /rc/cc /tmp/hello.c</code> runs real clang and wasm-ld as guests and
+executes the binary they just made. Real Go and CPython run too — the tour
+shows them.</p>
 
 <p>Or go straight for the good parts: <code>win acme &amp;</code> opens the
 real acme in a window (button-2 executes, button-3 searches);

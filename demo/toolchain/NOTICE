@@ -1,0 +1,5 @@
+clang and lld compiled to WebAssembly/WASI, and the wasi sysroot, from
+binji/wasm-clang (github.com/binji/wasm-clang) — LLVM 8-era binaries under
+Apache-2.0 WITH LLVM-exception (cache/LICENSE.llvm). They speak the older
+wasi_unstable ABI; the demo bundle adapts it over the preview1 shim (whence
+remap, filestat repack) in the dist derivation only.
