@@ -6,6 +6,7 @@
 #include <string.h>
 #include <time.h>
 #include <dirent.h>
+#include <sys/stat.h>
 
 int
 main(int argc, char **argv)
@@ -45,5 +46,24 @@ main(int argc, char **argv)
 		closedir(d);
 	}
 	printf("wasi: /etc has %d entries\n", n);
+
+	/* filestat inodes: clang's FileManager deduplicates by (dev,ino), so
+	 * every file must stat distinct (RESEARCH §9.7). The frozen reference
+	 * shim reports 0 — "unreported" is the recorded skip, never a failure;
+	 * equal NONZERO inodes on different files is the regression. */
+	{
+		struct stat a, b;
+		if (stat("/etc/motd", &a) == 0 && stat("/tmp/wasi.out", &b) == 0) {
+			if (a.st_ino == 0 && b.st_ino == 0)
+				printf("wasi: inodes: unreported\n");
+			else if (a.st_ino != b.st_ino && a.st_ino != 0 && b.st_ino != 0)
+				printf("wasi: inodes: distinct\n");
+			else
+				printf("wasi: inodes: BROKEN ino1=%llu ino2=%llu\n",
+				       (unsigned long long)a.st_ino,
+				       (unsigned long long)b.st_ino);
+		} else
+			printf("wasi: inodes: BROKEN stat failed\n");
+	}
 	return 0;
 }

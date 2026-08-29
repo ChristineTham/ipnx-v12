@@ -642,6 +642,8 @@ main(int argc, char *argv[])
 		ok(strstr(out, "readback: written by wasi") != nil &&
 		   strstr(out, "/etc has") != nil && strstr(out, "has 0 entries") == nil,
 		   "WASI ABI: wrote, read back, and listed a directory through the namespace");
+		ok(strstr(out, "inodes: BROKEN") == nil && strstr(out, "inodes:") != nil,
+		   "WASI ABI: filestat inodes distinct where reported (clang dedups by ino; frozen shim's 0 self-skips)");
 
 		pipe(wasipipe);
 		pid = procrfork(RFFDG, gochild, nil);

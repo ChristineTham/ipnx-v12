@@ -67,7 +67,7 @@ struct FdInfo {
     isdir: bool,
     preopen: bool,
     append: bool,
-    dirents: Option<Rc<Vec<(String, u8)>>>, // (name, qtype) snapshot
+    dirents: Option<Rc<Vec<(String, u8, u64)>>>, // (name, qtype) snapshot
 }
 
 pub struct WasiState {
@@ -194,16 +194,33 @@ fn resolve(caller: &Caller<'_, WasiState>, dirfd: i32, ptr: u32, len: u32) -> Op
     Some(format!("/{}", out.join("/")))
 }
 
-// one 9P stat record: (qtype, mode, atime, mtime, length, name)
-fn parse9(b: &[u8], off: usize) -> (usize, u8, u32, u32, u64, String) {
+// one 9P stat record: (qtype, qid.path, atime, mtime, length, name)
+fn parse9(b: &[u8], off: usize) -> (usize, u8, u64, u32, u32, u64, String) {
     let size = u16::from_le_bytes(b[off..off + 2].try_into().unwrap()) as usize + 2;
     let qtype = b[off + 8];
+    let qpath = u64::from_le_bytes(b[off + 13..off + 21].try_into().unwrap());
     let atime = u32::from_le_bytes(b[off + 25..off + 29].try_into().unwrap());
     let mtime = u32::from_le_bytes(b[off + 29..off + 33].try_into().unwrap());
     let length = u64::from_le_bytes(b[off + 33..off + 41].try_into().unwrap());
     let nlen = u16::from_le_bytes(b[off + 41..off + 43].try_into().unwrap()) as usize;
     let name = String::from_utf8_lossy(&b[off + 43..off + 43 + nlen]).into_owned();
-    (size, qtype, atime, mtime, length, name)
+    (size, qtype, qpath, atime, mtime, length, name)
+}
+
+// clang's FileManager deduplicates by (dev,ino): every file must carry a
+// DISTINCT inode (RESEARCH §9.7 — ino=0 made hello.c cache as stdio.h).
+// The qid.path is the kernel's own identity; a server that reports none
+// gets an FNV-1a of the path instead.
+fn ino_for(qpath: u64, path: &str) -> u64 {
+    if qpath != 0 {
+        return qpath;
+    }
+    let mut h: u64 = 0xcbf29ce484222325;
+    for b in path.as_bytes() {
+        h ^= *b as u64;
+        h = h.wrapping_mul(0x100000001b3);
+    }
+    h | 1
 }
 
 fn ftype(qtype: u8, path: &str) -> u8 {
@@ -218,9 +235,10 @@ fn ftype(qtype: u8, path: &str) -> u8 {
     }
 }
 
-fn put_filestat(caller: &mut Caller<'_, WasiState>, ptr: u32, qtype: u8, atime: u32,
-                mtime: u32, length: u64, path: &str) {
+fn put_filestat(caller: &mut Caller<'_, WasiState>, ptr: u32, qtype: u8, qpath: u64,
+                atime: u32, mtime: u32, length: u64, path: &str) {
     let mut b = [0u8; 64];
+    b[8..16].copy_from_slice(&ino_for(qpath, path).to_le_bytes());
     b[16] = ftype(qtype, path);
     b[24..32].copy_from_slice(&1u64.to_le_bytes());
     b[32..40].copy_from_slice(&length.to_le_bytes());
@@ -395,8 +413,8 @@ pub fn link_wasi(linker: &mut Linker<WasiState>) -> Result<(), wasmtime::Error> 
         if n < 0 {
             return Ok(kerrno(&mut caller));
         }
-        let (_, qtype, atime, mtime, length, _) = parse9(&data, 0);
-        put_filestat(&mut caller, out_p as u32, qtype, atime, mtime, length, &f.path);
+        let (_, qtype, qpath, atime, mtime, length, _) = parse9(&data, 0);
+        put_filestat(&mut caller, out_p as u32, qtype, qpath, atime, mtime, length, &f.path);
         Ok(e::SUCCESS)
     })?;
     linker.func_wrap(m, "fd_filestat_set_size",
@@ -486,7 +504,7 @@ pub fn link_wasi(linker: &mut Linker<WasiState>) -> Result<(), wasmtime::Error> 
         }
         let mut idx = cookie as usize;
         if idx == 0 || f.dirents.is_none() {
-            let mut entries: Vec<(String, u8)> = Vec::new();
+            let mut entries: Vec<(String, u8, u64)> = Vec::new();
             let mut pos: u64 = 0;
             loop {
                 let (n, data) = ksys(&mut caller, tn::PREAD, Vec::new(),
@@ -500,8 +518,8 @@ pub fn link_wasi(linker: &mut Linker<WasiState>) -> Result<(), wasmtime::Error> 
                 }
                 let mut off = 0usize;
                 while off + 2 <= data.len() {
-                    let (size, qtype, _, _, _, name) = parse9(&data, off);
-                    entries.push((name, qtype));
+                    let (size, qtype, qpath, _, _, _, name) = parse9(&data, off);
+                    entries.push((name, qtype, qpath));
                     off += size;
                 }
                 pos += n as u64;
@@ -514,11 +532,12 @@ pub fn link_wasi(linker: &mut Linker<WasiState>) -> Result<(), wasmtime::Error> 
         let mut used: usize = 0;
         let buflen = buflen as usize;
         while idx < entries.len() {
-            let (name, qtype) = &entries[idx];
+            let (name, qtype, qpath) = &entries[idx];
             let nb = name.as_bytes();
             let need = 24 + nb.len();
             let mut rec = vec![0u8; need];
             rec[0..8].copy_from_slice(&((idx as u64) + 1).to_le_bytes());
+            rec[8..16].copy_from_slice(&ino_for(*qpath, name).to_le_bytes());
             rec[16..20].copy_from_slice(&(nb.len() as u32).to_le_bytes());
             rec[20] = ftype(*qtype, "/");
             rec[24..].copy_from_slice(nb);
@@ -593,8 +612,8 @@ pub fn link_wasi(linker: &mut Linker<WasiState>) -> Result<(), wasmtime::Error> 
         if n < 0 {
             return Ok(kerrno(&mut caller));
         }
-        let (_, qtype, atime, mtime, length, _) = parse9(&data, 0);
-        put_filestat(&mut caller, out_p as u32, qtype, atime, mtime, length, &path);
+        let (_, qtype, qpath, atime, mtime, length, _) = parse9(&data, 0);
+        put_filestat(&mut caller, out_p as u32, qtype, qpath, atime, mtime, length, &path);
         Ok(e::SUCCESS)
     })?;
     linker.func_wrap(m, "path_filestat_set_times",

@@ -1273,7 +1273,14 @@ teeth:
   of 'main'" *inside the header*, seven include levels deep. Plumbing the
   9P qid.path (falling back to a path hash) as the inode fixes it. The
   Rust host's shim (`hosts/macos/src/wasi.rs`) has the same `ino = 0` and
-  needs the same fix before it meets a compiler.
+  needs the same fix before it meets a compiler. **The Rust host
+  (`hosts/macos/src/wasi.rs`) carried the same `ino=0` and is fixed the same
+  way (2026-08-29): `parse9` now yields qid.path, `put_filestat` and
+  `fd_readdir`'s dirents write it (FNV-1a of the path when a server reports
+  no qid), and the suite pins it — wasitest stats two files and prints
+  `inodes: distinct`/`unreported`/`BROKEN`; init asserts not-BROKEN, so the
+  frozen shim's honest 0 self-skips while a regression fails on any host.
+  Verified: `distinct` on wasmtime, 134 PASS on all three hosts.**
 
 ## 12. Prior art: capability operating systems (researched 2026-08-29)
 
