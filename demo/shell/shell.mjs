@@ -23,10 +23,27 @@ if (!crossOriginIsolated) {
   setStatus("not isolated");
   const d = document.createElement("div");
   d.style.cssText = "padding:60px;max-width:34rem;margin:auto;user-select:text";
-  d.textContent = "This demo needs cross-origin isolation and this load did not " +
-    "get it. Reload the page normally — and avoid hard reloads (\u2318\u21e7R): " +
-    "they deliberately bypass the isolation worker, which guarantees this " +
-    "screen. (build BUILDSTAMP)";
+  const hasSW = "serviceWorker" in navigator;
+  const ctl = hasSW && navigator.serviceWorker.controller ? "controlled" : "uncontrolled";
+  const line1 = "This demo needs cross-origin isolation and this load did not get it.";
+  let advice = "Reload the page normally — and avoid hard reloads (\u2318\u21e7R), " +
+    "which deliberately bypass the isolation worker.";
+  if (!hasSW)
+    advice = "Service workers are unavailable in this profile — Lockdown Mode " +
+      "and some private windows do this, and the demo cannot isolate without them.";
+  d.textContent = line1 + " " + advice +
+    " If it persists: Safari \u2192 Settings \u2192 Privacy \u2192 Manage Website " +
+    "Data \u2192 remove christham.net, then visit again.";
+  const diag = document.createElement("div");
+  diag.style.cssText = "margin-top:14px;color:#7f8ea0;font-size:12px;user-select:text";
+  diag.textContent = `state: sw-api=${hasSW} page=${ctl} build=BUILDSTAMP`;
+  d.appendChild(diag);
+  if (hasSW)
+    navigator.serviceWorker.getRegistration().then((r) => {
+      const st = !r ? "none" : r.active ? "active" : r.waiting ? "waiting" : r.installing ? "installing" : "empty";
+      diag.textContent += ` registration=${st}`;
+      if (r && r.active) diag.textContent += ` script=${(r.active.scriptURL || "").split("/").pop()}`;
+    }).catch((e) => { diag.textContent += ` registration=error:${e && e.name}`; });
   desktop.appendChild(d);
   throw new Error("no SAB");
 }
