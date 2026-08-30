@@ -366,12 +366,19 @@ namespace; S3-shaped storage as a file server and the agent sandbox (M9's
 sub-profiles as "give an AI a computer without giving it the computer")
 remain in the tranche. The tripwire travels: a spec dialect grown past its
 few files means we have rebuilt YAML Kubernetes, and we stop.
-**Acceptance (local):** a spec directory instantiates a credentialed,
-namespaced process; `svc` holds replicas at N through kills, and `cat
-/svc/<name>/status` tells the truth; a posted service fans attaches across
-replicas. **(cluster):** one `svc` tree spans two kernels over TCP and a
-spec runs remotely with the caller's namespace imported — judged by the
-suite like everything else.
+**Acceptance (local): landed 2026-08-30** — the spec directory
+instantiates namespace, env, credential and cmd (`run(1)`); `svc(4)`
+holds replicas at N through kills (reconcile-on-read: reading status IS
+the probe), scales down by note, drains on stop; `sleep`/`kill`/`ps`/
+`mount`/`unmount` landed beside them; two suite tests, **145 on all
+three hosts including the frozen oracle — zero kernel changes**, the
+compensation thesis demonstrated. Deferred within the local stage,
+honestly: per-service `log` collection, the `health` file's use by the
+reconciler (liveness today is /proc walkability), and the LB — a posted
+service is one name but does not yet fan attaches across replicas.
+**(cluster):** one `svc` tree spans two kernels over TCP and a spec runs
+remotely with the caller's namespace imported — judged by the suite like
+everything else.
 Sequenced by demand once M7–M9 exist.
 
 ### Continuous — curation sweeps *(S each, standing)*

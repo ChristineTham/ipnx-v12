@@ -132,6 +132,45 @@ arres=`{@{
 }}
 if(~ $"arres arok) echo PASS 'ar: archives round-trip r/t/x/d, replacement lands'; if not fails=bad
 
+# run(1): a spec directory instantiates a process — M12's local stage.
+# The spec declares a namespace (built on the boot file), an environment,
+# a credential and a command; run detaches, declares, drops, execs.
+mkdir /tmp/s1
+cat /lib/namespace > /tmp/s1/namespace
+echo 'bind /lib/alt /n/sx' >> /tmp/s1/namespace
+echo 'GREETING=hello' > /tmp/s1/env
+echo webster > /tmp/s1/user
+echo cat > /tmp/s1/cmd
+echo /env/GREETING >> /tmp/s1/cmd
+echo /dev/user >> /tmp/s1/cmd
+echo /n/sx/motd >> /tmp/s1/cmd
+rout=`{run /tmp/s1}
+if(~ $"rout hellowebsterthe*private*view*motd) echo PASS 'run: a spec instantiates namespace, env, user and cmd'; if not fails=bad
+
+# svc(4): the control plane is a file server — start scales replicas up,
+# a killed replica is restarted (reading status reconciles), scale shrinks,
+# stop drains and removes. kubectl is cat and echo.
+mkdir /tmp/s2
+echo sleep > /tmp/s2/cmd
+echo 60 >> /tmp/s2/cmd
+svc &
+svcpid=$apid
+sleep 1
+mount svc /n/svc
+echo start web /tmp/s2 2 > /n/svc/ctl
+st1=`{cat /n/svc/web/status}
+kill $st1(6)
+sleep 1
+st2=`{cat /n/svc/web/status}
+svok=no
+if(~ $"st2 'want 2 have 2'* && ! ~ $"st2 *' '^$st1(6)^' '* && ! ~ $"st2 *' '^$st1(6)) svok=yes
+echo scale web 1 > /n/svc/ctl
+st3=`{cat /n/svc/web/status}
+echo stop web > /n/svc/ctl
+st4=`{ls /n/svc}
+if(~ $"st1 'want 2 have 2 pids'* && ~ $svok yes && ~ $"st3 'want 1 have 1'* && ~ $"st4 *ctl) echo PASS 'svc: start scales, a killed replica returns, scale shrinks, stop drains'; if not fails=bad
+kill $svcpid
+
 # M2, the namespace-file boot: the same file format that boots the system
 # reshapes a world at runtime — newns(file, cmd) clears and rebuilds from
 # TEXT, so editing the file rebinds with no recompile (the acceptance).

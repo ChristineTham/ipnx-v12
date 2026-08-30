@@ -108,6 +108,29 @@ snapshot, the guard, console, optional presentation), point it at the rootfs,
 and run the suite; `poc/supervisor/` is the executable statement of the
 contract to read alongside. A host is real when init exits 0.
 
+## Running a service (M12's local stage)
+
+A **process file** is a directory: `cmd` (path, then one argument per
+line), and optionally `namespace` (namespace(6) subset, applied whole —
+start from `/lib/namespace`), `packages` ("name [version]" per line,
+pkg-verified), `env` (`NAME=value`), `user`, `replicas`, `health`.
+`run /path/to/spec` instantiates it once. For supervision:
+
+```
+svc &                              # posts /srv/svc
+mount svc /n/svc
+echo start web /path/to/spec 3 > /n/svc/ctl
+cat /n/svc/web/status              # want 3 have 3 pids …  (reading reconciles)
+echo scale web 5 > /n/svc/ctl
+echo stop web > /n/svc/ctl
+```
+
+Replicas spawn `RFNOWAIT` (no zombies); a dead one is noticed because its
+`/proc/<pid>/status` no longer opens, and the reconciler replaces it — on
+every ctl write, every status read, and an idle tick. `kill <pid>` posts
+the note; `ps` lists everyone. The whole suite is userspace over the
+kernel's existing primitives — the frozen oracle runs it unmodified.
+
 ## Redeploying the demo
 
 The live demo ([christham.net/ipnx-v12](https://christham.net/ipnx-v12/)) is
