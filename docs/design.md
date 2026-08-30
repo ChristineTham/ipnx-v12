@@ -652,6 +652,46 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   universal; look = tapping the thing; execute = tapping the tag or
   ⌘Enter; the chords were always the clipboard.
 
+- **(2026-08-30) The compensation thesis: complexity grows where a
+  primitive is missing.** Christine's capstone over the dissolution
+  series, recorded in her words: "the real benefit of this is that we
+  are avoiding all the mistakes of linux, systemd, docker and
+  kubernetes. These are overly complex systems because they did not
+  have a per process namespace. We are not only living in the modern
+  ecosystem, we are simplifying and replacing it." The causal argument,
+  made precise so the claim can defend itself: **when a kernel lacks a
+  primitive, userspace grows an industry** — and every such industry
+  ships its own config dialect, its own daemon, and its own privilege
+  model. Linux kept the global filesystem view; namespaces arrived
+  piecemeal as `CLONE_` flags (2002–2013), root-only for a decade,
+  disjoint from the file model — so Docker exists to *assemble* them
+  (a privileged daemon, image formats to cache mutation, overlay
+  filesystems to fake composition); systemd's unit files grew dozens of
+  sandboxing directives (`PrivateTmp`, `ProtectHome`,
+  `RootDirectory`…), each a hand-cut slice of what one `bind` verb
+  gives uniformly, and imperative boot ordering that a declarative
+  namespace file does not need (M2); Kubernetes then re-glues what the
+  layer below fractured — pods to group processes namespaces would have
+  grouped, CNI to give pods what per-process `/net` gives, service
+  meshes to interpose what a 9P proxy does at the file layer,
+  ConfigMaps to inject what a bind injects. The venv/flatpak entry
+  (2026-08-29) was this same theorem's first instance; Docker and
+  Kubernetes are its industrial form. The scope of "replacing,"
+  reconciled with the ecosystem statement ("the web platform is our
+  VAX"): we adopt the *surfaces* — browser, wasm, serverless — and
+  simplify away the *middle* of the stack, the distro-systemd-docker-
+  kubernetes plumbing between hardware and surface. Two honesty
+  clauses, kept beside the claim: not all of that complexity is
+  compensation — metering (cgroups' quota half, our standing open
+  question), consensus (etcd exists because a cluster must *agree*;
+  `bind -a` over `/svc` trees is a union, not a quorum, and the
+  cluster stage owes this its real engineering answer), and hardware's
+  own mess are essential complexity we inherit like everyone else. And
+  the practitioners' temptation, named per virtue-ethics.md: those
+  systems' bulk also encodes operational scar tissue earned under load
+  we have not yet borne — we avoid their *structural* mistake, the
+  missing primitive; our own scars are still ahead.
+
 - **(2026-08-30) Containerisation and orchestration, planned: a Dockerfile
   is a process file, the orchestrator is a file server, kubectl is `cat`
   and `echo`.** Christine's directive, recorded in her words: "a
