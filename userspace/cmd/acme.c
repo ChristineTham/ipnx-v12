@@ -125,6 +125,7 @@ static Channel *mc;		/* Msg* */
 static Channel *pidc;		/* ulong */
 static ulong seq;
 static int lastinsk = -1;	/* typed-insert coalescing state */
+static int lastselk = -1;	/* last window with a body selection */
 static char aroot[NMAX];	/* acme's own directory (root/column execs) */
 static int fids[NFID], fidnode[NFID], fidopen[NFID];
 static uchar fsmsg[MSIZE9], fsout[MSIZE9];
@@ -427,7 +428,7 @@ paintdirty(int k)
 	on = w->stateseq != w->cleanseq;
 	if(w->dirty != on){
 		w->dirty = on;
-		snprint(a, sizeof a, "bg=%s\n", on ? "#000000" : "#eaffff");
+		snprint(a, sizeof a, "bg=%s\n", on ? "#000099" : "#ffffff");
 		nprint(base + 4, "attrs", a);
 	}
 	rebuildauto(k);
@@ -562,12 +563,16 @@ afteredit(char *t, long n)
 	char *p;
 
 	t[n] = 0;
-	p = strstr(t, "Edit");
+	p = strchr(t, '|');
 	if(p == nil){
-		c[0] = 0;
-		return c;
-	}
-	p += 4;
+		p = strstr(t, "Edit");
+		if(p == nil){
+			c[0] = 0;
+			return c;
+		}
+		p += 4;
+	} else
+		p++;
 	while(*p == ' ' || *p == '\t' || *p == '|')
 		p++;
 	for(i = 0; p[i] != 0 && p[i] != '\n' && i < CMAX - 1; i++)
@@ -774,12 +779,18 @@ mkcol(int c)
 	cbase = CBASE + CSTRIDE * c;
 	memset(col, 0, sizeof *col);
 	col->used = 1;
-	col->tlen = snprint(col->tag, sizeof col->tag, "New Delcol Sort | ");
-	snprint(b, sizeof b, "new %d stack\nnew %d edit\n", cbase, cbase + 1);
+	col->tlen = snprint(col->tag, sizeof col->tag, "New Cut Paste Snarf Sort Zerox Delcol ");
+	snprint(b, sizeof b, "new %d stack\nnew %d edit\nnew %d text\nnew %d stack\n",
+		cbase, cbase + 1, cbase + 2, cbase + 3);
 	write(ctlfd, b, strlen(b));
 	snprint(a, sizeof a, "parent=3\norder=%d\nprop=1\n", c + 1);
 	nprint(cbase, "attrs", a);
-	snprint(a, sizeof a, "parent=%d\nbg=#eaffff\norder=1\n", cbase);
+	snprint(a, sizeof a, "parent=%d\ndir=row\nbg=#eaffff\norder=1\n", cbase);
+	nprint(cbase + 3, "attrs", a);
+	snprint(a, sizeof a, "parent=%d\nbg=#8888cc\nprop=0\norder=1\n", cbase + 3);
+	nprint(cbase + 2, "attrs", a);
+	nprint(cbase + 2, "data", "  ");
+	snprint(a, sizeof a, "parent=%d\nbg=#eaffff\norder=2\n", cbase + 3);
 	nprint(cbase + 1, "attrs", a);
 	setnode(cbase + 1, col->tag, col->tlen);
 	active = c;
@@ -837,15 +848,14 @@ mkwin(int k, char *file, int mode)
 	w->col = active;
 	dird = mode == MKREAD && file != nil && isdir(file) == 1;
 	if(dird)
-		w->nlen = snprint(w->name, sizeof w->name, "%s%s Del Get",
+		w->nlen = snprint(w->name, sizeof w->name, "%s%s Del Snarf Get Look",
 			file, file[strlen(file) - 1] == '/' ? "" : "/");
 	else
-		w->nlen = snprint(w->name, sizeof w->name, "%s Del Get",
+		w->nlen = snprint(w->name, sizeof w->name, "%s Del Snarf Get Look Edit",
 			file == nil ? "" : file);
 	w->autopos = w->nlen;
 	w->autolen = 0;
-	w->nlen += snprint(w->name + w->nlen, sizeof w->name - w->nlen,
-		dird ? " | " : " Edit | ");
+	w->nlen += snprint(w->name + w->nlen, sizeof w->name - w->nlen, " | ");
 	if(mode == MKREAD && file != nil){
 		n = dird ? listdir(file, w->body, sizeof w->body)
 			 : readfile(file, w->body, sizeof w->body);
@@ -856,16 +866,16 @@ mkwin(int k, char *file, int mode)
 		"new %d stack\nnew %d stack\nnew %d text\nnew %d edit\nnew %d edit\n",
 		base, base + 3, base + 4, base + 1, base + 2);
 	write(ctlfd, b, n);
-	snprint(a, sizeof a, "parent=%d\norder=%d\n", CBASE + CSTRIDE * active, 2 + k);
+	snprint(a, sizeof a, "parent=%d\norder=%d\nprop=1\n", CBASE + CSTRIDE * active, 2 + k);
 	nprint(base, "attrs", a);
 	snprint(a, sizeof a, "parent=%d\ndir=row\nbg=#eaffff\norder=1\n", base);
 	nprint(base + 3, "attrs", a);
-	snprint(a, sizeof a, "parent=%d\nbg=#eaffff\nprop=0\norder=1\n", base + 3);
+	snprint(a, sizeof a, "parent=%d\nbg=#ffffff\nprop=0\norder=1\n", base + 3);
 	nprint(base + 4, "attrs", a);
 	nprint(base + 4, "data", "  ");
 	snprint(a, sizeof a, "parent=%d\nbg=#eaffff\norder=2\n", base + 3);
 	nprint(base + 1, "attrs", a);
-	snprint(a, sizeof a, "parent=%d\nbg=#ffffea\norder=2\n", base);
+	snprint(a, sizeof a, "parent=%d\nbg=#ffffea\norder=2\nprop=1\n", base);
 	nprint(base + 2, "attrs", a);
 	setnode(base + 1, w->name, w->nlen);
 	setnode(base + 2, w->body, w->blen);
@@ -1291,6 +1301,10 @@ doexecute(int k, int c, char *word, char *args, int fromev)
 			if(active == c)
 				for(active = 0; active < MAXCOL && !cols[active].used; active++)
 					;
+		} else if(strcmp(word, "Cut") == 0 || strcmp(word, "Paste") == 0
+		   || strcmp(word, "Snarf") == 0 || strcmp(word, "Zerox") == 0){
+			if(lastselk >= 0 && wns[lastselk].used)
+				doexecute(lastselk, -1, word, args, fromev);
 		} else if(strcmp(word, "Sort") == 0){
 			int ks[MAXWIN], nk, j, t;
 			char a[64];
@@ -2154,8 +2168,8 @@ threadmain(int argc, char *argv[])
 
 	fprint(ctlfd, "new 1 edit\nnew 3 stack\n");
 	nprint(1, "attrs", "bg=#eaffff\norder=1\n");
-	nprint(1, "data", "Newcol Putall Dump Load Exit | ");
-	nprint(3, "attrs", "order=2\ndir=row\n");
+	nprint(1, "data", "Newcol Kill Putall Dump Exit ");
+	nprint(3, "attrs", "order=2\ndir=row\nprop=1\n");
 	mkcol(0);
 
 	k = 0;
@@ -2308,6 +2322,7 @@ threadmain(int argc, char *argv[])
 				w->sq1 = atol(f[3]);
 				if(w->sq0 > w->blen) w->sq0 = w->blen;
 				if(w->sq1 > w->blen) w->sq1 = w->blen;
+				lastselk = k;
 				break;
 			}
 			if(nf >= 4 && strcmp(f[0], "insert") == 0 && (off == 1 || off == 2)){

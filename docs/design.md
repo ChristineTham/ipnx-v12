@@ -618,6 +618,37 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-31) Parity is measured against the running reference.**
+  Christine: "I am comparing the acme from the demo vs acme from
+  plan9port, and there seem to be differences" — and she separated the
+  problems: parity first; the touchscreen/HIG redesign is PARKED for a
+  full design-thinking session (mouse chords and discoverability
+  belong there; nothing of it ships in this pass). Method, per the
+  house rule that measurement beats memory: her plan9port acme was
+  launched beside the demo, driven through its own /mnt/acme file
+  interface (dirty, selection, tag states staged with 9p), and
+  captured by CGWindowID — the screenshots are the spec. Adopted from
+  the reference: the tag seeds (root `Newcol Kill Putall Dump Exit`,
+  column `New Cut Paste Snarf Sort Zerox Delcol`, window
+  `Del Snarf Get Look Edit |` — column Cut/Paste/Snarf/Zerox act on
+  the last selection); Undo/Put appearing between the fixed words and
+  the bar; the Medblue dirty box and white clean box on a Purpleblue
+  column button (draw.h's own constants); black hairline separators
+  and no gaps; the proportional Lucida face; acme's selection colours
+  (#eeee9e bodies, #9eeeee tags); a static chunky caret; and the
+  screen shape — columns fill the window, windows divide the column,
+  bodies clip and scroll (the canvas spec grew column-prop for it).
+  The pass also caught two real presenter bugs the comparison exposed:
+  the window chrome's user-select:none had made native selection
+  impossible inside every canvas view (sweeps, double-click,
+  select-to-replace all dead — very likely the felt "difference"),
+  and the caret repaint on mousedown destroyed the browser's selection
+  anchor mid-gesture; both fixed (select on mouseup, selection owned
+  by the view). Still divergent, stamped: the scrollbar sits right
+  (its colours are acme's), no drag-layout between columns yet, look
+  warps focus not the pointer, Look sits before the bar (the
+  tag-scratch owns Edit's arguments), and tag wrap is the surface's.
+
 - **(2026-08-30) The paper is the yardstick: acme answers its own
   literature.** Christine, after the succession: "I still feel like
   acme does not behave like real acme. Have you read the acme paper? Do

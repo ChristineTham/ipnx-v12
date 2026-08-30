@@ -63,7 +63,11 @@ structure lives in attrs, not filesystem nesting, so the whole UI greps.
 **attrs** (v0 set as landed, all optional): `parent=<id>` `order=<n>`
 (siblings sort by order, ties by id) · stack: `dir=col|row`; children of
 a `row` share width by `prop` — `prop=0` hugs its content, any other
-value is the flex share (default 1) · any content node: `bg=<colour>`
+value is the flex share (default 1) · children of a *column* share
+HEIGHT by `prop` the same way, except the default is to hug (added
+2026-08-31, the plan9port parity pass: acme fills the screen, windows
+divide their column, bodies clip and scroll — but consoles and plots
+keep growing naturally, so columns share only when asked) · any content node: `bg=<colour>`
 (acme-today was the consumer that earned styling its first attr; the
 tags' `#eaffff` and bodies' `#ffffea` ride it) · path:
 `viewbox="x y w h"` `stroke=<colour>` `fill=<colour>` `width=<n>` · any

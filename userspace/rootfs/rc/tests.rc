@@ -251,8 +251,9 @@ if(~ $"cnok virtual){
 	echo 'event execute 11 0 0 Put' > $edp/ctl
 	sleep 1
 	edf=`{cat /tmp/ed1}
-	# Edit takes the rest of the tag line: append the command, execute the word
-	echo 'event insert 11 30 %20,x/[a-z]+ised/c/POLISHED/' > $edp/ctl
+	# Edit takes the scratch after the bar: append the command (99 clamps
+	# to the tag's end), execute the word
+	echo 'event insert 11 99 %20,x/[a-z]+ised/c/POLISHED/' > $edp/ctl
 	echo 'event execute 11 0 0 Edit' > $edp/ctl
 	echo 'event execute 11 0 0 Put' > $edp/ctl
 	sleep 1

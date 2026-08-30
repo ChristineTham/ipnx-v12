@@ -56,8 +56,8 @@ function caret(v) {
   v.caretOff = off;
   const c = document.createElement("span");
   c.className = "cvcaret";
-  c.textContent = "▏";
-  c.style.cssText = "animation:cvblink 1s steps(1) infinite;color:#334;";
+  c.style.cssText = "display:inline-block;width:2px;height:1.05em;background:#000;" +
+    "vertical-align:text-bottom;margin:0 -1px;";
   ed.el.replaceChildren(
     document.createTextNode(t.slice(0, off)), c,
     document.createTextNode(t.slice(off)));
@@ -66,7 +66,14 @@ function caret(v) {
 if (typeof document !== "undefined" && !document.getElementById("cvcaretstyle")) {
   const st = document.createElement("style");
   st.id = "cvcaretstyle";
-  st.textContent = "@keyframes cvblink { 50% { opacity: 0; } }";
+  // acme's own selection colours (acme.c:862,869 via draw.h): darker
+  // yellow in bodies, grey-green in tags — keyed by the node's bg
+  st.textContent =
+    '[data-cvbg="#ffffea"]::selection,[data-cvbg="#ffffea"] *::selection{background:#eeee9e;}' +
+    '[data-cvbg="#eaffff"]::selection,[data-cvbg="#eaffff"] *::selection{background:#9eeeee;}' +
+    '.cvscroll::-webkit-scrollbar{width:12px;}' +
+    '.cvscroll::-webkit-scrollbar-track{background:#99994c;}' +
+    '.cvscroll::-webkit-scrollbar-thumb{background:#ffffea;}';
   document.head.appendChild(st);
 }
 
@@ -92,19 +99,36 @@ function render(v, snap) {
       el.style.display = "flex";
       const row = n.attrs.dir === "row";
       el.style.flexDirection = row ? "row" : "column";
-      el.style.gap = "6px";
       el.style.alignItems = "stretch";
       el.style.minWidth = "0";
       el.style.minHeight = "0";
       if (n.attrs.bg) el.style.background = n.attrs.bg;
-      for (const k of kids.get(n.id) ?? []) {
+      const ks = kids.get(n.id) ?? [];
+      ks.forEach((k, i) => {
         const kel = build(k);
+        const pr = k.attrs.prop;
         if (row) {
-          const pr = cvProp(k);
-          kel.style.flex = pr === "0" ? "0 0 auto" : `${+pr || 1} 1 0`; // share, or hug
+          const rp = pr ?? "1";
+          kel.style.flex = rp === "0" ? "0 0 auto" : `${+rp || 1} 1 0`; // share, or hug
+        } else if (pr !== undefined) {
+          // columns share height only when asked — acme's screen shape
+          kel.style.flex = pr === "0" ? "0 0 auto" : `${+pr || 1} 1 0`;
+          kel.style.minHeight = "0";
+          if (k.kind === "edit" || k.kind === "text") {
+            kel.style.overflow = "auto";
+            kel.classList.add("cvscroll");
+          } else kel.style.overflow = "hidden";
+        }
+        // hairlines, the reference's black separators: always between a
+        // column's children; between a row's unless a side hugs (the box)
+        if (i > 0) {
+          const prevHug = (ks[i - 1].attrs.prop ?? "1") === "0";
+          const curHug = (pr ?? "1") === "0";
+          if (!row) kel.style.borderTop = "1px solid #000";
+          else if (!prevHug && !curHug) kel.style.borderLeft = "1px solid #000";
         }
         el.appendChild(kel);
-      }
+      });
     } else if (n.kind === "path") {
       el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       el.setAttribute("viewBox", (n.attrs.viewbox ?? "0 0 100 100").replace(/"/g, ""));
@@ -174,23 +198,25 @@ function render(v, snap) {
           v.send(`look ${n.id} ${wa.q0} ${wa.q1} ${cvq(wa.word)}`);
         });
       }
+      if (n.kind === "edit" || n.kind === "text")
+        el.dataset.cvbg = n.attrs.bg ?? "";
       if (n.kind === "edit") {
         el.style.cssText = "white-space:pre-wrap;margin:0;outline:none;min-height:1.4em;" +
-          "overflow-wrap:anywhere;min-width:0;" +
+          "overflow-wrap:anywhere;min-width:0;padding:0 1px 0 3px;" +
+          "font:500 14px/1.3 'Lucida Grande','Lucida Sans Unicode',system-ui,sans-serif;" +
           (n.attrs.bg ? "background:" + n.attrs.bg + ";" : "");
         el.dataset.cvid = n.id;                      // reportSel finds the node
         v.edit = { el, id: n.id };                   // the delegated keyboard's target
         el.addEventListener("mousedown", (e) => {
           e.stopPropagation();
           v.edit = { el, id: n.id };
+          // record the caret target but do NOT repaint the DOM here — a
+          // rebuild mid-gesture destroys the browser's selection anchor,
+          // killing sweeps and double-click word selection (measured)
           const r = document.caretRangeFromPoint?.(e.clientX, e.clientY);
-          if (r && r.startContainer.nodeType === 3 && r.startContainer.parentNode === el) {
-            v.caretOff = offOf(el, r.startContainer, r.startOffset);
-          } else {
-            v.caretOff = cvPlain(el).length;
-          }
-          caret(v);
-          reportSel(v);
+          v._pendOff = (r && r.startContainer.nodeType === 3 && r.startContainer.parentNode === el)
+            ? offOf(el, r.startContainer, r.startOffset)
+            : cvPlain(el).length;
         });
       }
       if (action)
@@ -203,7 +229,7 @@ function render(v, snap) {
   };
   const root = byid.get(0);
   const rootEl = root ? build(root) : document.createTextNode("");
-  if (root) rootEl.style.minHeight = "100%";
+  if (root) { rootEl.style.minHeight = "100%"; rootEl.style.height = "100%"; }
   v.el.replaceChildren(rootEl);
 
   // the app steered the selection: sel=q0,q1 on an edit node (byte
@@ -288,7 +314,22 @@ function reportSel(v) {
 }
 
 function installHandlers(v) {
-  v.el.addEventListener("mouseup", () => reportSel(v));
+  v.el.addEventListener("mouseup", () => {
+    // the caret paints at gesture end, and only when no sweep formed
+    const sel = window.getSelection();
+    if (v._pendOff !== undefined && v.edit && (!sel || sel.isCollapsed)) {
+      v.caretOff = v._pendOff;
+      caret(v);
+    }
+    v._pendOff = undefined;
+    reportSel(v);
+  });
+  // when the native selection collapses (any click, anywhere), forget
+  // which sel values were applied — a repeated look re-highlights
+  document.addEventListener("selectionchange", () => {
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) v._appliedSel.clear();
+  });
   v.el.addEventListener("copy", () => {
     const t = window.getSelection()?.toString() ?? "";
     if (t) v.snarf?.(t);                             // /dev/snarf hears the gesture
@@ -411,7 +452,9 @@ export function createCanvasView({ mount, send, snarf }) {
   v.el = document.createElement("div");
   v.el.tabIndex = 0;
   v.el.style.cssText = "position:absolute;left:0;right:0;bottom:0;top:30px;overflow:auto;" +
-    "background:#fff;color:#111;font:13px/1.45 system-ui,sans-serif;padding:8px;outline:none;";
+    "background:#fff;color:#111;outline:none;" +
+    "-webkit-user-select:text;user-select:text;" +   // the chrome's none stops here
+    "font:500 14px/1.3 'Lucida Grande','Lucida Sans Unicode',system-ui,sans-serif;";
   mount.appendChild(v.el);
   setTimeout(() => v.el.focus(), 0);                 // a new view takes the keyboard
   installHandlers(v);
