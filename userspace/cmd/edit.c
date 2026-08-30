@@ -31,6 +31,7 @@ typedef struct Wn Wn;
 struct Wn {
 	int used;
 	int col;			/* which column holds it */
+	int dirty;			/* the paper's black box, honestly tracked */
 	char name[NMAX];
 	long nlen;
 	char body[BMAX];
@@ -318,17 +319,39 @@ mkwin(int k, char *file)
 		if(n >= 0)
 			w->blen = n;
 	}
-	n = snprint(b, sizeof b, "new %d stack\nnew %d edit\nnew %d edit\n",
-		base, base + 1, base + 2);
+	n = snprint(b, sizeof b,
+		"new %d stack\nnew %d stack\nnew %d text\nnew %d edit\nnew %d edit\n",
+		base, base + 3, base + 4, base + 1, base + 2);
 	write(ctlfd, b, n);
 	snprint(a, sizeof a, "parent=%d\norder=%d\n", CBASE + CSTRIDE * active, 2 + k);
 	nprint(base, "attrs", a);
-	snprint(a, sizeof a, "parent=%d\nbg=#eaffff\norder=1\n", base);
+	snprint(a, sizeof a, "parent=%d\ndir=row\nbg=#eaffff\norder=1\n", base);
+	nprint(base + 3, "attrs", a);
+	snprint(a, sizeof a, "parent=%d\nbg=#eaffff\nprop=0\norder=1\n", base + 3);
+	nprint(base + 4, "attrs", a);
+	nprint(base + 4, "data", "  ");
+	snprint(a, sizeof a, "parent=%d\nbg=#eaffff\norder=2\n", base + 3);
 	nprint(base + 1, "attrs", a);
 	snprint(a, sizeof a, "parent=%d\nbg=#ffffea\norder=2\n", base);
 	nprint(base + 2, "attrs", a);
 	setnode(base + 1, w->name, w->nlen);
 	setnode(base + 2, w->body, w->blen);
+}
+
+/* the black box: bg flips on the tiny node beside the tag */
+static void
+setdirty(int k, int on)
+{
+	Wn *w = &wns[k];
+	int base = BASE + STRIDE * k;
+	char a[64];
+
+	if(w->dirty == on)
+		return;
+	w->dirty = on;
+	snprint(a, sizeof a, "bg=%s\n", on ? "#000000" : "#eaffff");
+	nprint(base + 4, "attrs", a);
+	fprint(ctlfd, "sync\n");
 }
 
 static int
@@ -392,7 +415,7 @@ main(int argc, char *argv[])
 	/* the root tag — editable, like every tag — over a ROW of columns */
 	fprint(ctlfd, "new 1 edit\nnew 3 stack\n");
 	nprint(1, "attrs", "bg=#eaffff\norder=1\n");
-	nprint(1, "data", "Newcol Putall Exit | ");
+	nprint(1, "data", "Newcol Putall Dump Load Exit | ");
 	nprint(3, "attrs", "order=2\ndir=row\n");
 	mkcol(0);
 
@@ -447,6 +470,34 @@ main(int argc, char *argv[])
 						write(fd, wns[k].body, wns[k].blen);
 						close(fd);
 					}
+				}
+			} else if(strcmp(word, "Dump") == 0){
+				fd = create("/tmp/edit.dump", OWRITE, 0644);
+				if(fd >= 0){
+					for(k = 0; k < MAXWIN; k++){
+						if(!wns[k].used)
+							continue;
+						fn = firstword(wns[k].name, wns[k].nlen, &fl);
+						if(fl > 0 && fn[0] != '|')
+							fprint(fd, "%s\n", fn);
+					}
+					close(fd);
+				}
+			} else if(strcmp(word, "Load") == 0){
+				char db[2048], *dl[32];
+				int nd, k2;
+				n = readfile("/tmp/edit.dump", db, sizeof db);
+				if(n > 0){
+					nd = getfields(db, dl, 32, 1, "\n");
+					for(i = 0; i < nd; i++){
+						if(dl[i][0] == 0)
+							continue;
+						k2 = freewin();
+						if(k2 < 0)
+							break;
+						mkwin(k2, dl[i]);
+					}
+					fprint(ctlfd, "sync\n");
 				}
 			} else if(strcmp(word, "Exit") == 0)
 				break;
@@ -522,6 +573,8 @@ main(int argc, char *argv[])
 			memmove(buf + q0, txt, d);
 			*len += d;
 			buf[*len] = 0;
+			if(off == 2)
+				setdirty(k, 1);
 			continue;
 		}
 		if(nf >= 4 && strcmp(f[0], "delete") == 0 && (off == 1 || off == 2)){
@@ -534,35 +587,75 @@ main(int argc, char *argv[])
 			memmove(buf + q0, buf + q1, *len - q1);
 			*len -= q1 - q0;
 			buf[*len] = 0;
+			if(off == 2)
+				setdirty(k, 1);
+			continue;
+		}
+		if(nf >= 5 && strcmp(f[0], "look") == 0){
+			/* acme's B3 on a path: open it in a window (the active
+			 * column). In-window literal search is the presenter's
+			 * half — a pure view operation. */
+			unq(f[4], txt, sizeof txt);
+			if(txt[0] == '/'){
+				int k2 = freewin();
+				if(k2 >= 0 && access(txt, AREAD) >= 0){
+					mkwin(k2, txt);
+					fprint(ctlfd, "sync\n");
+				}
+			}
 			continue;
 		}
 		if(word == nil || off != 1)
 			continue;
-		/* a word executed in this window's tag */
-		if(strcmp(word, "Get") == 0){
-			fn = firstword(w->name, w->nlen, &fl);
-			n = readfile(fn, w->body, sizeof w->body);
-			if(n >= 0){
-				w->blen = n;
+		/* executed in this window's tag: a word, or a SWEPT command
+		 * whose first word names the verb and the rest is arguments —
+		 * the paper's own execution model */
+		{
+			char *args = word;
+			while(*args != 0 && *args != ' ' && *args != '\t')
+				args++;
+			if(*args != 0)
+				*args++ = 0;
+			while(*args == ' ' || *args == '\t')
+				args++;
+			if(strcmp(word, "Get") == 0){
+				fn = firstword(w->name, w->nlen, &fl);
+				n = readfile(fn, w->body, sizeof w->body);
+				if(n >= 0){
+					w->blen = n;
+					setnode(base + 2, w->body, w->blen);
+					setdirty(k, 0);
+					fprint(ctlfd, "sync\n");
+				}
+			} else if(strcmp(word, "Put") == 0){
+				fn = firstword(w->name, w->nlen, &fl);
+				if(fl == 0)
+					continue;
+				fd = create(fn, OWRITE, 0644);
+				if(fd >= 0){
+					write(fd, w->body, w->blen);
+					close(fd);
+					setdirty(k, 0);
+				}
+			} else if(strcmp(word, "Del") == 0){
+				fprint(ctlfd, "del %d\nsync\n", base);
+				w->used = 0;
+			} else if(strcmp(word, "Zerox") == 0){
+				int k2 = freewin();
+				if(k2 >= 0){
+					fn = firstword(w->name, w->nlen, &fl);
+					mkwin(k2, fl ? fn : nil);
+					memmove(wns[k2].body, w->body, w->blen);
+					wns[k2].blen = w->blen;
+					setnode(BASE + STRIDE * k2 + 2, wns[k2].body, wns[k2].blen);
+					fprint(ctlfd, "sync\n");
+				}
+			} else if(strcmp(word, "Edit") == 0){
+				runedit(w, *args != 0 ? args : afteredit(w->name, w->nlen));
 				setnode(base + 2, w->body, w->blen);
+				setdirty(k, 1);
 				fprint(ctlfd, "sync\n");
 			}
-		} else if(strcmp(word, "Put") == 0){
-			fn = firstword(w->name, w->nlen, &fl);
-			if(fl == 0)
-				continue;
-			fd = create(fn, OWRITE, 0644);
-			if(fd >= 0){
-				write(fd, w->body, w->blen);
-				close(fd);
-			}
-		} else if(strcmp(word, "Del") == 0){
-			fprint(ctlfd, "del %d\nsync\n", base);
-			w->used = 0;
-		} else if(strcmp(word, "Edit") == 0){
-			runedit(w, afteredit(w->name, w->nlen));
-			setnode(base + 2, w->body, w->blen);
-			fprint(ctlfd, "sync\n");
 		}
 	}
 	snprint(path, sizeof path, "%s/wctl", wdir);

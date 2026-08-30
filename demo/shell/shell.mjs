@@ -362,15 +362,26 @@ function enterDrawMode(gw) {
 // (presenter-local echo, acme's discipline) and report v0 append-only
 // insert events. Full diff-reporting edit arrives with console-today.
 const cvenc = new TextEncoder();
+function cvPlain(el) {
+  let t = "";
+  for (const nd of el.childNodes) if (nd.nodeType === 3) t += nd.nodeValue;
+  return t;
+}
 function renderCaret(gw) {
   gw.cvEl?.querySelectorAll(".cvcaret").forEach((c) => c.remove());
   const ed = gw.cvEdit;
   if (!ed || !ed.el.isConnected) return;
+  const t = cvPlain(ed.el);
+  let off = gw.cvCaretOff ?? t.length;
+  if (off > t.length) off = t.length;
+  gw.cvCaretOff = off;
   const c = document.createElement("span");
   c.className = "cvcaret";
   c.textContent = "\u258f";                        // ▏ a thin block
   c.style.cssText = "animation:cvblink 1s steps(1) infinite;color:#334;";
-  ed.el.appendChild(c);
+  ed.el.replaceChildren(
+    document.createTextNode(t.slice(0, off)), c,
+    document.createTextNode(t.slice(off)));
 }
 if (!document.getElementById("cvcaretstyle")) {
   const st = document.createElement("style");
@@ -379,6 +390,7 @@ if (!document.getElementById("cvcaretstyle")) {
   document.head.appendChild(st);
 }
 const cvq = (t) => t.replace(/%/g, "%25").replace(/ /g, "%20").replace(/\n/g, "%0A");
+const cv_prop = (n) => n.attrs.prop ?? "1";
 const cvblen = (t) => cvenc.encode(t).length;
 function renderCanvas(gw, snap) {
   if (!gw.cvEl) {
@@ -394,27 +406,84 @@ function renderCanvas(gw, snap) {
     setTimeout(() => gw.cvEl.focus(), 0);   // the new window takes the keyboard
     // one delegated keyboard for the window's edit node (v0: the console's
     // single transcript) — the container holds focus, the edit receives
+    gw.cvEl.addEventListener("paste", (e) => {
+      const ed = gw.cvEdit;
+      if (!ed) return;
+      const txt = e.clipboardData?.getData("text/plain") ?? "";
+      if (!txt) return;
+      e.preventDefault();
+      const t = cvPlain(ed.el);
+      const off = Math.min(gw.cvCaretOff ?? t.length, t.length);
+      const q0 = cvblen(t.slice(0, off));
+      gw.cvCaretOff = off + txt.length;
+      ed.el.textContent = t.slice(0, off) + txt + t.slice(off);
+      renderCaret(gw);
+      wsys?.canvasEvent(gw.id, `insert ${ed.id} ${q0} ${cvq(txt)}`);
+    });
     gw.cvEl.addEventListener("keydown", (e) => {
       const ed = gw.cvEdit;
       if (!ed || e.metaKey || e.ctrlKey) return;
-      const plain = () => {                          // text without the caret
-        let t = "";
-        for (const nd of ed.el.childNodes)
-          if (nd.nodeType === 3) t += nd.nodeValue;
-        return t;
+      const t = cvPlain(ed.el);
+      let off = Math.min(gw.cvCaretOff ?? t.length, t.length);
+      // a live selection inside the target: typing replaces it, backspace
+      // deletes it — B1 sweep is the native selection, as the input
+      // convention promised
+      const selRange = () => {
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+        const r = sel.getRangeAt(0);
+        if (!ed.el.contains(r.startContainer) || !ed.el.contains(r.endContainer)) return null;
+        const offOf = (container, o) => {
+          let x = 0;
+          for (const nd of ed.el.childNodes) {
+            if (nd === container) return x + o;
+            if (nd.nodeType === 3) x += nd.nodeValue.length;
+          }
+          return x;
+        };
+        let a = offOf(r.startContainer, r.startOffset);
+        let b = offOf(r.endContainer, r.endOffset);
+        if (a > b) [a, b] = [b, a];
+        return a === b ? null : { a, b };
       };
-      const setText = (t) => {
-        ed.el.textContent = t;
+      const delSel = (sr) => {
+        const q0 = cvblen(t.slice(0, sr.a));
+        const q1 = cvblen(t.slice(0, sr.b));
+        wsys?.canvasEvent(gw.id, `delete ${ed.id} ${q0} ${q1}`);
+        window.getSelection()?.removeAllRanges();
+        return t.slice(0, sr.a) + t.slice(sr.b);
+      };
+      const setText = (nt, noff) => {
+        gw.cvCaretOff = noff;
+        ed.el.textContent = nt;
         renderCaret(gw);
       };
+      const lineNav = (dir) => {
+        const ls = t.slice(0, off).split("\n");
+        const row = ls.length - 1;
+        const col = ls[row].length;
+        const all = t.split("\n");
+        const nr = row + dir;
+        if (nr < 0 || nr >= all.length) return off;
+        let base2 = 0;
+        for (let i2 = 0; i2 < nr; i2++) base2 += all[i2].length + 1;
+        return base2 + Math.min(col, all[nr].length);
+      };
+      if (e.key === "ArrowLeft") { e.preventDefault(); gw.cvCaretOff = Math.max(0, off - 1); renderCaret(gw); return; }
+      if (e.key === "ArrowRight") { e.preventDefault(); gw.cvCaretOff = Math.min(t.length, off + 1); renderCaret(gw); return; }
+      if (e.key === "ArrowUp") { e.preventDefault(); gw.cvCaretOff = lineNav(-1); renderCaret(gw); return; }
+      if (e.key === "ArrowDown") { e.preventDefault(); gw.cvCaretOff = lineNav(1); renderCaret(gw); return; }
+      if (e.key === "Home") { e.preventDefault(); gw.cvCaretOff = t.lastIndexOf("\n", off - 1) + 1; renderCaret(gw); return; }
+      if (e.key === "End") { e.preventDefault(); const nx = t.indexOf("\n", off); gw.cvCaretOff = nx < 0 ? t.length : nx; renderCaret(gw); return; }
       if (e.key === "Backspace") {
         e.preventDefault();
-        const t = plain();
-        if (!t.length) return;
-        const last = t.slice(-1);
-        setText(t.slice(0, -1));                     // presenter-local echo
-        const end = cvblen(plain());
-        wsys?.canvasEvent(gw.id, `delete ${ed.id} ${end} ${end + cvblen(last)}`);
+        const sr = selRange();
+        if (sr) { setText(delSel(sr), sr.a); return; }
+        if (off === 0) return;
+        const q0 = cvblen(t.slice(0, off - 1));
+        const q1 = cvblen(t.slice(0, off));
+        setText(t.slice(0, off - 1) + t.slice(off), off - 1);  // local echo
+        wsys?.canvasEvent(gw.id, `delete ${ed.id} ${q0} ${q1}`);
         return;
       }
       let ch = null;
@@ -422,10 +491,13 @@ function renderCanvas(gw, snap) {
       else if (e.key.length === 1) ch = e.key;
       if (ch === null) return;
       e.preventDefault();
-      const at = cvblen(plain());
-      setText(plain() + ch);                         // presenter-local echo
-      ed.el.scrollIntoView?.(false);
-      wsys?.canvasEvent(gw.id, `insert ${ed.id} ${at} ${cvq(ch)}`);
+      let t2 = t;
+      let off2 = off;
+      const sr = selRange();
+      if (sr) { t2 = delSel(sr); off2 = sr.a; }
+      const q0 = cvblen(t2.slice(0, off2));
+      setText(t2.slice(0, off2) + ch + t2.slice(off2), off2 + 1);   // local echo
+      wsys?.canvasEvent(gw.id, `insert ${ed.id} ${q0} ${cvq(ch)}`);
     });
   }
   gw.cvEdit = null;
@@ -445,10 +517,21 @@ function renderCanvas(gw, snap) {
     if (n.kind === "stack") {
       el = document.createElement("div");
       el.style.display = "flex";
-      el.style.flexDirection = n.attrs.dir === "row" ? "row" : "column";
+      const row = n.attrs.dir === "row";
+      el.style.flexDirection = row ? "row" : "column";
       el.style.gap = "6px";
+      el.style.alignItems = "stretch";
+      el.style.minWidth = "0";
+      el.style.minHeight = "0";
       if (n.attrs.bg) el.style.background = n.attrs.bg;
-      for (const k of kids.get(n.id) ?? []) el.appendChild(build(k));
+      for (const k of kids.get(n.id) ?? []) {
+        const kel = build(k);
+        if (row) {
+          const pr = cv_prop(k);
+          kel.style.flex = pr === "0" ? "0 0 auto" : `${+pr || 1} 1 0`;  // share, or hug
+        }
+        el.appendChild(kel);
+      }
     } else if (n.kind === "path") {
       el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
       el.setAttribute("viewBox", (n.attrs.viewbox ?? "0 0 100 100").replace(/"/g, ""));
@@ -485,25 +568,64 @@ function renderCanvas(gw, snap) {
           if (a === b) return null;
           return { word: t.slice(a, b), q0: cvblen(t.slice(0, a)), q1: cvblen(t.slice(0, b)) };
         };
+        const sweepText = () => {
+          const sel = window.getSelection();
+          if (!sel || sel.isCollapsed || !el.contains(sel.anchorNode)) return null;
+          const t = sel.toString();
+          return t.trim().length ? t.trim() : null;
+        };
         el.addEventListener("mousedown", (e) => {
           if (e.altKey || e.button === 1) {
-            const wa = wordAt(e);
+            // execute: the swept selection if there is one (arguments and
+            // all — the paper's model), else the word under the pointer
+            const sw = sweepText();
+            const wa = sw ? { word: sw, q0: 0, q1: cvblen(sw) } : wordAt(e);
             if (wa) {
               e.preventDefault();
               e.stopPropagation();
-              const verb = e.button === 1 ? "look" : "execute";
-              wsys?.canvasEvent(gw.id, `${verb} ${n.id} ${wa.q0} ${wa.q1} ${cvq(wa.word)}`);
+              wsys?.canvasEvent(gw.id, `execute ${n.id} ${wa.q0} ${wa.q1} ${cvq(wa.word)}`);
             }
           }
+        });
+        el.addEventListener("contextmenu", (e) => {
+          // B3: look. In-window literal search is the presenter's half —
+          // jump the caret to the next occurrence and show it; the app
+          // hears the event too (paths open windows).
+          const wa = wordAt(e);
+          if (!wa) return;
+          e.preventDefault();
+          const t = cvPlain(el);
+          const from = (gw.cvEdit?.el === el ? (gw.cvCaretOff ?? 0) : 0) + 1;
+          let at = t.indexOf(wa.word, from);
+          if (at < 0) at = t.indexOf(wa.word);
+          if (at >= 0 && n.kind === "edit") {
+            gw.cvEdit = { el, id: n.id };
+            gw.cvCaretOff = at;
+            renderCaret(gw);
+            el.querySelector(".cvcaret")?.scrollIntoView?.({ block: "center" });
+          }
+          wsys?.canvasEvent(gw.id, `look ${n.id} ${wa.q0} ${wa.q1} ${cvq(wa.word)}`);
         });
       }
       if (n.kind === "edit") {
         el.style.cssText = "white-space:pre-wrap;margin:0;outline:none;min-height:1.4em;" +
+          "overflow-wrap:anywhere;min-width:0;" +
           (n.attrs.bg ? "background:" + n.attrs.bg + ";" : "");
         gw.cvEdit = { el, id: n.id };                // the delegated keyboard's target
         el.addEventListener("mousedown", (e) => {
           e.stopPropagation();
           gw.cvEdit = { el, id: n.id };
+          const r = document.caretRangeFromPoint?.(e.clientX, e.clientY);
+          if (r && r.startContainer.nodeType === 3 && r.startContainer.parentNode === el) {
+            let off = r.startOffset;
+            for (const nd of el.childNodes) {
+              if (nd === r.startContainer) break;
+              if (nd.nodeType === 3) off += nd.nodeValue.length;
+            }
+            gw.cvCaretOff = off;
+          } else {
+            gw.cvCaretOff = cvPlain(el).length;
+          }
           renderCaret(gw);
         });
       }
@@ -517,7 +639,9 @@ function renderCanvas(gw, snap) {
     return el;
   };
   const root = byid.get(0);
-  gw.cvEl.replaceChildren(root ? build(root) : document.createTextNode(""));
+  const rootEl = root ? build(root) : document.createTextNode("");
+  if (root) { rootEl.style.minHeight = "100%"; }
+  gw.cvEl.replaceChildren(rootEl);
   renderCaret(gw);
 }
 

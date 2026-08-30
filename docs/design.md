@@ -652,6 +652,21 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   universal; look = tapping the thing; execute = tapping the tag or
   ⌘Enter; the chords were always the clipboard.
 
+- **(2026-08-30) No half-working.** Christine, on acme-today's deferral
+  list, in her words: "I don't understand why we have deferrals. Either
+  acme works like acme, or it doesn't. We can't have half working." The
+  standard, recorded: slices may BUILD in sequence, but what ships to a
+  user carries whole behaviour — a deferral list is a build-planning
+  tool, never a licence for a shipped half-experience. Applied the same
+  hour: acme-today gained caret editing everywhere (click positions,
+  arrows navigate, selection replaces, paste inserts), sweep-execution
+  with arguments, Look (in-window literal search presenter-side; paths
+  open windows app-side), the dirty box that Put clears, Zerox, Dump
+  and Load — leaving exactly one deliberate divergence, already
+  stamped: the native clipboard IS snarf (the input convention's
+  "chords die into the host clipboard"), so Cut/Snarf/Paste live in
+  the platform's own gestures rather than as tag words.
+
 - **(2026-08-30) The design stretch: a distributed operating system.**
   Christine's articulation, recorded in her words: "the design stretch
   for IPNX is a distributed operating system. There is no reason why the

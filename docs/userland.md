@@ -84,13 +84,22 @@ the redesign completes the merger the originals gestured at:
   tag words; `|` separates commands from scratch space, and scratch
   words execute too. Colours are acme's (#eaffff tags, #ffffea bodies)
   via the `bg` attr the canvas spec reserved for the first benchmark
-  that demanded it. Deferrals against the paper, recorded: sweep-with-
-  arguments (v0 executes single words; `Edit` reads its line instead),
-  `Look` and the plumber, the dirty box (Put shows always),
-  `Snarf`/`Cut`/`Paste` as tag words (the presenter's native clipboard
-  already serves selection — deliberately not duplicated), `Zerox`,
-  `Dump`. Suite-proven end-to-file on every running host, columns
-  included.
+  that demanded it. **Same day, her standard applied — "either acme
+  works like acme, or it doesn't" — and the behaviour completed**:
+  caret editing everywhere (click positions it, arrows and Home/End
+  navigate, a B1 sweep is the native selection and typing replaces it,
+  paste inserts at the caret); **sweep-execution with arguments** (the
+  swept text's first word is the verb, the rest its arguments — `Edit
+  ,x/…/c/…/` swept runs whole); **Look** (B3): in-window literal
+  search jumps the caret presenter-side, and a path opens a window in
+  the active column app-side; **the dirty box** (black beside the tag
+  on edit, cleared by Put and Get); `Zerox`, `Putall`, `Dump`/`Load`.
+  The one deliberate divergence, per the stamped input convention:
+  the native clipboard IS snarf — Cut/Snarf/Paste are the platform's
+  own gestures, not tag words. The web presenter is the reference;
+  the Mac presenter renders and clicks today and takes the full
+  editing pass with its platform milestone. Suite-proven end-to-file
+  on every running host, columns included.
 - **First slice landed 2026-08-30 as `edit(1)`**: the editor's shape on
   canvas — a tag row whose verbs are real nodes (the file name is
   `action=look` and re-reads from disk; Put and Del are `action=execute`
