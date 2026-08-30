@@ -61,8 +61,9 @@ ABI. The conformance suite binds all three.
   | `p` | `/proc` — status, ctl (identity transitions), notes, wait |
   | `e` | `/env` |
   | `w` | the window server — `#w/clone` mints windows; a window is a
-        directory (`cons ctl mouse wctl label rgb draw/…`) a namespace can
-        `bind` over `/dev` |
+        directory (`cons ctl mouse wctl label rgb draw/…` and, on hosts
+        with canvas v0, `canvas/…` — the display protocol, contract in
+        [canvas.md](canvas.md)) a namespace can `bind` over `/dev` |
   | `d` | `/fd` — dup by open |
   | `s` | `/srv` — a posted fd's channel, kept alive by name |
   | `H` | webfs — `#H/<hex-of-url>` reads an http(s) body (native + demo hosts) |

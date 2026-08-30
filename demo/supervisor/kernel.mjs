@@ -1019,5 +1019,6 @@ export async function boot(theHost, { rootSeed, interactive }) {
     cred: { euid: EVE, ruid: EVE } });
   const image = await readAll(await walk(init, "/bin/init"));
   spawn(init, await WebAssembly.compile(image), interactive ? ["init", "-i"] : ["init"]);
-  return { cons, wsys: { mouse: wsys.mouse, key: wsys.key }, graft: (seed) => devs.M.graft(seed) };
+  return { cons, wsys: { mouse: wsys.mouse, key: wsys.key, canvasEvent: wsys.canvasEvent, quote: wsys.quote },
+    graft: (seed) => devs.M.graft(seed) };
 }

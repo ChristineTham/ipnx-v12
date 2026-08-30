@@ -171,6 +171,37 @@ st4=`{ls /n/svc}
 if(~ $"st1 'want 2 have 2 pids'* && ~ $svok yes && ~ $"st3 'want 1 have 1'* && ~ $"st4 *ctl) echo PASS 'svc: start scales, a killed replica returns, scale shrinks, stop drains'; if not fails=bad
 kill $svcpid
 
+# /dev/canvas (M5 v0, docs/canvas.md): the display is a semantic file
+# tree — built, edited and driven entirely from rc, which is the point:
+# a UI you can cat, echo and grep. The virtual surface is the suite's
+# user; resize and close arrive as protocol lines (the old deferral,
+# retired). Self-skips where the window server offers no canvas (the
+# frozen oracle; the Rust host until parity lands).
+cwid=`{cat '#w/clone'}
+cvp='#w/'$"cwid^'/canvas'
+cvok=`{cat $cvp/caps >[2=1]}
+if(~ $"cvok virtual){
+	echo new 1 edit > $cvp/ctl
+	echo new 2 path > $cvp/ctl
+	echo -n 'hello world' > $cvp/1/data
+	echo -n '0,5' > $cvp/1/addr
+	echo -n HELLO > $cvp/1/data
+	echo -n '0,$' > $cvp/1/addr
+	cvd=`{cat $cvp/1/data}
+	echo 'viewbox="0 0 10 10"' > $cvp/2/attrs
+	echo -n 'M0 0 L10 10' > $cvp/2/data
+	cvk=`{cat $cvp/2/kind}
+	cva=`{grep viewbox $cvp/2/attrs}
+	echo sync > $cvp/ctl
+	echo 'event execute 1 0 5 HELLO' > $cvp/ctl
+	ev1=`{read < $cvp/events}
+	echo resize 320 200 > '#w/'$cwid^'/wctl'
+	ev2=`{read < $cvp/events}
+	ev3=`{{ echo delete > '#w/'$cwid^'/wctl'; read } < $cvp/events}
+	if(~ $"cvd 'HELLO world' && ~ $"cvk path && ~ $"cva *viewbox* && ~ $"ev1 'execute 1 0 5 HELLO' && ~ $"ev2 'resize 0 320 200' && ~ $"ev3 'close 0') echo PASS 'canvas: a UI is files — nodes, addr/data edits, attrs, resize/close as events'; if not fails=bad
+}
+if not echo PASS 'canvas: no /dev/canvas on this host — skipped'
+
 # M2, the namespace-file boot: the same file format that boots the system
 # reshapes a world at runtime — newns(file, cmd) clears and rebuilds from
 # TEXT, so editing the file rebinds with no recompile (the acceptance).

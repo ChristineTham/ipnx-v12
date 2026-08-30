@@ -189,6 +189,21 @@ when it lands) → acme-today absorbing sam's Edit language (one editor plus
 a language; raster sam/acme retire to the exhibit with the suite floor
 intact) → rio-today policy files. The plumber's rules and message shape
 are designed inside the measurement pass — the look verb needs them.
+**Progress 2026-08-30**: the measurement pass is written — docs/canvas.md
+derives v0 from the four benchmarks (four kinds live: stack·text·edit·path;
+`image` provisionally folds into `frame`; addr/data simplified to
+`q0,q1`/`$` with the verbatim language recorded as sam-today's return) —
+and **canvas v0 runs on the demo kernel**: the per-window `canvas/` tree
+in devwsys, the virtual surface as the suite's user (`event` door, wctl
+precedent), resize/close as protocol lines (the old deferral, retired at
+last), and the SPA presenter's seed in the shell (stacks→flex, paths→SVG,
+action attrs→real links and buttons, presenter-local echo on edit).
+Verified end to end in a real browser: a tree echoed from rc rendered as
+DOM, and a button click came back as `execute 3 0 7 Refresh` on the
+events file. One suite test, pure rc — 146 on the demo kernel, 146 with
+self-skips on native and the frozen oracle. `read(1)` landed beside it
+(one read per invocation — the line-per-read device's natural client).
+Next in order: console-today, then Rust-kernel canvas parity.
 Compile `kernel/` to wasm (the core is single-threaded, no OS dependencies —
 built for this), embed it in a JS shim structurally parallel to
 `hosts/macos`: Workers as processes, the SAB mailbox, the existing browser

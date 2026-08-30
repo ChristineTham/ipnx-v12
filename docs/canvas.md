@@ -1,0 +1,109 @@
+# /dev/canvas — the display protocol (v0)
+
+The contract for the 2026-08-30 canvas decision (design.md: six kinds, four
+clauses, the tripwire). **v0 is measured**: every element below is justified
+by one of the four benchmarks — console-today, acme-today, rio-today, one
+plot — and everything none of them demanded is absent. Dated simplifications
+are recorded inline; each is a decision, not an accident.
+
+## The derivation (the measurement pass, 2026-08-30)
+
+| benchmark | demands | and nothing else |
+|---|---|---|
+| **console-today** | one `edit` node (the transcript); insert/delete events with offsets and text (typing echo is presenter-local — the app *observes* edits, acme's discipline); addressed writes (append output, rewrite the input region); `label` | no key events — typed text arrives as edit events; arrows/scroll are presenter-local |
+| **acme-today** | `stack` (columns and rows: orientation, order, proportion attrs); `edit` bodies and tags; `execute`/`look` events carrying node, range and the text under the verb | no pre-marked span roles in v0 — the event carries the target text and policy decides (span attrs arrive with the web presenter's real links, later) |
+| **rio-today** | `resize` and `close` as events — the protocol lines that retire the demo's oldest deferral; windows themselves stay `#w`'s | no nested windowing in v0 (that is the remote-surface story) |
+| **one plot** | `path` (SVG path data verbatim — adopt notation, own the model); `text` labels; a `viewbox` attr for coordinates; stroke/fill attrs | no gradients, no clipping, no transforms in v0 |
+
+Kinds shipped in v0: **`stack · text · edit · path`**. The vocabulary's
+remaining two stay declared but unimplemented until a benchmark demands
+them: `frame` (pixels-in-a-grid, honestly opaque — video's home; the
+raster `rgb` file is its ancestor) and `image`, which v0 provisionally
+**folds into `frame`** (the decision's open question, resolved this way
+until a consumer separates them). Four live kinds against the
+dozen-kinds tripwire.
+
+## The tree
+
+A window's canvas is a flat directory of numbered nodes — acme's shape:
+structure lives in attrs, not filesystem nesting, so the whole UI greps.
+
+```
+/dev/canvas/            (bind '#w/N' /dev makes this a window's)
+  ctl                   new · del · sync · event
+  events                the surface speaks: one line per event, reads park
+  caps                  what the attached surface offers (ro)
+  0/                    the root node, a stack, always present
+  <id>/
+    kind                stack | text | edit | path   (ro after new)
+    attrs               k=v lines; write merges       (parent, order, …)
+    addr                "q0,q1" byte offsets; $ is end (write)
+    data                content: read the addr range, write replaces it
+```
+
+**ctl verbs** (one per line):
+- `new <id> <kind>` — the app chooses ids (positive integers, fresh);
+  the node lands under `parent=0` at the end unless attrs say otherwise.
+- `del <id>` — the node and its subtree.
+- `sync` — commit: the surface receives the tree atomically. Nothing is
+  promised to render before sync.
+- `event <line>` — the virtual-surface door: injects a line into
+  `events` exactly as a surface would (the suite's user; the same
+  house precedent as wctl's `type`).
+
+**attrs** (v0 set, all optional): `parent=<id>` `order=<n>` (siblings
+sort by order, ties by id) · stack: `dir=col|row` `prop=<n>` · text/edit:
+none yet (styling arrives with a consumer) · path: `viewbox="x y w h"`
+`stroke=<colour>` `fill=<colour>` `width=<n>` · any node:
+`action=execute|look` (a whole-node role; the presenter renders it
+honestly — a real link or button on the web).
+
+**addr/data** — acme's buffer interface, simplified for v0 (recorded
+open: verbatim addr language returns with sam-today): `addr` accepts only
+`q0,q1`, `q0` (empty selection) or `$` (end); byte offsets into UTF-8
+content. Writing `data` **replaces the addressed range** and moves addr
+to the insertion's end — so append is `$` then write, and the whole file
+is `0,$` then write. Reading `data` returns the addressed range
+(honouring the read offset within it). Every content kind speaks
+addr/data — a path's data is its SVG path string, replaced the same way.
+
+## Events
+
+One line each, parked reads, oldest first. Text fields are %-quoted
+(`%25` `%20` `%0A`) so a line stays a line and rc can read the file:
+
+```
+insert <id> <q0> <text>       the user typed/pasted into an edit node
+delete <id> <q0> <q1>         the user removed a range
+execute <id> <q0> <q1> <text> the execute verb landed on this range
+look <id> <q0> <q1> <text>    the look verb (tap) landed
+resize 0 <w> <h>              the surface resized the window
+close 0                       the surface asked to close (advisory:
+                              the app exits, or does not; wctl delete
+                              remains the imperative)
+```
+
+The app's own writes never echo back as events — events are the user.
+
+## Surfaces
+
+`caps` reads what is attached: `virtual` (the headless host: syncs are
+acknowledged, `event` is the user — the suite's surface, and the reason
+pixel censuses retire) or a list from an interactive presenter
+(`interactive input reflow`). The browser presenter is the universal
+SPA: stacks become flex containers, text becomes text, edit nodes accept
+typing and report it as insert/delete events, paths become inline SVG,
+`action` nodes become real links and buttons (the input convention's
+web grammar). Layout resolution is the surface's; divergence between
+surfaces is accepted and named. SwiftUI (M6) and VSCode panels (M13)
+consume the same tree over their bridges.
+
+## What v0 refuses, and where the rest lives
+
+No markup crosses the boundary (the protocol speaks four kinds whatever
+the app knows); no behaviour lives in the surface; no styling vocabulary
+until a benchmark demands one, and if the kinds ever pass a dozen the
+HTML refusal is re-litigated (the tripwire, design.md). The plumber's
+message shape — where `look` lines go — is the next measurement's work;
+v0 delivers the event and stops. Wire format for remote surfaces: the
+tree is already files, so exportfs already ships it.

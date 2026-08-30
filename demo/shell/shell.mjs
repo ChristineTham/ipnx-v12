@@ -203,7 +203,10 @@ function winCreate(id, x, y, w, h, title) {
   const win = makeWindow({
     title, x: 560 + (id * 30) % 200, y: 60 + (id * 26) % 260,
     w: Math.max(w + 16, 460), h: Math.max(h + 46, 340), closable: true,
-    onClose: () => closeGuest(gw),
+    onClose: () => {
+      if (gw.cvMode) { wsys?.canvasEvent(id, "close 0"); return; }  // advisory: the app decides
+      closeGuest(gw);
+    },
   });
   win.setPid("#" + id);
 
@@ -222,6 +225,10 @@ function winCreate(id, x, y, w, h, title) {
   gwins.set(id, gw);
   win.setFocusInner(() => (gw.drawMode ? gw.canvas : t.term).focus());
   win.onResize(() => {
+    if (gw.cvMode) {
+      wsys?.canvasEvent(id, `resize 0 ${win.div.offsetWidth} ${win.div.offsetHeight - 30}`);
+      return;
+    }
     if (!gw.drawMode) { t.fit.fit(); return; }
     // draw windows: the grip scales the view of the fixed raster
     const availW = win.div.offsetWidth - 2, availH = win.div.offsetHeight - 32;
@@ -349,6 +356,88 @@ function enterDrawMode(gw) {
 }
 
 // ---------- the host ----------
+// ---- the canvas presenter (docs/canvas.md): the universal SPA's seed.
+// stacks are flex, text is text, paths are inline SVG, action=look is a
+// real link and action=execute a real button; edit nodes echo locally
+// (presenter-local echo, acme's discipline) and report v0 append-only
+// insert events. Full diff-reporting edit arrives with console-today.
+const cvenc = new TextEncoder();
+const cvq = (t) => t.replace(/%/g, "%25").replace(/ /g, "%20").replace(/\n/g, "%0A");
+const cvblen = (t) => cvenc.encode(t).length;
+function renderCanvas(gw, snap) {
+  if (!gw.cvEl) {
+    gw.cvEl = document.createElement("div");
+    gw.cvEl.style.cssText = "position:absolute;left:0;right:0;bottom:0;top:30px;overflow:auto;" +
+      "background:#fff;color:#111;font:13px/1.45 system-ui,sans-serif;padding:8px;";
+    gw.win.body.appendChild(gw.cvEl);
+    gw.termEl.style.display = "none";
+    gw.canvas.style.display = "none";
+    gw.cvMode = true;
+    gw.win.setFocusInner(() => gw.cvEl.focus());
+  }
+  const kids = new Map();
+  const byid = new Map();
+  for (const n of snap) byid.set(n.id, n);
+  for (const n of snap) {
+    if (n.id === 0) continue;
+    const par = +(n.attrs.parent ?? 0);
+    if (!kids.has(par)) kids.set(par, []);
+    kids.get(par).push(n);
+  }
+  for (const l of kids.values())
+    l.sort((a, b) => (+(a.attrs.order ?? 0) - +(b.attrs.order ?? 0)) || (a.id - b.id));
+  const build = (n) => {
+    let el;
+    if (n.kind === "stack") {
+      el = document.createElement("div");
+      el.style.display = "flex";
+      el.style.flexDirection = n.attrs.dir === "row" ? "row" : "column";
+      el.style.gap = "6px";
+      for (const k of kids.get(n.id) ?? []) el.appendChild(build(k));
+    } else if (n.kind === "path") {
+      el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      el.setAttribute("viewBox", (n.attrs.viewbox ?? "0 0 100 100").replace(/"/g, ""));
+      el.style.cssText = "width:100%;max-height:300px;";
+      const pa = document.createElementNS("http://www.w3.org/2000/svg", "path");
+      pa.setAttribute("d", n.data);
+      pa.setAttribute("stroke", n.attrs.stroke ?? "#111");
+      pa.setAttribute("fill", n.attrs.fill ?? "none");
+      pa.setAttribute("stroke-width", n.attrs.width ?? "1.5");
+      el.appendChild(pa);
+    } else {
+      const action = n.attrs.action;
+      if (action === "look") { el = document.createElement("a"); el.href = "#"; }
+      else if (action === "execute") el = document.createElement("button");
+      else el = document.createElement(n.kind === "edit" ? "pre" : "div");
+      el.textContent = n.data;
+      if (n.kind === "edit") {
+        el.style.cssText = "white-space:pre-wrap;margin:0;outline:none;min-height:1.4em;";
+        el.tabIndex = 0;
+        el.addEventListener("keydown", (e) => {
+          if (e.metaKey || e.ctrlKey) return;
+          let ch = null;
+          if (e.key === "Enter") ch = "\n";
+          else if (e.key.length === 1) ch = e.key;
+          if (ch === null) return;
+          e.preventDefault();
+          const at = cvblen(el.textContent);
+          el.textContent += ch;                        // presenter-local echo
+          wsys?.canvasEvent(gw.id, `insert ${n.id} ${at} ${cvq(ch)}`);
+        });
+      }
+      if (action)
+        el.addEventListener("click", (e) => {
+          e.preventDefault();
+          wsys?.canvasEvent(gw.id,
+            `${action} ${n.id} 0 ${cvblen(n.data)} ${cvq(n.data)}`);
+        });
+    }
+    return el;
+  };
+  const root = byid.get(0);
+  gw.cvEl.replaceChildren(root ? build(root) : document.createTextNode(""));
+}
+
 const host = {
   spawnWorker: (initMsg, transfer) => {
     let w = null, pending = [[initMsg, transfer]], dead = false;
@@ -416,6 +505,11 @@ const host = {
     if (gw.drawMode) sizeDrawWin(gw);
   },
   winClose: (id) => { const gw = gwins.get(id); if (gw) { gw.win.remove(); gwins.delete(id); } },
+  winCanvas: (id, snap) => {
+    const gw = gwins.get(id);
+    if (gw) renderCanvas(gw, snap);
+  },
+  canvasCaps: () => "interactive input",
   exit: (code) => {
     setStatus(code === 0 ? "halted, clean" : "halted, exit " + code);
     consT.term.write("\r\n\x1b[33m[system halted: exit " + code + "]\x1b[0m\r\n");
