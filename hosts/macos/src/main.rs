@@ -396,6 +396,20 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
                     let _ = p.send_event(ui::UiMsg::Text { wid, bytes });
                 }
             }
+            Effect::SnarfSet { text } => {
+                use std::io::Write as _;
+                if let Ok(mut c) = std::process::Command::new("pbcopy")
+                    .stdin(std::process::Stdio::piped()).spawn() {
+                    if let Some(mut si) = c.stdin.take() { let _ = si.write_all(text.as_bytes()); }
+                    let _ = c.wait();
+                }
+            }
+            Effect::SnarfGet => {
+                let got = std::process::Command::new("pbpaste").output().ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).into_owned());
+                kern.snarf_done(got);   // None where no pasteboard: our buffer serves
+            }
             Effect::WinCanvas { wid, label, x, y, w, h, snap } => {
                 if let Some(p) = ui {
                     let _ = p.send_event(ui::UiMsg::Canvas { wid, label, x, y, w, h, snap });

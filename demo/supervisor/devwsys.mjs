@@ -19,6 +19,7 @@ export function makeWsys(hostRef) {
   const wins = new Map();
   let nextwid = 1;
   let qgen = 1;
+  let snarf = new Uint8Array(0);        // the clipboard, as a file (#w/snarf)
 
   function newWindow() {
     const wid = nextwid++;
@@ -155,6 +156,7 @@ export function makeWsys(hostRef) {
     walk: (n, name) => {
       if (n.kind === "root") {
         if (name === "clone") return { kind: "clone", win: null };
+        if (name === "snarf") return { kind: "snarf" };
         const win = wins.get(Number(name));
         return win ? { kind: "windir", win } : null;
       }
@@ -188,7 +190,8 @@ export function makeWsys(hostRef) {
         return { kind: "draw" + name, win: n.win, conn: n.conn };
       return null;
     },
-    open: (n) => {
+    open: (n, mode) => {
+      if (n.kind === "snarf" && (mode & 16)) { snarf = new Uint8Array(0); }
       if (n.kind === "drawnew") {          // a fresh connection; image 0 is the window
         const { win } = n;
         n.conn = { id: win.nextconn++, images: new Map([[0, win.img]]), screens: new Map() };
@@ -215,6 +218,20 @@ export function makeWsys(hostRef) {
           out.push(rec); total += rec.length;
         }
         return concat(out);
+      }
+      case "snarf": {
+        const serve = () => {
+          const o = Math.min(Number(off), snarf.length);
+          return snarf.subarray(o, Math.min(o + count, snarf.length));
+        };
+        const g = hostRef.host.snarfGet?.();
+        if (g && typeof g.then === "function") {
+          g.then((t) => { if (typeof t === "string") snarf = sbytes(t); })
+            .catch(() => {})
+            .then(() => ctx.done(serve()));
+          return undefined;              // park: the host clipboard answers
+        }
+        return serve();
       }
       case "clone":
         if (!n.win) n.win = newWindow();
@@ -305,6 +322,14 @@ export function makeWsys(hostRef) {
         hostRef.host.winGeom?.(win.wid, win.x, win.y, win.w, win.h);
         return data.length;
       }
+      case "snarf": {
+        const o = Number(off);
+        const grown = new Uint8Array(Math.max(snarf.length, o + data.length));
+        grown.set(snarf); grown.set(new Uint8Array(data), o);
+        snarf = grown;
+        hostRef.host.snarfSet?.(bstr(snarf));   // the host clipboard hears
+        return data.length;
+      }
       case "cvctl": cvctl(win, bstr(data)); return data.length;
       case "cvaddr": cvparseaddr(win.cv.nodes.get(n.id), bstr(data)); return data.length;
       case "cvdata": {
@@ -365,6 +390,8 @@ export function makeWsys(hostRef) {
       if (!win) return;
       cvpush(win, line);
     },
+    snarfPut: (text) => { snarf = sbytes(text); },  // a gesture copied: mirror it
+    truncSnarf: () => { snarf = new Uint8Array(0); },
     quote: qt,
   };
 

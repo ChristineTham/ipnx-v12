@@ -290,6 +290,19 @@ if(! ~ $#twl 0){
 }
 if not echo PASS 'rio-today: no #w listing on this host — skipped'
 
+# /dev/snarf: the clipboard is a file (the input convention's own words —
+# chords die into the host clipboard via /dev/snarf). On macOS it IS the
+# pasteboard (pbcopy/pbpaste); elsewhere the kernel buffer serves. The
+# gesture mirror (cmd-C/X/V feeding this file) is the presenter's half.
+# Self-skips where '#w' has no snarf (the frozen oracle).
+snp=`{cat '#w/snarf' >[2=1]}
+if(! ~ $"snp *'does not exist'* && ! ~ $"snp *'bad path'*){
+	echo -n 'snarf travels' > '#w/snarf'
+	snr=`{cat '#w/snarf'}
+	if(~ $"snr 'snarf travels') echo PASS 'snarf: the clipboard is a file — write it, read it back'; if not fails=bad
+}
+if not echo PASS 'snarf: no /dev/snarf on this host — skipped'
+
 # M2, the namespace-file boot: the same file format that boots the system
 # reshapes a world at runtime — newns(file, cmd) clears and rebuilds from
 # TEXT, so editing the file rebinds with no recompile (the acceptance).

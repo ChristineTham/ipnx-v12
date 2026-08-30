@@ -248,6 +248,17 @@ identical through the credited path. M4 needed nothing (measured:
 edit's Put lands on #Z's real disk; #V coexists untouched — canvas is
 display, files are the persistent objects, and the namespace already
 serves both).
+**And the clipboard is a file (same day, her confirmation and her
+framing)**: `/dev/snarf` landed at `#w/snarf` on every running kernel —
+on macOS it IS the pasteboard (pbcopy/pbpaste through the effect loop),
+in the browser writes push and reads pull through
+`navigator.clipboard` where the platform permits (Chrome after one
+grant; Safari's gesture-only reads degrade to the kernel buffer), and
+the editor's ⌘C/⌘X/⌘V mirror every gesture into it — guest↔host
+clipboard sync, "what Parallels and other hypervisors do," her words,
+now a file any program can cat. One rc subtlety recorded from the
+suite work: a failed redirection aborts the command WITHOUT setting
+$status, so probes must probe by read, not by write-status.
 **Recorded deferrals leaving M5**: `path` nodes not yet drawn on the Mac
 surface; caret/selection editing (both presenters are append/backspace
 v0 — the full editing pass rides acme-today's continuation); the

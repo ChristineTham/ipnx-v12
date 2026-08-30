@@ -406,12 +406,17 @@ function renderCanvas(gw, snap) {
     setTimeout(() => gw.cvEl.focus(), 0);   // the new window takes the keyboard
     // one delegated keyboard for the window's edit node (v0: the console's
     // single transcript) — the container holds focus, the edit receives
+    gw.cvEl.addEventListener("copy", () => {
+      const t = window.getSelection()?.toString() ?? "";
+      if (t) wsys?.snarfPut?.(t);              // /dev/snarf hears the gesture
+    });
     gw.cvEl.addEventListener("paste", (e) => {
       const ed = gw.cvEdit;
       if (!ed) return;
       const txt = e.clipboardData?.getData("text/plain") ?? "";
       if (!txt) return;
       e.preventDefault();
+      wsys?.snarfPut?.(txt);                   // pasted text is the snarf now
       const t = cvPlain(ed.el);
       const off = Math.min(gw.cvCaretOff ?? t.length, t.length);
       const q0 = cvblen(t.slice(0, off));
@@ -422,7 +427,39 @@ function renderCanvas(gw, snap) {
     });
     gw.cvEl.addEventListener("keydown", (e) => {
       const ed = gw.cvEdit;
-      if (!ed || e.metaKey || e.ctrlKey) return;
+      if (!ed) return;
+      if ((e.metaKey || e.ctrlKey) && (e.key === "x" || e.key === "X")) {
+        // cut: native clipboard IS snarf — copy the sweep, delete it
+        const t0 = cvPlain(ed.el);
+        const sel = window.getSelection();
+        if (!sel || sel.isCollapsed) return;
+        const stext = sel.toString();
+        e.preventDefault();
+        try { navigator.clipboard?.writeText(stext); } catch {}
+        wsys?.snarfPut?.(stext);
+        const offOf = (container, o) => {
+          let x = 0;
+          for (const nd of ed.el.childNodes) {
+            if (nd === container) return x + o;
+            if (nd.nodeType === 3) x += nd.nodeValue.length;
+          }
+          return x;
+        };
+        const r0 = sel.getRangeAt(0);
+        let a = offOf(r0.startContainer, r0.startOffset);
+        let b = offOf(r0.endContainer, r0.endOffset);
+        if (a > b) [a, b] = [b, a];
+        if (a === b) return;
+        const q0 = cvblen(t0.slice(0, a));
+        const q1 = cvblen(t0.slice(0, b));
+        wsys?.canvasEvent(gw.id, `delete ${ed.id} ${q0} ${q1}`);
+        sel.removeAllRanges();
+        gw.cvCaretOff = a;
+        ed.el.textContent = t0.slice(0, a) + t0.slice(b);
+        renderCaret(gw);
+        return;
+      }
+      if (e.metaKey || e.ctrlKey) return;
       const t = cvPlain(ed.el);
       let off = Math.min(gw.cvCaretOff ?? t.length, t.length);
       // a live selection inside the target: typing replaces it, backspace
@@ -712,6 +749,11 @@ const host = {
     if (gw.drawMode) sizeDrawWin(gw);
   },
   winClose: (id) => { const gw = gwins.get(id); if (gw) { gw.win.remove(); gwins.delete(id); } },
+  // /dev/snarf <-> the host clipboard, the hypervisor's own habit
+  // (Parallels precedent, her words): writes push, reads pull where the
+  // platform permits; Safari's gesture-only reads degrade to the buffer
+  snarfSet: (text) => { try { navigator.clipboard?.writeText(text); } catch {} },
+  snarfGet: () => { try { return navigator.clipboard?.readText?.(); } catch { return null; } },
   winCanvas: (id, snap) => {
     // the browser's own credit system: keep only the LATEST tree and
     // render once per animation frame — coalescing changes the rate,

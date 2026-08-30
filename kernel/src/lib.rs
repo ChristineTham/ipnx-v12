@@ -109,6 +109,9 @@ pub enum Effect {
     WinCanvas { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, snap: Vec<CvSnap> },
     // '#H': the host performs the GET off-thread and answers with FetchDone
     Fetch { url: String },
+    // /dev/snarf: the host clipboard hears writes; reads ask it first
+    SnarfSet { text: String },
+    SnarfGet,
     ConsWrite(Vec<u8>),
     Timer { ms: u64, token: u64 },
     Shutdown(i32),
@@ -226,6 +229,7 @@ enum WKind {
     CvCtl,
     CvEvents,
     CvCaps,
+    Snarf,
 }
 
 fn node_eq(a: &Node, b: &Node) -> bool {
@@ -571,6 +575,8 @@ struct KState {
     ram_root: RamRef,
     snaps: Vec<(String, u32, RamRef)>, // name, snap time, frozen root — '#V'
     canvas_caps: String, // what the attached surface offers; virtual = the suite's user
+    snarf: Vec<u8>,                 // /dev/snarf's buffer — the host clipboard's twin
+    snarf_waiters: Vec<(usize, u64, Completer<RRes>)>, // n, off, completer
     hostfs_root: Option<std::path::PathBuf>,
     live_root: bool,
     qgen: u64,
@@ -606,6 +612,9 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, name
         WKind::Root => {
             if name == "clone" {
                 return Some(wnode(WKind::Clone, None, None));
+            }
+            if name == "snarf" {
+                return Some(wnode(WKind::Snarf, None, None));
             }
             let wid: u32 = name.parse().ok()?;
             let w = k.borrow().wins.get(&wid).cloned()?;
@@ -954,6 +963,17 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
             let caps = k.borrow().canvas_caps.clone();
             return Ok(one(format!("{}\n", caps)));
         }
+        WKind::Snarf => {
+            // ask the host clipboard; it answers through snarf_done (the
+            // kernel buffer is the answer where no bridge exists)
+            let (c, wt) = oneshot::<RRes>();
+            {
+                let mut kb = k.borrow_mut();
+                kb.snarf_waiters.push((n, off, c));
+                kb.effects.push(Effect::SnarfGet);
+            }
+            return Ok(wt.await);
+        }
         WKind::CvEvents => {
             let w = win.as_ref().ok_or("no window")?;
             let now = {
@@ -1171,6 +1191,15 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
             cv_ctl(k, w, &raw)?;
             Ok(data.len())
         }
+        WKind::Snarf => {
+            let mut kb = k.borrow_mut();
+            let text = {
+                kb.snarf.extend_from_slice(data);
+                String::from_utf8_lossy(&kb.snarf).into_owned()
+            };
+            kb.effects.push(Effect::SnarfSet { text });
+            Ok(data.len())
+        }
         WKind::DrawData => {
             let w = win.as_ref().ok_or("no window")?;
             let c = conn.as_ref().ok_or("no draw connection")?;
@@ -1206,6 +1235,7 @@ fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>) -> Vec<u8> 
         WKind::CvCtl => "ctl".to_string(),
         WKind::CvEvents => "events".to_string(),
         WKind::CvCaps => "caps".to_string(),
+        WKind::Snarf => "snarf".to_string(),
     };
     let wid = win.as_ref().map(|w| w.borrow().wid).unwrap_or(0) as u64;
     let cid = conn.as_ref().map(|c| c.borrow().id).unwrap_or(0) as u64;
@@ -1480,6 +1510,24 @@ impl Kernel {
     }
 
     /// the UI painted this window's last batch: restore its credit
+    // the host clipboard answered (None = no bridge: serve our buffer)
+    pub fn snarf_done(&self, text: Option<String>) {
+        let (waiters, body) = {
+            let mut kb = self.k.borrow_mut();
+            if let Some(t) = text {
+                kb.snarf = t.into_bytes();
+            }
+            let w = std::mem::take(&mut kb.snarf_waiters);
+            (w, kb.snarf.clone())
+        };
+        for (n, off, c) in waiters {
+            let o = (off as usize).min(body.len());
+            let give = body[o..(o + n).min(body.len())].to_vec();
+            c.complete(RRes::Data(give));
+        }
+        self.ex.run_until_stalled();
+    }
+
     pub fn canvas_caps_set(&self, caps: &str) {
         self.k.borrow_mut().canvas_caps = caps.to_string();
     }
@@ -1555,6 +1603,8 @@ impl Kernel {
                 ram_root: root,
                 snaps: Vec::new(),
                 canvas_caps: "virtual".into(),
+                snarf: Vec::new(),
+                snarf_waiters: Vec::new(),
                 hostfs_root: None,
                 live_root: false,
                 qgen,
@@ -4077,6 +4127,12 @@ fn wstat_ram(node: &RamRef, parent: &DN, base: &str, st: &stat9::StatOut,
 }
 
 fn open_perm(k: &K, dn: &DN, mode: u32, pid: Pid) -> Result<(), KErr> {
+    if let Node::Wsys { kind: WKind::Snarf, .. } = &dn.node {
+        if mode & OTRUNC != 0 {
+            k.borrow_mut().snarf.clear();
+        }
+        return Ok(());
+    }
     if let Node::Host(hp) = &dn.node {
         let _ = pid;
         if mode & OTRUNC != 0 && hp.is_file() {
