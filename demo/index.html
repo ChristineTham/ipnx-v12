@@ -35,14 +35,19 @@ running in this tab</p>
 <p>A modified <b>Plan&nbsp;9 kernel</b> hosted as an ordinary process, with
 per-process namespaces, 9P as the only IPC, and WebAssembly as the executable
 format. What boots below is not a tribute: the shell is the <b>real
-4th-edition <code>rc</code></b>, the editors are the <b>real <code>sam</code>
+4th-edition <code>rc</code></b>, the display is <b>/dev/canvas</b> — a semantic
+file tree you can <code>cat</code>, <code>echo</code> and <code>grep</code>, with
+<code>con</code> the editable-transcript console and <code>edit</code> the one
+editor (Put is a real button; Edit runs sam's language) — the heritage editors are
+the <b>real <code>sam</code>
 and <code>acme</code></b> (all twenty source files, verbatim), twenty-four
 real commands ride the real Plan&nbsp;9 libraries, V10 binaries from the TUHS
 tapes sit in <code>/v10/bin</code> — and real Go and CPython&nbsp;3.14
 binaries run against the same kernel through a WASI shim.</p>
 
 <p>
-<a class="go" href="shell/"><b>Boot ipnx-v12</b> — the whole world: shells, sam, acme,
+<a class="go" href="shell/"><b>Boot ipnx-v12</b> — the whole world: the canvas
+console and editor, shells, sam, acme,
 cc, the real Go compiler, Python with pip. The desktop appears in seconds; the
 toolchains (~260&nbsp;MB) stream in while you look around.</a>
 <a class="go" href="browser/">Run the 132-test suite</a>

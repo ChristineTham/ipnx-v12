@@ -523,8 +523,18 @@ const host = {
   },
   winClose: (id) => { const gw = gwins.get(id); if (gw) { gw.win.remove(); gwins.delete(id); } },
   winCanvas: (id, snap) => {
+    // the browser's own credit system: keep only the LATEST tree and
+    // render once per animation frame — coalescing changes the rate,
+    // only credit changes the bound, here too
     const gw = gwins.get(id);
-    if (gw) renderCanvas(gw, snap);
+    if (!gw) return;
+    gw.cvSnap = snap;
+    if (!gw.cvRaf) {
+      gw.cvRaf = requestAnimationFrame(() => {
+        gw.cvRaf = null;
+        if (gwins.has(id)) renderCanvas(gw, gw.cvSnap);
+      });
+    }
   },
   canvasCaps: () => "interactive input",
   exit: (code) => {
@@ -648,6 +658,8 @@ const feedCons = (line) => {
   consT.term.focus();
 };
 const BIGFONT = "/lib/font/bit/go/regular.13.font";
+document.getElementById("mCon").addEventListener("click", () => feedCons("con &"));
+document.getElementById("mEdit").addEventListener("click", () => feedCons("edit /usr/kitty/README &"));
 document.getElementById("mNew").addEventListener("click", () => feedCons("win rc &"));
 document.getElementById("mAcme").addEventListener("click", () => feedCons("win acme -f " + BIGFONT + " &"));
 document.getElementById("mSam").addEventListener("click", () => feedCons("font=" + BIGFONT + " win sam &"));
