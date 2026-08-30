@@ -266,7 +266,13 @@ plumber's rules and message shape (the next measurement — look events
 deliver, nothing routes them yet); canvas on iPad is M6's bridge and
 VSCode panels M13's; the original "browser host on the Rust core" aim
 (the Rust kernel compiled to wasm for the page) moves to the browser
-host's own line in platforms.md, unblocked but unscheduled. The xterm
+host's own line in platforms.md, unblocked but unscheduled — and the
+question "why can't the demo be the browser surface" (hers,
+2026-08-30) is answered on the record: it IS, structurally — the demo
+shell's canvas presenter is the universal SPA, the chrome around it
+is packaging, and only two named steps separate "home of" from "is":
+factoring the presenter into a standalone cached artifact any page
+can load, and swapping the Rust core beneath the page. The xterm
 console stays beside con per AND-not-XOR.
 Compile `kernel/` to wasm (the core is single-threaded, no OS dependencies —
 built for this), embed it in a JS shim structurally parallel to
