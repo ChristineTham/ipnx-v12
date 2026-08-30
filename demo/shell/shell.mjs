@@ -893,6 +893,4 @@ const BIGFONT = "/lib/font/bit/go/regular.13.font";
 document.getElementById("mCon").addEventListener("click", () => feedCons("con &"));
 document.getElementById("mEdit").addEventListener("click", () => feedCons("edit /usr/kitty/README &"));
 document.getElementById("mNew").addEventListener("click", () => feedCons("win rc &"));
-document.getElementById("mAcme").addEventListener("click", () => feedCons("win acme -f " + BIGFONT + " &"));
-document.getElementById("mSam").addEventListener("click", () => feedCons("font=" + BIGFONT + " win sam &"));
 document.getElementById("mTour").addEventListener("click", () => feedCons("rc /rc/tour"));

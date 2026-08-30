@@ -652,6 +652,21 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   universal; look = tapping the thing; execute = tapping the tag or
   ⌘Enter; the chords were always the clipboard.
 
+- **(2026-08-30) The succession rule: a name is inherited by passing
+  the ancestor's tests.** Christine's directive — "get sam-today
+  working, then we can retire the heritage items" — executed as a
+  rule worth keeping: sam-today took `/bin/sam` only by passing the
+  three existing sam tests UNCHANGED (structural regexps, the `g//`
+  guard on class ranges, and `,| tr` — the buffer piped through a
+  real command, fork machinery and all); the raster original stepped
+  back to `sam9`, still built, still driven by samtest (the whole
+  sam/samterm/libframe stack stays proven), still holding its share
+  of the floor. The demo menu's heritage wing retired the same hour —
+  the exhibit remains runnable by name (`sam9`, `acme`), present in
+  the tree and the suite, absent from the product face. Retirement
+  means the successor answers to the ancestor's name and the
+  ancestor's proof; it never means deletion.
+
 - **(2026-08-30) No half-working.** Christine, on acme-today's deferral
   list, in her words: "I don't understand why we have deferrals. Either
   acme works like acme, or it doesn't. We can't have half working." The

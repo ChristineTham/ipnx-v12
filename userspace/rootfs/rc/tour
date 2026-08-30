@@ -46,8 +46,8 @@ echo '$ /v10/bin/echo -e hello^\\n^world | wc'
 /v10/bin/echo -e 'hello\nworld' | wc
 echo
 
-echo '── 5 · the editor is sam ────────────────────────────────────'
-echo 'Structural regexps, from the real source (sam -d, scripted):'
+echo '── 5 · the editor speaks sam ───────────────────────────────'
+echo 'Structural regexps — sam-today, the language as a filter:'
 echo horses for courses > /tmp/tourf
 echo 'e /tmp/tourf
 ,x/courses/ c/COURSES/
@@ -77,9 +77,10 @@ echo 'Real CPython 3.14 is here too — worth the moment it takes:'
 echo '$ python /tmp/pytest.py'
 echo
 echo '── 7 · windows and editors ──────────────────────────────────'
-echo 'win rc opens a shell window; win sam and win acme are THE real'
-echo 'editors, all verbatim source. (In acme: button 2 executes,'
-echo 'button 3 looks — on a trackpad, option-click and cmd-click.)'
+echo 'con opens the transcript console; edit opens acme-today —'
+echo 'every tag is editable text, alt-click executes a word, right-'
+echo 'click looks (paths open, names search). The heritage raster'
+echo 'editors remain runnable as sam9 and acme.'
 echo
 echo 'The whole system is open: https://github.com/ChristineTham/ipnx-v12'
 echo 'tour: complete'

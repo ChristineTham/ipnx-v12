@@ -18,7 +18,7 @@ static char winpath[32];
 static void
 samchild(void *v)
 {
-	char *av[] = { "sam", nil };
+	char *av[] = { "sam9", nil };
 	int fd;
 
 	USED(v);
@@ -27,7 +27,7 @@ samchild(void *v)
 	dup(fd, 0);
 	dup(fd, 1);
 	dup(fd, 2);
-	exec("/bin/sam", av);
+	exec("/bin/sam9", av);   /* the heritage raster stack, by its stepped-back name */
 	exits("exec");
 }
 

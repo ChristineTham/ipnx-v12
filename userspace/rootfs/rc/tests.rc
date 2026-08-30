@@ -62,8 +62,9 @@ if(test -d /nonexistent) fails=bad; if not echo PASS 'real test -d says no'
 # eve-ruid shell may become anyone (rule 1); su none is the drop shell.
 if(~ `{su none id} 'none none') echo PASS 'su none: the privilege-drop shell (rule 1, both ids move)'; if not fails=bad
 
-# the real sam, terminal mode: structural regexps, and the buffer piped
-# through a real command (sam forks both pipe ends; setjmp/longjmp live)
+# sam — the SUCCESSOR holding the ancestor's own tests (the succession
+# rule: sam-today inherited /bin/sam by passing these unchanged):
+# structural regexps, and the buffer piped through a real command
 echo sam test line > /tmp/samf
 echo 'e /tmp/samf
 ,x/test/ c/TEST/
@@ -71,7 +72,7 @@ echo 'e /tmp/samf
 w /tmp/samf
 q' > /tmp/samscript
 sam -d < /tmp/samscript > /dev/null >[2] /dev/null
-if(~ `{cat /tmp/samf} 'SAM TEST LINE') echo PASS 'the real sam: x, c, and | through real tr (sam -d)'; if not fails=bad
+if(~ `{cat /tmp/samf} 'SAM TEST LINE') echo PASS 'sam-today holds the ancestor'^''''^'s test: x, c, and | through real tr'; if not fails=bad
 
 # M4, hostfs ('#Z'): a host directory as files — create, write, read back,
 # stat length, remove, all against the real disk. Self-skips where the host

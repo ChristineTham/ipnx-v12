@@ -61,11 +61,15 @@ the redesign completes the merger the originals gestured at:
   `data`, `event`) is **kept and strengthened** — that interface was
   never raster; it is the part of acme that was always the future, and
   external tooling keeps working against it.
-- **sam survives as a language and a filter**: the structural-regexp
-  command language is the spec (acme-today's `Edit` implements it whole),
-  and a batch CLI — working title `ed`'s true heir, `sam -d`'s job —
-  applies it to files and edit nodes from scripts and the tour. The
-  interactive raster sam retires to the exhibit with honours.
+- **sam survives as a language and a filter** — and **landed 2026-08-30
+  as `sam` itself**, the name inherited by the succession rule (design
+  log): the batch CLI passes the ancestor's three tests unchanged —
+  `e`/`w`/`q`, `,x/re/ [g|v/re2/] c|d`, `,s/re/sub/[g]`, and `,| cmd`
+  (the buffer through a real command, con's proccreate/procexec shape).
+  The raster original stepped back to `sam9`, still built and still
+  driven by samtest, so the whole sam/samterm/libframe stack stays
+  proven while the product face speaks only the new world. The demo
+  menu's heritage wing retired with it.
 - Open question, deliberately: whether the command language is also
   exposed as a control file on every `edit` node (write commands, the
   node edits itself) — which would make "sam" a property of text in this
