@@ -91,3 +91,8 @@ body {
   color: #cfe0f0; padding: 8px 14px; border-radius: 8px; z-index: 10001;
   box-shadow: 0 8px 30px rgba(0,0,0,0.5); font-size: 12.5px;
 }
+
+/* the heritage exhibit's wing of the menu: present, honest, slightly aside */
+#menubar .msep { color: #667; font-size: 11px; margin-left: 14px; margin-right: 2px; cursor: default; }
+#menubar button.heritage { opacity: 0.72; }
+#menubar button.heritage:hover { opacity: 1; }
