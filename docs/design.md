@@ -652,6 +652,64 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   universal; look = tapping the thing; execute = tapping the tag or
   ⌘Enter; the chords were always the clipboard.
 
+- **(2026-08-30) The ultimate dev environment, and VSCode as a surface.**
+  Christine's realisation, recorded in her words: "we have created the
+  ultimate dev environment. A system can build and run a cluster - in a
+  browser, without relying on VMs or containers... VSCode needs to be a
+  surface." The first half is a shipped fact, not an aspiration: the
+  live demo tab holds five toolchains, pkg, and — since the local stage
+  landed — a supervised replica set; the cluster-in-a-tab runs today.
+  The consideration, worked through: **VSCode is two surfaces, arriving
+  at two times.** *The namespace surface, buildable now*: VSCode's
+  FileSystemProvider API is nearly 9P — stat/readDirectory/readFile/
+  writeFile/delete map to Tstat/dirread/Topen+Tread/Twrite/Tremove, and
+  rename is `wstat` carrying a name, exactly the V10 shape we already
+  landed. And the transport is *nothing*: the extension host is Node,
+  and `demo/supervisor/kernel.mjs` is platform-neutral — the kernel
+  boots inside the extension process, FileSystemProvider methods call
+  straight into kernel walks (kernel-as-a-library, the JS twin's third
+  host). Terminals are the Pseudoterminal API wired to `/dev/cons`;
+  tasks run process files; the debugger's substrate is `/proc`. The
+  doctrinal kicker: **devcontainer.json is a process file, badly** —
+  Remote-Containers is a large extension plus Docker because the OS
+  beneath had no per-process namespace; Remote-IPNX needs neither.
+  *The canvas surface, after M5*: webview panels presenting canvas
+  trees — acme-today can live in a VSCode tab. No conflict with the
+  one-editor doctrine: VSCode is a surface a developer already
+  inhabits, not our editor; IPNX mounts into their world, and surfaces
+  multiply while the protocol stays one. Honest engineering questions,
+  named: 9P has no change-notification (FileSystemProvider.watch needs
+  polling or a synthetic event file — decide when building);
+  vscode.dev runs extensions in a web worker (nested-worker and SAB
+  constraints to measure, WebKit's especially). Sequenced as its own
+  small milestone (M13), interleavable like the local stage was.
+
+- **(2026-08-30) The iPad surface, re-aimed: an app that launches
+  WebKit over local files.** Christine's call, in her words: "the ipad
+  surface has changed. it is simply an app that launches webkit,
+  connecting to local files. It circumvents JIT restrictions." The
+  stopgap becomes the design. WKWebView's content process carries
+  Apple's own JIT entitlement — third-party apps cannot JIT in-process
+  but may host WKWebView, so the browser port runs at full JavaScriptCore
+  speed inside the app, sanctioned. The shell shrinks to a few hundred
+  lines of Swift: a WKURLSchemeHandler serving the bundled dist with
+  **real COOP/COEP headers on every response** — no service worker, no
+  register race, and plausibly no WebKit module-worker serialisation
+  defect, since that measured failure was specific to loads through a
+  service worker (a measurement to retake in-app); local files mean
+  first boot is offline, the 260MB stream gone; and the app bridges
+  real files inward — a security-scoped bookmark IS a bind
+  (platforms.md), served to the kernel's hostfs over the script-message
+  channel. Pulley demotes from the M6 plan to recorded fallback
+  research (the engine-matrix decision stands if store policy or
+  WKWebView limits ever bite; App Store honesty: this is a full local
+  system that works offline, not a remote-site wrapper). The
+  unification, stated once: **the browser port is the universal
+  embedding** — VSCode lends it Node and a file API, the iPad app
+  lends it WebKit and local files, and every future surface is a shell
+  that gives the one port a place to run and files to touch. The
+  ecosystem statement, cashed out.
+
 - **(2026-08-30) The compensation thesis: complexity grows where a
   primitive is missing.** Christine's capstone over the dissolution
   series, recorded in her words: "the real benefit of this is that we

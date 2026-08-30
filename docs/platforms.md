@@ -20,7 +20,8 @@ engine change (the engine matrix is a dated decision in
 | **Browser tab** | `poc/browser` (frozen) → `hosts/browser` (M5) | the page's own JIT, Workers + SAB | **green, 143** (floor 131) in Chrome 148 on the reference; iPadOS 26.5 Safari (simulator) boots the desktop to rc, measured 2026-08-29; **live at [christham.net/ipnx-v12](https://christham.net/ipnx-v12/)**; Rust core in wasm is M5 |
 | **macOS** | `hosts/macos` | wasmtime 48, Cranelift JIT | **green, 143** (floor 131) headless; **IPNX.app runs** (M3): windows via winit/softbuffer, acme on screen, `--live` hostfs persistence (M4), `#V` snapshots |
 | **OCI container** | `hosts/oci` | wasmtime, Cranelift (or AOT `.cwasm`) | **green, 143** (floor 131) — `FROM scratch`, musl-static, 62.2MB image, proven on every push by CI (amd64 full suite; the aarch64 image smoke-boots under qemu) |
-| **iPadOS** | `hosts/ipados` (M6) | wasmtime, **Pulley**, `signals_based_traps(false)` | scaffolded — no JIT, no runtime-AOT on iOS; WKWebView stopgap runs the browser port with full JIT today |
+| **iPadOS** | `hosts/ipados` (M6, **re-aimed 2026-08-30**) | WKWebView (JavaScriptCore, full JIT — sanctioned in the content process) | the app is a WebKit launcher over the bundled browser port: WKURLSchemeHandler serves local files with real COOP/COEP, offline first boot, host files bridged in (a security-scoped bookmark is a bind); Pulley demoted to fallback research |
+| **VSCode** | `hosts/vscode` (M13, designed 2026-08-30) | the extension host's Node (kernel-as-a-library) | unbuilt — FileSystemProvider ≈ 9P mounts the namespace as a workspace; Pseudoterminal is `/dev/cons`; tasks run process files; canvas panels after M5 |
 | **microVM** | (M11) | wasmtime over Firecracker/virtio, 9P-over-vsock | aspiration, research-first — the second OCI weight |
 
 Platform constraints that shape everything: the browser needs COOP/COEP for

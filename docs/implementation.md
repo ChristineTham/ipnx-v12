@@ -281,17 +281,19 @@ raster tests' polling margins are measured on slow hosts before CI treats a
 timeout as a failure.
 **Acceptance:** the table in RESEARCH, one row per host, dated.
 
-### M6 — the iPadOS app *(M–L)* — consumes: engine matrix + iOS-files decisions (2026-08-27)
-wasmtime with Pulley (the interpreter backend) and
-`signals_based_traps(false)` — no JIT, no runtime codegen, App Store-lawful.
-SwiftUI shell over M3's presentation shape; user-granted folders arrive as
-security-scoped bookmarks surfaced as binds (the decision: a granted subtree
-*is* a bind). Measure Pulley's slowdown honestly into RESEARCH. **Gate
-(six-hats):** the WKWebView-stopgap claim rides on the browser port running
-under WebKit — unverified; the suite runs under Safari before the stopgap is
-trusted.
-**Acceptance:** the floor suite green on an iPad (self-skipping what the
-sandbox forbids, each skip named); acme editing a file in a granted folder.
+### M6 — the iPadOS app *(S–M)* — **re-aimed 2026-08-30: a WebKit launcher over local files** — consumes: the iPad-surface decision (design.md 2026-08-30), M4 (files), the browser port
+The stopgap becomes the design: a few hundred lines of Swift hosting
+WKWebView — full JavaScriptCore JIT, sanctioned, in Apple's own content
+process. A WKURLSchemeHandler serves the bundled dist with **real
+COOP/COEP headers** (no service worker, no register race; retake the
+module-worker-serialisation measurement in-app — the recorded defect was
+specific to loads through a service worker). First boot is offline. Real
+files arrive over the script-message bridge into hostfs — a
+security-scoped bookmark is a bind. Pulley (the prior plan) demotes to
+recorded fallback research per the engine-matrix decision.
+**Acceptance:** the app boots the bundled port offline and the suite runs
+green in-app with real headers; a granted folder reads and writes
+through the namespace; the WebKit measurement is retaken and recorded.
 
 ### M7 — `/net` *(L)* — consumes: "sockets won" adoption (founding)
 The network as files: `/net/tcp/clone`, per-connection `ctl`/`data`/`local`/
@@ -380,6 +382,19 @@ service is one name but does not yet fan attaches across replicas.
 remotely with the caller's namespace imported — judged by the suite like
 everything else.
 Sequenced by demand once M7–M9 exist.
+
+### M13 — the VSCode surface *(S–M, interleavable)* — consumes: kernel-as-a-library (the JS twin), the orchestration local stage; canvas panels consume M5
+The namespace surface (design.md 2026-08-30): an extension boots
+`kernel.mjs` inside the extension host (it is Node; no transport) and
+serves the namespace through FileSystemProvider — stat/readDirectory/
+readFile/writeFile/delete onto walks, rename onto `wstat`; terminals are
+Pseudoterminal over `/dev/cons`; tasks run process files; Remote-IPNX
+where devcontainer.json needed Docker. Watch is the named question (9P
+has no notification: poll, or a synthetic event file). vscode.dev's
+web-worker constraints get measured before that form is promised.
+**Acceptance:** an IPNX namespace opens as a workspace folder — edit,
+save, `run` a spec from a task, rc in the integrated terminal; the suite
+drives the same kernel the editor mounts.
 
 ### Continuous — curation sweeps *(S each, standing)*
 The Plan 9 userland, command by command, PR-sized tranches as ever: `mk`, the
