@@ -396,9 +396,9 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
                     let _ = p.send_event(ui::UiMsg::Text { wid, bytes });
                 }
             }
-            Effect::WinCanvas { wid, snap } => {
+            Effect::WinCanvas { wid, label, x, y, w, h, snap } => {
                 if let Some(p) = ui {
-                    let _ = p.send_event(ui::UiMsg::Canvas { wid, snap });
+                    let _ = p.send_event(ui::UiMsg::Canvas { wid, label, x, y, w, h, snap });
                 }
             }
             Effect::WinGone { wid } => {

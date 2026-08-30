@@ -27,7 +27,7 @@ use winit::window::{Window, WindowId};
 pub enum UiMsg {
     Update { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, rgba: Vec<u8> },
     Text { wid: u32, bytes: Vec<u8> },
-    Canvas { wid: u32, snap: Vec<CvSnap> },
+    Canvas { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, snap: Vec<CvSnap> },
     Gone { wid: u32 },
     Shutdown,
 }
@@ -406,10 +406,37 @@ impl ApplicationHandler<UiMsg> for App {
                 self.paint(wid);
                 let _ = self.ev.send(Ev::WinAck { wid });
             }
-            UiMsg::Canvas { wid, snap } => {
+            UiMsg::Canvas { wid, label, x, y, w, h, snap } => {
+                if !self.wins.contains_key(&wid) {
+                    // a canvas-first window: create it exactly as Update would
+                    let attrs = Window::default_attributes()
+                        .with_title(label.clone())
+                        .with_position(winit::dpi::LogicalPosition::new(
+                            (x + 60) as f64, (y + 60) as f64))
+                        .with_inner_size(LogicalSize::new(w as f64, h as f64));
+                    if let Ok(window) = el.create_window(attrs) {
+                        let window = Rc::new(window);
+                        if self.ctx.is_none() {
+                            self.ctx = softbuffer::Context::new(window.clone()).ok();
+                        }
+                        if let Some(ctx) = &self.ctx {
+                            if let Ok(surface) = softbuffer::Surface::new(ctx, window.clone()) {
+                                self.by_window.insert(window.id(), wid);
+                                self.wins.insert(wid, WinState {
+                                    window, surface, w, h, frame: Vec::new(),
+                                    tty: Tty { lines: vec![String::new()] },
+                                    has_text: false, buttons: 0, mx: 0, my: 0,
+                                    cv: None, cv_hits: Vec::new(), cv_edit: None,
+                                });
+                            }
+                        }
+                    }
+                }
                 if let Some(ws) = self.wins.get_mut(&wid) {
+                    ws.window.set_title(&label);
                     ws.cv = Some(snap);
                     self.paint(wid);
+                    let _ = self.ev.send(Ev::WinAck { wid }); // credit returns after paint
                 }
             }
             UiMsg::Text { wid, bytes } => {

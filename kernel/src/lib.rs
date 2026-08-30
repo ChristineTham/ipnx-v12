@@ -102,8 +102,11 @@ pub enum Effect {
     WinUpdate { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, rgba: Vec<u8> },
     WinGone { wid: u32 },
     WinText { wid: u32, bytes: Vec<u8> },
-    // /dev/canvas sync: the window's semantic tree, for a native presenter
-    WinCanvas { wid: u32, snap: Vec<CvSnap> },
+    // /dev/canvas sync: the window's semantic tree, for a native presenter.
+    // Travels ONLY through the credit system (win_dirty/win_inflight/ack) —
+    // coalescing changes the rate, only credit changes the bound, and a
+    // snapshot built at flush time coalesces by construction.
+    WinCanvas { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, snap: Vec<CvSnap> },
     // '#H': the host performs the GET off-thread and answers with FetchDone
     Fetch { url: String },
     ConsWrite(Vec<u8>),
@@ -698,6 +701,22 @@ fn win_dirty(k: &K, win: &WinR) {
 }
 
 fn win_flush(k: &K, win: &WinR) {
+    // a canvas window's frame is its semantic tree, snapshotted at flush
+    // time — intermediate syncs coalesce away by construction
+    let cvsnap = {
+        let wb = win.borrow();
+        wb.cv.as_ref().map(|cv| {
+            let mut snap: Vec<CvSnap> = cv.nodes.iter().map(|(id, nd)| CvSnap {
+                id: *id, kind: nd.kind, attrs: nd.attrs.clone(), data: nd.data.clone(),
+            }).collect();
+            snap.sort_by_key(|n| n.id);
+            (wb.wid, wb.label.clone(), wb.x, wb.y, wb.w, wb.h, snap)
+        })
+    };
+    if let Some((wid, label, x, y, w, h, snap)) = cvsnap {
+        k.borrow_mut().effects.push(Effect::WinCanvas { wid, label, x, y, w, h, snap });
+        return;
+    }
     let (wid, label, x, y, w, h, back) = {
         let wb = win.borrow();
         let img = wb.img.clone();
@@ -870,18 +889,11 @@ fn cv_ctl(k: &K, win: &WinR, raw: &str) -> Result<(), KErr> {
                 for k2 in doomed { cv.nodes.remove(&k2); }
             }
             "sync" => {
+                // under credit: mark dirty, the tick flushes the LATEST tree
                 let interactive = k.borrow().canvas_caps != "virtual";
                 if interactive {
-                    let (wid, snap) = {
-                        let wb = win.borrow();
-                        let cv = wb.cv.as_ref().ok_or("no canvas")?;
-                        let mut snap: Vec<CvSnap> = cv.nodes.iter().map(|(id, nd)| CvSnap {
-                            id: *id, kind: nd.kind, attrs: nd.attrs.clone(), data: nd.data.clone(),
-                        }).collect();
-                        snap.sort_by_key(|n| n.id);
-                        (wb.wid, snap)
-                    };
-                    k.borrow_mut().effects.push(Effect::WinCanvas { wid, snap });
+                    let wid = win.borrow().wid;
+                    k.borrow_mut().win_dirty.insert(wid);
                 }
             }
             "event" => {

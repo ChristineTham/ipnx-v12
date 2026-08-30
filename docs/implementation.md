@@ -235,6 +235,19 @@ insert/delete events with local echo — verified by window capture:
 con(1)'s transcript, typed command and output, in a real macOS window
 from the same files the browser renders as DOM. One tree, two
 presenters, demonstrated.
+**Post-landing alignment (same day, her question "do we need to redo
+M3?")**: canvas syncs now travel ONLY through M3's credit system —
+sync marks the window dirty, the tick flushes the LATEST tree when
+credit allows, the UI acks after paint. Snapshots built at flush time
+coalesce by construction (intermediate trees never travel), so the
+credit law — coalescing changes the rate, only credit changes the
+bound — holds for semantic frames exactly as for raster ones. A
+canvas-first window is created by the UI on its first flush, as
+Update would. Verified: 149 native, and con's transcript re-captured
+identical through the credited path. M4 needed nothing (measured:
+edit's Put lands on #Z's real disk; #V coexists untouched — canvas is
+display, files are the persistent objects, and the namespace already
+serves both).
 **Recorded deferrals leaving M5**: `path` nodes not yet drawn on the Mac
 surface; caret/selection editing (both presenters are append/backspace
 v0 — the full editing pass rides acme-today's continuation); the
