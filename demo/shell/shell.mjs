@@ -362,6 +362,22 @@ function enterDrawMode(gw) {
 // (presenter-local echo, acme's discipline) and report v0 append-only
 // insert events. Full diff-reporting edit arrives with console-today.
 const cvenc = new TextEncoder();
+function renderCaret(gw) {
+  gw.cvEl?.querySelectorAll(".cvcaret").forEach((c) => c.remove());
+  const ed = gw.cvEdit;
+  if (!ed || !ed.el.isConnected) return;
+  const c = document.createElement("span");
+  c.className = "cvcaret";
+  c.textContent = "\u258f";                        // ▏ a thin block
+  c.style.cssText = "animation:cvblink 1s steps(1) infinite;color:#334;";
+  ed.el.appendChild(c);
+}
+if (!document.getElementById("cvcaretstyle")) {
+  const st = document.createElement("style");
+  st.id = "cvcaretstyle";
+  st.textContent = "@keyframes cvblink { 50% { opacity: 0; } }";
+  document.head.appendChild(st);
+}
 const cvq = (t) => t.replace(/%/g, "%25").replace(/ /g, "%20").replace(/\n/g, "%0A");
 const cvblen = (t) => cvenc.encode(t).length;
 function renderCanvas(gw, snap) {
@@ -375,18 +391,29 @@ function renderCanvas(gw, snap) {
     gw.canvas.style.display = "none";
     gw.cvMode = true;
     gw.win.setFocusInner(() => gw.cvEl.focus());
+    setTimeout(() => gw.cvEl.focus(), 0);   // the new window takes the keyboard
     // one delegated keyboard for the window's edit node (v0: the console's
     // single transcript) — the container holds focus, the edit receives
     gw.cvEl.addEventListener("keydown", (e) => {
       const ed = gw.cvEdit;
       if (!ed || e.metaKey || e.ctrlKey) return;
+      const plain = () => {                          // text without the caret
+        let t = "";
+        for (const nd of ed.el.childNodes)
+          if (nd.nodeType === 3) t += nd.nodeValue;
+        return t;
+      };
+      const setText = (t) => {
+        ed.el.textContent = t;
+        renderCaret(gw);
+      };
       if (e.key === "Backspace") {
         e.preventDefault();
-        const t = ed.el.textContent;
+        const t = plain();
         if (!t.length) return;
         const last = t.slice(-1);
-        ed.el.textContent = t.slice(0, -1);          // presenter-local echo
-        const end = cvblen(ed.el.textContent);
+        setText(t.slice(0, -1));                     // presenter-local echo
+        const end = cvblen(plain());
         wsys?.canvasEvent(gw.id, `delete ${ed.id} ${end} ${end + cvblen(last)}`);
         return;
       }
@@ -395,8 +422,8 @@ function renderCanvas(gw, snap) {
       else if (e.key.length === 1) ch = e.key;
       if (ch === null) return;
       e.preventDefault();
-      const at = cvblen(ed.el.textContent);
-      ed.el.textContent += ch;                       // presenter-local echo
+      const at = cvblen(plain());
+      setText(plain() + ch);                         // presenter-local echo
       ed.el.scrollIntoView?.(false);
       wsys?.canvasEvent(gw.id, `insert ${ed.id} ${at} ${cvq(ch)}`);
     });
@@ -420,6 +447,7 @@ function renderCanvas(gw, snap) {
       el.style.display = "flex";
       el.style.flexDirection = n.attrs.dir === "row" ? "row" : "column";
       el.style.gap = "6px";
+      if (n.attrs.bg) el.style.background = n.attrs.bg;
       for (const k of kids.get(n.id) ?? []) el.appendChild(build(k));
     } else if (n.kind === "path") {
       el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
@@ -437,10 +465,16 @@ function renderCanvas(gw, snap) {
       else if (action === "execute") el = document.createElement("button");
       else el = document.createElement(n.kind === "edit" ? "pre" : "div");
       el.textContent = n.data;
+      if (n.attrs.bg) el.style.background = n.attrs.bg;
       if (n.kind === "edit") {
-        el.style.cssText = "white-space:pre-wrap;margin:0;outline:none;min-height:1.4em;";
+        el.style.cssText = "white-space:pre-wrap;margin:0;outline:none;min-height:1.4em;" +
+          (n.attrs.bg ? "background:" + n.attrs.bg + ";" : "");
         gw.cvEdit = { el, id: n.id };                // the delegated keyboard's target
-        el.addEventListener("mousedown", () => { gw.cvEdit = { el, id: n.id }; });
+        el.addEventListener("mousedown", (e) => {
+          e.stopPropagation();
+          gw.cvEdit = { el, id: n.id };
+          renderCaret(gw);
+        });
       }
       if (action)
         el.addEventListener("click", (e) => {
@@ -453,6 +487,7 @@ function renderCanvas(gw, snap) {
   };
   const root = byid.get(0);
   gw.cvEl.replaceChildren(root ? build(root) : document.createTextNode(""));
+  renderCaret(gw);
 }
 
 const host = {

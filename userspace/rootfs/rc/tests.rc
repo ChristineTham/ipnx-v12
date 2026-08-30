@@ -231,33 +231,42 @@ if(~ $"cnok virtual){
 }
 if not echo PASS 'console-today: no canvas on this host — skipped'
 
-# edit(1) — acme-today's first slice (M5): tag row of verb nodes, an edit
-# body, Put writes the file back, Del closes the window. Driven through
-# the event door; the file round-trip is the proof. Self-skips with canvas.
+# edit(1) — acme-today (M5): the workspace. A root tag with New, a column
+# of windows, each an EDITABLE file-name tag (Put writes to whatever it
+# says) with Get/Put/Del and sam's Edit language in the command box.
+# Window 0's ids: fname 12, Get 13, Put 14, Del 15, cmd 16, Edit 17,
+# body 18. Driven through the event door; self-skips with canvas.
 if(~ $"cnok virtual){
 	echo -n 'first draft' > /tmp/ed1
 	edwid=`{cat '#w/clone'}
 	edp='#w/'$"edwid^'/canvas'
 	edit -W $edwid /tmp/ed1 &
 	sleep 2
-	echo -n '0,$' > $edp/5/addr
-	edb=`{cat $edp/5/data}
-	echo 'event insert 5 11 %20revised' > $edp/ctl
-	echo 'event execute 3 0 3 Put' > $edp/ctl
+	echo -n '0,$' > $edp/18/addr
+	edb=`{cat $edp/18/data}
+	echo 'event insert 18 11 %20revised' > $edp/ctl
+	echo 'event execute 14 0 3 Put' > $edp/ctl
 	sleep 1
 	edf=`{cat /tmp/ed1}
-	echo 'event insert 6 0 ,x/[a-z]+ised/c/POLISHED/' > $edp/ctl
-	echo 'event execute 7 0 4 Edit' > $edp/ctl
-	echo 'event delete 6 0 25' > $edp/ctl
-	echo 'event insert 6 0 ,s/draft/DRAFT!/' > $edp/ctl
-	echo 'event execute 7 0 4 Edit' > $edp/ctl
-	echo 'event execute 3 0 3 Put' > $edp/ctl
+	echo 'event insert 16 0 ,x/[a-z]+ised/c/POLISHED/' > $edp/ctl
+	echo 'event execute 17 0 4 Edit' > $edp/ctl
+	echo 'event delete 16 0 25' > $edp/ctl
+	echo 'event insert 16 0 ,s/draft/DRAFT!/' > $edp/ctl
+	echo 'event execute 17 0 4 Edit' > $edp/ctl
+	echo 'event execute 14 0 3 Put' > $edp/ctl
 	sleep 1
 	ede=`{cat /tmp/ed1}
-	echo 'event execute 4 0 3 Del' > $edp/ctl
+	# the tag is editable: retarget it and Put lands on the NEW name
+	echo 'event delete 12 0 8' > $edp/ctl
+	echo 'event insert 12 0 /tmp/ed2' > $edp/ctl
+	echo 'event execute 14 0 3 Put' > $edp/ctl
 	sleep 1
-	edg=`{cat $edp/5/kind >[2=1]}
-	if(~ $"edb 'first draft' && ~ $"edf 'first draft revised' && ~ $"ede 'first DRAFT! POLISHED' && ~ $"edg *'does not exist'* || ~ $"edg *o such*) echo PASS 'edit: acme-today — tag verbs are nodes, Put round-trips, and the Edit language returns (x, c, s on real regexps)'; if not fails=bad
+	edh=`{cat /tmp/ed2}
+	echo 'event execute 15 0 3 Del' > $edp/ctl
+	sleep 1
+	edg=`{cat $edp/18/kind >[2=1]}
+	echo 'event close 0' > $edp/ctl
+	if(~ $"edb 'first draft' && ~ $"edf 'first draft revised' && ~ $"ede 'first DRAFT! POLISHED' && ~ $"edh 'first DRAFT! POLISHED' && ~ $"edg *'does not exist'* || ~ $"edg *o such*) echo PASS 'edit: acme-today — the workspace: editable tags, Put by name, Del leaves the column, sam'^''''^'s language runs'; if not fails=bad
 }
 if not echo PASS 'edit: no canvas on this host — skipped'
 
