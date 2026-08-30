@@ -1,0 +1,10 @@
+/lib/wasm32-wasi/zlib/adler32.o
+/lib/wasm32-wasi/zlib/compress.o
+/lib/wasm32-wasi/zlib/crc32.o
+/lib/wasm32-wasi/zlib/deflate.o
+/lib/wasm32-wasi/zlib/inffast.o
+/lib/wasm32-wasi/zlib/inflate.o
+/lib/wasm32-wasi/zlib/inftrees.o
+/lib/wasm32-wasi/zlib/trees.o
+/lib/wasm32-wasi/zlib/uncompr.o
+/lib/wasm32-wasi/zlib/zutil.o

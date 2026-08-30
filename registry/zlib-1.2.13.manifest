@@ -1,0 +1,14 @@
+include/zconf.h zlib-1.2.13/include/zconf.h 80e0a31a4c0e6f20d1bad0df99271b9d535aa9f7c4e62f1a54f643adb4c6dfa2
+include/zlib.h zlib-1.2.13/include/zlib.h a980a0d104198a53cc220c51ab5856e5be901bec8a2d02e0ee79a8754219dfed
+lib/wasm32-wasi/libz.objects zlib-1.2.13/lib/wasm32-wasi/libz.objects 49303e0bb7e85b66606e1efb78c8f37af7cbf4351d83b76ecf763637a48cf575
+lib/wasm32-wasi/zlib/adler32.o zlib-1.2.13/lib/wasm32-wasi/zlib/adler32.o 9759ac07095b2eec5c3ea21b88351e29dd6065c7222b6804c29fd89136f5e20f
+lib/wasm32-wasi/zlib/compress.o zlib-1.2.13/lib/wasm32-wasi/zlib/compress.o f692feb5e1803867b404be391ec32b04f413ca29571bf08fd466d8a67f6ffe30
+lib/wasm32-wasi/zlib/crc32.o zlib-1.2.13/lib/wasm32-wasi/zlib/crc32.o 5fcb6638c8f04a14b4fdc679832b4178d1313b342bcce8f080448b48ca45c416
+lib/wasm32-wasi/zlib/deflate.o zlib-1.2.13/lib/wasm32-wasi/zlib/deflate.o 4f2970ccdf6795587580f840d0eb3e99653bd744494e0b05f535f57d32d32dd6
+lib/wasm32-wasi/zlib/inffast.o zlib-1.2.13/lib/wasm32-wasi/zlib/inffast.o 7023cca8537c75758aef6af82a250154b36e9a0ca4a05261f9eaedb39306cc70
+lib/wasm32-wasi/zlib/inflate.o zlib-1.2.13/lib/wasm32-wasi/zlib/inflate.o 8e5d9e3ef0ae359119a271e903ccf1bd40291f136c7d3b350c2b16f716842e2e
+lib/wasm32-wasi/zlib/inftrees.o zlib-1.2.13/lib/wasm32-wasi/zlib/inftrees.o 359dc7390d0e3c6f44ada84aad63dbbeb1d72d9db118d6401e432aab800113e0
+lib/wasm32-wasi/zlib/trees.o zlib-1.2.13/lib/wasm32-wasi/zlib/trees.o 5c73ef37dbce7b304ef32bfde20b6cbee3021ef06b17e04087bd37aa457465cd
+lib/wasm32-wasi/zlib/uncompr.o zlib-1.2.13/lib/wasm32-wasi/zlib/uncompr.o 35349e4be2689d96224ce06236b7652e10d8ac03e519b1e382a09a4584e9241a
+lib/wasm32-wasi/zlib/zutil.o zlib-1.2.13/lib/wasm32-wasi/zlib/zutil.o ebe5d9f937f91787edbde6587c9c59257058ddc4d6067f41d7314c12962fa454
+meta zlib-1.2.13/meta 459f3791bf4599ec1884feabd93b405111ed74d12a96e9b779a5a57d2f645d41

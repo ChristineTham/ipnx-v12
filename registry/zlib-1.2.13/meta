@@ -1,0 +1,4 @@
+# zlib 1.2.13, compiled from pinned source by the system's own cc —
+# link with: cc yourfile.c -lz   (cc expands the objects list)
+bind -a ./lib/wasm32-wasi /lib/wasm32-wasi
+bind -a ./include /include

@@ -1,0 +1,3 @@
+ruby 3.2.2 bin ruby-3.2.2.wasm 8b4abc0da1cfca2bc6d04c9b4e89ac6cd52340e020c3bf974fb6139b8195d8ac
+php 8.2.6 bin php-8.2.6.wasm 4fd2e8c42ae529ba72f88a0f1e46de1fc69a4b4f01e01fedd65ca966b8ffe6fa
+zlib 1.2.13 tree zlib-1.2.13.manifest b9f3e28779070cc83d09fd0a31034673485b1e64a28a2562a8ea469fc34a4908
