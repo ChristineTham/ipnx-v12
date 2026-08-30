@@ -5,6 +5,7 @@
 // windows are the real libdraw raster, shown crisp; windows carry macOS-style
 // chrome. Worker startup is serialized (WebKit defect, demo/webkit-repro/).
 import { boot } from "../supervisor/kernel.mjs";
+import { createCanvasView } from "./presenter.mjs";
 
 const desktop = document.getElementById("desktop");
 const statusEl = document.getElementById("status");
@@ -356,332 +357,6 @@ function enterDrawMode(gw) {
 }
 
 // ---------- the host ----------
-// ---- the canvas presenter (docs/canvas.md): the universal SPA's seed.
-// stacks are flex, text is text, paths are inline SVG, action=look is a
-// real link and action=execute a real button; edit nodes echo locally
-// (presenter-local echo, acme's discipline) and report v0 append-only
-// insert events. Full diff-reporting edit arrives with console-today.
-const cvenc = new TextEncoder();
-function cvPlain(el) {
-  let t = "";
-  for (const nd of el.childNodes) if (nd.nodeType === 3) t += nd.nodeValue;
-  return t;
-}
-function renderCaret(gw) {
-  gw.cvEl?.querySelectorAll(".cvcaret").forEach((c) => c.remove());
-  const ed = gw.cvEdit;
-  if (!ed || !ed.el.isConnected) return;
-  const t = cvPlain(ed.el);
-  let off = gw.cvCaretOff ?? t.length;
-  if (off > t.length) off = t.length;
-  gw.cvCaretOff = off;
-  const c = document.createElement("span");
-  c.className = "cvcaret";
-  c.textContent = "\u258f";                        // ▏ a thin block
-  c.style.cssText = "animation:cvblink 1s steps(1) infinite;color:#334;";
-  ed.el.replaceChildren(
-    document.createTextNode(t.slice(0, off)), c,
-    document.createTextNode(t.slice(off)));
-}
-if (!document.getElementById("cvcaretstyle")) {
-  const st = document.createElement("style");
-  st.id = "cvcaretstyle";
-  st.textContent = "@keyframes cvblink { 50% { opacity: 0; } }";
-  document.head.appendChild(st);
-}
-const cvq = (t) => t.replace(/%/g, "%25").replace(/ /g, "%20").replace(/\n/g, "%0A");
-const cv_prop = (n) => n.attrs.prop ?? "1";
-const cvblen = (t) => cvenc.encode(t).length;
-function renderCanvas(gw, snap) {
-  if (!gw.cvEl) {
-    gw.cvEl = document.createElement("div");
-    gw.cvEl.tabIndex = 0;
-    gw.cvEl.style.cssText = "position:absolute;left:0;right:0;bottom:0;top:30px;overflow:auto;" +
-      "background:#fff;color:#111;font:13px/1.45 system-ui,sans-serif;padding:8px;outline:none;";
-    gw.win.body.appendChild(gw.cvEl);
-    gw.termEl.style.display = "none";
-    gw.canvas.style.display = "none";
-    gw.cvMode = true;
-    gw.win.setFocusInner(() => gw.cvEl.focus());
-    setTimeout(() => gw.cvEl.focus(), 0);   // the new window takes the keyboard
-    // one delegated keyboard for the window's edit node (v0: the console's
-    // single transcript) — the container holds focus, the edit receives
-    gw.cvEl.addEventListener("copy", () => {
-      const t = window.getSelection()?.toString() ?? "";
-      if (t) wsys?.snarfPut?.(t);              // /dev/snarf hears the gesture
-    });
-    gw.cvEl.addEventListener("paste", (e) => {
-      const ed = gw.cvEdit;
-      if (!ed) return;
-      const txt = e.clipboardData?.getData("text/plain") ?? "";
-      if (!txt) return;
-      e.preventDefault();
-      wsys?.snarfPut?.(txt);                   // pasted text is the snarf now
-      const t = cvPlain(ed.el);
-      const off = Math.min(gw.cvCaretOff ?? t.length, t.length);
-      const q0 = cvblen(t.slice(0, off));
-      gw.cvCaretOff = off + txt.length;
-      ed.el.textContent = t.slice(0, off) + txt + t.slice(off);
-      renderCaret(gw);
-      wsys?.canvasEvent(gw.id, `insert ${ed.id} ${q0} ${cvq(txt)}`);
-    });
-    gw.cvEl.addEventListener("keydown", (e) => {
-      const ed = gw.cvEdit;
-      if (!ed) return;
-      if ((e.metaKey || e.ctrlKey) && (e.key === "x" || e.key === "X")) {
-        // cut: native clipboard IS snarf — copy the sweep, delete it
-        const t0 = cvPlain(ed.el);
-        const sel = window.getSelection();
-        if (!sel || sel.isCollapsed) return;
-        const stext = sel.toString();
-        e.preventDefault();
-        try { navigator.clipboard?.writeText(stext); } catch {}
-        wsys?.snarfPut?.(stext);
-        const offOf = (container, o) => {
-          let x = 0;
-          for (const nd of ed.el.childNodes) {
-            if (nd === container) return x + o;
-            if (nd.nodeType === 3) x += nd.nodeValue.length;
-          }
-          return x;
-        };
-        const r0 = sel.getRangeAt(0);
-        let a = offOf(r0.startContainer, r0.startOffset);
-        let b = offOf(r0.endContainer, r0.endOffset);
-        if (a > b) [a, b] = [b, a];
-        if (a === b) return;
-        const q0 = cvblen(t0.slice(0, a));
-        const q1 = cvblen(t0.slice(0, b));
-        wsys?.canvasEvent(gw.id, `delete ${ed.id} ${q0} ${q1}`);
-        sel.removeAllRanges();
-        gw.cvCaretOff = a;
-        ed.el.textContent = t0.slice(0, a) + t0.slice(b);
-        renderCaret(gw);
-        return;
-      }
-      if (e.metaKey || e.ctrlKey) return;
-      const t = cvPlain(ed.el);
-      let off = Math.min(gw.cvCaretOff ?? t.length, t.length);
-      // a live selection inside the target: typing replaces it, backspace
-      // deletes it — B1 sweep is the native selection, as the input
-      // convention promised
-      const selRange = () => {
-        const sel = window.getSelection();
-        if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
-        const r = sel.getRangeAt(0);
-        if (!ed.el.contains(r.startContainer) || !ed.el.contains(r.endContainer)) return null;
-        const offOf = (container, o) => {
-          let x = 0;
-          for (const nd of ed.el.childNodes) {
-            if (nd === container) return x + o;
-            if (nd.nodeType === 3) x += nd.nodeValue.length;
-          }
-          return x;
-        };
-        let a = offOf(r.startContainer, r.startOffset);
-        let b = offOf(r.endContainer, r.endOffset);
-        if (a > b) [a, b] = [b, a];
-        return a === b ? null : { a, b };
-      };
-      const delSel = (sr) => {
-        const q0 = cvblen(t.slice(0, sr.a));
-        const q1 = cvblen(t.slice(0, sr.b));
-        wsys?.canvasEvent(gw.id, `delete ${ed.id} ${q0} ${q1}`);
-        window.getSelection()?.removeAllRanges();
-        return t.slice(0, sr.a) + t.slice(sr.b);
-      };
-      const setText = (nt, noff) => {
-        gw.cvCaretOff = noff;
-        ed.el.textContent = nt;
-        renderCaret(gw);
-      };
-      const lineNav = (dir) => {
-        const ls = t.slice(0, off).split("\n");
-        const row = ls.length - 1;
-        const col = ls[row].length;
-        const all = t.split("\n");
-        const nr = row + dir;
-        if (nr < 0 || nr >= all.length) return off;
-        let base2 = 0;
-        for (let i2 = 0; i2 < nr; i2++) base2 += all[i2].length + 1;
-        return base2 + Math.min(col, all[nr].length);
-      };
-      if (e.key === "ArrowLeft") { e.preventDefault(); gw.cvCaretOff = Math.max(0, off - 1); renderCaret(gw); return; }
-      if (e.key === "ArrowRight") { e.preventDefault(); gw.cvCaretOff = Math.min(t.length, off + 1); renderCaret(gw); return; }
-      if (e.key === "ArrowUp") { e.preventDefault(); gw.cvCaretOff = lineNav(-1); renderCaret(gw); return; }
-      if (e.key === "ArrowDown") { e.preventDefault(); gw.cvCaretOff = lineNav(1); renderCaret(gw); return; }
-      if (e.key === "Home") { e.preventDefault(); gw.cvCaretOff = t.lastIndexOf("\n", off - 1) + 1; renderCaret(gw); return; }
-      if (e.key === "End") { e.preventDefault(); const nx = t.indexOf("\n", off); gw.cvCaretOff = nx < 0 ? t.length : nx; renderCaret(gw); return; }
-      if (e.key === "Backspace") {
-        e.preventDefault();
-        const sr = selRange();
-        if (sr) { setText(delSel(sr), sr.a); return; }
-        if (off === 0) return;
-        const q0 = cvblen(t.slice(0, off - 1));
-        const q1 = cvblen(t.slice(0, off));
-        setText(t.slice(0, off - 1) + t.slice(off), off - 1);  // local echo
-        wsys?.canvasEvent(gw.id, `delete ${ed.id} ${q0} ${q1}`);
-        return;
-      }
-      let ch = null;
-      if (e.key === "Enter") ch = "\n";
-      else if (e.key.length === 1) ch = e.key;
-      if (ch === null) return;
-      e.preventDefault();
-      let t2 = t;
-      let off2 = off;
-      const sr = selRange();
-      if (sr) { t2 = delSel(sr); off2 = sr.a; }
-      const q0 = cvblen(t2.slice(0, off2));
-      setText(t2.slice(0, off2) + ch + t2.slice(off2), off2 + 1);   // local echo
-      wsys?.canvasEvent(gw.id, `insert ${ed.id} ${q0} ${cvq(ch)}`);
-    });
-  }
-  gw.cvEdit = null;
-  const kids = new Map();
-  const byid = new Map();
-  for (const n of snap) byid.set(n.id, n);
-  for (const n of snap) {
-    if (n.id === 0) continue;
-    const par = +(n.attrs.parent ?? 0);
-    if (!kids.has(par)) kids.set(par, []);
-    kids.get(par).push(n);
-  }
-  for (const l of kids.values())
-    l.sort((a, b) => (+(a.attrs.order ?? 0) - +(b.attrs.order ?? 0)) || (a.id - b.id));
-  const build = (n) => {
-    let el;
-    if (n.kind === "stack") {
-      el = document.createElement("div");
-      el.style.display = "flex";
-      const row = n.attrs.dir === "row";
-      el.style.flexDirection = row ? "row" : "column";
-      el.style.gap = "6px";
-      el.style.alignItems = "stretch";
-      el.style.minWidth = "0";
-      el.style.minHeight = "0";
-      if (n.attrs.bg) el.style.background = n.attrs.bg;
-      for (const k of kids.get(n.id) ?? []) {
-        const kel = build(k);
-        if (row) {
-          const pr = cv_prop(k);
-          kel.style.flex = pr === "0" ? "0 0 auto" : `${+pr || 1} 1 0`;  // share, or hug
-        }
-        el.appendChild(kel);
-      }
-    } else if (n.kind === "path") {
-      el = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      el.setAttribute("viewBox", (n.attrs.viewbox ?? "0 0 100 100").replace(/"/g, ""));
-      el.style.cssText = "width:100%;max-height:300px;";
-      const pa = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      pa.setAttribute("d", n.data);
-      pa.setAttribute("stroke", n.attrs.stroke ?? "#111");
-      pa.setAttribute("fill", n.attrs.fill ?? "none");
-      pa.setAttribute("stroke-width", n.attrs.width ?? "1.5");
-      el.appendChild(pa);
-    } else {
-      const action = n.attrs.action;
-      if (action === "look") { el = document.createElement("a"); el.href = "#"; }
-      else if (action === "execute") el = document.createElement("button");
-      else el = document.createElement(n.kind === "edit" ? "pre" : "div");
-      el.textContent = n.data;
-      if (n.attrs.bg) el.style.background = n.attrs.bg;
-      if (n.kind === "edit" || n.kind === "text") {
-        const wordAt = (e) => {
-          const r = document.caretRangeFromPoint?.(e.clientX, e.clientY);
-          if (!r || r.startContainer.nodeType !== 3) return null;
-          let t = "";
-          for (const nd of el.childNodes) if (nd.nodeType === 3) t += nd.nodeValue;
-          let off = r.startOffset;
-          for (const nd of el.childNodes) {
-            if (nd === r.startContainer) break;
-            if (nd.nodeType === 3) off += nd.nodeValue.length;
-          }
-          if (off > t.length) off = t.length;
-          const isw = (c) => c && !/\s/.test(c);
-          let a = off, b = off;
-          while (a > 0 && isw(t[a - 1])) a--;
-          while (b < t.length && isw(t[b])) b++;
-          if (a === b) return null;
-          return { word: t.slice(a, b), q0: cvblen(t.slice(0, a)), q1: cvblen(t.slice(0, b)) };
-        };
-        const sweepText = () => {
-          const sel = window.getSelection();
-          if (!sel || sel.isCollapsed || !el.contains(sel.anchorNode)) return null;
-          const t = sel.toString();
-          return t.trim().length ? t.trim() : null;
-        };
-        el.addEventListener("mousedown", (e) => {
-          if (e.altKey || e.button === 1) {
-            // execute: the swept selection if there is one (arguments and
-            // all — the paper's model), else the word under the pointer
-            const sw = sweepText();
-            const wa = sw ? { word: sw, q0: 0, q1: cvblen(sw) } : wordAt(e);
-            if (wa) {
-              e.preventDefault();
-              e.stopPropagation();
-              wsys?.canvasEvent(gw.id, `execute ${n.id} ${wa.q0} ${wa.q1} ${cvq(wa.word)}`);
-            }
-          }
-        });
-        el.addEventListener("contextmenu", (e) => {
-          // B3: look. In-window literal search is the presenter's half —
-          // jump the caret to the next occurrence and show it; the app
-          // hears the event too (paths open windows).
-          const wa = wordAt(e);
-          if (!wa) return;
-          e.preventDefault();
-          const t = cvPlain(el);
-          const from = (gw.cvEdit?.el === el ? (gw.cvCaretOff ?? 0) : 0) + 1;
-          let at = t.indexOf(wa.word, from);
-          if (at < 0) at = t.indexOf(wa.word);
-          if (at >= 0 && n.kind === "edit") {
-            gw.cvEdit = { el, id: n.id };
-            gw.cvCaretOff = at;
-            renderCaret(gw);
-            el.querySelector(".cvcaret")?.scrollIntoView?.({ block: "center" });
-          }
-          wsys?.canvasEvent(gw.id, `look ${n.id} ${wa.q0} ${wa.q1} ${cvq(wa.word)}`);
-        });
-      }
-      if (n.kind === "edit") {
-        el.style.cssText = "white-space:pre-wrap;margin:0;outline:none;min-height:1.4em;" +
-          "overflow-wrap:anywhere;min-width:0;" +
-          (n.attrs.bg ? "background:" + n.attrs.bg + ";" : "");
-        gw.cvEdit = { el, id: n.id };                // the delegated keyboard's target
-        el.addEventListener("mousedown", (e) => {
-          e.stopPropagation();
-          gw.cvEdit = { el, id: n.id };
-          const r = document.caretRangeFromPoint?.(e.clientX, e.clientY);
-          if (r && r.startContainer.nodeType === 3 && r.startContainer.parentNode === el) {
-            let off = r.startOffset;
-            for (const nd of el.childNodes) {
-              if (nd === r.startContainer) break;
-              if (nd.nodeType === 3) off += nd.nodeValue.length;
-            }
-            gw.cvCaretOff = off;
-          } else {
-            gw.cvCaretOff = cvPlain(el).length;
-          }
-          renderCaret(gw);
-        });
-      }
-      if (action)
-        el.addEventListener("click", (e) => {
-          e.preventDefault();
-          wsys?.canvasEvent(gw.id,
-            `${action} ${n.id} 0 ${cvblen(n.data)} ${cvq(n.data)}`);
-        });
-    }
-    return el;
-  };
-  const root = byid.get(0);
-  const rootEl = root ? build(root) : document.createTextNode("");
-  if (root) { rootEl.style.minHeight = "100%"; }
-  gw.cvEl.replaceChildren(rootEl);
-  renderCaret(gw);
-}
-
 const host = {
   spawnWorker: (initMsg, transfer) => {
     let w = null, pending = [[initMsg, transfer]], dead = false;
@@ -755,18 +430,21 @@ const host = {
   snarfSet: (text) => { try { navigator.clipboard?.writeText(text); } catch {} },
   snarfGet: () => { try { return navigator.clipboard?.readText?.(); } catch { return null; } },
   winCanvas: (id, snap) => {
-    // the browser's own credit system: keep only the LATEST tree and
-    // render once per animation frame — coalescing changes the rate,
-    // only credit changes the bound, here too
     const gw = gwins.get(id);
     if (!gw) return;
-    gw.cvSnap = snap;
-    if (!gw.cvRaf) {
-      gw.cvRaf = requestAnimationFrame(() => {
-        gw.cvRaf = null;
-        if (gwins.has(id)) renderCanvas(gw, gw.cvSnap);
+    if (!gw.cv) {
+      // the window becomes the browser surface's client
+      gw.cv = createCanvasView({
+        mount: gw.win.body,
+        send: (line) => wsys?.canvasEvent(id, line),
+        snarf: (t) => wsys?.snarfPut?.(t),
       });
+      gw.termEl.style.display = "none";
+      gw.canvas.style.display = "none";
+      gw.cvMode = true;
+      gw.win.setFocusInner(() => gw.cv.focus());
     }
+    gw.cv.update(snap);
   },
   canvasCaps: () => "interactive input",
   exit: (code) => {
@@ -829,6 +507,35 @@ await new Promise((r) => setTimeout(r, 0));      // let the status paint
 const files = JSON.parse(text);
 setStatus("booting…");
 const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: true });
+// ---- the home chooser: play (ramfs) · browser storage (OPFS) · a real
+// local folder (File System Access). A granted directory IS a bind.
+{
+  const sel = document.getElementById("mHome");
+  let current = "play";
+  sel?.addEventListener("change", async () => {
+    const want = sel.value;
+    try {
+      if (want === "play") {
+        feedCons("unmount /n/host >[2]/dev/null; cd /usr/kitty");
+        toast("home: the shipped examples — nothing persists");
+      } else if (want === "browser") {
+        const h = await navigator.storage.getDirectory();
+        booted.grantHostfs(h);
+        feedCons("bind -c '#Z' /n/host; cd /n/host");
+        toast("home: browser storage — /n/host persists in this browser, private to this site");
+      } else if (want === "folder") {
+        const h = await window.showDirectoryPicker({ mode: "readwrite" });
+        booted.grantHostfs(h);
+        feedCons("bind -c '#Z' /n/host; cd /n/host");
+        toast("home: " + h.name + " — /n/host is your real folder; Put writes to your disk");
+      }
+      current = want;
+    } catch (e) {
+      sel.value = current;               // picker cancelled or refused
+      if (want === "folder") toast("no folder granted — home unchanged");
+    }
+  });
+}
 cons = booted.cons;
 wsys = booted.wsys;
 setStatus("running");

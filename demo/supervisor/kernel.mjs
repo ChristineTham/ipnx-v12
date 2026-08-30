@@ -11,6 +11,7 @@
 // and calls boot(host, { rootSeed, interactive }), receiving { cons } to
 // feed console input into.
 import { makeRamfs, makeCons, makePipeDev, makeWebfs, makeSnapDev } from "./devs.mjs";
+import { makeBrowserHostfs } from "./devhostfs.mjs";
 import { makeMntDev, mountConn } from "./mnt9p.mjs";
 import { parseStat, marshalStat, DMSETUID, QTDIR } from "./stat9.mjs";
 import { makeWsys } from "./devwsys.mjs";
@@ -1012,14 +1013,16 @@ export async function boot(theHost, { rootSeed, interactive }) {
   const hostRef = { host };
   const wsys = makeWsys(hostRef);
   const ram = makeRamfs(rootSeed, EVE);
+  const zfs = makeBrowserHostfs();
   devs = { M: ram, c: cons, "|": makePipeDev(), m: makeMntDev(),
     p: makeProcDev(), e: makeEnvDev(), w: wsys, d: makeDupDev(), s: makeSrvDev(),
-    H: makeWebfs(), V: makeSnapDev(ram) };
+    H: makeWebfs(), V: makeSnapDev(ram), Z: zfs };
   const init = newProc(0, { ns: new Map(), fdt: newFdt(), cwd: "/",
     cred: { euid: EVE, ruid: EVE } });
   const image = await readAll(await walk(init, "/bin/init"));
   spawn(init, await WebAssembly.compile(image), interactive ? ["init", "-i"] : ["init"]);
   return { cons, wsys: { mouse: wsys.mouse, key: wsys.key, canvasEvent: wsys.canvasEvent,
     quote: wsys.quote, snarfPut: wsys.snarfPut },
+    grantHostfs: (handle) => zfs.grant(handle),
     graft: (seed) => devs.M.graft(seed) };
 }

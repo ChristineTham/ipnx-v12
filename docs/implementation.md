@@ -268,11 +268,20 @@ VSCode panels M13's; the original "browser host on the Rust core" aim
 (the Rust kernel compiled to wasm for the page) moves to the browser
 host's own line in platforms.md, unblocked but unscheduled — and the
 question "why can't the demo be the browser surface" (hers,
-2026-08-30) is answered on the record: it IS, structurally — the demo
-shell's canvas presenter is the universal SPA, the chrome around it
-is packaging, and only two named steps separate "home of" from "is":
-factoring the presenter into a standalone cached artifact any page
-can load, and swapping the Rust core beneath the page. The xterm
+2026-08-30) is answered on the record: it IS, structurally — and the first of the
+two named steps landed the same day, on her directive ("convert the
+demo to the browser surface… swap out ramfs with a real namespace"):
+the presenter is factored into `demo/shell/presenter.mjs`, a
+standalone artifact (createCanvasView: snapshots in, event lines out,
+rAF-coalesced) with the shell as its first client — and the namespace
+became a user CHOICE of three homes, her design: play (ramfs +
+examples), browser storage (OPFS), or a real local folder (File
+System Access) — one `#Z` hostfs device over FileSystemDirectoryHandle
+serving both persistent modes, since OPFS and picked folders speak
+the identical API. A granted directory IS a bind, demonstrated: a
+file written through the namespace survived a full page reload. The
+remaining step — the Rust core beneath the page — stays unblocked,
+unscheduled. The xterm
 console stays beside con per AND-not-XOR.
 Compile `kernel/` to wasm (the core is single-threaded, no OS dependencies —
 built for this), embed it in a JS shim structurally parallel to
