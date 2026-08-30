@@ -21,6 +21,15 @@ const cvenc = new TextEncoder();
 const cvq = (t) => t.replace(/%/g, "%25").replace(/ /g, "%20").replace(/\n/g, "%0A");
 const cvProp = (n) => n.attrs.prop ?? "1";
 const cvblen = (t) => cvenc.encode(t).length;
+// a byte offset (the protocol's coordinate) back to a char offset (the DOM's)
+const cvchar = (t, boff) => {
+  let b = 0;
+  for (let i = 0; i < t.length; i++) {
+    if (b >= boff) return i;
+    b += cvenc.encode(t[i]).length;
+  }
+  return t.length;
+};
 
 function cvPlain(el) {
   let t = "";
@@ -169,6 +178,7 @@ function render(v, snap) {
         el.style.cssText = "white-space:pre-wrap;margin:0;outline:none;min-height:1.4em;" +
           "overflow-wrap:anywhere;min-width:0;" +
           (n.attrs.bg ? "background:" + n.attrs.bg + ";" : "");
+        el.dataset.cvid = n.id;                      // reportSel finds the node
         v.edit = { el, id: n.id };                   // the delegated keyboard's target
         el.addEventListener("mousedown", (e) => {
           e.stopPropagation();
@@ -180,6 +190,7 @@ function render(v, snap) {
             v.caretOff = cvPlain(el).length;
           }
           caret(v);
+          reportSel(v);
         });
       }
       if (action)
@@ -194,10 +205,90 @@ function render(v, snap) {
   const rootEl = root ? build(root) : document.createTextNode("");
   if (root) rootEl.style.minHeight = "100%";
   v.el.replaceChildren(rootEl);
+
+  // the app steered the selection: sel=q0,q1 on an edit node (byte
+  // offsets). Scroll it into view always; take the keyboard only when
+  // the node is new this render — output tails never steal the caret.
+  for (const n of snap) {
+    if (n.kind !== "edit" || n.attrs.sel === undefined) continue;
+    if (v._appliedSel.get(n.id) === n.attrs.sel) continue;
+    v._appliedSel.set(n.id, n.attrs.sel);
+    const el = v.el.querySelector(`[data-cvid="${n.id}"]`);
+    if (!el) continue;
+    const [bq0, bq1] = n.attrs.sel.split(",").map((x) => +x || 0);
+    const fresh = !v._seen.has(n.id);
+    if (fresh || v.edit?.id === n.id) {
+      v.edit = { el, id: n.id };
+      v.caretOff = cvchar(n.data, bq1);
+    }
+    el._cvsel = { a: cvchar(n.data, bq0), b: cvchar(n.data, bq1) };
+    el._cvscroll = true;
+  }
+  const live = new Set(snap.map((n) => n.id));
+  for (const id of v._seen)
+    if (!live.has(id)) { v._seen.delete(id); v._appliedSel.delete(id); }
+  for (const n of snap) v._seen.add(n.id);
   caret(v);
+  for (const el of v.el.querySelectorAll("[data-cvid]")) {
+    if (!el._cvscroll) continue;
+    el._cvscroll = false;
+    const c = el.querySelector(".cvcaret");
+    (c ?? el).scrollIntoView?.({ block: "nearest" });
+    const s = el._cvsel;
+    if (s && s.a !== s.b && v.edit?.el === el) {
+      // paint the range as the native selection
+      const r = document.createRange();
+      let x = 0, done = 0;
+      for (const nd of el.childNodes) {
+        if (nd.nodeType !== 3) continue;
+        const ln = nd.nodeValue.length;
+        if (!(done & 1) && s.a <= x + ln) { r.setStart(nd, Math.max(0, s.a - x)); done |= 1; }
+        if (!(done & 2) && s.b <= x + ln) { r.setEnd(nd, Math.max(0, s.b - x)); done |= 2; break; }
+        x += ln;
+      }
+      if (done === 3) {
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(r);
+      }
+    }
+    el._cvsel = null;
+  }
+}
+
+// the surface's half of the select event: report the user's selection
+// (or collapsed caret) in an edit node when it changes
+function reportSel(v) {
+  let id = null, a = 0, b = 0;
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed && sel.rangeCount > 0) {
+    const r = sel.getRangeAt(0);
+    const el = r.startContainer.parentElement?.closest?.("[data-cvid]");
+    if (el && v.el.contains(el) && el.contains(r.endContainer)) {
+      id = +el.dataset.cvid;
+      const t = cvPlain(el);
+      a = offOf(el, r.startContainer, r.startOffset);
+      b = offOf(el, r.endContainer, r.endOffset);
+      if (a > b) [a, b] = [b, a];
+      a = cvblen(t.slice(0, a));
+      b = cvblen(t.slice(0, b));
+    }
+  }
+  if (id === null && v.edit) {
+    id = v.edit.id;
+    const t = cvPlain(v.edit.el);
+    const off = Math.min(v.caretOff ?? t.length, t.length);
+    a = b = cvblen(t.slice(0, off));
+  }
+  if (id === null) return;
+  const key = `${id} ${a} ${b}`;
+  if (v._lastSel === key) return;
+  v._lastSel = key;
+  v.send(`select ${id} ${a} ${b}`);
 }
 
 function installHandlers(v) {
+  v.el.addEventListener("mouseup", () => reportSel(v));
   v.el.addEventListener("copy", () => {
     const t = window.getSelection()?.toString() ?? "";
     if (t) v.snarf?.(t);                             // /dev/snarf hears the gesture
@@ -310,11 +401,13 @@ function installHandlers(v) {
     const q0 = cvblen(t2.slice(0, off2));
     setText(t2.slice(0, off2) + ch + t2.slice(off2), off2 + 1);  // local echo
     v.send(`insert ${ed.id} ${q0} ${cvq(ch)}`);
+    reportSel(v);
   });
 }
 
 export function createCanvasView({ mount, send, snarf }) {
-  const v = { el: null, edit: null, caretOff: null, send, snarf, _snap: null, _raf: 0 };
+  const v = { el: null, edit: null, caretOff: null, send, snarf, _snap: null, _raf: 0,
+    _appliedSel: new Map(), _seen: new Set(), _lastSel: "" };
   v.el = document.createElement("div");
   v.el.tabIndex = 0;
   v.el.style.cssText = "position:absolute;left:0;right:0;bottom:0;top:30px;overflow:auto;" +

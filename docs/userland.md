@@ -108,6 +108,28 @@ the redesign completes the merger the originals gestured at:
   the succession rule's second clause — the behaviour suite is the
   proof, and the raster ancestor's substrate tests stepped back with
   it to `acme9`. The one editor answers to the one name.
+- **The paper pass, same day again** (her question: "do all the
+  examples in the paper work?" — design.md logs the decision): the
+  engine joined the shape. External commands run in the window's
+  directory with output appended to a `dir/+Errors` window (the mk
+  workflow, §19 of the paper); the selection filters `| < >` pipe dot
+  through real binaries; Undo/Redo unwind by sequence number with
+  typing coalesced; Put (and Undo/Redo) appear in the tag only while
+  they have work — a tracked auto block that user tag edits shift;
+  B3 takes sam addresses (`f3:2`, `:/re/`, `#c`, compounds), reuses
+  an open window, and `<header>` resolves through /sys/include;
+  Cut/Snarf/Paste/Look/Sort/ID/Kill/Delete joined the word set —
+  Cut and Paste move through `/dev/snarf` itself, so the tag words
+  and the host-clipboard gestures are one buffer (AND, not XOR: the
+  earlier "gestures, not tag words" divergence is superseded); and
+  the file interface is REAL: `index`, `new`, `N/{tag,body,addr,
+  data,ctl,event}` served as 9P at `/srv/acme`, the event file
+  delegating execute/look in the paper's own format. The canvas
+  protocol grew `select` (event) and `sel` (attr) for all this;
+  neither kernel changed. Still divergent, stamped: chords stay the
+  host clipboard's, scrollbars/fonts are the surface's, Zerox copies
+  rather than aliasing, §6's guide-file tools are superseded by the
+  built-in Edit, and the Mac presenter stays v0.
 - **First slice landed 2026-08-30 as `edit(1)`** (working title;
   renamed `acme` at succession): the editor's shape on
   canvas — a tag row whose verbs are real nodes (the file name is

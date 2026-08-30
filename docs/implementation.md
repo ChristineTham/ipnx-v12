@@ -259,11 +259,15 @@ clipboard sync, "what Parallels and other hypervisors do," her words,
 now a file any program can cat. One rc subtlety recorded from the
 suite work: a failed redirection aborts the command WITHOUT setting
 $status, so probes must probe by read, not by write-status.
-**Recorded deferrals leaving M5**: `path` nodes not yet drawn on the Mac
-surface; caret/selection editing (both presenters are append/backspace
-v0 — the full editing pass rides acme-today's continuation); the
-plumber's rules and message shape (the next measurement — look events
-deliver, nothing routes them yet); canvas on iPad is M6's bridge and
+**Recorded deferrals leaving M5** *(revised by the acme fidelity pass,
+2026-08-30 — the paper's examples as yardstick; design.md logs the
+decision)*: `path` nodes not yet drawn on the Mac surface; the MAC
+presenter's editing stays append/backspace v0 (the browser presenter
+now carries full editing, selection reporting and app-steered `sel`);
+the plumber's rules and message shape (narrowed: look now resolves
+files, directories and sam addresses app-side and delegates through
+acme's own event file — what remains is the plumber as a separate
+program with rules); canvas on iPad is M6's bridge and
 VSCode panels M13's; the original "browser host on the Rust core" aim
 (the Rust kernel compiled to wasm for the page) moves to the browser
 host's own line in platforms.md, unblocked but unscheduled — and the

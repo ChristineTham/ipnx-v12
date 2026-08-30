@@ -6,7 +6,7 @@
 // — that is how pipe reads and console reads block their caller without
 // blocking the kernel. Platform-neutral: no Node APIs, no Buffer.
 import { marshalStat, QTDIR, QTFILE, QTSYMLINK, DMDIR, DMSYMLINK } from "./stat9.mjs";
-import { concat } from "./bytes.mjs";
+import { concat, bstr } from "./bytes.mjs";
 
 let qgen = 1;
 const empty = new Uint8Array(0);
@@ -254,7 +254,7 @@ export function makeSnapDev(ram) {
     },
     write: (node, data, off) => {
       if (node.snapctl) {
-        const words = new TextDecoder().decode(data).trim().split(/\s+/);
+        const words = bstr(data).trim().split(/\s+/); // SAB-safe (RESEARCH §5.3)
         if (words[0] === "snap") {
           const name = words[1] ?? `s${snaps.length + 1}`;
           if (snaps.some((s2) => s2.name === name)) throw derr(`snapshot '${name}' exists`);

@@ -618,6 +618,45 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-30) The paper is the yardstick: acme answers its own
+  literature.** Christine, after the succession: "I still feel like
+  acme does not behave like real acme. Have you read the acme paper? Do
+  you know if all the examples in the paper will work?" The honest
+  answer was no — acme-today had the paper's shape and not its engine —
+  so the paper (Pike, *Acme: A User Interface for Programmers*) was
+  inventoried example by example and the gaps closed in one pass:
+  **external commands** run in the window's directory (`mk` in a tag,
+  the §19 workflow) with output to a `dir/+Errors` window created
+  towards the right; the **selection filters `| < >`** (4th-edition
+  exec.c:118 provenance) pipe dot through real commands; **Undo/Redo**
+  unwind by sequence number, typing coalesced, exactly the paper's
+  two-list algorithm; **Put appears in the tag only while dirty** (and
+  Undo/Redo only when they have work), maintained as a tracked auto
+  block that user tag edits shift; **B3 takes sam addresses** —
+  `dat.h:27`, `:/re/`, `#c`, compounds — opening at the line, reusing
+  an existing window, `<header>` resolving through /sys/include; **Cut,
+  Snarf, Paste, Look, Sort, ID, Kill, Delete are words** (Cut/Paste
+  compose with the host clipboard through /dev/snarf itself, so the
+  stamped divergence and the paper's builtins reconcile in one buffer);
+  and **the editor serves its file interface** — `index`, `new`,
+  `N/{tag,body,addr,data,ctl,event}` — as 9P posted at `/srv/acme`,
+  the paper's §7: `grep -n var *.c > /mnt/acme/new/body` works, `addr`
+  speaks the same address language, `data` replaces the addressed
+  range, and the `event` file delegates execute/look to a client in
+  the paper's own format (`MI15 19 0 4 time`), writeback applying the
+  default interpretation. The canvas protocol grew exactly two
+  elements for all this — the `select` event and the `sel` attr, both
+  device-transparent (neither kernel changed). What remains divergent
+  is stamped in the matrix delivered with the pass: chords are the
+  host clipboard's gestures (decided earlier), scrollbars and fonts
+  are the surface's, Zerox copies rather than aliasing one buffer, the
+  guide-file tools of §6 are superseded by the built-in Edit (as later
+  acme did itself), and the Mac presenter still renders v0
+  (deferral already on record). The suite grew one composite test
+  driving every behaviour headlessly through the virtual surface and a
+  real mount of /srv/acme — green on the Rust host and the demo
+  kernel, self-skipped on the frozen oracle.
+
 - **(2026-08-30) The name on the door: IPNX, not "modified Plan 9".**
   Christine, in her words: "We shouldn't call it a modified Plan 9 kernel.
   You yourself stated it does not inherit any code from Plan 9. We should

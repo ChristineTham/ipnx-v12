@@ -208,7 +208,12 @@ $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/samtoday.o build
   -o rootfs/bin/sam.tmp && mv rootfs/bin/sam.tmp rootfs/bin/sam
 echo "  bin/sam  $(wc -c < rootfs/bin/sam | tr -d ' ') bytes (sam-today: the language as a filter — the name inherited)"
 $P9CC -c cmd/acme.c -o build/acmetoday.o
-$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/acmetoday.o build/libp9.a -o rootfs/bin/acme
+$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/acmetoday.o build/libthread.o build/libp9.a -o rootfs/bin/acme
+"$BINARYEN/bin/wasm-opt" rootfs/bin/acme \
+  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj,env.tsave,env.tjump -O2 \
+  --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
+  --enable-nontrapping-float-to-int \
+  -o rootfs/bin/acme.tmp && mv rootfs/bin/acme.tmp rootfs/bin/acme
 echo "  bin/acme  $(wc -c < rootfs/bin/acme | tr -d ' ') bytes (acme-today: the one editor, the name inherited)"
 
 # samterm: the real editor's screen — libframe over libdraw over libthread,

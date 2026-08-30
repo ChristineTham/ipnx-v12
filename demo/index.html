@@ -67,11 +67,19 @@ directory is a bind.</a>
 </p>
 
 <h2 style="font:700 1.25rem Georgia,serif;color:#fff;margin:2rem 0 .3rem">What's inside</h2>
-<p><b>acme</b> — the one editor, acme reimagined for modern surfaces: columns
-of windows, every tag an editable line whose words are the commands, a
-directory listing as the file browser, sam's structural regexps in every tag
-(<code>Edit ,x/re/c/text/</code>), and the dirty box that <code>Put</code>
-clears. <b>sam</b> — the same language as a standalone filter:
+<p><b>acme</b> — the one editor, acme reimagined for modern surfaces and
+answering the 1994 paper example for example: columns of windows, every tag
+an editable line whose words are the commands, a directory listing as the
+file browser, sam's structural regexps in every tag
+(<code>Edit ,x/re/c/text/</code>), the dirty box (and <code>Put</code>
+appears in the tag only while it's needed). Execute any command in a tag —
+its output opens in a <code>dir/+Errors</code> window; <code>|</code>,
+<code>&lt;</code> and <code>&gt;</code> filter the selection through real
+programs; <code>Undo</code>/<code>Redo</code> unwind by sequence;
+right-click <code>hello.c:3</code> and the file opens <i>at line three</i>.
+And the editor is itself files: <code>mount acme /mnt/acme</code>, then
+<code>grep -n main *.c &gt; /mnt/acme/new/body</code> puts grep's output in
+a fresh window — the paper's own example, running. <b>sam</b> — the same language as a standalone filter:
 <code>sam file &lt; commands</code>, ed's true heir; it earned the name by
 passing the original's tests. <b>con</b> — the console as an editable
 transcript: scrollback is a buffer, search is the editor, no terminal

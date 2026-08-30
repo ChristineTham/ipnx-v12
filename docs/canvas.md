@@ -9,7 +9,11 @@ are recorded inline; each is a decision, not an accident.
 *Revised 2026-08-30 after the benchmarks landed: the four consumers —
 con(1), acme(1) (acme-today), `/rc/tile`, and the path plot — now run
 against this contract on every host, and the spec below states the
-protocol as built, additions dated in place.*
+protocol as built, additions dated in place. Revised again the same
+day by the acme fidelity pass (the paper's examples as the yardstick):
+one event (`select`) and one attr (`sel`) joined, each carried by a
+measured need; both pass through the devices untouched, so neither
+kernel changed.*
 
 ## The derivation (the measurement pass, 2026-08-30)
 
@@ -64,7 +68,14 @@ value is the flex share (default 1) · any content node: `bg=<colour>`
 tags' `#eaffff` and bodies' `#ffffea` ride it) · path:
 `viewbox="x y w h"` `stroke=<colour>` `fill=<colour>` `width=<n>` · any
 node: `action=execute|look` (a whole-node role; the presenter renders
-it honestly — a real link or button on the web).
+it honestly — a real link or button on the web) · edit:
+`sel=<q0>,<q1>` (added 2026-08-30, the acme fidelity pass: the app
+steers the surface's selection — byte offsets; the paper's "selects
+line 112 and places the mouse there" demands it, and Undo, Look and
+`file:27` all ride it. The surface scrolls the range into view; how
+much keyboard focus follows is the surface's policy — the browser
+presenter retargets only for a node new in that render, so `+Errors`
+tails scroll without stealing the caret).
 
 **addr/data** — acme's buffer interface, simplified for v0 (recorded
 open: verbatim addr language returns with sam-today): `addr` accepts only
@@ -83,6 +94,12 @@ One line each, parked reads, oldest first. Text fields are %-quoted
 ```
 insert <id> <q0> <text>       the user typed/pasted into an edit node
 delete <id> <q0> <q1>         the user removed a range
+select <id> <q0> <q1>         the user's selection (or collapsed
+                              caret) in an edit node changed — added
+                              2026-08-30: Cut/Snarf/Paste-as-words and
+                              the | < > selection filters need the app
+                              to know dot. Not a mutation: the device
+                              queues it untouched
 execute <id> <q0> <q1> <text> the execute verb landed on this range
 look <id> <q0> <q1> <text>    the look verb (tap) landed
 resize 0 <w> <h>              the surface resized the window

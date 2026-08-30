@@ -289,6 +289,112 @@ if(~ $"cnok virtual){
 }
 if not echo PASS 'acme: no canvas on this host — skipped'
 
+# acme against the paper (the fidelity pass, 2026-08-30): external
+# commands run in the window's directory, output to dir/+Errors; the
+# selection filters | < > work; Undo/Redo unwind by sequence; the tag
+# grows Undo/Put dynamically (the paper's rule); B3 takes addresses
+# (file:2); Cut/Snarf/Paste are words AND /dev/snarf; Sort orders a
+# column; and the file interface serves index, new and
+# N/{tag,body,addr,data,ctl,event} at /srv/acme. Window k: 9P dir
+# 10+10k, canvas tag 11+10k, body 12+10k.
+if(~ $"cnok virtual){
+	mkdir /tmp/aw
+	echo -n 'alpha beta' > /tmp/aw/f1
+	echo one > /tmp/aw/f3
+	echo two words here >> /tmp/aw/f3
+	echo three >> /tmp/aw/f3
+	apwid=`{cat '#w/clone'}
+	app='#w/'$"apwid^'/canvas'
+	acme -W $apwid /tmp/aw/f1 &
+	sleep 2
+	# external commands: output lands in /tmp/aw/+Errors (window 1)
+	echo 'event execute 11 0 0 echo%20paper%20works' > $app/ctl
+	sleep 2
+	echo -n '0,$' > $app/22/addr
+	er1=`{cat $app/22/data}
+	# directory context: a relative name resolves in the window's dir
+	echo 'event execute 11 0 0 cat%20f1' > $app/ctl
+	sleep 2
+	echo -n '0,$' > $app/22/addr
+	er2=`{cat $app/22/data}
+	# | filters the selection through a command
+	echo 'event select 12 0 5' > $app/ctl
+	echo 'event execute 11 0 0 |tr%20a-z%20A-Z' > $app/ctl
+	sleep 2
+	echo -n '0,$' > $app/12/addr
+	ab1=`{cat $app/12/data}
+	# Undo unwinds it, Redo restores it, the tag says so
+	echo 'event execute 11 0 0 Undo' > $app/ctl
+	sleep 1
+	echo -n '0,$' > $app/12/addr
+	ab2=`{cat $app/12/data}
+	echo 'event execute 11 0 0 Redo' > $app/ctl
+	sleep 1
+	echo -n '0,$' > $app/12/addr
+	ab3=`{cat $app/12/data}
+	echo -n '0,$' > $app/11/addr
+	tg1=`{cat $app/11/data}
+	# Snarf/Cut/Paste as words, through /dev/snarf itself
+	echo 'event select 12 0 5' > $app/ctl
+	echo 'event execute 11 0 0 Snarf' > $app/ctl
+	sleep 1
+	sn=`{cat '#w/snarf'}
+	echo 'event execute 11 0 0 Cut' > $app/ctl
+	sleep 1
+	echo -n '0,$' > $app/12/addr
+	cb1=`{cat $app/12/data}
+	echo 'event execute 11 0 0 Paste' > $app/ctl
+	sleep 1
+	echo -n '0,$' > $app/12/addr
+	pa1=`{cat $app/12/data}
+	# B3 with an address: f3:2 opens the file AT line two (sel travels)
+	echo 'event look 12 0 0 f3:2' > $app/ctl
+	sleep 1
+	a32=`{grep sel $app/32/attrs}
+	# the file interface: index, addressed edits, new/, the event file
+	mkdir /mnt/acme
+	mount acme /mnt/acme
+	ix=`{grep -c f1 /mnt/acme/index}
+	echo -n 2 > /mnt/acme/30/addr
+	echo -n 'TWO WORDS' > /mnt/acme/30/data
+	sleep 1
+	echo -n '0,$' > $app/32/addr
+	w3=`{cat $app/32/data}
+	echo hello new > /mnt/acme/new/body
+	sleep 1
+	echo -n '0,$' > $app/42/addr
+	nb=`{cat $app/42/data}
+	read < /mnt/acme/10/event > /tmp/aw/ev &
+	sleep 1
+	echo 'event execute 11 0 0 Put' > $app/ctl
+	sleep 2
+	ev=`{cat /tmp/aw/ev}
+	echo 'event execute 11 0 0 Put' > $app/ctl
+	sleep 1
+	pf=`{cat /tmp/aw/f1}
+	# Sort orders the column's windows by name
+	echo 'event execute 201 0 0 Sort' > $app/ctl
+	sleep 1
+	so1=`{grep order $app/10/attrs}
+	unmount /mnt/acme >[2] /dev/null
+	echo 'event close 0' > $app/ctl
+	apok=yes
+	if(! ~ $"er1 'paper works') apok=no
+	if(! ~ $"er2 *'alpha beta'*) apok=no
+	if(! ~ $"ab1 'ALPHA beta' || ! ~ $"ab2 'alpha beta' || ! ~ $"ab3 'ALPHA beta') apok=no
+	if(! ~ $"tg1 *Undo* || ! ~ $"tg1 *Put*) apok=no
+	if(! ~ $"sn ALPHA || ! ~ $"cb1 beta || ! ~ $"pa1 'ALPHA beta') apok=no
+	if(! ~ $"a32 'sel=4,19') apok=no
+	if(~ $ix 0) apok=no
+	if(! ~ $"w3 *'TWO WORDS'*) apok=no
+	if(! ~ $"nb 'hello new') apok=no
+	if(! ~ $"ev 'Mx0 0 0 3 Put') apok=no
+	if(! ~ $"pf 'ALPHA beta') apok=no
+	if(! ~ $"so1 'order=3') apok=no
+	if(~ $apok yes) echo PASS 'acme against the paper: +Errors, the | filter, Undo/Redo, dynamic Put, look addresses, Cut/Snarf/Paste, Sort, and the served file interface'; if not fails=bad
+}
+if not echo PASS 'acme paper pass: no canvas on this host — skipped'
+
 # rio-today's proof: a window manager in rc. ls '#w' lists the windows;
 # /rc/tile writes move and resize lines to every wctl — policy is a file
 # you write, so any program can be a window manager, this script included.
