@@ -296,14 +296,67 @@ mkcol(int c)
 	active = c;
 }
 
+static int
+cmpdir(void *a, void *b)
+{
+	return strcmp(((Dir*)a)->name, ((Dir*)b)->name);
+}
+
+/* a directory's body is its listing — acme's file browser: names, one
+ * per line, directories marked with '/'; look on a name opens it */
+static long
+listdir(char *path, char *buf, long max)
+{
+	Dir *d;
+	int fd;
+	long nd, i, o;
+
+	fd = open(path, OREAD);
+	if(fd < 0)
+		return -1;
+	nd = dirreadall(fd, &d);
+	close(fd);
+	if(nd < 0)
+		return -1;
+	qsort(d, nd, sizeof(Dir), cmpdir);
+	o = 0;
+	for(i = 0; i < nd; i++){
+		long l = strlen(d[i].name);
+		if(o + l + 2 >= max)
+			break;
+		memmove(buf + o, d[i].name, l);
+		o += l;
+		if(d[i].mode & DMDIR)
+			buf[o++] = '/';
+		buf[o++] = '\n';
+	}
+	buf[o] = 0;
+	free(d);
+	return o;
+}
+
+static int
+isdir(char *path)
+{
+	Dir *d;
+	int r;
+
+	d = dirstat(path);
+	if(d == nil)
+		return -1;			/* does not exist */
+	r = (d->mode & DMDIR) != 0;
+	free(d);
+	return r;
+}
+
 /* a window lands in the ACTIVE column — the paper's placement rule,
- * at v0 scale. Tag: name first, commands, | then scratch space; Put is
- * always shown (the dirty box is a recorded deferral). */
+ * at v0 scale. Tag: name first, commands, | then scratch space. A
+ * directory window lists its names and carries no Put. */
 static void
 mkwin(int k, char *file)
 {
 	Wn *w;
-	int base;
+	int base, dird;
 	char b[1024], a[256];
 	long n;
 
@@ -312,10 +365,16 @@ mkwin(int k, char *file)
 	memset(w, 0, sizeof *w);
 	w->used = 1;
 	w->col = active;
-	w->nlen = snprint(w->name, sizeof w->name, "%s Del Get Put Edit | ",
-		file == nil ? "" : file);
+	dird = file != nil && isdir(file) == 1;
+	if(dird)
+		w->nlen = snprint(w->name, sizeof w->name, "%s%s Del Get | ",
+			file, file[strlen(file) - 1] == '/' ? "" : "/");
+	else
+		w->nlen = snprint(w->name, sizeof w->name, "%s Del Get Put Edit | ",
+			file == nil ? "" : file);
 	if(file != nil){
-		n = readfile(file, w->body, sizeof w->body);
+		n = dird ? listdir(file, w->body, sizeof w->body)
+			 : readfile(file, w->body, sizeof w->body);
 		if(n >= 0)
 			w->blen = n;
 	}
@@ -422,8 +481,16 @@ main(int argc, char *argv[])
 	k = 0;
 	for(; i < argc && k < MAXWIN; i++, k++)
 		mkwin(k, argv[i]);
-	if(k == 0)
-		mkwin(k++, nil);
+	if(k == 0){
+		/* acme's opening face: a second column with the current
+		 * directory listed — the file browser */
+		static char cwd[256];
+		mkcol(1);
+		if(getwd(cwd, sizeof cwd) != nil)
+			mkwin(k++, cwd);
+		else
+			mkwin(k++, "/");
+	}
 	fprint(ctlfd, "sync\n");
 
 	snprint(path, sizeof path, "%s/label", wdir);
@@ -592,14 +659,31 @@ main(int argc, char *argv[])
 			continue;
 		}
 		if(nf >= 5 && strcmp(f[0], "look") == 0){
-			/* acme's B3 on a path: open it in a window (the active
-			 * column). In-window literal search is the presenter's
-			 * half — a pure view operation. */
+			/* acme's B3: a name resolves against the looked-in
+			 * window's own directory — the listing is the browser.
+			 * In-window literal search is the presenter's half. */
+			static char resolved[512];
+			char *target;
 			unq(f[4], txt, sizeof txt);
-			if(txt[0] == '/'){
+			target = txt;
+			if(txt[0] != '/' && k < MAXWIN && wns[k].used){
+				char dbase[NMAX], *sl;
+				long fl2;
+				fn = firstword(wns[k].name, wns[k].nlen, &fl2);
+				snprint(dbase, sizeof dbase, "%s", fn);
+				if(fl2 > 0 && dbase[fl2-1] == '/')
+					dbase[fl2-1] = 0;	/* a dir window: itself */
+				else if((sl = strrchr(dbase, '/')) != nil)
+					*sl = 0;		/* a file window: its dir */
+				else
+					dbase[0] = 0;
+				snprint(resolved, sizeof resolved, "%s/%s", dbase, txt);
+				target = resolved;
+			}
+			if(isdir(target) >= 0){
 				int k2 = freewin();
-				if(k2 >= 0 && access(txt, AREAD) >= 0){
-					mkwin(k2, txt);
+				if(k2 >= 0){
+					mkwin(k2, target);
 					fprint(ctlfd, "sync\n");
 				}
 			}
@@ -620,7 +704,9 @@ main(int argc, char *argv[])
 				args++;
 			if(strcmp(word, "Get") == 0){
 				fn = firstword(w->name, w->nlen, &fl);
-				n = readfile(fn, w->body, sizeof w->body);
+				n = fl > 0 && fn[fl-1] == '/'
+					? listdir(fn, w->body, sizeof w->body)
+					: readfile(fn, w->body, sizeof w->body);
 				if(n >= 0){
 					w->blen = n;
 					setnode(base + 2, w->body, w->blen);

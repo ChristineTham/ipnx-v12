@@ -181,6 +181,13 @@ heals an already-poisoned tab once the edge settles.
   70-line reduction (`demo/webkit-repro/`) showed the deterministic trigger
   a whole-system symptom had hidden.
 
+**Debugging the demo in a driven browser pane**: browsers throttle
+`requestAnimationFrame` in hidden panes, and the canvas presenter renders
+on rAF — so DOM queries made while the pane is backgrounded read the
+UNPAINTED tree and report features as absent that worked fine. Front the
+pane (a screenshot does it) before asserting on rendered state; three
+separate "bugs" in one evening were this one ghost.
+
 ## Conventions
 
 Prose is British-inflected, em-dashed; numbers are load-bearing and carry

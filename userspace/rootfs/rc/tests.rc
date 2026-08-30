@@ -260,6 +260,19 @@ if(~ $"cnok virtual){
 	echo 'event execute 11 0 0 Put' > $edp/ctl
 	sleep 1
 	edh=`{cat /tmp/ed2}
+	# acme's browser: look resolves against the window's directory —
+	# a bare name opens the sibling file; an absolute path opens a
+	# LISTING window (names, dirs marked /), Del closes it
+	echo 'event look 12 0 0 ed1' > $edp/ctl
+	sleep 1
+	echo -n '0,$' > $edp/22/addr
+	edl=`{cat $edp/22/data}
+	echo 'event execute 21 0 0 Del' > $edp/ctl
+	echo 'event look 11 0 0 /tmp' > $edp/ctl
+	sleep 1
+	echo -n '0,$' > $edp/22/addr
+	edd=`{cat $edp/22/data}
+	echo 'event execute 21 0 0 Del' > $edp/ctl
 	# a second column, a window born into it (the active-column rule)
 	echo 'event execute 1 0 0 Newcol' > $edp/ctl
 	echo 'event execute 211 0 0 New' > $edp/ctl
@@ -269,7 +282,7 @@ if(~ $"cnok virtual){
 	sleep 1
 	edg=`{cat $edp/12/kind >[2=1]}
 	echo 'event close 0' > $edp/ctl
-	if(~ $"edb 'first draft' && ~ $"edf 'first draft revised' && ~ $"ede 'first draft POLISHED' && ~ $"edh 'first draft POLISHED' && ~ $"edn edit && ~ $"edg *'does not exist'* || ~ $"edg *o such*) echo PASS 'edit: acme-today — the paper'^''''^'s shape: columns, editable tags, words execute, Put follows the name'; if not fails=bad
+	if(~ $"edb 'first draft' && ~ $"edf 'first draft revised' && ~ $"ede 'first draft POLISHED' && ~ $"edh 'first draft POLISHED' && ~ $"edl 'first draft POLISHED' && ~ $"edd *ed1* && ~ $"edd *ed2* && ~ $"edn edit && ~ $"edg *'does not exist'* || ~ $"edg *o such*) echo PASS 'edit: acme-today — columns, editable tags, words execute, and look is the file browser'; if not fails=bad
 }
 if not echo PASS 'edit: no canvas on this host — skipped'
 
