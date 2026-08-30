@@ -70,6 +70,13 @@ the redesign completes the merger the originals gestured at:
   exposed as a control file on every `edit` node (write commands, the
   node edits itself) — which would make "sam" a property of text in this
   system rather than a program. Decide during M5's measurement pass.
+- **First slice landed 2026-08-30 as `edit(1)`**: the editor's shape on
+  canvas — a tag row whose verbs are real nodes (the file name is
+  `action=look` and re-reads from disk; Put and Del are `action=execute`
+  and render as honest buttons on the web), an edit body shadowed from
+  its events, the file round-trip suite-proven and verified by hand in
+  the browser. Next slices: the Edit language (sam's return), multi-file
+  columns, the plumber on look.
 
 ## rio-today: policy as a file server
 

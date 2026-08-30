@@ -229,6 +229,28 @@ if(~ $"cnok virtual){
 }
 if not echo PASS 'console-today: no canvas on this host — skipped'
 
+# edit(1) — acme-today's first slice (M5): tag row of verb nodes, an edit
+# body, Put writes the file back, Del closes the window. Driven through
+# the event door; the file round-trip is the proof. Self-skips with canvas.
+if(~ $"cnok virtual){
+	echo -n 'first draft' > /tmp/ed1
+	edwid=`{cat '#w/clone'}
+	edp='#w/'$"edwid^'/canvas'
+	edit -W $edwid /tmp/ed1 &
+	sleep 2
+	echo -n '0,$' > $edp/5/addr
+	edb=`{cat $edp/5/data}
+	echo 'event insert 5 11 %20revised' > $edp/ctl
+	echo 'event execute 3 0 3 Put' > $edp/ctl
+	sleep 1
+	edf=`{cat /tmp/ed1}
+	echo 'event execute 4 0 3 Del' > $edp/ctl
+	sleep 1
+	edg=`{cat $edp/5/kind >[2=1]}
+	if(~ $"edb 'first draft' && ~ $"edf 'first draft revised' && ~ $"edg *'does not exist'* || ~ $"edg *o such*) echo PASS 'edit: acme-today v0 — tag verbs are nodes, Put round-trips the file, Del closes'; if not fails=bad
+}
+if not echo PASS 'edit: no canvas on this host — skipped'
+
 # M2, the namespace-file boot: the same file format that boots the system
 # reshapes a world at runtime — newns(file, cmd) clears and rebuilds from
 # TEXT, so editing the file rebinds with no recompile (the acceptance).

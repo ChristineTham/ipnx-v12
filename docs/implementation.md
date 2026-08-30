@@ -213,8 +213,13 @@ presenter gained Backspace. Suite-proven through the virtual surface
 with output the typed text never contained — 147 on the demo kernel,
 147 with self-skips on native and the oracle. Found on the way and kept:
 the port's procexec now reports exec failure on fd 2 (a silent child
-death proved undiagnosable). Next in order: acme-today, rio-today, and
-Rust-kernel canvas parity.
+death proved undiagnosable). **acme-today's first slice landed the same
+day as `edit(1)`** — tag verbs as real nodes (look re-reads, Put and Del
+are honest buttons), the body shadowed from events, the file round-trip
+suite-proven (148 on the demo kernel, 148 with self-skips elsewhere) and
+verified by hand in the browser: typed text, a real Put click, the file
+changed on disk, Del released the shell. Next in order: the Edit
+language (sam's return), rio-today, and Rust-kernel canvas parity.
 Compile `kernel/` to wasm (the core is single-threaded, no OS dependencies —
 built for this), embed it in a JS shim structurally parallel to
 `hosts/macos`: Workers as processes, the SAB mailbox, the existing browser
