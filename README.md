@@ -215,10 +215,25 @@ a file, and every process composes its own world.
   machines on a wire do; jails, containers and much of the orchestration
   around them are what systems build when isolation is bolted on afterwards.
   Sun's motto was "The network is the computer." Our computer is a network.
+- **The orchestrator is a file server.** A Dockerfile here is a directory: a
+  namespace file, declared packages, a credential, a command — a declaration,
+  not a script, because installing is a bind. `run` instantiates it; `svc`
+  keeps N alive; and kubectl is `cat` and `echo`: desired state is a file you
+  write, observation is a file you read. Built in two small programs on an
+  unmodified kernel, because the kernel already had the primitive.
 - **A computer can be treated as a function call.** The same kernel is intended to run
   in a microVM that boots in about 100 milliseconds, mounts what it needs, and then goes
   away. This is the sort of environment used by services such as Lambda, but with an
   actual operating system underneath.
+- **Every screen is the same computer.** IPNX runs today in a browser tab in an
+  Internet café — securely by construction: nothing installs, nothing persists,
+  the whole system lives and dies inside the page's sandbox — and on macOS with
+  full JIT. It will run inside VSCode, in a browser included, and on iPad, where
+  the app lends WebKit's own JIT to the kernel, SwiftUI to the screen, and its
+  file entitlements to the namespace. Every surface is a shell lending the one
+  port a place to run, a screen to draw on and files to touch. I think this is
+  an achievement no other WASM runtime, development environment or Linux
+  distribution can easily claim.
 
 ## The principles
 
