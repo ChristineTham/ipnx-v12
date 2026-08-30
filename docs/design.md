@@ -623,7 +623,8 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   plan9port, and there seem to be differences" — and she separated the
   problems: parity first; the touchscreen/HIG redesign is PARKED for a
   full design-thinking session (mouse chords and discoverability
-  belong there; nothing of it ships in this pass). Method, per the
+  belong there; nothing of it ships in this pass — the brief is
+  docs/acme.txt). Method, per the
   house rule that measurement beats memory: her plan9port acme was
   launched beside the demo, driven through its own /mnt/acme file
   interface (dirty, selection, tag states staged with 9p), and

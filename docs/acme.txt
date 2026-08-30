@@ -1,0 +1,117 @@
+acme beyond the three-button mouse — the parked problem
+========================================================
+
+Status: PARKED (2026-08-31). This is the brief for a future full
+design-thinking session (method per docs/design-thinking.md). Nothing
+here is decided; nothing here has shipped. Problem 1 — visual and
+behavioural parity with plan9port acme on the desktop — was solved and
+shipped separately (design.md, 2026-08-31); this file is problem 2.
+
+The problem, in Christine's words
+---------------------------------
+2026-08-31: "We also need to find a solution for mouse chords. Maybe
+extra toolbars? The current acme interface is neither discoverable nor
+usable on a touchscreen."
+
+Same day, sharpening it: "The other problem is how to redesign acme
+for surfaces like touchscreen where functionality needs to be exposed
+via Apple HIG. We need to abandon the three button mouse completely.
+... We need to do full design thinking here."
+
+Two complaints, one root: acme's verbs are invisible. A mouse user
+cannot discover them (nothing on screen says alt-click executes or
+right-click looks, and the chords are pure folklore); a touch user
+cannot perform them at all (no alt, no middle, no right, no chords).
+
+What the three buttons actually carry (the inventory to re-home)
+----------------------------------------------------------------
+Every item below is load-bearing acme functionality that currently
+rides mouse hardware. The redesign must give each a visible,
+touch-performable home — or explicitly retire it with reasons.
+
+  B1 sweep            select text (typing replaces, the sweep is dot)
+  B1 double-click     context select: word, line, quoted, bracketed
+  B2 click            execute the word under the pointer
+  B2 sweep            execute the sweep as a command with arguments
+  B3 click            look: open file/dir, file:addr, :addr search,
+                      else literal search
+  B3 sweep            look up the swept text exactly
+  1-2 chord           cut
+  1-3 chord           paste
+  2-1 chord           execute with the current selection as argument
+                      (cross-window: "apply a command in one window to
+                      text in another" — the paper)
+  scrollbar buttons   per-button scroll semantics (B1/B2/B3 differ)
+  layout box drags    grow / move windows between columns
+
+The directive: design as if the three-button mouse does not exist.
+Mouse users get the same visible grammar as touch users — that is
+what makes the verbs discoverable for everyone. (Whether alt/middle/
+right remain as invisible accelerators for the initiated is itself a
+question for the session; the grammar must be COMPLETE without them.)
+
+Constraints already decided elsewhere (not to be re-litigated)
+--------------------------------------------------------------
+1. The input convention (design.md, 2026-08-30): roles live in the
+   tree, each surface renders verbs in its OWN native grammar, verbs
+   never in the hardware. This redesign IS that convention's touch and
+   HIG chapter. Divergence between surfaces is accepted and named.
+2. The canvas protocol already carries everything the grammar needs:
+   execute/look/select/insert/delete events, the sel attr, action
+   roles on nodes, /dev/snarf wired to the host clipboard both ways.
+   Expect little or no protocol change; this is presenter-side
+   grammar, and the suite (which speaks events) should not care.
+3. Apple HIG is the named vocabulary for the Apple surfaces: iPad is
+   M6 (WebKit engine room, SwiftUI canvas presenter), and the Mac app
+   follows. The web presenter needs its own equivalent expression —
+   the convention says native per platform, so SwiftUI furniture
+   (UIEditMenuInteraction, UIMenu context menus, toolbars) and web
+   furniture (selection callouts, real buttons) may differ in form
+   while carrying the same verbs.
+4. No half-working (design.md, 2026-08-30): whatever grammar ships,
+   ships whole on its surface.
+5. The succession rule: acme's behaviour suite keeps passing
+   unchanged. The grammar is presentation; the events are the
+   contract.
+
+Known hard sub-problems (found during the parked first attempt;
+recorded so the session starts warm — none of this shipped)
+----------------------------------------------------------------
+- Soft keyboards: the presenter's hand-rolled caret never summons the
+  iOS on-screen keyboard (nothing focusable-for-input). Some path —
+  hidden input proxy, contenteditable + beforeinput, or the SwiftUI
+  presenter simply owning text input natively — is prerequisite for
+  touch typing at all.
+- Selection-verb timing: a callout/toolbar acting on a selection must
+  snapshot the range when it appears — the tap that presses its
+  button collapses the native selection first.
+- Focus stealing: any grammar that surfaces verbs on selection change
+  must not fight the app steering the selection (sel attr) — the
+  +Errors tail lesson.
+- The 2-1 argument chord has no obvious touch analogue; sweep-execute
+  (verb and arguments in one sweep) may subsume it, or a "use current
+  selection as argument" affordance may be wanted. Decide, don't
+  drift.
+
+Ideation seeds (candidates only — the session judges them)
+----------------------------------------------------------
+- Christine's: extra toolbars.
+- The selection callout bar: verbs appear at the selection (Run, Look,
+  Cut, Copy, Paste) — the platform-native pattern on iOS (long-press)
+  and easily mirrored on the web; makes chords visible verbs.
+- Tag words as honest buttons (the action-role machinery exists);
+  tags are already the toolbar acme always had.
+- Long-press = look; two-finger tap = execute; drag = select — a pure
+  gesture mapping (discoverability still unsolved on its own).
+- A first-run hint / help overlay (discoverability patch, not a
+  grammar).
+- Whatever the session invents that none of the above is.
+
+What "solved" looks like
+------------------------
+A person who has never read the acme paper, holding an iPad, can:
+open a file from a listing, edit it, save it, run a command on a
+selection, search, and undo — without being told any secret, and
+without the experience being a lesser acme. The same grammar, on the
+desktop web surface, teaches the mouse user what acme can do. The
+suite still passes 151 unchanged.
