@@ -12,7 +12,8 @@ commit as the change.
 
 ## The system, in one paragraph
 
-A modified Plan 9 kernel runs as an ordinary userspace process on each platform.
+The IPNX kernel — an original implementation of Plan 9's architecture, sharing
+none of its code — runs as an ordinary userspace process on each platform.
 Processes are WebAssembly instances; `exec` is instantiation. Every process has
 its own namespace — a mount table mapping paths to file servers — and every
 non-process syscall resolves through it. 9P is the only IPC: in-process devices

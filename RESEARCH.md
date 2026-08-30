@@ -10,7 +10,8 @@ recorded here as data, because that tree is deliberately **not** copied into thi
 
 ## TL;DR — the recommendation
 
-Build a **modified Plan 9 kernel that runs as an ordinary userspace process** on macOS,
+Build **the IPNX kernel — Plan 9's architecture, none of its code — as an ordinary
+userspace process** on macOS,
 iPadOS and in the browser, executing **WebAssembly** binaries in a per-process namespace,
 and add a **Unix personality** on top. *(Re-founded 2026-08-27, decision log: the
 personality is a **modern** Unix surface — derived by measurement against git, CPython

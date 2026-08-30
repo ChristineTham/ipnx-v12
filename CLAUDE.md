@@ -5,7 +5,8 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## What this repository is
 
 **ipnx-v12 is a reimagining of Unix** — the counterfactual next Research edition:
-**a modified Plan 9 kernel hosted as an ordinary userspace process** (browser, macOS,
+**the IPNX kernel — Plan 9's architecture, none of its code — hosted as an ordinary
+userspace process** (browser, macOS,
 iPadOS, OCI, eventually hypervisor-direct); **9P as the only IPC**; **per-process
 namespaces**; **WebAssembly as the executable format**; and **personalities as libc
 dialects** over that one kernel — Plan 9's own userland (taken entire, by the curation
@@ -19,7 +20,7 @@ as heritage; V10 completeness is not a goal (re-founded 2026-08-27, decision log
 
 The thesis, from the README: *the Plan 9 authors' pivot gave Unix its best kernel and
 broke compatibility in the same act — "Compatibility was not a requirement for the
-system" — a choice, which is what makes it undoable.* This project takes the kernel and
+system" — a choice, which is what makes it undoable.* This project takes that kernel's architecture — reimplemented, no code inherited — and
 undoes the break: their curation of the userland preserved above, Unix's interface
 restored as personalities, the kernel unable to bloat by construction.
 
@@ -162,7 +163,8 @@ provenance in RESEARCH.md.
 Each has its reasoning and citations in RESEARCH.md / the plan. Reopening one requires new
 evidence, not a fresh opinion.
 
-- **The kernel is Plan 9's, not V10 retargeted.** ~5% of V10's 61,072-line kernel has
+- **The kernel's architecture is Plan 9's, not V10 retargeted** (and the identity is
+  IPNX's own — no code inherited from either; decision log 2026-08-30). ~5% of V10's 61,072-line kernel has
   anything to say on a target with no MMU and no hardware. The surgery runs Unix-onto-
   Plan 9 (addition), never the reverse (eviction) — and V10's `chmk $n` trap numbers
   collide with Plan 9's on the same instruction (`.set open,5` vs `DUP` 5).

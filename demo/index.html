@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ipnx-v12 — a reimagining of Unix, in your browser</title>
+<title>IPNX v12 — a reimagining of Unix, in your browser</title>
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; background: #0d1117; color: #d6dde4;
@@ -28,39 +28,123 @@
 </head>
 <body>
 <main>
-<h1>ipnx-v12</h1>
+<h1>IPNX v12</h1>
 <p class="sub">a reimagining of Unix — the counterfactual next Research edition,
 running in this tab</p>
 
-<p>A modified <b>Plan&nbsp;9 kernel</b> hosted as an ordinary process, with
-per-process namespaces, 9P as the only IPC, and WebAssembly as the executable
-format. What boots below is not a tribute: the shell is the <b>real
-4th-edition <code>rc</code></b>, the display is <b>/dev/canvas</b> — a semantic
-file tree you can <code>cat</code>, <code>echo</code> and <code>grep</code>, with
-<code>con</code> the editable-transcript console and <code>edit</code> the one
-editor (Put is a real button; Edit runs sam's language) — the heritage editors are
-the <b>real <code>sam</code>
-and <code>acme</code></b> (all twenty source files, verbatim), twenty-four
-real commands ride the real Plan&nbsp;9 libraries, V10 binaries from the TUHS
-tapes sit in <code>/v10/bin</code> — and real Go and CPython&nbsp;3.14
-binaries run against the same kernel through a WASI shim.</p>
+<p><b>IPNX is a new operating system</b> — not a distribution of an old one,
+not an emulator. Its kernel is original, written twice over — in Rust for
+native hosts and in JavaScript for this tab — and proven to be one system by
+one conformance suite, identical on both. The architecture takes what
+Plan&nbsp;9 proved and Unix never shipped — <b>per-process namespaces</b>, 9P
+as the only IPC, everything a file — with none of Plan&nbsp;9's kernel code,
+and <b>WebAssembly</b> as the executable format.</p>
+
+<p>What boots below is the complete system, entirely in this tab: the
+reimagined userland on <b>/dev/canvas</b> — a display that is a semantic file
+tree you can <code>cat</code>, <code>echo</code> and <code>grep</code> —
+with <code>con</code>, <code>acme</code> and <code>sam</code> (each name
+inherited by passing its ancestor's tests; the raster originals still run as
+<code>sam9</code> and <code>acme9</code>), the real 4th-edition
+<code>rc</code>, twenty-four real commands, V10 binaries from the TUHS tapes
+in <code>/v10/bin</code>, real Go and CPython&nbsp;3.14, a C compiler, a
+package manager, whole-system snapshots and a process orchestrator. Nothing
+you type leaves the page. <b>No other wasm runtime, development environment
+or Linux distribution can easily claim this</b>: a whole operating system —
+kernel, editors, compilers, Python with pip — running securely in a browser
+tab, in an internet café if need be; and the same system runs native on macOS
+with full JIT.</p>
 
 <p>
-<a class="go" href="shell/"><b>Boot ipnx-v12</b> — the whole world: the canvas
+<a class="go" href="shell/"><b>Boot IPNX v12</b> — the whole world: the canvas
 console and editor, shells, sam, acme,
 cc, the real Go compiler, Python with pip. The desktop appears in seconds; the
 toolchains (~260&nbsp;MB) stream in while you look around. Nothing persists
 by default; pick <b>home: browser storage</b> or grant a real <b>local
 folder</b> from the menu and your files outlive the tab — a granted
 directory is a bind.</a>
-<a class="go" href="browser/">Run the 132-test suite</a>
+<a class="go" href="browser/">Run the conformance suite</a>
 </p>
+
+<h2 style="font:700 1.25rem Georgia,serif;color:#fff;margin:2rem 0 .3rem">What's inside</h2>
+<p><b>acme</b> — the one editor, acme reimagined for modern surfaces: columns
+of windows, every tag an editable line whose words are the commands, a
+directory listing as the file browser, sam's structural regexps in every tag
+(<code>Edit ,x/re/c/text/</code>), and the dirty box that <code>Put</code>
+clears. <b>sam</b> — the same language as a standalone filter:
+<code>sam file &lt; commands</code>, ed's true heir; it earned the name by
+passing the original's tests. <b>con</b> — the console as an editable
+transcript: scrollback is a buffer, search is the editor, no terminal
+emulation anywhere in the native path.</p>
+<p><b>pkg</b> — the package manager where <i>installing is a bind</i>: a
+package is a verified subtree, <code>pkg install ruby</code> binds its
+binaries into <code>/bin</code>, versions coexist, conflicts are refused at
+install time, and a subshell that does <code>rfork n</code> owns a private
+dev environment that vanishes with it — no venv, no nvm, no flatpak,
+because the kernel can say <code>bind</code>.</p>
+<p><b>#V</b> — every system is a time machine:
+<code>echo snap t1 &gt; '#V/ctl'</code> freezes the filesystem by
+copy-on-write (nine megabytes for twenty whole-system snapshots),
+<code>cat '#V/t1/tmp/f'</code> reads the past, and rollback is
+<code>bind '#V/t1/dir' /dir</code>. Nobody rewrites history — not even the
+owner.</p>
+<p><b>run &amp; svc</b> — containers and orchestration without the industry:
+a process spec is a directory (a Dockerfile is a script because installing
+is mutation; here it's a declaration because installing is a bind);
+<code>svc</code> keeps N replicas alive and kubectl is <code>cat</code> and
+<code>echo</code>: <code>echo start web /spec 3 &gt; /n/svc/ctl</code>.</p>
+<p><b>Real toolchains</b> — <code>cc</code> is clang and wasm-ld running as
+guests; <code>go</code> drives the real gc compiler; <code>python</code> is
+CPython 3.14 with the full stdlib and <code>pip</code> talking to the real
+PyPI. And the display itself is files: every window's UI can be
+<code>cat</code>-ed, <code>echo</code>-ed into, and <code>grep</code>-ed —
+which is why the test suite drives real editors without a screen.</p>
+
+<h2 style="font:700 1.25rem Georgia,serif;color:#fff;margin:2rem 0 .3rem">The browser surface</h2>
+<p>Press <b>Boot</b>, then:</p>
+<p><b>Choose a home</b> from the menu selector: <i>play</i> (the shipped
+examples; nothing persists), <i>browser storage</i> (your files survive
+reload, private to this site), or <i>local folder…</i> (grant a real
+directory on your disk — <code>Put</code> writes to it; a granted directory
+is a bind). <b>Console</b> opens <code>con</code>: type at the caret, Enter
+runs the line, and the whole transcript is an ordinary editable, searchable
+buffer. <b>acme</b> opens the workspace: two columns with your home listed —
+<b>right-click a name to open it</b> (directories open as more listings),
+<b>alt-click (or middle-click) any word in any tag to execute it</b> —
+<code>Put</code>, <code>Get</code>, <code>Del</code>, <code>New</code>,
+<code>Newcol</code> — and sweep a selection first to execute it with
+arguments, e.g. select <code>Edit&nbsp;,x/harses/c/horses/</code> in a tag
+and alt-click it. Rename the tag's first word and <code>Put</code> writes to
+the new name. Your ⌘C/⌘X/⌘V are snarf: <code>cat /dev/snarf</code> reads
+what you last copied. The display really is files — from the console, try
+<code>cat '#w/2/canvas/12/data'</code> to read an editor's buffer as text,
+or <code>rc /rc/tile</code> to run a window manager written in a dozen lines
+of shell.</p>
+
+<h2 style="font:700 1.25rem Georgia,serif;color:#fff;margin:2rem 0 .3rem">The macOS surface</h2>
+<p>The same system runs native — full JIT under wasmtime, real windows,
+your real pasteboard, and host storage. With <a
+href="https://www.rust-lang.org/tools/install">Rust</a>, wasi-sdk, binaryen,
+<code>bison</code> and <code>go</code> installed (versions and paths in
+<code>docs/handbook.md</code>):</p>
+<pre>git clone https://github.com/ChristineTham/ipnx-v12 &amp;&amp; cd ipnx-v12
+bash userspace/mk.sh                                      # build the guest world
+cargo run --release -p host -- userspace/rootfs           # headless: init runs the suite
+cargo run --release -p host -- userspace/rootfs --app -i  # windows: con, acme, canvas
+cargo run --release -p host -- userspace/rootfs --live    # writes persist to the rootfs dir
+bash hosts/macos/mkapp.sh                                 # wrap it as IPNX.app</pre>
+<p>Under <code>--app</code> the canvas renders natively; <code>/dev/snarf</code>
+<i>is</i> the Mac pasteboard (<code>echo hi &gt; /dev/snarf</code> then paste
+anywhere); and the versioning layer runs everywhere:
+<code>echo snap t1 &gt; '#V/ctl'</code> freezes the filesystem,
+<code>bind '#V/t1/dir' /dir</code> is the rollback — twenty whole-system
+snapshots cost nine megabytes.</p>
 
 <p>Once the prompt appears, take the guided tour:</p>
 <pre>rc /rc/tour</pre>
 
 <p>You boot as <b>kitty</b>, at home in <code>/usr/kitty</code>, where
-<code><code>hello.c</code>, <code>hello.py</code> and <code>hello.go</code> are waiting. With the
+<code>hello.c</code>, <code>hello.py</code> and <code>hello.go</code> are waiting. With the
 toolchain aboard, <code>cc hello.c</code> then <code>./a.out</code> runs real
 clang and wasm-ld as guests, then the binary you built — Hello Kitty. It is a
 real <code>cc(1)</code>: flags, <code>-o</code>, <code>-c</code> and multiple
@@ -68,21 +152,22 @@ files all work. Python interprets in the tab too
 (<code>python hello.py</code>); real Go binaries run, though Go's compiler is
 host-side (<code>go</code> explains why). The tour shows everything.</p>
 
-<p>Or go straight for the good parts: <code>win acme &amp;</code> opens the
-real acme in a window (button-2 executes, button-3 searches);
-<code>@{bind /lib/alt /etc; cat /etc/motd}</code> shows a subshell rearranging
-its own private namespace; <code>/v10/bin/echo -e 'a\nb' | wc</code> pipes
-1989 into 1992.</p>
+<p>Heritage is one command away: <code>font=/lib/font/bit/go/regular.13.font
+win acme9 &amp;</code> opens the 1993 raster acme, verbatim source, beside its
+successor; <code>@{bind /lib/alt /etc; cat /etc/motd}</code> shows a subshell
+rearranging its own private namespace; <code>/v10/bin/echo -e 'a\nb' | wc</code>
+pipes 1989 into 1992.</p>
 
 <p class="fine">
 Everything runs in your browser — nothing you type leaves this tab, and
-reloading forgets it all. <b>Measured green in Chromium (Chrome, Edge,
-Brave, Arc) and in Safari</b> — the full 132-test suite passes in both.
+reloading forgets it all unless you chose a persistent home. <b>Measured
+green in Chromium (Chrome, Edge, Brave, Arc) and in Safari</b> — the full
+conformance suite (150 tests today; the floor is 131) passes in both.
 (Safari needed real engineering: WebKit deterministically fails concurrent
 module-worker loads through a service worker — minimal repro and file-ready
 report in the repository under <code>demo/webkit-repro/</code> — so this
 page serializes worker startup.) Firefox is untested. The whole system — kernel, sources, the
-132-test conformance suite, and the documents that argue for it — is at
+conformance suite, and the documents that argue for it — is at
 <a href="https://github.com/ChristineTham/ipnx-v12">github.com/ChristineTham/ipnx-v12</a>.
 Third-party licences: <a href="NOTICES.html">NOTICES</a>.
 </p>

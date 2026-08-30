@@ -2,7 +2,7 @@
 # Run it:  rc /rc/tour        (each chapter also names things to try yourself)
 
 echo '━━ ipnx-v12 — the tour ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'
-echo 'You are inside a Plan 9-descended kernel running as a wasm process.'
+echo 'You are inside IPNX: an original kernel, Plan 9 architecture, running as a wasm process.'
 echo 'This shell is the REAL rc, compiled from 4th-edition source; every'
 echo 'command below is real Plan 9 or Research Unix code, unmodified.'
 echo

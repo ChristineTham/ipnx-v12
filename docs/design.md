@@ -11,8 +11,9 @@ where things live, [platforms.md](platforms.md); **who** a user is,
 [identity.md](identity.md), and who it is **for**, [personas.md](personas.md);
 what **was**, [poc.md](poc.md).*
 
-**The statement, once.** A **modified Plan 9 kernel hosted as an ordinary userspace
-process** — browser, macOS, iPadOS, OCI, eventually hypervisor-direct; **9P as the only
+**The statement, once.** **The IPNX kernel — Plan 9's architecture, none of its
+code — hosted as an ordinary userspace process** — browser, macOS, iPadOS, OCI,
+eventually hypervisor-direct; **9P as the only
 IPC**; **per-process namespaces**; **everything exposed as a file**; **WebAssembly as
 the executable format**; and **personalities as libc dialects** above the one kernel —
 Plan 9's userland entire by the curation principle, a WASI second ABI, and a **modern
@@ -21,7 +22,7 @@ stays as heritage; its completeness is not a goal.
 
 No VAX. No disk image. No emulator. No POSIX, no systemd, no sediment.
 
-## Why the kernel is Plan 9's and not V10's
+## Why the kernel's architecture is Plan 9's and not V10's
 
 The parent project's V10 kernel is 61,072 lines of C and 3,141 of VAX assembly. Measured
 against this target:
@@ -616,6 +617,24 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   **no Windows host** (until a persona demands it with evidence); courseware
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
+
+- **(2026-08-30) The name on the door: IPNX, not "modified Plan 9".**
+  Christine, in her words: "We shouldn't call it a modified Plan 9 kernel.
+  You yourself stated it does not inherit any code from Plan 9. We should
+  be promoting IPNX, not Plan 9. IPNX isn't Plan 9 and will never be" —
+  and, minutes later: "I feel like we are underselling what has been
+  achieved." Both corrections are of fact, not of taste. The kernel was
+  never a modification: it is an original implementation of Plan 9's
+  *architecture*, written twice over — the Rust core and the JS
+  supervisor, neither sharing a line with Plan 9's C — and proven one
+  system by one conformance suite. Her README said it first ("The kernel
+  is fresh… IPNX is not Plan 9, it is not UNIX"); this decision brings
+  the working documents and the public page into line. The statement now
+  opens with the IPNX kernel; Plan 9 is credited for the architecture
+  and for the vendored heritage userland (which really is its code, and
+  says so, notices intact); and the demo page leads with the achievement
+  — a complete operating system, compilers and editors included, running
+  client-side in a browser tab — rather than with the ancestor.
 
 - **(2026-08-30) The input convention: roles in the tree, native grammar
   per platform, verbs never in the hardware.** The three-button replacement,
