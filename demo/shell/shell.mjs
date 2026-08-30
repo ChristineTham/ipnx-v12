@@ -367,14 +367,41 @@ const cvblen = (t) => cvenc.encode(t).length;
 function renderCanvas(gw, snap) {
   if (!gw.cvEl) {
     gw.cvEl = document.createElement("div");
+    gw.cvEl.tabIndex = 0;
     gw.cvEl.style.cssText = "position:absolute;left:0;right:0;bottom:0;top:30px;overflow:auto;" +
-      "background:#fff;color:#111;font:13px/1.45 system-ui,sans-serif;padding:8px;";
+      "background:#fff;color:#111;font:13px/1.45 system-ui,sans-serif;padding:8px;outline:none;";
     gw.win.body.appendChild(gw.cvEl);
     gw.termEl.style.display = "none";
     gw.canvas.style.display = "none";
     gw.cvMode = true;
     gw.win.setFocusInner(() => gw.cvEl.focus());
+    // one delegated keyboard for the window's edit node (v0: the console's
+    // single transcript) — the container holds focus, the edit receives
+    gw.cvEl.addEventListener("keydown", (e) => {
+      const ed = gw.cvEdit;
+      if (!ed || e.metaKey || e.ctrlKey) return;
+      if (e.key === "Backspace") {
+        e.preventDefault();
+        const t = ed.el.textContent;
+        if (!t.length) return;
+        const last = t.slice(-1);
+        ed.el.textContent = t.slice(0, -1);          // presenter-local echo
+        const end = cvblen(ed.el.textContent);
+        wsys?.canvasEvent(gw.id, `delete ${ed.id} ${end} ${end + cvblen(last)}`);
+        return;
+      }
+      let ch = null;
+      if (e.key === "Enter") ch = "\n";
+      else if (e.key.length === 1) ch = e.key;
+      if (ch === null) return;
+      e.preventDefault();
+      const at = cvblen(ed.el.textContent);
+      ed.el.textContent += ch;                       // presenter-local echo
+      ed.el.scrollIntoView?.(false);
+      wsys?.canvasEvent(gw.id, `insert ${ed.id} ${at} ${cvq(ch)}`);
+    });
   }
+  gw.cvEdit = null;
   const kids = new Map();
   const byid = new Map();
   for (const n of snap) byid.set(n.id, n);
@@ -412,28 +439,7 @@ function renderCanvas(gw, snap) {
       el.textContent = n.data;
       if (n.kind === "edit") {
         el.style.cssText = "white-space:pre-wrap;margin:0;outline:none;min-height:1.4em;";
-        el.tabIndex = 0;
-        el.addEventListener("keydown", (e) => {
-          if (e.metaKey || e.ctrlKey) return;
-          if (e.key === "Backspace") {
-            e.preventDefault();
-            const t = el.textContent;
-            if (!t.length) return;
-            const last = t.slice(-1);
-            el.textContent = t.slice(0, -1);           // presenter-local echo
-            const end = cvblen(el.textContent);
-            wsys?.canvasEvent(gw.id, `delete ${n.id} ${end} ${end + cvblen(last)}`);
-            return;
-          }
-          let ch = null;
-          if (e.key === "Enter") ch = "\n";
-          else if (e.key.length === 1) ch = e.key;
-          if (ch === null) return;
-          e.preventDefault();
-          const at = cvblen(el.textContent);
-          el.textContent += ch;                        // presenter-local echo
-          wsys?.canvasEvent(gw.id, `insert ${n.id} ${at} ${cvq(ch)}`);
-        });
+        gw.cvEdit = { el, id: n.id };                // the delegated keyboard's target
       }
       if (action)
         el.addEventListener("click", (e) => {
