@@ -11,6 +11,7 @@
 // command-left=3 (the demo's chords, so one laptop trackpad drives acme).
 
 use crate::Ev;
+use kernel::CvSnap;
 use std::collections::HashMap;
 use std::num::NonZeroU32;
 use std::rc::Rc;
@@ -26,6 +27,7 @@ use winit::window::{Window, WindowId};
 pub enum UiMsg {
     Update { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, rgba: Vec<u8> },
     Text { wid: u32, bytes: Vec<u8> },
+    Canvas { wid: u32, snap: Vec<CvSnap> },
     Gone { wid: u32 },
     Shutdown,
 }
@@ -152,6 +154,120 @@ struct WinState {
     buttons: i32,
     mx: i32,
     my: i32,
+    cv: Option<Vec<CvSnap>>,
+    cv_hits: Vec<CvHit>,
+    cv_edit: Option<u32>,
+}
+
+// a clickable region of the rendered canvas: verb 1 execute, 2 look
+struct CvHit {
+    x0: i32, y0: i32, x1: i32, y1: i32,
+    id: u32, verb: u8, blen: usize, text: String,
+}
+
+fn cv_q(t: &str) -> String {
+    t.replace('%', "%25").replace(' ', "%20").replace('\n', "%0A")
+}
+
+fn cv_attr<'a>(n: &'a CvSnap, key: &str) -> Option<&'a str> {
+    n.attrs.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
+}
+
+fn cv_children<'a>(snap: &'a [CvSnap], parent: u32) -> Vec<&'a CvSnap> {
+    let pid = parent.to_string();
+    let mut kids: Vec<&CvSnap> = snap.iter()
+        .filter(|n| n.id != 0 && cv_attr(n, "parent").unwrap_or("0") == pid)
+        .collect();
+    kids.sort_by_key(|n| (cv_attr(n, "order").and_then(|o| o.parse::<i64>().ok()).unwrap_or(0), n.id));
+    kids
+}
+
+fn cv_str(buf: &mut [u8], w: usize, h: usize, font: &Subfont, x: i32, y: i32, s: &str) -> (i32, i32) {
+    let (gw, gh) = (font.glyph_w, font.glyph_h);
+    let mut maxw = 0i32;
+    let mut rows = 0i32;
+    for line in s.split('\n') {
+        let mut col = 0i32;
+        for ch in line.chars() {
+            let g = ch as usize;
+            if (0x20..0x7f).contains(&g) {
+                for gy in 0..gh {
+                    for gx in 0..gw {
+                        if font.bit(g, gx, gy) {
+                            let px = x + col * gw as i32 + gx as i32;
+                            let py = y + rows * gh as i32 + gy as i32;
+                            if px >= 0 && py >= 0 && (px as usize) < w && (py as usize) < h {
+                                let o = (py as usize * w + px as usize) * 4;
+                                buf[o] = 0; buf[o + 1] = 0; buf[o + 2] = 0;
+                            }
+                        }
+                    }
+                }
+            }
+            col += 1;
+        }
+        maxw = maxw.max(col * gw as i32);
+        rows += 1;
+    }
+    (maxw, rows.max(1) * gh as i32)
+}
+
+fn cv_box(buf: &mut [u8], w: usize, h: usize, x0: i32, y0: i32, x1: i32, y1: i32) {
+    let mut px = |x: i32, y: i32| {
+        if x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h {
+            let o = (y as usize * w + x as usize) * 4;
+            buf[o] = 160; buf[o + 1] = 160; buf[o + 2] = 176;
+        }
+    };
+    for x in x0..=x1 { px(x, y0); px(x, y1); }
+    for y in y0..=y1 { px(x0, y); px(x1, y); }
+}
+
+// lay the tree out: stacks flow col/row, text draws, action nodes get a
+// border and a hit region, the last edit is the keyboard's target.
+fn cv_render(buf: &mut [u8], w: usize, h: usize, font: &Subfont, snap: &[CvSnap],
+             hits: &mut Vec<CvHit>, edit: &mut Option<u32>, id: u32, x: i32, y: i32) -> (i32, i32) {
+    let node = match snap.iter().find(|n| n.id == id) { Some(n) => n, None => return (0, 0) };
+    match node.kind {
+        0 => {
+            let row = cv_attr(node, "dir") == Some("row");
+            let (mut cx, mut cy) = (x, y);
+            let (mut tw, mut th) = (0i32, 0i32);
+            for k in cv_children(snap, id) {
+                let (cw, ch) = cv_render(buf, w, h, font, snap, hits, edit, k.id, cx, cy);
+                if row {
+                    cx += cw + 8;
+                    tw += cw + 8;
+                    th = th.max(ch);
+                } else {
+                    cy += ch + 6;
+                    th += ch + 6;
+                    tw = tw.max(cw);
+                }
+            }
+            (tw, th)
+        }
+        3 => (0, 0), // path: not rendered on this surface yet (recorded)
+        _ => {
+            let text = String::from_utf8_lossy(&node.data).into_owned();
+            let action = cv_attr(node, "action");
+            let pad = if action.is_some() { 5 } else { 0 };
+            let (sw, sh) = cv_str(buf, w, h, font, x + pad, y + pad, &text);
+            let (bw, bh) = (sw + pad * 2, sh + pad * 2);
+            if let Some(a) = action {
+                cv_box(buf, w, h, x, y, x + bw.max(10), y + bh);
+                hits.push(CvHit {
+                    x0: x, y0: y, x1: x + bw.max(10), y1: y + bh,
+                    id: node.id, verb: if a == "look" { 2 } else { 1 },
+                    blen: node.data.len(), text,
+                });
+            }
+            if node.kind == 2 {
+                *edit = Some(node.id);
+            }
+            (bw, bh)
+        }
+    }
 }
 
 pub struct App {
@@ -185,7 +301,17 @@ impl App {
         let (w, h) = (ws.w as usize, ws.h as usize);
         // compose: frame, then the tty text if any has arrived
         let mut composed: Vec<u8>;
-        let src: &[u8] = if ws.has_text {
+        let src: &[u8] = if let Some(snap) = ws.cv.clone() {
+            composed = vec![255u8; w * h * 4];
+            let mut hits = Vec::new();
+            let mut edit = None;
+            if let Some(f) = font {
+                cv_render(&mut composed, w, h, f, &snap, &mut hits, &mut edit, 0, 8, 8);
+            }
+            ws.cv_hits = hits;
+            ws.cv_edit = edit;
+            &composed
+        } else if ws.has_text {
             composed = ws.frame.clone();
             if let Some(f) = font {
                 let (gw, gh) = (f.glyph_w, f.glyph_h);
@@ -266,6 +392,7 @@ impl ApplicationHandler<UiMsg> for App {
                         window, surface, w, h, frame: rgba,
                         tty: Tty { lines: vec![String::new()] },
                         has_text: false, buttons: 0, mx: 0, my: 0,
+                        cv: None, cv_hits: Vec::new(), cv_edit: None,
                     });
                 } else if let Some(ws) = self.wins.get_mut(&wid) {
                     ws.window.set_title(&label);
@@ -278,6 +405,12 @@ impl ApplicationHandler<UiMsg> for App {
                 }
                 self.paint(wid);
                 let _ = self.ev.send(Ev::WinAck { wid });
+            }
+            UiMsg::Canvas { wid, snap } => {
+                if let Some(ws) = self.wins.get_mut(&wid) {
+                    ws.cv = Some(snap);
+                    self.paint(wid);
+                }
             }
             UiMsg::Text { wid, bytes } => {
                 if let Some(ws) = self.wins.get_mut(&wid) {
@@ -301,6 +434,11 @@ impl ApplicationHandler<UiMsg> for App {
             WindowEvent::RedrawRequested => self.paint(wid),
             WindowEvent::ModifiersChanged(m) => self.modifiers = m.state(),
             WindowEvent::CloseRequested => {
+                if self.wins.get(&wid).map(|w| w.cv.is_some()).unwrap_or(false) {
+                    // canvas close is advisory: the app decides (wctl delete removes)
+                    let _ = self.ev.send(Ev::WinCanvasEv { wid, line: "close 0".into() });
+                    return;
+                }
                 let _ = self.ev.send(Ev::WinClose { wid });
                 if let Some(ws) = self.wins.remove(&wid) {
                     self.by_window.remove(&ws.window.id());
@@ -311,7 +449,9 @@ impl ApplicationHandler<UiMsg> for App {
                     let scale = ws.window.scale_factor();
                     ws.mx = (position.x / scale) as i32;
                     ws.my = (position.y / scale) as i32;
-                    let _ = self.ev.send(Ev::WinMouse { wid, x: ws.mx, y: ws.my, b: ws.buttons });
+                    if ws.cv.is_none() {
+                        let _ = self.ev.send(Ev::WinMouse { wid, x: ws.mx, y: ws.my, b: ws.buttons });
+                    }
                 }
             }
             WindowEvent::MouseInput { state, button, .. } => {
@@ -325,6 +465,20 @@ impl ApplicationHandler<UiMsg> for App {
                     _ => 0,
                 };
                 if let Some(ws) = self.wins.get_mut(&wid) {
+                    if ws.cv.is_some() {
+                        // the input convention: left activates; the hit's role
+                        // decides the verb (execute or look)
+                        if pressed && bit == 1 {
+                            let (mx, my) = (ws.mx, ws.my);
+                            if let Some(hit) = ws.cv_hits.iter()
+                                .find(|t| mx >= t.x0 && mx <= t.x1 && my >= t.y0 && my <= t.y1) {
+                                let verb = if hit.verb == 2 { "look" } else { "execute" };
+                                let line = format!("{} {} 0 {} {}", verb, hit.id, hit.blen, cv_q(&hit.text));
+                                let _ = self.ev.send(Ev::WinCanvasEv { wid, line });
+                            }
+                        }
+                        return;
+                    }
                     if pressed {
                         ws.buttons |= bit;
                     } else {
@@ -346,12 +500,41 @@ impl ApplicationHandler<UiMsg> for App {
                     _ => Vec::new(),
                 };
                 if !bytes.is_empty() {
-                    // local echo into the glass tty, so typing is visible
+                    let mut canvas_line: Option<String> = None;
                     if let Some(ws) = self.wins.get_mut(&wid) {
-                        if ws.has_text {
+                        if let (Some(snap), Some(eid)) = (ws.cv.as_mut(), ws.cv_edit) {
+                            if let Some(node) = snap.iter_mut().find(|n| n.id == eid) {
+                                if bytes == [8] {
+                                    // pop the last character (UTF-8 aware)
+                                    let mut cut = node.data.len();
+                                    while cut > 0 {
+                                        cut -= 1;
+                                        if node.data[cut] & 0xC0 != 0x80 { break; }
+                                    }
+                                    if cut < node.data.len() {
+                                        let q1 = node.data.len();
+                                        node.data.truncate(cut);
+                                        canvas_line = Some(format!("delete {} {} {}", eid, cut, q1));
+                                    }
+                                } else {
+                                    let at = node.data.len();
+                                    let txt = String::from_utf8_lossy(&bytes).into_owned();
+                                    node.data.extend_from_slice(&bytes); // presenter-local echo
+                                    canvas_line = Some(format!("insert {} {} {}", eid, at, cv_q(&txt)));
+                                }
+                            }
+                        } else if ws.has_text {
+                            // local echo into the glass tty, so typing is visible
                             ws.tty.feed(&bytes);
-                            self.paint(wid);
                         }
+                    }
+                    if let Some(line) = canvas_line {
+                        self.paint(wid);
+                        let _ = self.ev.send(Ev::WinCanvasEv { wid, line });
+                        return;
+                    }
+                    if self.wins.get(&wid).map(|w| w.has_text).unwrap_or(false) {
+                        self.paint(wid);
                     }
                     let _ = self.ev.send(Ev::WinKey { wid, bytes });
                 }

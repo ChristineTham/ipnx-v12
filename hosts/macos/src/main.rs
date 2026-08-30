@@ -32,6 +32,7 @@ pub enum Ev {
     WinClose { wid: u32 },
     WinTick,
     WinAck { wid: u32 },
+    WinCanvasEv { wid: u32, line: String },
     FetchDone { url: String, result: Result<Vec<u8>, String> },
 }
 
@@ -273,6 +274,9 @@ fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
     }
     kern.interactive = interactive;
     kern.verbose = verbose;
+    if app_mode {
+        kern.canvas_caps_set("interactive input");
+    }
 
     let mut config = Config::new();
     config.wasm_exceptions(true);
@@ -341,6 +345,7 @@ fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
             Ev::WinKey { wid, bytes } => kern.win_key(wid, &bytes),
             Ev::WinMouse { wid, x, y, b } => kern.win_mouse(wid, x, y, b),
             Ev::WinClose { wid } => kern.win_close(wid),
+            Ev::WinCanvasEv { wid, line } => kern.canvas_event(wid, &line),
             Ev::WinTick => kern.win_tick(),
             Ev::WinAck { wid } => kern.win_ack(wid),
             Ev::FetchDone { url, result } => kern.fetch_done(&url, result),
@@ -389,6 +394,11 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
             Effect::WinText { wid, bytes } => {
                 if let Some(p) = ui {
                     let _ = p.send_event(ui::UiMsg::Text { wid, bytes });
+                }
+            }
+            Effect::WinCanvas { wid, snap } => {
+                if let Some(p) = ui {
+                    let _ = p.send_event(ui::UiMsg::Canvas { wid, snap });
                 }
             }
             Effect::WinGone { wid } => {

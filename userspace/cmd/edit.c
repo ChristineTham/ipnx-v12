@@ -10,14 +10,16 @@
  * one blocking read on events is the whole loop. The body is shadowed
  * from its events (never re-read), con's discipline.
  */
-#include "lib9.h"
+#include <u.h>
+#include <libc.h>
+#include <regexp.h>
 
-int tokenize(char*, char**, int);	/* libp9's, linked in every cmd */
-
-enum { BMAX = 65536 };
+enum { BMAX = 65536, CMAX = 512 };
 
 static char body[BMAX];
 static long blen;
+static char cmd[CMAX];		/* the tag's command box, shadowed like the body */
+static long clen;
 static char wdir[64];
 static int ctlfd, addrfd, datafd;
 
@@ -78,7 +80,130 @@ unq(char *s, char *out, int max)
 	return n;
 }
 
-int
+/* sam's language returns — the v0 core, on the real libregexp:
+ *   [,]x/re/c/text/   change every match
+ *   [,]x/re/d         delete every match
+ *   [,]s/re/sub/[g]   substitute (& and \1..\9 via regsub)
+ * Matches are collected first and applied back to front, the classic
+ * discipline; an empty match advances one byte so loops terminate. The
+ * verbatim address language stays sam-today's recorded growth. */
+
+typedef struct Span Span;
+struct Span {
+	long q0, q1;
+};
+
+static char *
+delim(char *p, char *out, int max)
+{
+	int n;
+
+	if(*p != '/')
+		return nil;
+	p++;
+	n = 0;
+	while(*p != 0 && *p != '/' && n < max - 1){
+		if(*p == '\\' && p[1] == '/'){ out[n++] = '/'; p += 2; continue; }
+		if(*p == '\\' && p[1] == 'n'){ out[n++] = '\n'; p += 2; continue; }
+		out[n++] = *p++;
+	}
+	out[n] = 0;
+	if(*p != '/')
+		return nil;
+	return p + 1;
+}
+
+static int
+collect(Reprog *prog, Span *sp, int max, Resub *subs, int nsub)
+{
+	long off;
+	int n;
+	Resub m[10];
+
+	n = 0;
+	off = 0;
+	body[blen] = 0;
+	while(off <= blen && n < max){
+		memset(m, 0, sizeof m);
+		if(!regexec(prog, body + off, m, nsub))
+			break;
+		sp[n].q0 = m[0].sp - body;
+		sp[n].q1 = m[0].ep - body;
+		if(subs != nil)
+			memmove(&subs[n * 10], m, sizeof m);
+		n++;
+		off = (m[0].ep - body) + (m[0].sp == m[0].ep ? 1 : 0);
+	}
+	return n;
+}
+
+static void
+splice(long q0, long q1, char *txt, long tn)
+{
+	if(blen - (q1 - q0) + tn > BMAX - 1)
+		return;
+	memmove(body + q0 + tn, body + q1, blen - q1);
+	memmove(body + q0, txt, tn);
+	blen += tn - (q1 - q0);
+	body[blen] = 0;
+}
+
+static void
+runedit(char *line)
+{
+	static Span sp[512];
+	static Resub subs[512 * 10];
+	char re[256], arg[512], out[1024];
+	Reprog *prog;
+	char *p;
+	int n, i, glob;
+
+	p = line;
+	while(*p == ' ' || *p == '\t' || *p == ',')
+		p++;
+	if(*p == 'x'){
+		p = delim(p + 1, re, sizeof re);
+		if(p == nil)
+			return;
+		prog = regcomp(re);
+		if(prog == nil)
+			return;
+		if(*p == 'c'){
+			if(delim(p + 1, arg, sizeof arg) == nil){ free(prog); return; }
+			n = collect(prog, sp, 512, nil, 1);
+			for(i = n - 1; i >= 0; i--)
+				splice(sp[i].q0, sp[i].q1, arg, strlen(arg));
+		} else if(*p == 'd'){
+			n = collect(prog, sp, 512, nil, 1);
+			for(i = n - 1; i >= 0; i--)
+				splice(sp[i].q0, sp[i].q1, "", 0);
+		}
+		free(prog);
+		return;
+	}
+	if(*p == 's'){
+		p = delim(p + 1, re, sizeof re);
+		if(p == nil)
+			return;
+		p = delim(p - 1, arg, sizeof arg);	/* p-1 is the middle slash */
+		if(p == nil)
+			return;
+		glob = *p == 'g';
+		prog = regcomp(re);
+		if(prog == nil)
+			return;
+		n = collect(prog, sp, 512, subs, 10);
+		if(n > 0 && !glob)
+			n = 1;
+		for(i = n - 1; i >= 0; i--){
+			regsub(arg, out, sizeof out, &subs[i * 10], 10);
+			splice(sp[i].q0, sp[i].q1, out, strlen(out));
+		}
+		free(prog);
+	}
+}
+
+void
 main(int argc, char *argv[])
 {
 	char path[128], line[4096], txt[4096], *f[8], *file;
@@ -118,7 +243,20 @@ main(int argc, char *argv[])
 	/* the tree: a column of tag row and body.
 	 * 1 = tag (stack row), 2 = file name (look), 3 = Put, 4 = Del,
 	 * 5 = the body (edit). Structure in attrs, acme's shape. */
-	fprint(ctlfd, "new 1 stack\nnew 2 text\nnew 3 text\nnew 4 text\nnew 5 edit\n");
+	fprint(ctlfd, "new 1 stack\nnew 2 text\nnew 3 text\nnew 4 text\nnew 5 edit\nnew 6 edit\nnew 7 text\n");
+	{
+		char ap[128];
+		int afd;
+		snprint(ap, sizeof ap, "%s/canvas/7/attrs", wdir);
+		afd = open(ap, OWRITE);
+		if(afd >= 0){ fprint(afd, "parent=1\norder=7\naction=execute\n"); close(afd); }
+		snprint(ap, sizeof ap, "%s/canvas/7/data", wdir);
+		afd = open(ap, OWRITE);
+		if(afd >= 0){ fprint(afd, "Edit"); close(afd); }
+		snprint(ap, sizeof ap, "%s/canvas/6/attrs", wdir);
+		afd = open(ap, OWRITE);
+		if(afd >= 0){ fprint(afd, "parent=1\norder=6\n"); close(afd); }
+	}
 	for(i = 2; i <= 4; i++){
 		snprint(path, sizeof path, "%s/canvas/%d/attrs", wdir, i);
 		fd = open(path, OWRITE);
@@ -172,6 +310,7 @@ main(int argc, char *argv[])
 			memmove(body + q0 + d, body + q0, blen - q0);
 			memmove(body + q0, txt, d);
 			blen += d;
+			body[blen] = 0;
 			continue;
 		}
 		if(nf >= 4 && strcmp(f[0], "delete") == 0 && atoi(f[1]) == 5){
@@ -181,6 +320,33 @@ main(int argc, char *argv[])
 			if(q0 > q1) q0 = q1;
 			memmove(body + q0, body + q1, blen - q1);
 			blen -= q1 - q0;
+			body[blen] = 0;
+			continue;
+		}
+		if(nf >= 4 && strcmp(f[0], "insert") == 0 && atoi(f[1]) == 6){
+			q0 = atol(f[2]);
+			d = unq(f[3], txt, sizeof txt);
+			if(q0 > clen) q0 = clen;
+			if(clen + d > CMAX - 1) d = CMAX - 1 - clen;
+			memmove(cmd + q0 + d, cmd + q0, clen - q0);
+			memmove(cmd + q0, txt, d);
+			clen += d;
+			cmd[clen] = 0;
+			continue;
+		}
+		if(nf >= 4 && strcmp(f[0], "delete") == 0 && atoi(f[1]) == 6){
+			q0 = atol(f[2]);
+			q1 = atol(f[3]);
+			if(q1 > clen) q1 = clen;
+			if(q0 > q1) q0 = q1;
+			memmove(cmd + q0, cmd + q1, clen - q1);
+			clen -= q1 - q0;
+			cmd[clen] = 0;
+			continue;
+		}
+		if(nf >= 2 && strcmp(f[0], "execute") == 0 && atoi(f[1]) == 7){
+			runedit(cmd);			/* sam's language, returned */
+			setbody();
 			continue;
 		}
 		if(nf >= 2 && strcmp(f[0], "execute") == 0 && atoi(f[1]) == 3){

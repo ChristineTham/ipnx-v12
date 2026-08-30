@@ -69,7 +69,13 @@ the redesign completes the merger the originals gestured at:
 - Open question, deliberately: whether the command language is also
   exposed as a control file on every `edit` node (write commands, the
   node edits itself) — which would make "sam" a property of text in this
-  system rather than a program. Decide during M5's measurement pass.
+  system rather than a program. Still open leaving M5 — the language
+  landed inside `edit(1)` first; the control-file form waits for a
+  second consumer.
+- **The Edit language returned 2026-08-30**: `edit(1)`'s tag carries a
+  command box and an Edit button; `x/re/c|d` and `s/re/sub/[g]` run on
+  the real libregexp (regsub's `&` and backrefs included), suite-proven
+  to the file on all running hosts.
 - **First slice landed 2026-08-30 as `edit(1)`**: the editor's shape on
   canvas — a tag row whose verbs are real nodes (the file name is
   `action=look` and re-reads from disk; Put and Del are `action=execute`
@@ -87,7 +93,10 @@ focus) is files, and any program can be a window manager, recursion
 included. The host presenter — the universal SPA in a browser, the
 SwiftUI app on Apple platforms — renders frames and chrome natively and
 feeds the `events` files. Resize and close are protocol lines, which is
-what retires the demo's old deferral.
+what retires the demo's old deferral. **First proof landed 2026-08-30**:
+the window server's root lists windows, and `/rc/tile` is a window
+manager in a dozen lines of rc — any program can be one, a shell script
+included.
 
 ## The plumber, central again
 

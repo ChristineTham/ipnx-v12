@@ -1,0 +1,13 @@
+#!/bin/rc
+# tile: every window into a row — a window manager in a dozen lines of rc.
+# rio-today's proof (docs/userland.md): policy is a file you write, so any
+# program can be a window manager, this shell script included.
+xs=(40 360 680 1000 1320 1640 1960 2280)
+for(p in `{ls '#w'}){
+	p=`{echo -n $p | tr -d ''''}
+	if(! ~ $p */clone && ! ~ $#xs 0){
+		echo move $xs(1) 60 > $p/wctl
+		echo resize 300 220 > $p/wctl
+		xs=$xs(2-)
+	}
+}

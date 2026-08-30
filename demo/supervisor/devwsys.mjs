@@ -199,6 +199,23 @@ export function makeWsys(hostRef) {
       const { win } = n;
       const one = (s) => (Number(off) === 0 ? sbytes(s) : new Uint8Array(0));
       switch (n.kind) {
+      case "root": {
+        let skip = Number(off);
+        const out = [];
+        let total = 0;
+        const ents = [["clone", false], ...[...wins.keys()].map((w) => [String(w), true])];
+        for (const [nm, isdir] of ents) {
+          const rec = marshalStat({
+            name: nm, uid: "wsys", qpath: 7000 + (isdir ? +nm : 0),
+            qtype: isdir ? 0x80 : 0,
+            mode: ((isdir ? 0x80000000 | 0o555 : 0o444) >>> 0), length: 0,
+          });
+          if (skip >= rec.length) { skip -= rec.length; continue; }
+          if (total + rec.length > count) break;
+          out.push(rec); total += rec.length;
+        }
+        return concat(out);
+      }
       case "clone":
         if (!n.win) n.win = newWindow();
         return one(`${n.win.wid}`);

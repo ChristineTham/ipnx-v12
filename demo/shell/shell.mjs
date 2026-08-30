@@ -440,6 +440,7 @@ function renderCanvas(gw, snap) {
       if (n.kind === "edit") {
         el.style.cssText = "white-space:pre-wrap;margin:0;outline:none;min-height:1.4em;";
         gw.cvEdit = { el, id: n.id };                // the delegated keyboard's target
+        el.addEventListener("mousedown", () => { gw.cvEdit = { el, id: n.id }; });
       }
       if (action)
         el.addEventListener("click", (e) => {

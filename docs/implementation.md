@@ -173,7 +173,7 @@ per-write granularity; both slot in behind `#V` unchanged.
 **Acceptance:** boot from a host-directory root; a write survives restart;
 V10 permission tests still enforce; the frozen reference still boots its ramfs.
 
-### M5 — the browser host on the Rust core *(M)* — **re-aimed 2026-08-30: lands `/dev/canvas`**
+### M5 — the browser host on the Rust core *(M)* — **re-aimed 2026-08-30: lands `/dev/canvas`** — **landed 2026-08-30**
 **The canvas decision and the userland reimagining (design.md 2026-08-30,
 docs/userland.md) are this milestone's target**:
 the browser host's presenter is the ONE universal SPA rendering the semantic
@@ -216,10 +216,34 @@ the port's procexec now reports exec failure on fd 2 (a silent child
 death proved undiagnosable). **acme-today's first slice landed the same
 day as `edit(1)`** — tag verbs as real nodes (look re-reads, Put and Del
 are honest buttons), the body shadowed from events, the file round-trip
-suite-proven (148 on the demo kernel, 148 with self-skips elsewhere) and
-verified by hand in the browser: typed text, a real Put click, the file
-changed on disk, Del released the shell. Next in order: the Edit
-language (sam's return), rio-today, and Rust-kernel canvas parity.
+suite-proven and verified by hand in the browser.
+**M5 closed 2026-08-30, all four remaining slices in one round.** The
+Edit language returned: `edit(1)` carries sam's core on the real
+libregexp — `x/re/c|d` and `s/re/sub/[g]` with regsub's `&` and
+backrefs, matches collected then applied back-to-front, suite-proven
+end-to-file. rio-today's proof is the doctrine made ridiculous-honest:
+`/rc/tile` is **a window manager in a dozen lines of rc** (the window
+server's root now lists windows; policy is a loop writing wctl files).
+The Rust kernel reached full canvas parity — device, virtual surface,
+event application, resize/close pushes — so the canvas, console, edit
+and rio tests all run natively: **149 / 149 / 149**, self-skips now
+belonging to the frozen oracle alone, forever by design. And the Mac
+presenter's v0 maps the same tree to native drawing: stacks lay out,
+text and edit nodes render through the k1 subfont, action nodes are
+bordered hit-regions on the input convention's verbs, keys make
+insert/delete events with local echo — verified by window capture:
+con(1)'s transcript, typed command and output, in a real macOS window
+from the same files the browser renders as DOM. One tree, two
+presenters, demonstrated.
+**Recorded deferrals leaving M5**: `path` nodes not yet drawn on the Mac
+surface; caret/selection editing (both presenters are append/backspace
+v0 — the full editing pass rides acme-today's continuation); the
+plumber's rules and message shape (the next measurement — look events
+deliver, nothing routes them yet); canvas on iPad is M6's bridge and
+VSCode panels M13's; the original "browser host on the Rust core" aim
+(the Rust kernel compiled to wasm for the page) moves to the browser
+host's own line in platforms.md, unblocked but unscheduled. The xterm
+console stays beside con per AND-not-XOR.
 Compile `kernel/` to wasm (the core is single-threaded, no OS dependencies —
 built for this), embed it in a JS shim structurally parallel to
 `hosts/macos`: Workers as processes, the SAB mailbox, the existing browser

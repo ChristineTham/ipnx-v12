@@ -86,6 +86,14 @@ pub struct AsySnap {
     pub sp: u32,
 }
 
+#[derive(Clone)]
+pub struct CvSnap {
+    pub id: u32,
+    pub kind: u8, // 0 stack, 1 text, 2 edit, 3 path
+    pub attrs: Vec<(String, String)>,
+    pub data: Vec<u8>,
+}
+
 pub enum Effect {
     Spawn { pid: Pid, image: Arc<Vec<u8>>, argv: Vec<String>, asy: Option<AsySnap> },
     // M3: the presentation layer's feed — a window's fresh pixels (r8g8b8a8,
@@ -94,6 +102,8 @@ pub enum Effect {
     WinUpdate { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, rgba: Vec<u8> },
     WinGone { wid: u32 },
     WinText { wid: u32, bytes: Vec<u8> },
+    // /dev/canvas sync: the window's semantic tree, for a native presenter
+    WinCanvas { wid: u32, snap: Vec<CvSnap> },
     // '#H': the host performs the GET off-thread and answers with FetchDone
     Fetch { url: String },
     ConsWrite(Vec<u8>),
@@ -185,6 +195,7 @@ enum Node {
     Proc { kind: u8, pid: Pid }, // 0 root, 1 dir, 2 ctl, 3 status, 4 note, 5 notepg
     Mnt(MntRef),
     Wsys { kind: WKind, win: Option<WinR>, conn: Option<DConnR> },
+    Cv { win: WinR, id: u32, file: u8 }, // canvas node: file 255 dir, 0 kind, 1 attrs, 2 addr, 3 data
     SnapRoot,
     SnapCtl,
 }
@@ -208,11 +219,17 @@ enum WKind {
     DrawCtl,
     DrawData,
     DrawRefresh,
+    CvDir,
+    CvCtl,
+    CvEvents,
+    CvCaps,
 }
 
 fn node_eq(a: &Node, b: &Node) -> bool {
     match (a, b) {
         (Node::Ram(x), Node::Ram(y)) => Rc::ptr_eq(x, y),
+        (Node::Cv { win: a, id: i1, file: f1 }, Node::Cv { win: b, id: i2, file: f2 }) =>
+            Rc::ptr_eq(a, b) && i1 == i2 && f1 == f2,
         (Node::SnapRoot, Node::SnapRoot) => true,
         (Node::SnapCtl, Node::SnapCtl) => true,
         (Node::Host(x), Node::Host(y)) => x == y,
@@ -423,6 +440,24 @@ impl<'a> R9<'a> {
 // wctl, winid, label, rgb — and draw/, an actual per-window /dev/draw.
 // Native v1 is headless: no host presentation effects; the suite reads
 // rasters back through rgb and injects input through wctl. ----
+// /dev/canvas (docs/canvas.md): a flat tree of semantic nodes per window.
+// v0 kinds stack/text/edit/path; addr/data is acme's interface simplified;
+// events are %-quoted lines with parked reads. A user edit event is a
+// mutation that happened — cv_apply keeps node data the truth.
+struct CvNode {
+    kind: u8, // 0 stack, 1 text, 2 edit, 3 path
+    attrs: Vec<(String, String)>,
+    data: Vec<u8>,
+    addr: (usize, usize),
+}
+
+struct Canvas {
+    nodes: HashMap<u32, CvNode>,
+    order: u32,
+    events: VecDeque<String>,
+    parked: Vec<Waiter>,
+}
+
 struct Win {
     wid: u32,
     x: i32,
@@ -438,6 +473,7 @@ struct Win {
     uitext: Vec<u8>,
     mousebuf: VecDeque<Vec<u8>>,
     mouseparked: Vec<Waiter>,
+    cv: Option<Canvas>,
     dead: bool,
 }
 type WinR = Rc<RefCell<Win>>;
@@ -531,6 +567,7 @@ struct KState {
     eve: String,
     ram_root: RamRef,
     snaps: Vec<(String, u32, RamRef)>, // name, snap time, frozen root — '#V'
+    canvas_caps: String, // what the attached surface offers; virtual = the suite's user
     hostfs_root: Option<std::path::PathBuf>,
     live_root: bool,
     qgen: u64,
@@ -583,9 +620,23 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, name
                 "consctl" => WKind::Consctl,
                 "cursor" => WKind::Cursor,
                 "draw" => WKind::DrawDir,
+                "canvas" => { mkcv(&w); WKind::CvDir }
                 _ => return None,
             };
             Some(wnode(kd, Some(w), None))
+        }
+        WKind::CvDir => {
+            let w = win.clone()?;
+            match name {
+                "ctl" => return Some(wnode(WKind::CvCtl, Some(w), None)),
+                "events" => return Some(wnode(WKind::CvEvents, Some(w), None)),
+                "caps" => return Some(wnode(WKind::CvCaps, Some(w), None)),
+                _ => {}
+            }
+            let id: u32 = name.parse().ok()?;
+            let has = w.borrow().cv.as_ref().map(|c| c.nodes.contains_key(&id)).unwrap_or(false);
+            if !has { return None; }
+            Some(DN { dev: DevId::Wsys, node: Node::Cv { win: w, id, file: 255 }, path: None })
         }
         WKind::DrawDir => {
             let w = win.clone()?;
@@ -632,6 +683,7 @@ fn new_window(k: &K) -> WinR {
         consparked: Vec::new(),
         mousebuf: VecDeque::new(),
         mouseparked: Vec::new(),
+        cv: None,
         dead: false,
     }));
     kb.wins.insert(wid, win.clone());
@@ -687,6 +739,161 @@ fn serve_wmouse(k: &K, win: &WinR) {
     }
 }
 
+fn cv_kindname(kd: u8) -> &'static str {
+    match kd { 0 => "stack", 1 => "text", 2 => "edit", _ => "path" }
+}
+
+fn mkcv(win: &WinR) {
+    let mut wb = win.borrow_mut();
+    if wb.cv.is_none() {
+        let mut nodes = HashMap::new();
+        nodes.insert(0, CvNode {
+            kind: 0, attrs: vec![("dir".into(), "col".into())],
+            data: Vec::new(), addr: (0, 0),
+        });
+        wb.cv = Some(Canvas { nodes, order: 1, events: VecDeque::new(), parked: Vec::new() });
+    }
+}
+
+fn cv_unq(t: &str) -> Vec<u8> {
+    let b = t.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            let two = &t[i + 1..i + 3];
+            match two {
+                "20" => { out.push(b' '); i += 3; continue; }
+                "0A" | "0a" => { out.push(b'\n'); i += 3; continue; }
+                "25" => { out.push(b'%'); i += 3; continue; }
+                _ => {}
+            }
+        }
+        out.push(b[i]);
+        i += 1;
+    }
+    out
+}
+
+fn serve_cv(k: &K, win: &WinR) {
+    loop {
+        let fired = {
+            let mut w = win.borrow_mut();
+            let dead = w.dead;
+            let cv = match w.cv.as_mut() { Some(c) => c, None => return };
+            if cv.parked.is_empty() || (cv.events.is_empty() && !dead) {
+                return;
+            }
+            let waiter = cv.parked.remove(0);
+            let give = cv.events.pop_front().unwrap_or_default().into_bytes();
+            (waiter.kind, give)
+        };
+        wake(k, fired.0, fired.1);
+    }
+}
+
+// a user edit event mutates the node before notifying — the tree is the truth
+fn cv_apply(win: &WinR, line: &str) {
+    let f: Vec<&str> = line.trim().split_whitespace().collect();
+    if f.len() < 4 { return; }
+    let id: u32 = match f[1].parse() { Ok(v) => v, Err(_) => return };
+    let mut wb = win.borrow_mut();
+    let cv = match wb.cv.as_mut() { Some(c) => c, None => return };
+    let nd = match cv.nodes.get_mut(&id) { Some(n) => n, None => return };
+    if f[0] == "insert" {
+        let ins = cv_unq(f[3]);
+        let q0: usize = f[2].parse::<usize>().unwrap_or(0).min(nd.data.len());
+        nd.data.splice(q0..q0, ins);
+    } else if f[0] == "delete" {
+        let q0: usize = f[2].parse::<usize>().unwrap_or(0).min(nd.data.len());
+        let q1: usize = f[3].parse::<usize>().unwrap_or(0).min(nd.data.len());
+        if q1 > q0 { nd.data.drain(q0..q1); }
+    }
+}
+
+fn cv_push(k: &K, win: &WinR, line: &str) {
+    if win.borrow().cv.is_none() { return; }
+    cv_apply(win, line);
+    {
+        let mut wb = win.borrow_mut();
+        let cv = wb.cv.as_mut().unwrap();
+        cv.events.push_back(format!("{}\n", line));
+        if cv.events.len() > 512 { cv.events.pop_front(); }
+    }
+    serve_cv(k, win);
+}
+
+fn cv_ctl(k: &K, win: &WinR, raw: &str) -> Result<(), KErr> {
+    for line in raw.split('\n') {
+        let t = line.trim();
+        if t.is_empty() { continue; }
+        let f: Vec<&str> = t.split_whitespace().collect();
+        match f[0] {
+            "new" => {
+                if f.len() < 3 { return Err("new wants id and kind".into()); }
+                let id: u32 = f[1].parse().map_err(|_| "new: bad id")?;
+                let kd = match f[2] {
+                    "stack" => 0u8, "text" => 1, "edit" => 2, "path" => 3,
+                    other => return Err(format!("new: unknown kind '{}'", other)),
+                };
+                let mut wb = win.borrow_mut();
+                let cv = wb.cv.as_mut().ok_or("no canvas")?;
+                if id == 0 || cv.nodes.contains_key(&id) {
+                    return Err(format!("new: bad or taken id '{}'", f[1]));
+                }
+                let ord = cv.order; cv.order += 1;
+                cv.nodes.insert(id, CvNode {
+                    kind: kd,
+                    attrs: vec![("parent".into(), "0".into()), ("order".into(), ord.to_string())],
+                    data: Vec::new(), addr: (0, 0),
+                });
+            }
+            "del" => {
+                if f.len() < 2 { return Err("del wants id".into()); }
+                let id: u32 = f[1].parse().map_err(|_| "del: bad id")?;
+                let mut wb = win.borrow_mut();
+                let cv = wb.cv.as_mut().ok_or("no canvas")?;
+                if id == 0 || !cv.nodes.contains_key(&id) {
+                    return Err(format!("del: no node '{}'", f[1]));
+                }
+                let mut doomed = vec![id];
+                let mut i = 0;
+                while i < doomed.len() {
+                    let pid = doomed[i].to_string();
+                    for (k2, nd) in cv.nodes.iter() {
+                        if nd.attrs.iter().any(|(a, v)| a == "parent" && *v == pid) {
+                            doomed.push(*k2);
+                        }
+                    }
+                    i += 1;
+                }
+                for k2 in doomed { cv.nodes.remove(&k2); }
+            }
+            "sync" => {
+                let interactive = k.borrow().canvas_caps != "virtual";
+                if interactive {
+                    let (wid, snap) = {
+                        let wb = win.borrow();
+                        let cv = wb.cv.as_ref().ok_or("no canvas")?;
+                        let mut snap: Vec<CvSnap> = cv.nodes.iter().map(|(id, nd)| CvSnap {
+                            id: *id, kind: nd.kind, attrs: nd.attrs.clone(), data: nd.data.clone(),
+                        }).collect();
+                        snap.sort_by_key(|n| n.id);
+                        (wb.wid, snap)
+                    };
+                    k.borrow_mut().effects.push(Effect::WinCanvas { wid, snap });
+                }
+            }
+            "event" => {
+                let rest = t.strip_prefix("event").unwrap_or("").trim().to_string();
+                cv_push(k, win, &rest);
+            }
+            other => return Err(format!("canvas ctl: unknown verb '{}'", other)),
+        }
+    }
+    Ok(())
+}
+
 // msec really advances, because double-click detection is msec arithmetic
 fn inject_mouse(k: &K, win: &WinR, x: i32, y: i32, buttons: i32) {
     let msec = (now_nanos() / 1_000_000) & 0x3fff_ffff;
@@ -707,6 +914,56 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
         RRes::Data(if off == 0 { s.into_bytes() } else { Vec::new() })
     };
     match kind {
+        WKind::Root => {
+            // the windows, listed — rio-today's ls '#w' (policy needs an enumeration)
+            let mut skip = off as usize;
+            let mut out = Vec::new();
+            let mut ents: Vec<(String, bool)> = vec![("clone".into(), false)];
+            {
+                let kb = k.borrow();
+                let mut ids: Vec<u32> = kb.wins.keys().cloned().collect();
+                ids.sort();
+                for w in ids { ents.push((w.to_string(), true)); }
+            }
+            for (i, (nm, isdir)) in ents.iter().enumerate() {
+                let rec = marshal_stat(&StatIn {
+                    name: nm, uid: "wsys", gid: "wsys", qpath: 7000 + i as u64,
+                    qtype: if *isdir { QTDIR } else { 0 },
+                    mode: if *isdir { DMDIR | 0o555 } else { 0o444 },
+                    ..Default::default()
+                });
+                if skip >= rec.len() { skip -= rec.len(); continue; }
+                if out.len() + rec.len() > n { break; }
+                out.extend_from_slice(&rec);
+            }
+            return Ok(RRes::Data(out));
+        }
+        WKind::CvCaps => {
+            let caps = k.borrow().canvas_caps.clone();
+            return Ok(one(format!("{}\n", caps)));
+        }
+        WKind::CvEvents => {
+            let w = win.as_ref().ok_or("no window")?;
+            let now = {
+                let mut wb = w.borrow_mut();
+                let dead = wb.dead;
+                let cv = wb.cv.as_mut().ok_or("no canvas")?;
+                if let Some(line) = cv.events.pop_front() {
+                    Some(line.into_bytes())
+                } else if dead {
+                    Some(Vec::new())
+                } else {
+                    None
+                }
+            };
+            if let Some(give) = now {
+                return Ok(RRes::Data(give));
+            }
+            let (c, wt) = oneshot::<RRes>();
+            w.borrow_mut().cv.as_mut().unwrap().parked.push(Waiter { n, kind: WaitKind::Wake { pid: 0, c } });
+            return Ok(wt.await);
+        }
+        WKind::CvDir | WKind::CvCtl => return Ok(RRes::Data(Vec::new())),
         WKind::Clone => {
             // reading clone mints the window and pins it on this chan
             let have = {
@@ -857,6 +1114,7 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                 ["resize", nw, nh] => {
                     let (nw, nh): (i32, i32) =
                         (nw.parse().map_err(|_| "bad resize")?, nh.parse().map_err(|_| "bad resize")?);
+                    cv_push(k, w, &format!("resize 0 {} {}", nw, nh));
                     let img = draw::new_image([0, 0, nw, nh], 0, 0x0818_2848, None,
                                               Some([255, 255, 255, 255]), None);
                     let mut wb = w.borrow_mut();
@@ -876,6 +1134,7 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                         b.parse().map_err(|_| "bad mouse")?);
                 }
                 ["delete"] => {
+                    cv_push(k, w, "close 0");
                     let wid = {
                         let mut wb = w.borrow_mut();
                         wb.dead = true;
@@ -883,6 +1142,7 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                     };
                     serve_wcons(k, w);
                     serve_wmouse(k, w);
+                    serve_cv(k, w);
                     let mut kb = k.borrow_mut();
                     kb.wins.remove(&wid);
                     kb.win_dirty.remove(&wid);
@@ -891,6 +1151,12 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                 }
                 _ => return Err(format!("wctl: bad message '{}'", raw.trim())),
             }
+            Ok(data.len())
+        }
+        WKind::CvCtl => {
+            let w = win.as_ref().ok_or("no window")?;
+            let raw = String::from_utf8_lossy(data).into_owned();
+            cv_ctl(k, w, &raw)?;
             Ok(data.len())
         }
         WKind::DrawData => {
@@ -905,7 +1171,7 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
 }
 
 fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>) -> Vec<u8> {
-    let dir = matches!(kind, WKind::Root | WKind::WinDir | WKind::DrawDir | WKind::ConnDir);
+    let dir = matches!(kind, WKind::Root | WKind::WinDir | WKind::DrawDir | WKind::ConnDir | WKind::CvDir);
     let name = match kind {
         WKind::Root => "wsys".to_string(),
         WKind::WinDir => win.as_ref().map(|w| w.borrow().wid.to_string()).unwrap_or_default(),
@@ -924,6 +1190,10 @@ fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>) -> Vec<u8> 
         WKind::Rgb => "rgb".to_string(),
         WKind::Consctl => "consctl".to_string(),
         WKind::Cursor => "cursor".to_string(),
+        WKind::CvDir => "canvas".to_string(),
+        WKind::CvCtl => "ctl".to_string(),
+        WKind::CvEvents => "events".to_string(),
+        WKind::CvCaps => "caps".to_string(),
     };
     let wid = win.as_ref().map(|w| w.borrow().wid).unwrap_or(0) as u64;
     let cid = conn.as_ref().map(|c| c.borrow().id).unwrap_or(0) as u64;
@@ -1198,6 +1468,19 @@ impl Kernel {
     }
 
     /// the UI painted this window's last batch: restore its credit
+    pub fn canvas_caps_set(&self, caps: &str) {
+        self.k.borrow_mut().canvas_caps = caps.to_string();
+    }
+
+    // an interactive surface speaks: deliver one event line to a window's canvas
+    pub fn canvas_event(&self, wid: u32, line: &str) {
+        let win = self.k.borrow().wins.get(&wid).cloned();
+        if let Some(w) = win {
+            mkcv(&w);
+            cv_push(&self.k, &w, line);
+        }
+    }
+
     pub fn win_ack(&self, wid: u32) {
         self.k.borrow_mut().win_inflight.remove(&wid);
         self.ex.run_until_stalled();
@@ -1259,6 +1542,7 @@ impl Kernel {
                 eve: eve.into(),
                 ram_root: root,
                 snaps: Vec::new(),
+                canvas_caps: "virtual".into(),
                 hostfs_root: None,
                 live_root: false,
                 qgen,
@@ -1680,6 +1964,13 @@ async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>
         }
         (DevId::Ram, Node::Ram(r)) => {
             Ok(kid(r, name).map(|kd| DN { dev: DevId::Ram, node: Node::Ram(kd), path: None }))
+        }
+        (DevId::Wsys, Node::Cv { win, id, file: 255 }) => {
+            let file = match name {
+                "kind" => 0u8, "attrs" => 1, "addr" => 2, "data" => 3,
+                _ => return Ok(None),
+            };
+            Ok(Some(DN { dev: DevId::Wsys, node: Node::Cv { win: win.clone(), id: *id, file }, path: None }))
         }
         (DevId::Snap, Node::SnapRoot) => {
             if name == "ctl" {
@@ -2132,6 +2423,13 @@ async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
             r.u16(); // outer size, per stat(5)'s double count
             Ok(r.rest().to_vec())
         }
+        (DevId::Wsys, Node::Cv { id, file, .. }) => Ok(marshal_stat(&StatIn {
+            name: match file { 255 => "node", 0 => "kind", 1 => "attrs", 2 => "addr", _ => "data" },
+            uid: "wsys", gid: "wsys", qpath: 7100 + *id as u64 * 8 + *file as u64,
+            qtype: if *file == 255 { QTDIR } else { 0 },
+            mode: if *file == 255 { DMDIR | 0o555 } else { 0o666 },
+            ..Default::default()
+        })),
         (DevId::Wsys, Node::Wsys { kind, win, conn }) => Ok(wsys_stat(*kind, win, conn)),
         (DevId::Web, Node::WebRoot) => Ok(marshal_stat(&StatIn {
             name: "web", qtype: QTDIR, mode: DMDIR | 0o555, ..Default::default()
@@ -2191,6 +2489,30 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
                 let got = f.read(&mut buf).map_err(|e| e.to_string())?;
                 buf.truncate(got);
                 buf
+            };
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Wsys, Node::Cv { win, id, file }) => {
+            let idv: u32 = id;
+            let wb = win.borrow();
+            let cv = wb.cv.as_ref().ok_or("no canvas")?;
+            let nd = cv.nodes.get(&idv).ok_or("node gone")?;
+            let out: Vec<u8> = match file {
+                0 => if off == 0 { format!("{}\n", cv_kindname(nd.kind)).into_bytes() } else { Vec::new() },
+                1 => if off == 0 {
+                    let mut t = String::new();
+                    for (a, v) in &nd.attrs { t.push_str(&format!("{}={}\n", a, v)); }
+                    t.into_bytes()
+                } else { Vec::new() },
+                2 => if off == 0 { format!("{},{}\n", nd.addr.0, nd.addr.1).into_bytes() } else { Vec::new() },
+                3 => {
+                    let (q0, q1) = nd.addr;
+                    let seg = &nd.data[q0.min(nd.data.len())..q1.min(nd.data.len())];
+                    let o = (off as usize).min(seg.len());
+                    seg[o..(o + n).min(seg.len())].to_vec()
+                }
+                _ => Vec::new(),
             };
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
@@ -2680,6 +3002,51 @@ fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Re
         }
         (DevId::Wsys, Node::Wsys { kind, win, conn }) => {
             wsys_write(k, kind, &win, &conn, data)?
+        }
+        (DevId::Wsys, Node::Cv { win, id, file }) => {
+            let mut wb = win.borrow_mut();
+            let cv = wb.cv.as_mut().ok_or("no canvas")?;
+            let nd = cv.nodes.get_mut(&id).ok_or("node gone")?;
+            match file {
+                1 => {
+                    for line in String::from_utf8_lossy(data).split('\n') {
+                        if let Some(eq) = line.find('=') {
+                            let (a, v) = (line[..eq].trim().to_string(), line[eq + 1..].trim().to_string());
+                            if a.is_empty() { continue; }
+                            if let Some(slot) = nd.attrs.iter_mut().find(|(k2, _)| *k2 == a) {
+                                slot.1 = v;
+                            } else {
+                                nd.attrs.push((a, v));
+                            }
+                        }
+                    }
+                }
+                2 => {
+                    let t = String::from_utf8_lossy(data).trim().to_string();
+                    let end = nd.data.len();
+                    if t == "$" {
+                        nd.addr = (end, end);
+                    } else {
+                        let (a, b) = match t.split_once(',') {
+                            Some((x, y)) => (x.to_string(), y.to_string()),
+                            None => (t.clone(), t.clone()),
+                        };
+                        let q0 = a.parse::<usize>().map_err(|_| "bad addr")?.min(end);
+                        let q1 = if b == "$" { end } else { b.parse::<usize>().map_err(|_| "bad addr")?.min(end) };
+                        if q1 < q0 { return Err("addr reversed".into()); }
+                        nd.addr = (q0, q1);
+                    }
+                }
+                3 => {
+                    let (q0, q1) = nd.addr;
+                    let repl: Vec<u8> = data.to_vec();
+                    let end = q0 + repl.len();
+                    nd.data.splice(q0..q1, repl);
+                    nd.addr = (end, end);
+                }
+                _ => return Err("read-only canvas file".into()),
+            }
+            data.len()
         }
         _ => return Err("write not supported here (v0)".into()),
     };

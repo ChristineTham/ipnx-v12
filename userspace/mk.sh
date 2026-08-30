@@ -198,6 +198,9 @@ $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/con.o build/libt
   --enable-nontrapping-float-to-int \
   -o rootfs/bin/con.tmp && mv rootfs/bin/con.tmp rootfs/bin/con
 echo "  bin/con  $(wc -c < rootfs/bin/con | tr -d ' ') bytes (console-today: the editable transcript)"
+$P9CC -c cmd/edit.c -o build/edit.o
+$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/edit.o build/libp9.a -o rootfs/bin/edit
+echo "  bin/edit  $(wc -c < rootfs/bin/edit | tr -d ' ') bytes (acme-today: the one editor, Edit language aboard)"
 
 # samterm: the real editor's screen — libframe over libdraw over libthread,
 # spoken to by sam over the mesg protocol; sam spawns /bin/aux/samterm
@@ -309,7 +312,7 @@ for c in plan9/sys/src/cmd/*.c; do
 done
 for c in cmd/*.c; do
   b=$(basename "$c" .c)
-  case "$b" in drtest|threadtest|con) continue;; esac   # built above, against the real headers
+  case "$b" in drtest|threadtest|con|edit) continue;; esac   # built above, against the real headers
   $CC -c "$c" -o "build/$b.o"
   $LD build/crt0.o build/lib9.o build/lib9p.o build/draw9.o "build/$b.o" build/libp9.a -o "rootfs/bin/$b"
   case " $ASYNCIFY " in *" $b "*)
