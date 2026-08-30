@@ -596,6 +596,7 @@ procexec(Channel *pidc, char *prog, char *args[])
 		for(i = 0; i < NSTASH; i++)		/* the command must not see the stash */
 			close(STASHBASE + i);
 		exec(prog, args);
+		fprint(2, "procexec: exec %s: %r\n", prog);
 		_exits("exec failed");
 	}
 	fdrestore();

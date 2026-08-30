@@ -184,8 +184,8 @@ acme-today, rio-today and one plot before code. The demo kernel prototypes
 canvas first (demo-leads-discovery doctrine); the Mac app's presenter then
 maps the same tree to CoreText/AppKit, and iPadOS inherits the shape.
 Build order per userland.md: measure → console-today (the editable
-transcript — the first canvas client; xterm.js and the glass tty retire
-when it lands) → acme-today absorbing sam's Edit language (one editor plus
+transcript — the first canvas client; **AND, not XOR**, 2026-08-30: the
+xterm byte console stays beside it) → acme-today absorbing sam's Edit language (one editor plus
 a language; raster sam/acme retire to the exhibit with the suite floor
 intact) → rio-today policy files. The plumber's rules and message shape
 are designed inside the measurement pass — the look verb needs them.
@@ -203,7 +203,18 @@ DOM, and a button click came back as `execute 3 0 7 Refresh` on the
 events file. One suite test, pure rc — 146 on the demo kernel, 146 with
 self-skips on native and the frozen oracle. `read(1)` landed beside it
 (one read per invocation — the line-per-read device's natural client).
-Next in order: console-today, then Rust-kernel canvas parity.
+**Console-today landed 2026-08-30**: `con(1)` — the transcript is one
+edit node, a mark separates history from the input region, Enter sends
+the line; three libthread coroutines feed one canvas-writing consumer
+(no locks, shadow state only, the transcript never re-read); the device
+now applies user insert/delete events to node data before notifying (the
+tree is the truth — presenter echo and buffer stay one thing); the
+presenter gained Backspace. Suite-proven through the virtual surface
+with output the typed text never contained — 147 on the demo kernel,
+147 with self-skips on native and the oracle. Found on the way and kept:
+the port's procexec now reports exec failure on fd 2 (a silent child
+death proved undiagnosable). Next in order: acme-today, rio-today, and
+Rust-kernel canvas parity.
 Compile `kernel/` to wasm (the core is single-threaded, no OS dependencies —
 built for this), embed it in a JS shim structurally parallel to
 `hosts/macos`: Workers as processes, the SAB mailbox, the existing browser

@@ -202,6 +202,33 @@ if(~ $"cvok virtual){
 }
 if not echo PASS 'canvas: no /dev/canvas on this host — skipped'
 
+# console-today (M5, docs/userland.md): the console is an editable
+# transcript — one edit node, a mark separating history from input,
+# Enter sends the line. con(1) mediates on the wasm libthread; the test
+# drives it through the virtual surface's event door and proves the
+# full loop with output the typed text never contained. AND, not XOR:
+# the xterm byte console stays beside this one.
+cnwid=`{cat '#w/clone' >[2]/dev/null}
+if(~ $#cnwid 1){
+	cnp='#w/'$"cnwid^'/canvas'
+	cnok=`{cat $cnp/caps >[2=1]}
+}
+if not cnok=absent
+if(~ $"cnok virtual){
+	con -W $cnwid rc -i &
+	sleep 3
+	echo -n '0,$' > $cnp/1/addr
+	cnoff=`{cat $cnp/1/data | wc -c}
+	cnpr=`{cat $cnp/1/data}
+	echo 'event insert 1 '$cnoff' echo%20-n%20abc;%20echo%20def%0A' > $cnp/ctl
+	sleep 2
+	echo -n '0,$' > $cnp/1/addr
+	cnt=`{cat $cnp/1/data}
+	echo 'event close 0' > $cnp/ctl
+	if(~ $"cnpr *%* && ~ $"cnt *abcdef*) echo PASS 'console-today: the transcript is the console — prompt, line, output through one edit node'; if not fails=bad
+}
+if not echo PASS 'console-today: no canvas on this host — skipped'
+
 # M2, the namespace-file boot: the same file format that boots the system
 # reshapes a world at runtime — newns(file, cmd) clears and rebuilds from
 # TEXT, so editing the file rebinds with no recompile (the acceptance).

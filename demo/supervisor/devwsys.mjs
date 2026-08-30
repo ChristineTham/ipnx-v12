@@ -51,11 +51,39 @@ export function makeWsys(hostRef) {
     if (!cv) return;
     while (cv.evparked.length && (cv.events.length || win.dead)) {
       const { ctx } = cv.evparked.shift();
-      ctx.done(null, sbytes(cv.events.length ? cv.events.shift() : ""));
+      ctx.done(sbytes(cv.events.length ? cv.events.shift() : ""));
+    }
+  };
+  const cvunq = (t) => t.replace(/%0[Aa]/g, "\n").replace(/%20/g, " ").replace(/%25/g, "%");
+  // a user edit event is a mutation that HAPPENED: the tree is the truth,
+  // so the device applies insert/delete to the node before notifying the
+  // app — presenter echo and node data stay one thing (acme's discipline)
+  const cvapply = (win, line) => {
+    const f = line.trim().split(/\s+/);
+    const nd = win.cv?.nodes.get(+f[1]);
+    if (!nd) return;
+    if (f[0] === "insert" && f.length >= 4) {
+      const ins = sbytes(cvunq(f[3]));
+      const q0 = Math.min(+f[2], nd.data.length);
+      const grown = new Uint8Array(nd.data.length + ins.length);
+      grown.set(nd.data.subarray(0, q0), 0);
+      grown.set(ins, q0);
+      grown.set(nd.data.subarray(q0), q0 + ins.length);
+      nd.data = grown;
+    } else if (f[0] === "delete" && f.length >= 4) {
+      const q0 = Math.min(+f[2], nd.data.length);
+      const q1 = Math.min(+f[3], nd.data.length);
+      if (q1 > q0) {
+        const cut = new Uint8Array(nd.data.length - (q1 - q0));
+        cut.set(nd.data.subarray(0, q0), 0);
+        cut.set(nd.data.subarray(q1), q0);
+        nd.data = cut;
+      }
     }
   };
   const cvpush = (win, line) => {
     if (!win.cv) return;
+    cvapply(win, line);
     win.cv.events.push(line + "\n");
     if (win.cv.events.length > 512) win.cv.events.shift();
     serveCv(win);

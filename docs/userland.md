@@ -35,12 +35,17 @@ The terminal emulator dies. A console is an `edit` node with a **prompt
 discipline**: the transcript is one editable buffer; a mark separates
 history from the input region; Enter in the input region sends the line;
 everything above is ordinary editable, searchable, selectable text.
-acme's `win(1)` was this design's prototype twenty years early — we make
-it the *only* console. Consequences, all free: infinite scrollback that is
-just a buffer; copy/paste that is just selection; search that is just the
-editor; no escape-sequence emulation, ever (programs that want structure
-have canvas; programs that write bytes get a transcript). The glass tty
-and xterm.js retire when this lands.
+acme's `win(1)` was this design's prototype twenty years early. **Amended
+2026-08-30 (design log): AND, not XOR** — the transcript is the native
+console, and the xterm byte console stays beside it, because familiarity
+is a door, not a debt. Consequences of the transcript, all free: infinite
+scrollback that is just a buffer; copy/paste that is just selection;
+search that is just the editor; no escape-sequence emulation in the
+native design (programs that want structure have canvas; programs that
+write bytes get a transcript — or the xterm door, their choice).
+**Landed 2026-08-30 as `con(1)`** on the wasm libthread: three
+coroutines, one canvas writer, shadow-state mark arithmetic, suite-
+tested through the virtual surface.
 
 ## One editor: acme-today absorbs sam
 

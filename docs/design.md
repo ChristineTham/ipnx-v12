@@ -652,6 +652,17 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   universal; look = tapping the thing; execute = tapping the tag or
   ⌘Enter; the chords were always the clipboard.
 
+- **(2026-08-30) The console amendment: AND, not XOR.** Christine, mid-
+  build, in her words: "we should allow xterm.js as well - it is what
+  people are used to... and not xor." The retirement clause softens on
+  the record: console-today (the editable transcript, `con(1)`) is the
+  NATIVE design and the doctrine's direction, and the xterm byte console
+  stays beside it as the familiar door — the same reasoning that made
+  VSCode a surface (meet people where they live) applied to our own
+  terminal, and the exhibit philosophy applied to the present: nothing
+  is deleted, surfaces multiply. Programs that write bytes get either
+  console; programs that want structure get canvas.
+
 - **(2026-08-30) The ultimate dev environment, and VSCode as a surface.**
   Christine's realisation, recorded in her words: "we have created the
   ultimate dev environment. A system can build and run a cluster - in a

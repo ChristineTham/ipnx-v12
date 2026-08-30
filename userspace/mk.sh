@@ -190,6 +190,14 @@ $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/threadtest.o bui
   --enable-nontrapping-float-to-int \
   -o rootfs/bin/threadtest.tmp && mv rootfs/bin/threadtest.tmp rootfs/bin/threadtest
 echo "  bin/threadtest  $(wc -c < rootfs/bin/threadtest | tr -d ' ') bytes (libthread, asyncified)"
+$P9CC -c cmd/con.c -o build/con.o
+$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/con.o build/libthread.o build/libp9.a -o rootfs/bin/con
+"$BINARYEN/bin/wasm-opt" rootfs/bin/con \
+  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj,env.tsave,env.tjump -O2 \
+  --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
+  --enable-nontrapping-float-to-int \
+  -o rootfs/bin/con.tmp && mv rootfs/bin/con.tmp rootfs/bin/con
+echo "  bin/con  $(wc -c < rootfs/bin/con | tr -d ' ') bytes (console-today: the editable transcript)"
 
 # samterm: the real editor's screen — libframe over libdraw over libthread,
 # spoken to by sam over the mesg protocol; sam spawns /bin/aux/samterm
@@ -301,7 +309,7 @@ for c in plan9/sys/src/cmd/*.c; do
 done
 for c in cmd/*.c; do
   b=$(basename "$c" .c)
-  case "$b" in drtest|threadtest) continue;; esac   # built above, against the real headers
+  case "$b" in drtest|threadtest|con) continue;; esac   # built above, against the real headers
   $CC -c "$c" -o "build/$b.o"
   $LD build/crt0.o build/lib9.o build/lib9p.o build/draw9.o "build/$b.o" build/libp9.a -o "rootfs/bin/$b"
   case " $ASYNCIFY " in *" $b "*)

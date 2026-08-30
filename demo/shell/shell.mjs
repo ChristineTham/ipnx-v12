@@ -415,6 +415,16 @@ function renderCanvas(gw, snap) {
         el.tabIndex = 0;
         el.addEventListener("keydown", (e) => {
           if (e.metaKey || e.ctrlKey) return;
+          if (e.key === "Backspace") {
+            e.preventDefault();
+            const t = el.textContent;
+            if (!t.length) return;
+            const last = t.slice(-1);
+            el.textContent = t.slice(0, -1);           // presenter-local echo
+            const end = cvblen(el.textContent);
+            wsys?.canvasEvent(gw.id, `delete ${n.id} ${end} ${end + cvblen(last)}`);
+            return;
+          }
           let ch = null;
           if (e.key === "Enter") ch = "\n";
           else if (e.key.length === 1) ch = e.key;
