@@ -665,7 +665,18 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   the exhibit remains runnable by name (`sam9`, `acme`), present in
   the tree and the suite, absent from the product face. Retirement
   means the successor answers to the ancestor's name and the
-  ancestor's proof; it never means deletion.
+  ancestor's proof; it never means deletion. **The second clause,
+  from acme's succession the same hour**: an ancestor's tests divide
+  into BEHAVIOURAL (file in, commands, file out — sam's, which the
+  heir passed verbatim) and SUBSTRATE (raster pixels, the draw
+  protocol — acmetest's, which certify the stack, not the editor).
+  A name passes on the behavioural tests; the substrate tests step
+  back with the ancestor (`acme9`, still driven by acmetest, the
+  sam/samterm/libframe and acme raster stacks staying proven). So
+  `acme` now means acme-today, held to the workspace behaviour suite
+  — columns, editable tags everywhere, word execution, Put-by-name,
+  the look browser, the Edit language — and both originals answer to
+  their stepped-back names.
 
 - **(2026-08-30) No half-working.** Christine, on acme-today's deferral
   list, in her words: "I don't understand why we have deferrals. Either

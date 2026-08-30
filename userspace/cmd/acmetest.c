@@ -20,7 +20,7 @@ static char winpath[32];
 static void
 acmechild(void *v)
 {
-	char *av[] = { "acme", nil };
+	char *av[] = { "acme9", nil };
 	int fd;
 
 	USED(v);
@@ -29,7 +29,7 @@ acmechild(void *v)
 	dup(fd, 0);
 	dup(fd, 1);
 	/* fd 2 stays on the test console: acme's errors surface in the log */
-	exec("/bin/acme", av);
+	exec("/bin/acme9", av);
 	exits("exec");
 }
 

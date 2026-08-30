@@ -207,9 +207,9 @@ $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/samtoday.o build
   --enable-nontrapping-float-to-int \
   -o rootfs/bin/sam.tmp && mv rootfs/bin/sam.tmp rootfs/bin/sam
 echo "  bin/sam  $(wc -c < rootfs/bin/sam | tr -d ' ') bytes (sam-today: the language as a filter — the name inherited)"
-$P9CC -c cmd/edit.c -o build/edit.o
-$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/edit.o build/libp9.a -o rootfs/bin/edit
-echo "  bin/edit  $(wc -c < rootfs/bin/edit | tr -d ' ') bytes (acme-today: the one editor, Edit language aboard)"
+$P9CC -c cmd/acme.c -o build/acmetoday.o
+$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/acmetoday.o build/libp9.a -o rootfs/bin/acme
+echo "  bin/acme  $(wc -c < rootfs/bin/acme | tr -d ' ') bytes (acme-today: the one editor, the name inherited)"
 
 # samterm: the real editor's screen — libframe over libdraw over libthread,
 # spoken to by sam over the mesg protocol; sam spawns /bin/aux/samterm
@@ -303,13 +303,13 @@ for o in $ACMEOBJS; do
   [ -n "$weak" ] && node weaken.mjs "$o" $weak
 done
 $P9CC -c plan9/sys/src/libcomplete/complete.c -o build/p9-complete.o
-$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/p9-acme-*.o build/libthread.o build/mousekbd.o build/p9-plumb-mesg.o build/p9-plumb-sendtext.o build/p9-complete.o build/libdraw.a build/libp9.a -o rootfs/bin/acme
-"$BINARYEN/bin/wasm-opt" rootfs/bin/acme \
+$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/p9-acme-*.o build/libthread.o build/mousekbd.o build/p9-plumb-mesg.o build/p9-plumb-sendtext.o build/p9-complete.o build/libdraw.a build/libp9.a -o rootfs/bin/acme9
+"$BINARYEN/bin/wasm-opt" rootfs/bin/acme9 \
   --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj,env.tsave,env.tjump -O2 \
   --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
   --enable-nontrapping-float-to-int \
-  -o rootfs/bin/acme.tmp && mv rootfs/bin/acme.tmp rootfs/bin/acme
-echo "  bin/acme  $(wc -c < rootfs/bin/acme | tr -d ' ') bytes (REAL acme, asyncified)"
+  -o rootfs/bin/acme9.tmp && mv rootfs/bin/acme9.tmp rootfs/bin/acme9
+echo "  bin/acme9  $(wc -c < rootfs/bin/acme9 | tr -d ' ') bytes (heritage raster acme)"
 
 # real Plan 9 sources (poc/plan9/NOTICE): compiled unmodified, void main,
 # through the shim headers — these SUPERSEDE any same-named PoC command
@@ -321,7 +321,7 @@ for c in plan9/sys/src/cmd/*.c; do
 done
 for c in cmd/*.c; do
   b=$(basename "$c" .c)
-  case "$b" in drtest|threadtest|con|edit|sam) continue;; esac   # built above, against the real headers
+  case "$b" in drtest|threadtest|con|acme|sam) continue;; esac   # built above, against the real headers
   $CC -c "$c" -o "build/$b.o"
   $LD build/crt0.o build/lib9.o build/lib9p.o build/draw9.o "build/$b.o" build/libp9.a -o "rootfs/bin/$b"
   case " $ASYNCIFY " in *" $b "*)

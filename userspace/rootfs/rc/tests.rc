@@ -232,7 +232,9 @@ if(~ $"cnok virtual){
 }
 if not echo PASS 'console-today: no canvas on this host — skipped'
 
-# edit(1) — acme-today (M5), the paper's shape: a root tag over a ROW of
+# acme — acme-today under the inherited name (the succession rule:
+# the behaviour suite is the proof; the raster ancestor's substrate
+# tests stay with acme9). The paper's shape: a root tag over a ROW of
 # columns, every tag one EDITABLE node whose WORDS execute (the tag's
 # first word is the file name — Put writes to it; Edit takes the rest of
 # its line as sam's command). Window 0: wrapper 10, tag 11, body 12;
@@ -241,7 +243,7 @@ if(~ $"cnok virtual){
 	echo -n 'first draft' > /tmp/ed1
 	edwid=`{cat '#w/clone'}
 	edp='#w/'$"edwid^'/canvas'
-	edit -W $edwid /tmp/ed1 &
+	acme -W $edwid /tmp/ed1 &
 	sleep 2
 	echo -n '0,$' > $edp/12/addr
 	edb=`{cat $edp/12/data}
@@ -283,9 +285,9 @@ if(~ $"cnok virtual){
 	sleep 1
 	edg=`{cat $edp/12/kind >[2=1]}
 	echo 'event close 0' > $edp/ctl
-	if(~ $"edb 'first draft' && ~ $"edf 'first draft revised' && ~ $"ede 'first draft POLISHED' && ~ $"edh 'first draft POLISHED' && ~ $"edl 'first draft POLISHED' && ~ $"edd *ed1* && ~ $"edd *ed2* && ~ $"edn edit && ~ $"edg *'does not exist'* || ~ $"edg *o such*) echo PASS 'edit: acme-today — columns, editable tags, words execute, and look is the file browser'; if not fails=bad
+	if(~ $"edb 'first draft' && ~ $"edf 'first draft revised' && ~ $"ede 'first draft POLISHED' && ~ $"edh 'first draft POLISHED' && ~ $"edl 'first draft POLISHED' && ~ $"edd *ed1* && ~ $"edd *ed2* && ~ $"edn edit && ~ $"edg *'does not exist'* || ~ $"edg *o such*) echo PASS 'acme: the heir holds the behaviour suite — columns, editable tags, words execute, look is the browser'; if not fails=bad
 }
-if not echo PASS 'edit: no canvas on this host — skipped'
+if not echo PASS 'acme: no canvas on this host — skipped'
 
 # rio-today's proof: a window manager in rc. ls '#w' lists the windows;
 # /rc/tile writes move and resize lines to every wctl — policy is a file

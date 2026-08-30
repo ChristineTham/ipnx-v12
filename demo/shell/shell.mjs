@@ -891,6 +891,6 @@ const feedCons = (line) => {
 };
 const BIGFONT = "/lib/font/bit/go/regular.13.font";
 document.getElementById("mCon").addEventListener("click", () => feedCons("con &"));
-document.getElementById("mEdit").addEventListener("click", () => feedCons("edit /usr/kitty/README &"));
+document.getElementById("mEdit").addEventListener("click", () => feedCons("acme &"));
 document.getElementById("mNew").addEventListener("click", () => feedCons("win rc &"));
 document.getElementById("mTour").addEventListener("click", () => feedCons("rc /rc/tour"));

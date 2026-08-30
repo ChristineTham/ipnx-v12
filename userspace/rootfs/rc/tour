@@ -77,10 +77,10 @@ echo 'Real CPython 3.14 is here too — worth the moment it takes:'
 echo '$ python /tmp/pytest.py'
 echo
 echo '── 7 · windows and editors ──────────────────────────────────'
-echo 'con opens the transcript console; edit opens acme-today —'
+echo 'con opens the transcript console; acme is acme-today —'
 echo 'every tag is editable text, alt-click executes a word, right-'
 echo 'click looks (paths open, names search). The heritage raster'
-echo 'editors remain runnable as sam9 and acme.'
+echo 'editors remain runnable as sam9 and acme9.'
 echo
 echo 'The whole system is open: https://github.com/ChristineTham/ipnx-v12'
 echo 'tour: complete'

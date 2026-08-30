@@ -1,4 +1,7 @@
-/* edit: acme-today — the one editor, as a canvas workspace (M5,
+/* acme: acme-today — the one editor, the name inherited by the
+ * succession rule (design log: the behaviour suite is the proof; the
+ * raster ancestor's substrate tests stay with acme9). A canvas
+ * workspace (M5,
  * docs/userland.md). The shape is acme's: a root tag, a column, windows
  * of tag-and-body; the tag's file name is EDITABLE (Put writes to
  * whatever it says — acme's own truth), Get re-reads, Del closes the
@@ -495,7 +498,7 @@ main(int argc, char *argv[])
 
 	snprint(path, sizeof path, "%s/label", wdir);
 	fd = open(path, OWRITE);
-	if(fd >= 0){ fprint(fd, "edit — acme-today"); close(fd); }
+	if(fd >= 0){ fprint(fd, "acme"); close(fd); }
 
 	snprint(path, sizeof path, "%s/canvas/events", wdir);
 	evfd = open(path, OREAD);
@@ -539,7 +542,7 @@ main(int argc, char *argv[])
 					}
 				}
 			} else if(strcmp(word, "Dump") == 0){
-				fd = create("/tmp/edit.dump", OWRITE, 0644);
+				fd = create("/tmp/acme.dump", OWRITE, 0644);
 				if(fd >= 0){
 					for(k = 0; k < MAXWIN; k++){
 						if(!wns[k].used)
@@ -553,7 +556,7 @@ main(int argc, char *argv[])
 			} else if(strcmp(word, "Load") == 0){
 				char db[2048], *dl[32];
 				int nd, k2;
-				n = readfile("/tmp/edit.dump", db, sizeof db);
+				n = readfile("/tmp/acme.dump", db, sizeof db);
 				if(n > 0){
 					nd = getfields(db, dl, 32, 1, "\n");
 					for(i = 0; i < nd; i++){

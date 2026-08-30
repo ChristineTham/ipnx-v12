@@ -104,7 +104,12 @@ the redesign completes the merger the originals gestured at:
   the Mac presenter renders and clicks today and takes the full
   editing pass with its platform milestone. Suite-proven end-to-file
   on every running host, columns included.
-- **First slice landed 2026-08-30 as `edit(1)`**: the editor's shape on
+- **The name inherited, same day**: acme-today is now `/bin/acme` by
+  the succession rule's second clause — the behaviour suite is the
+  proof, and the raster ancestor's substrate tests stepped back with
+  it to `acme9`. The one editor answers to the one name.
+- **First slice landed 2026-08-30 as `edit(1)`** (working title;
+  renamed `acme` at succession): the editor's shape on
   canvas — a tag row whose verbs are real nodes (the file name is
   `action=look` and re-reads from disk; Put and Del are `action=execute`
   and render as honest buttons on the web), an edit body shadowed from
