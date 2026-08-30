@@ -231,42 +231,45 @@ if(~ $"cnok virtual){
 }
 if not echo PASS 'console-today: no canvas on this host — skipped'
 
-# edit(1) — acme-today (M5): the workspace. A root tag with New, a column
-# of windows, each an EDITABLE file-name tag (Put writes to whatever it
-# says) with Get/Put/Del and sam's Edit language in the command box.
-# Window 0's ids: fname 12, Get 13, Put 14, Del 15, cmd 16, Edit 17,
-# body 18. Driven through the event door; self-skips with canvas.
+# edit(1) — acme-today (M5), the paper's shape: a root tag over a ROW of
+# columns, every tag one EDITABLE node whose WORDS execute (the tag's
+# first word is the file name — Put writes to it; Edit takes the rest of
+# its line as sam's command). Window 0: wrapper 10, tag 11, body 12;
+# column 0's tag is 201; the root tag is 1. Executes carry the word.
 if(~ $"cnok virtual){
 	echo -n 'first draft' > /tmp/ed1
 	edwid=`{cat '#w/clone'}
 	edp='#w/'$"edwid^'/canvas'
 	edit -W $edwid /tmp/ed1 &
 	sleep 2
-	echo -n '0,$' > $edp/18/addr
-	edb=`{cat $edp/18/data}
-	echo 'event insert 18 11 %20revised' > $edp/ctl
-	echo 'event execute 14 0 3 Put' > $edp/ctl
+	echo -n '0,$' > $edp/12/addr
+	edb=`{cat $edp/12/data}
+	echo 'event insert 12 11 %20revised' > $edp/ctl
+	echo 'event execute 11 0 0 Put' > $edp/ctl
 	sleep 1
 	edf=`{cat /tmp/ed1}
-	echo 'event insert 16 0 ,x/[a-z]+ised/c/POLISHED/' > $edp/ctl
-	echo 'event execute 17 0 4 Edit' > $edp/ctl
-	echo 'event delete 16 0 25' > $edp/ctl
-	echo 'event insert 16 0 ,s/draft/DRAFT!/' > $edp/ctl
-	echo 'event execute 17 0 4 Edit' > $edp/ctl
-	echo 'event execute 14 0 3 Put' > $edp/ctl
+	# Edit takes the rest of the tag line: append the command, execute the word
+	echo 'event insert 11 30 %20,x/[a-z]+ised/c/POLISHED/' > $edp/ctl
+	echo 'event execute 11 0 0 Edit' > $edp/ctl
+	echo 'event execute 11 0 0 Put' > $edp/ctl
 	sleep 1
 	ede=`{cat /tmp/ed1}
-	# the tag is editable: retarget it and Put lands on the NEW name
-	echo 'event delete 12 0 8' > $edp/ctl
-	echo 'event insert 12 0 /tmp/ed2' > $edp/ctl
-	echo 'event execute 14 0 3 Put' > $edp/ctl
+	# the tag is editable everywhere: rename its first word, Put follows
+	echo 'event delete 11 0 8' > $edp/ctl
+	echo 'event insert 11 0 /tmp/ed2' > $edp/ctl
+	echo 'event execute 11 0 0 Put' > $edp/ctl
 	sleep 1
 	edh=`{cat /tmp/ed2}
-	echo 'event execute 15 0 3 Del' > $edp/ctl
+	# a second column, a window born into it (the active-column rule)
+	echo 'event execute 1 0 0 Newcol' > $edp/ctl
+	echo 'event execute 211 0 0 New' > $edp/ctl
 	sleep 1
-	edg=`{cat $edp/18/kind >[2=1]}
+	edn=`{cat $edp/21/kind >[2=1]}
+	echo 'event execute 11 0 0 Del' > $edp/ctl
+	sleep 1
+	edg=`{cat $edp/12/kind >[2=1]}
 	echo 'event close 0' > $edp/ctl
-	if(~ $"edb 'first draft' && ~ $"edf 'first draft revised' && ~ $"ede 'first DRAFT! POLISHED' && ~ $"edh 'first DRAFT! POLISHED' && ~ $"edg *'does not exist'* || ~ $"edg *o such*) echo PASS 'edit: acme-today — the workspace: editable tags, Put by name, Del leaves the column, sam'^''''^'s language runs'; if not fails=bad
+	if(~ $"edb 'first draft' && ~ $"edf 'first draft revised' && ~ $"ede 'first draft POLISHED' && ~ $"edh 'first draft POLISHED' && ~ $"edn edit && ~ $"edg *'does not exist'* || ~ $"edg *o such*) echo PASS 'edit: acme-today — the paper'^''''^'s shape: columns, editable tags, words execute, Put follows the name'; if not fails=bad
 }
 if not echo PASS 'edit: no canvas on this host — skipped'
 

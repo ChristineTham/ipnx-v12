@@ -72,10 +72,25 @@ the redesign completes the merger the originals gestured at:
   system rather than a program. Still open leaving M5 — the language
   landed inside `edit(1)` first; the control-file form waits for a
   second consumer.
-- **The Edit language returned 2026-08-30**: `edit(1)`'s tag carries a
-  command box and an Edit button; `x/re/c|d` and `s/re/sub/[g]` run on
-  the real libregexp (regsub's `&` and backrefs included), suite-proven
-  to the file on all running hosts.
+- **The Edit language returned 2026-08-30**, and the same day —
+  Christine reading the acme paper beside the build — the workspace took
+  **the paper's own shape**: a root tag over a ROW of columns, every tag
+  one *editable* node whose **words execute** (alt-click or middle-click
+  the word, on either presenter — acme's accelerator per the input
+  convention). The tag's first word is the file name and `Put` writes to
+  it (rename the word, Put follows); `Edit` takes the rest of its tag
+  line as sam's command; `New` lands a window in the ACTIVE column (the
+  paper's placement rule); `Newcol`/`Delcol`/`Putall`/`Exit` all live as
+  tag words; `|` separates commands from scratch space, and scratch
+  words execute too. Colours are acme's (#eaffff tags, #ffffea bodies)
+  via the `bg` attr the canvas spec reserved for the first benchmark
+  that demanded it. Deferrals against the paper, recorded: sweep-with-
+  arguments (v0 executes single words; `Edit` reads its line instead),
+  `Look` and the plumber, the dirty box (Put shows always),
+  `Snarf`/`Cut`/`Paste` as tag words (the presenter's native clipboard
+  already serves selection — deliberately not duplicated), `Zerox`,
+  `Dump`. Suite-proven end-to-file on every running host, columns
+  included.
 - **First slice landed 2026-08-30 as `edit(1)`**: the editor's shape on
   canvas — a tag row whose verbs are real nodes (the file name is
   `action=look` and re-reads from disk; Put and Del are `action=execute`

@@ -466,6 +466,37 @@ function renderCanvas(gw, snap) {
       else el = document.createElement(n.kind === "edit" ? "pre" : "div");
       el.textContent = n.data;
       if (n.attrs.bg) el.style.background = n.attrs.bg;
+      if (n.kind === "edit" || n.kind === "text") {
+        const wordAt = (e) => {
+          const r = document.caretRangeFromPoint?.(e.clientX, e.clientY);
+          if (!r || r.startContainer.nodeType !== 3) return null;
+          let t = "";
+          for (const nd of el.childNodes) if (nd.nodeType === 3) t += nd.nodeValue;
+          let off = r.startOffset;
+          for (const nd of el.childNodes) {
+            if (nd === r.startContainer) break;
+            if (nd.nodeType === 3) off += nd.nodeValue.length;
+          }
+          if (off > t.length) off = t.length;
+          const isw = (c) => c && !/\s/.test(c);
+          let a = off, b = off;
+          while (a > 0 && isw(t[a - 1])) a--;
+          while (b < t.length && isw(t[b])) b++;
+          if (a === b) return null;
+          return { word: t.slice(a, b), q0: cvblen(t.slice(0, a)), q1: cvblen(t.slice(0, b)) };
+        };
+        el.addEventListener("mousedown", (e) => {
+          if (e.altKey || e.button === 1) {
+            const wa = wordAt(e);
+            if (wa) {
+              e.preventDefault();
+              e.stopPropagation();
+              const verb = e.button === 1 ? "look" : "execute";
+              wsys?.canvasEvent(gw.id, `${verb} ${n.id} ${wa.q0} ${wa.q1} ${cvq(wa.word)}`);
+            }
+          }
+        });
+      }
       if (n.kind === "edit") {
         el.style.cssText = "white-space:pre-wrap;margin:0;outline:none;min-height:1.4em;" +
           (n.attrs.bg ? "background:" + n.attrs.bg + ";" : "");

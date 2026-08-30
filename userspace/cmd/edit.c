@@ -17,25 +17,36 @@
 
 enum {
 	MAXWIN = 8,
+	MAXCOL = 4,
 	BMAX = 32768,
 	NMAX = 256,
 	CMAX = 512,
 	BASE = 10,
 	STRIDE = 10,
+	CBASE = 200,
+	CSTRIDE = 10,
 };
 
 typedef struct Wn Wn;
 struct Wn {
 	int used;
+	int col;			/* which column holds it */
 	char name[NMAX];
 	long nlen;
-	char cmd[CMAX];
-	long clen;
 	char body[BMAX];
 	long blen;
 };
 
+typedef struct Col Col;
+struct Col {
+	int used;
+	char tag[NMAX];
+	long tlen;
+};
+
 static Wn wns[MAXWIN];
+static Col cols[MAXCOL];
+static int active;			/* the column that last saw action (the paper's rule) */
 static char wdir[64];
 static int ctlfd;
 
@@ -218,57 +229,117 @@ runedit(Wn *w, char *line)
 	}
 }
 
-/* ---- the workspace ---- */
+/* ---- the workspace, acme-true ---- */
 
+static char *
+firstword(char *t, long n, long *ln)
+{
+	static char w[NMAX];
+	long i, j;
+
+	i = 0;
+	while(i < n && (t[i] == ' ' || t[i] == '\t'))
+		i++;
+	j = 0;
+	while(i < n && t[i] != ' ' && t[i] != '\t' && t[i] != '\n' && j < NMAX - 1)
+		w[j++] = t[i++];
+	w[j] = 0;
+	*ln = j;
+	return w;
+}
+
+/* the text after the word "Edit" in the tag — the command, acme's way */
+static char *
+afteredit(char *t, long n)
+{
+	static char c[CMAX];
+	long i;
+	char *p;
+
+	t[n] = 0;
+	p = strstr(t, "Edit");
+	if(p == nil){
+		c[0] = 0;
+		return c;
+	}
+	p += 4;
+	while(*p == ' ' || *p == '\t' || *p == '|')
+		p++;
+	for(i = 0; p[i] != 0 && p[i] != '\n' && i < CMAX - 1; i++)
+		c[i] = p[i];
+	c[i] = 0;
+	return c;
+}
+
+/* a column: its stack under the column row, and its editable tag —
+ * "New Delcol |", the paper's shape at v0 scale */
+static void
+mkcol(int c)
+{
+	Col *col;
+	int cbase;
+	char b[256], a[128];
+
+	col = &cols[c];
+	cbase = CBASE + CSTRIDE * c;
+	memset(col, 0, sizeof *col);
+	col->used = 1;
+	col->tlen = snprint(col->tag, sizeof col->tag, "New Delcol | ");
+	snprint(b, sizeof b, "new %d stack\nnew %d edit\n", cbase, cbase + 1);
+	write(ctlfd, b, strlen(b));
+	snprint(a, sizeof a, "parent=3\norder=%d\nprop=1\n", c + 1);
+	nprint(cbase, "attrs", a);
+	snprint(a, sizeof a, "parent=%d\nbg=#eaffff\norder=1\n", cbase);
+	nprint(cbase + 1, "attrs", a);
+	setnode(cbase + 1, col->tag, col->tlen);
+	active = c;
+}
+
+/* a window lands in the ACTIVE column — the paper's placement rule,
+ * at v0 scale. Tag: name first, commands, | then scratch space; Put is
+ * always shown (the dirty box is a recorded deferral). */
 static void
 mkwin(int k, char *file)
 {
 	Wn *w;
 	int base;
-	char b[4096];
+	char b[1024], a[256];
 	long n;
 
 	w = &wns[k];
 	base = BASE + STRIDE * k;
 	memset(w, 0, sizeof *w);
 	w->used = 1;
+	w->col = active;
+	w->nlen = snprint(w->name, sizeof w->name, "%s Del Get Put Edit | ",
+		file == nil ? "" : file);
 	if(file != nil){
-		w->nlen = snprint(w->name, sizeof w->name, "%s", file);
 		n = readfile(file, w->body, sizeof w->body);
 		if(n >= 0)
 			w->blen = n;
 	}
-	n = snprint(b, sizeof b,
-		"new %d stack\nnew %d stack\nnew %d edit\nnew %d text\nnew %d text\nnew %d text\nnew %d edit\nnew %d text\nnew %d edit\n",
-		base, base + 1, base + 2, base + 3, base + 4, base + 5, base + 6, base + 7, base + 8);
+	n = snprint(b, sizeof b, "new %d stack\nnew %d edit\nnew %d edit\n",
+		base, base + 1, base + 2);
 	write(ctlfd, b, n);
-	/* wrapper under the column; tag row under the wrapper; acme's colours */
-	nprint(base, "attrs", "parent=3\n");
-	{
-		char a[256];
-		snprint(a, sizeof a, "parent=%d\ndir=row\nbg=#eaffff\norder=1\n", base);
-		nprint(base + 1, "attrs", a);
-		snprint(a, sizeof a, "parent=%d\nbg=#eaffff\norder=1\n", base + 1);
-		nprint(base + 2, "attrs", a);
-		snprint(a, sizeof a, "parent=%d\naction=execute\norder=2\n", base + 1);
-		nprint(base + 3, "attrs", a);
-		snprint(a, sizeof a, "parent=%d\naction=execute\norder=3\n", base + 1);
-		nprint(base + 4, "attrs", a);
-		snprint(a, sizeof a, "parent=%d\naction=execute\norder=4\n", base + 1);
-		nprint(base + 5, "attrs", a);
-		snprint(a, sizeof a, "parent=%d\nbg=#eaffff\norder=5\n", base + 1);
-		nprint(base + 6, "attrs", a);
-		snprint(a, sizeof a, "parent=%d\naction=execute\norder=6\n", base + 1);
-		nprint(base + 7, "attrs", a);
-		snprint(a, sizeof a, "parent=%d\nbg=#ffffea\norder=2\n", base);
-		nprint(base + 8, "attrs", a);
-	}
-	setnode(base + 2, w->name, w->nlen);
-	nprint(base + 3, "data", "Get");
-	nprint(base + 4, "data", "Put");
-	nprint(base + 5, "data", "Del");
-	nprint(base + 7, "data", "Edit");
-	setnode(base + 8, w->body, w->blen);
+	snprint(a, sizeof a, "parent=%d\norder=%d\n", CBASE + CSTRIDE * active, 2 + k);
+	nprint(base, "attrs", a);
+	snprint(a, sizeof a, "parent=%d\nbg=#eaffff\norder=1\n", base);
+	nprint(base + 1, "attrs", a);
+	snprint(a, sizeof a, "parent=%d\nbg=#ffffea\norder=2\n", base);
+	nprint(base + 2, "attrs", a);
+	setnode(base + 1, w->name, w->nlen);
+	setnode(base + 2, w->body, w->blen);
+}
+
+static int
+freecol(void)
+{
+	int c;
+
+	for(c = 0; c < MAXCOL; c++)
+		if(!cols[c].used)
+			return c;
+	return -1;
 }
 
 static int
@@ -285,9 +356,9 @@ freewin(void)
 void
 main(int argc, char *argv[])
 {
-	char path[128], line[4096], txt[4096], *f[8];
+	char path[128], line[4096], txt[4096], *f[8], *word, *fn;
 	int wid, evfd, fd, nf, i, k, base, off, minted;
-	long n, q0, q1, d;
+	long n, q0, q1, d, fl;
 	Wn *w;
 
 	wid = -1;
@@ -318,12 +389,12 @@ main(int argc, char *argv[])
 	if(ctlfd < 0)
 		sysfatal("no canvas on this host: %r");
 
-	/* the root tag and the column */
-	fprint(ctlfd, "new 1 stack\nnew 2 text\nnew 3 stack\n");
-	nprint(1, "attrs", "dir=row\nbg=#eaffff\norder=1\n");
-	nprint(2, "attrs", "parent=1\naction=execute\n");
-	nprint(2, "data", "New");
-	nprint(3, "attrs", "order=2\n");
+	/* the root tag — editable, like every tag — over a ROW of columns */
+	fprint(ctlfd, "new 1 edit\nnew 3 stack\n");
+	nprint(1, "attrs", "bg=#eaffff\norder=1\n");
+	nprint(1, "data", "Newcol Putall Exit | ");
+	nprint(3, "attrs", "order=2\ndir=row\n");
+	mkcol(0);
 
 	k = 0;
 	for(; i < argc && k < MAXWIN; i++, k++)
@@ -352,11 +423,81 @@ main(int argc, char *argv[])
 		if(strcmp(f[0], "close") == 0)
 			break;
 		i = atoi(f[1]);
-		if(strcmp(f[0], "execute") == 0 && i == 2){	/* New */
-			k = freewin();
-			if(k >= 0){
-				mkwin(k, nil);
-				fprint(ctlfd, "sync\n");
+		word = nil;
+		if(nf >= 5 && strcmp(f[0], "execute") == 0){
+			unq(f[4], txt, sizeof txt);
+			word = txt;
+		}
+		if(word != nil && i == 1){		/* the root tag's words */
+			if(strcmp(word, "Newcol") == 0){
+				k = freecol();
+				if(k >= 0){
+					mkcol(k);
+					fprint(ctlfd, "sync\n");
+				}
+			} else if(strcmp(word, "Putall") == 0){
+				for(k = 0; k < MAXWIN; k++){
+					if(!wns[k].used)
+						continue;
+					fn = firstword(wns[k].name, wns[k].nlen, &fl);
+					if(fl == 0 || fn[0] == '|')
+						continue;
+					fd = create(fn, OWRITE, 0644);
+					if(fd >= 0){
+						write(fd, wns[k].body, wns[k].blen);
+						close(fd);
+					}
+				}
+			} else if(strcmp(word, "Exit") == 0)
+				break;
+			continue;
+		}
+		if(i >= CBASE){			/* a column's tag */
+			k = (i - CBASE) / CSTRIDE;
+			if(k >= MAXCOL || !cols[k].used)
+				continue;
+			active = k;
+			if(nf >= 4 && strcmp(f[0], "insert") == 0){
+				Col *cl = &cols[k];
+				q0 = atol(f[2]);
+				d = unq(f[3], txt, sizeof txt);
+				if(q0 > cl->tlen) q0 = cl->tlen;
+				if(cl->tlen + d > NMAX - 1) d = NMAX - 1 - cl->tlen;
+				memmove(cl->tag + q0 + d, cl->tag + q0, cl->tlen - q0);
+				memmove(cl->tag + q0, txt, d);
+				cl->tlen += d;
+				cl->tag[cl->tlen] = 0;
+				continue;
+			}
+			if(nf >= 4 && strcmp(f[0], "delete") == 0){
+				Col *cl = &cols[k];
+				q0 = atol(f[2]);
+				q1 = atol(f[3]);
+				if(q1 > cl->tlen) q1 = cl->tlen;
+				if(q0 > q1) q0 = q1;
+				memmove(cl->tag + q0, cl->tag + q1, cl->tlen - q1);
+				cl->tlen -= q1 - q0;
+				cl->tag[cl->tlen] = 0;
+				continue;
+			}
+			if(word == nil)
+				continue;
+			if(strcmp(word, "New") == 0){
+				k = freewin();
+				if(k >= 0){
+					mkwin(k, nil);
+					fprint(ctlfd, "sync\n");
+				}
+			} else if(strcmp(word, "Delcol") == 0){
+				int c2 = (i - CBASE) / CSTRIDE;
+				for(k = 0; k < MAXWIN; k++)
+					if(wns[k].used && wns[k].col == c2)
+						wns[k].used = 0;
+				fprint(ctlfd, "del %d\nsync\n", CBASE + CSTRIDE * c2);
+				cols[c2].used = 0;
+				if(active == c2)
+					for(active = 0; active < MAXCOL && !cols[active].used; active++)
+						;
 			}
 			continue;
 		}
@@ -367,13 +508,12 @@ main(int argc, char *argv[])
 		if(k >= MAXWIN || !wns[k].used)
 			continue;
 		w = &wns[k];
+		active = w->col;
 		base = BASE + STRIDE * k;
-		if(nf >= 4 && strcmp(f[0], "insert") == 0){
-			char *buf = off == 2 ? w->name : off == 6 ? w->cmd : off == 8 ? w->body : nil;
-			long *len = off == 2 ? &w->nlen : off == 6 ? &w->clen : off == 8 ? &w->blen : nil;
-			long max = off == 2 ? NMAX : off == 6 ? CMAX : BMAX;
-			if(buf == nil)
-				continue;
+		if(nf >= 4 && strcmp(f[0], "insert") == 0 && (off == 1 || off == 2)){
+			char *buf = off == 1 ? w->name : w->body;
+			long *len = off == 1 ? &w->nlen : &w->blen;
+			long max = off == 1 ? NMAX : BMAX;
 			q0 = atol(f[2]);
 			d = unq(f[3], txt, sizeof txt);
 			if(q0 > *len) q0 = *len;
@@ -384,11 +524,9 @@ main(int argc, char *argv[])
 			buf[*len] = 0;
 			continue;
 		}
-		if(nf >= 4 && strcmp(f[0], "delete") == 0){
-			char *buf = off == 2 ? w->name : off == 6 ? w->cmd : off == 8 ? w->body : nil;
-			long *len = off == 2 ? &w->nlen : off == 6 ? &w->clen : off == 8 ? &w->blen : nil;
-			if(buf == nil)
-				continue;
+		if(nf >= 4 && strcmp(f[0], "delete") == 0 && (off == 1 || off == 2)){
+			char *buf = off == 1 ? w->name : w->body;
+			long *len = off == 1 ? &w->nlen : &w->blen;
 			q0 = atol(f[2]);
 			q1 = atol(f[3]);
 			if(q1 > *len) q1 = *len;
@@ -398,35 +536,33 @@ main(int argc, char *argv[])
 			buf[*len] = 0;
 			continue;
 		}
-		if(strcmp(f[0], "execute") != 0)
+		if(word == nil || off != 1)
 			continue;
-		switch(off){
-		case 3:				/* Get: re-read the tag's file */
-			n = readfile(w->name, w->body, sizeof w->body);
+		/* a word executed in this window's tag */
+		if(strcmp(word, "Get") == 0){
+			fn = firstword(w->name, w->nlen, &fl);
+			n = readfile(fn, w->body, sizeof w->body);
 			if(n >= 0){
 				w->blen = n;
-				setnode(base + 8, w->body, w->blen);
+				setnode(base + 2, w->body, w->blen);
 				fprint(ctlfd, "sync\n");
 			}
-			break;
-		case 4:				/* Put: write to whatever the tag says */
-			if(w->nlen == 0)
-				break;
-			fd = create(w->name, OWRITE, 0644);
+		} else if(strcmp(word, "Put") == 0){
+			fn = firstword(w->name, w->nlen, &fl);
+			if(fl == 0)
+				continue;
+			fd = create(fn, OWRITE, 0644);
 			if(fd >= 0){
 				write(fd, w->body, w->blen);
 				close(fd);
 			}
-			break;
-		case 5:				/* Del: this window leaves the column */
+		} else if(strcmp(word, "Del") == 0){
 			fprint(ctlfd, "del %d\nsync\n", base);
 			w->used = 0;
-			break;
-		case 7:				/* Edit: sam's language on the body */
-			runedit(w, w->cmd);
-			setnode(base + 8, w->body, w->blen);
+		} else if(strcmp(word, "Edit") == 0){
+			runedit(w, afteredit(w->name, w->nlen));
+			setnode(base + 2, w->body, w->blen);
 			fprint(ctlfd, "sync\n");
-			break;
 		}
 	}
 	snprint(path, sizeof path, "%s/wctl", wdir);

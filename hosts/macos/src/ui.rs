@@ -162,6 +162,7 @@ struct WinState {
 // a clickable region of the rendered canvas: verb 1 execute, 2 look
 struct CvHit {
     x0: i32, y0: i32, x1: i32, y1: i32,
+    tx: i32, ty: i32,               // where the text itself starts
     id: u32, verb: u8, blen: usize, text: String,
 }
 
@@ -256,12 +257,16 @@ fn cv_render(buf: &mut [u8], w: usize, h: usize, font: &Subfont, snap: &[CvSnap]
             let (bw, bh) = (sw + pad * 2, sh + pad * 2);
             if let Some(a) = action {
                 cv_box(buf, w, h, x, y, x + bw.max(10), y + bh);
-                hits.push(CvHit {
-                    x0: x, y0: y, x1: x + bw.max(10), y1: y + bh,
-                    id: node.id, verb: if a == "look" { 2 } else { 1 },
-                    blen: node.data.len(), text,
-                });
             }
+            // every text carries a hit: action nodes activate on left, and
+            // ANY word executes on the chord (acme's accelerator)
+            hits.push(CvHit {
+                x0: x, y0: y, x1: x + bw.max(10), y1: y + bh,
+                tx: x + pad, ty: y + pad,
+                id: node.id,
+                verb: match action { Some("look") => 2, Some(_) => 1, None => 0 },
+                blen: node.data.len(), text,
+            });
             if node.kind == 2 {
                 *edit = Some(node.id);
             }
@@ -493,15 +498,41 @@ impl ApplicationHandler<UiMsg> for App {
                 };
                 if let Some(ws) = self.wins.get_mut(&wid) {
                     if ws.cv.is_some() {
-                        // the input convention: left activates; the hit's role
-                        // decides the verb (execute or look)
+                        let (mx, my) = (ws.mx, ws.my);
+                        // left activates a role; the chord (alt-left/middle)
+                        // executes the WORD under the pointer — acme's
+                        // accelerator per the input convention
                         if pressed && bit == 1 {
-                            let (mx, my) = (ws.mx, ws.my);
                             if let Some(hit) = ws.cv_hits.iter()
+                                .filter(|t| t.verb != 0)
                                 .find(|t| mx >= t.x0 && mx <= t.x1 && my >= t.y0 && my <= t.y1) {
                                 let verb = if hit.verb == 2 { "look" } else { "execute" };
                                 let line = format!("{} {} 0 {} {}", verb, hit.id, hit.blen, cv_q(&hit.text));
                                 let _ = self.ev.send(Ev::WinCanvasEv { wid, line });
+                            }
+                        } else if pressed && bit == 2 {
+                            if let (Some(f), Some(hit)) = (&self.font, ws.cv_hits.iter()
+                                .find(|t| mx >= t.x0 && mx <= t.x1 && my >= t.y0 && my <= t.y1)) {
+                                let col = ((mx - hit.tx).max(0) as usize) / f.glyph_w;
+                                let row = ((my - hit.ty).max(0) as usize) / f.glyph_h;
+                                let line_s: Vec<&str> = hit.text.split('\n').collect();
+                                if let Some(ln) = line_s.get(row) {
+                                    let chs: Vec<char> = ln.chars().collect();
+                                    let at = col.min(chs.len());
+                                    let isw = |c: &char| !c.is_whitespace();
+                                    let mut a = at;
+                                    let mut b = at;
+                                    while a > 0 && chs.get(a - 1).map(isw).unwrap_or(false) { a -= 1; }
+                                    while b < chs.len() && chs.get(b).map(isw).unwrap_or(false) { b += 1; }
+                                    if b > a {
+                                        let word: String = chs[a..b].iter().collect();
+                                        let pre: usize = line_s[..row].iter().map(|l| l.len() + 1).sum();
+                                        let q0: usize = pre + chs[..a].iter().map(|c| c.len_utf8()).sum::<usize>();
+                                        let q1 = q0 + word.len();
+                                        let line = format!("execute {} {} {} {}", hit.id, q0, q1, cv_q(&word));
+                                        let _ = self.ev.send(Ev::WinCanvasEv { wid, line });
+                                    }
+                                }
                             }
                         }
                         return;
