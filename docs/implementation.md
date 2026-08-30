@@ -413,7 +413,14 @@ reconciler (liveness today is /proc walkability), and the LB — a posted
 service is one name but does not yet fan attaches across replicas.
 **(cluster):** one `svc` tree spans two kernels over TCP and a spec runs
 remotely with the caller's namespace imported — judged by the suite like
-everything else.
+everything else. **The distributed-OS stretch (design.md 2026-08-30)
+aims this stage further**: rehosting as the orchestrator's normal move
+(kill-here, run-there — the spec re-applies), live migration as the fork
+snapshot shipped across the wire (the fd half is the named engineering:
+wire mounts re-dial, pipes proxy or drain), discovery as mounted
+neighbourhood directories in cs/ndb's lineage ("what can you do" is
+`ls`), and the spanning identity riding M8's tickets and M9's profile.
+The consensus debt stands unwaived.
 Sequenced by demand once M7–M9 exist.
 
 ### M13 — the VSCode surface *(S–M, interleavable)* — consumes: kernel-as-a-library (the JS twin), the orchestration local stage; canvas panels consume M5

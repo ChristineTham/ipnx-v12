@@ -652,6 +652,45 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   universal; look = tapping the thing; execute = tapping the tag or
   ⌘Enter; the chords were always the clipboard.
 
+- **(2026-08-30) The design stretch: a distributed operating system.**
+  Christine's articulation, recorded in her words: "the design stretch
+  for IPNX is a distributed operating system. There is no reason why the
+  process orchestrator in IPNX can't orchestrate processes on other
+  systems, so we can truly replace kubernetes if we wanted to. We need
+  to be able to support process migration and rehosting, discovery of
+  other systems and capabilities, and a user identity that can span
+  systems." The framing that makes it honest: this is a **return, not a
+  departure** — Plan 9 was a distributed operating system first (cpu
+  servers, file servers, terminals, import and export), M0–M6 built the
+  single-kernel half, and the stretch names what completes the circle.
+  The three capabilities, mapped to mechanisms already in the tree:
+  **Rehosting** is the orchestrator's normal move once specs exist — a
+  process file is declarative, so "run it there instead" is kill-here,
+  run-there with the namespace re-applied on arrival; wasm makes the
+  binary host-neutral by construction (the same image runs under V8,
+  JavaScriptCore and wasmtime today — rehosting across ARCHITECTURES is
+  already routine in this repository). **Migration** — the live form —
+  is uniquely plausible here because *every bare fork already serialises
+  a whole process*: the asyncify unwind snapshots memory and stack, and
+  a fresh Worker rewinds it; migration is that snapshot shipped to
+  another kernel instead of a sibling Worker. The honest edge, named
+  where classic migration died: open fds do not travel — wire mounts
+  must re-dial and pipes must proxy or drain; the declarative namespace
+  makes the FILE half re-bindable, and the fd half is the engineering.
+  **Discovery** stays files, per the founding principle: Plan 9's cs(8)
+  and ndb are the precedent — a neighbourhood is a mounted directory,
+  a system's capabilities are read from its files (/svc, caps, /proc),
+  and "what can you do" is `ls`. **Spanning identity** is M8+M9 seen
+  whole: tickets authenticate the wire, the factotum-shaped agent holds
+  the keys, and the profile is the portable person — one identity
+  booting constrained instances on any kernel, "the kernel instance is
+  the new uid" extended to a person who owns many. The kubernetes
+  clause keeps its recorded honesty: the orchestration entry's
+  consensus debt (a union of /svc trees is not a quorum) stands — the
+  stretch does not waive it. Sequenced, not new milestones: M7 carries
+  the wire, M8 the identity, M9 the person, M12's cluster stage the
+  orchestration; the stretch names their sum and aims them.
+
 - **(2026-08-30) The console amendment: AND, not XOR.** Christine, mid-
   build, in her words: "we should allow xterm.js as well - it is what
   people are used to... and not xor." The retirement clause softens on

@@ -235,6 +235,24 @@ a file, and every process composes its own world.
   an achievement no other WASM runtime, development environment or Linux
   distribution can easily claim.
 
+## The stretch: a distributed operating system
+
+The design stretch for IPNX is a distributed operating system — which is a
+return, not a departure: Plan 9 was one first, and what runs today is the
+single-kernel half of its circle. There is no reason the process
+orchestrator here cannot orchestrate processes on other systems, so we can
+truly replace the orchestration layer if we choose to — within the honesty
+already on the record about what never dissolves. That needs three things,
+and their seeds are already in the tree: **process migration and
+rehosting** (a process file is declarative, so rehosting is running the
+same spec elsewhere; and every fork in this system already serialises a
+whole process — live migration is that snapshot shipped to another kernel
+instead of a sibling worker); **discovery** of other systems and their
+capabilities, as files, where "what can you do" is `ls`; and **a user
+identity that spans systems** — tickets on the wire, keys in an agent, the
+profile as the portable person. Sun said the network is the computer. Our
+computer is a network, and the network of our computers is one system.
+
 ## The principles
 
 - **Curation over completeness.** Plan 9's `/bin` is its designers' testimony about
