@@ -237,6 +237,11 @@ a file, and every process composes its own world.
   things with neither ancestry nor necessity.
 - **Personalities live in userspace, behind 9P,** where they can be composed and
   unmounted. The system can grow without making the kernel more complicated.
+- **Complexity is compensation.** Linux, systemd, Docker and Kubernetes are overly
+  complex because the kernel beneath them never had a per-process namespace; when a
+  kernel lacks a primitive, userspace grows an industry. Each trick above is one of
+  those industries, dissolved. We are not only living in the modern ecosystem — we
+  are simplifying and replacing it.
 
 ## What runs today
 
