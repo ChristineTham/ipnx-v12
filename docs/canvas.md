@@ -6,6 +6,11 @@ by one of the four benchmarks — console-today, acme-today, rio-today, one
 plot — and everything none of them demanded is absent. Dated simplifications
 are recorded inline; each is a decision, not an accident.
 
+*Revised 2026-08-30 after the benchmarks landed: the four consumers —
+con(1), acme(1) (acme-today), `/rc/tile`, and the path plot — now run
+against this contract on every host, and the spec below states the
+protocol as built, additions dated in place.*
+
 ## The derivation (the measurement pass, 2026-08-30)
 
 | benchmark | demands | and nothing else |
@@ -51,12 +56,15 @@ structure lives in attrs, not filesystem nesting, so the whole UI greps.
   `events` exactly as a surface would (the suite's user; the same
   house precedent as wctl's `type`).
 
-**attrs** (v0 set, all optional): `parent=<id>` `order=<n>` (siblings
-sort by order, ties by id) · stack: `dir=col|row` `prop=<n>` · text/edit:
-none yet (styling arrives with a consumer) · path: `viewbox="x y w h"`
-`stroke=<colour>` `fill=<colour>` `width=<n>` · any node:
-`action=execute|look` (a whole-node role; the presenter renders it
-honestly — a real link or button on the web).
+**attrs** (v0 set as landed, all optional): `parent=<id>` `order=<n>`
+(siblings sort by order, ties by id) · stack: `dir=col|row`; children of
+a `row` share width by `prop` — `prop=0` hugs its content, any other
+value is the flex share (default 1) · any content node: `bg=<colour>`
+(acme-today was the consumer that earned styling its first attr; the
+tags' `#eaffff` and bodies' `#ffffea` ride it) · path:
+`viewbox="x y w h"` `stroke=<colour>` `fill=<colour>` `width=<n>` · any
+node: `action=execute|look` (a whole-node role; the presenter renders
+it honestly — a real link or button on the web).
 
 **addr/data** — acme's buffer interface, simplified for v0 (recorded
 open: verbatim addr language returns with sam-today): `addr` accepts only
@@ -84,13 +92,24 @@ close 0                       the surface asked to close (advisory:
 ```
 
 The app's own writes never echo back as events — events are the user.
+**And a user edit event is a mutation that happened**: the device
+applies `insert` and `delete` to the node's data *before* queueing the
+event, so presenter echo and node data are one thing and typed-ahead
+text survives the app's next sync. Apps shadow their buffers from
+events and never re-read them — con(1)'s discipline, load-bearing.
+
+**Transport**: `sync` marks the window dirty; the snapshot travels to an
+interactive surface only under the host's credit system — one frame in
+flight per window, acked after paint, the LATEST tree snapshotted at
+flush time so superseded syncs coalesce away by construction
+(coalescing changes the rate, only credit changes the bound). The
+browser presenter's equivalent is one render per animation frame.
 
 ## Surfaces
 
 `caps` reads what is attached: `virtual` (the headless host: syncs are
 acknowledged, `event` is the user — the suite's surface, and the reason
-pixel censuses retire) or a list from an interactive presenter
-(`interactive input reflow`). The browser presenter is the universal
+pixel censuses retire) or `interactive input` from a live presenter. The browser presenter is the universal
 SPA: stacks become flex containers, text becomes text, edit nodes accept
 typing and report it as insert/delete events, paths become inline SVG,
 `action` nodes become real links and buttons (the input convention's
