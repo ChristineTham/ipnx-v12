@@ -282,18 +282,25 @@ timeout as a failure.
 **Acceptance:** the table in RESEARCH, one row per host, dated.
 
 ### M6 — the iPadOS app *(S–M)* — **re-aimed 2026-08-30: a WebKit launcher over local files** — consumes: the iPad-surface decision (design.md 2026-08-30), M4 (files), the browser port
-The stopgap becomes the design: a few hundred lines of Swift hosting
-WKWebView — full JavaScriptCore JIT, sanctioned, in Apple's own content
-process. A WKURLSchemeHandler serves the bundled dist with **real
-COOP/COEP headers** (no service worker, no register race; retake the
-module-worker-serialisation measurement in-app — the recorded defect was
-specific to loads through a service worker). First boot is offline. Real
-files arrive over the script-message bridge into hostfs — a
-security-scoped bookmark is a bind. Pulley (the prior plan) demotes to
-recorded fallback research per the engine-matrix decision.
+The stopgap becomes the design, with the split stated precisely (design
+log): **the webview is the engine room, not the display.** Kernel and
+wasm binaries run inside WKWebView — full JavaScriptCore JIT, sanctioned,
+in Apple's own content process; a WKURLSchemeHandler serves the bundled
+dist with **real COOP/COEP headers** (no service worker, no register
+race; retake the module-worker-serialisation measurement in-app — the
+recorded defect was specific to loads through a service worker). First
+boot is offline. `/dev/canvas` crosses the script-message bridge to a
+**native SwiftUI presenter** (M5's tree, Apple's grammar per the input
+convention — semantic trees are small on a bridge where raster frames
+were the 640GB lesson). The app's file entitlements serve the local
+filesystem inward to hostfs over the same bridge — a security-scoped
+bookmark is a bind. Pulley (the prior plan) demotes to recorded fallback
+research per the engine-matrix decision.
 **Acceptance:** the app boots the bundled port offline and the suite runs
 green in-app with real headers; a granted folder reads and writes
-through the namespace; the WebKit measurement is retaken and recorded.
+through the namespace; a canvas tree renders through SwiftUI and its
+events land back in the kernel; the WebKit measurement is retaken and
+recorded.
 
 ### M7 — `/net` *(L)* — consumes: "sockets won" adoption (founding)
 The network as files: `/net/tcp/clone`, per-connection `ctl`/`data`/`local`/

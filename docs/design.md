@@ -704,11 +704,23 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   research (the engine-matrix decision stands if store policy or
   WKWebView limits ever bite; App Store honesty: this is a full local
   system that works offline, not a remote-site wrapper). The
-  unification, stated once: **the browser port is the universal
-  embedding** — VSCode lends it Node and a file API, the iPad app
-  lends it WebKit and local files, and every future surface is a shell
-  that gives the one port a place to run and files to touch. The
-  ecosystem statement, cashed out.
+  precision, hers in the same breath: "the ipad app runs the kernel
+  and binaries inside webkit, but **/dev/canvas connects to swiftui**"
+  — and "we can give webkit entitlement to access the local ipad
+  filesystem." So the webview is an **engine room, not a display**:
+  compute (kernel + wasm guests) runs in WKWebView for the JIT; the
+  canvas tree crosses the script-message bridge and the presenter is
+  native SwiftUI (stack→layout containers, text→Text, edit→the native
+  editor, path→Path, events flowing back per the verb convention) —
+  exactly the canvas doctrine's split, and cheap on the wire because
+  semantic trees are small where raster frames were the 640GB lesson;
+  and the app's entitlements serve the local filesystem inward to
+  hostfs over the same bridge. The unification, stated once: **the
+  browser port is the universal embedding, and every surface is a
+  shell that lends it three things — a place to run, a screen to draw
+  on, files to touch.** VSCode lends Node, its own panes, and a file
+  API; the iPad app lends WebKit's JIT, SwiftUI, and its file
+  entitlements. The ecosystem statement, cashed out.
 
 - **(2026-08-30) The compensation thesis: complexity grows where a
   primitive is missing.** Christine's capstone over the dissolution
