@@ -269,8 +269,25 @@ files, directories and sam addresses app-side and delegates through
 acme's own event file — what remains is the plumber as a separate
 program with rules); canvas on iPad is M6's bridge and
 VSCode panels M13's; the original "browser host on the Rust core" aim
-(the Rust kernel compiled to wasm for the page) moves to the browser
-host's own line in platforms.md, unblocked but unscheduled — and the
+(the Rust kernel compiled to wasm for the page) moved to the browser
+host's own line in platforms.md, unblocked but unscheduled — **and
+landed 2026-08-31, on her directive** ("replacing the demo with the
+browser surface"): `hosts/browser/` compiles the untouched `kernel/`
+crate to wasm32-unknown-unknown behind a C ABI (574KB), and
+`demo/supervisor/rustkern.mjs` is the mach layer — the same boot()
+interface kernel.mjs served, the same Workers, mailboxes and
+guestcore.mjs (the guest world cannot tell the kernels apart), with
+entries mirroring the macOS host's Ev and one binary drain mirroring
+run_effects. Landing it made the kernel literally OS-free: '#Z' now
+delegates every host-file operation as an effect answered by the
+embedding (hostop_done — webfs's fetch_done pattern applied to the
+filesystem), so hosts/macos gained the op server the kernel lost, the
+browser serves OPFS and picked folders through the same protocol, and
+the Node harness (main-rust.mjs) serves node:fs — 151 green on all of
+them, plus 151 in Chrome, `cc hello.c` to Hello Kitty on the Rust
+core in the tab, and a file written to browser storage surviving a
+full reload. The demo's JS kernel lineage retired to
+reference-in-tree; the frozen oracle stands where it always did — and the
 question "why can't the demo be the browser surface" (hers,
 2026-08-30) is answered on the record: it IS, structurally — and the first of the
 two named steps landed the same day, on her directive ("convert the

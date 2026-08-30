@@ -84,7 +84,7 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 bash userspace/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints the suite's PASS lines (floor 131; currently 150 — the count grows as features add self-skipping tests; the final "poc: all N tests passed" line counts only init.c's C-level tranche, not the whole suite), exits 0:
+Boot the kernel — init (pid 1) runs the acceptance tests, prints the suite's PASS lines (floor 131; currently 151 — the count grows as features add self-skipping tests; the final "poc: all N tests passed" line counts only init.c's C-level tranche, not the whole suite), exits 0:
 
 ```bash
 bash poc/run.sh
@@ -103,9 +103,13 @@ COOP/COEP headers SharedArrayBuffer needs; `?i` boots interactive):
 node poc/serve.mjs
 ```
 
-The real implementation — the Rust kernel core (`kernel/`, RESEARCH §9.6) under the
-macOS wasmtime host (`hosts/macos/`; the full 131/131 conformance) — builds and runs
-from the root Cargo workspace:
+The real implementation — the Rust kernel core (`kernel/`, RESEARCH §9.6; OS-free:
+'#Z' host files are ops delegated to the embedding) under the macOS wasmtime host
+(`hosts/macos/`), compiled to wasm for the browser (`hosts/browser/` +
+`demo/supervisor/rustkern.mjs` — THE DEMO'S KERNEL since 2026-08-31; the JS demo
+lineage is reference-in-tree), and driven headless by Node
+(`node demo/supervisor/main-rust.mjs userspace/rootfs`) — builds and runs from the
+root Cargo workspace:
 
 ```bash
 cargo run --release -p host -- userspace/rootfs

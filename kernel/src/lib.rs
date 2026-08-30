@@ -14,6 +14,13 @@ pub mod exec;
 pub mod stat9;
 
 use exec::{oneshot, Completer, LocalExec};
+
+// wasm32 has no stderr: shadow eprintln! so diagnostics vanish instead
+// of panicking (the embedding provides its own logging).
+#[cfg(target_arch = "wasm32")]
+macro_rules! eprintln {
+    ($($t:tt)*) => {{ let _ = format_args!($($t)*); }};
+}
 use stat9::{marshal_stat, parse_stat, StatIn, DMDIR, DMSETUID, DMSYMLINK, QTDIR, QTFILE, QTSYMLINK};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -94,6 +101,35 @@ pub struct CvSnap {
     pub data: Vec<u8>,
 }
 
+// '#Z' host-file operations, delegated to the embedding: the kernel
+// speaks root-relative paths; the host owns the real root and the
+// canonicalize-under-root security check. Answered via hostop_done —
+// webfs's fetch_done pattern, applied to the filesystem.
+pub enum HostOp {
+    Meta { path: String },
+    Read { path: String, off: u64, n: usize },
+    Write { path: String, off: u64, data: Vec<u8> },
+    Create { path: String, dir: bool, perm: u32 },
+    Remove { path: String },
+    Trunc { path: String },
+    ReadDir { path: String },
+}
+pub struct HostEnt {
+    pub name: String,
+    pub dir: bool,
+    pub len: u64,
+    pub mtime: u32,
+    pub ino: u64,
+    pub mode: u32,
+}
+pub enum HostReply {
+    Missing,
+    Meta { dir: bool, len: u64, mtime: u32, ino: u64, mode: u32 },
+    Bytes(Vec<u8>),
+    Entries(Vec<HostEnt>),
+    Unit,
+}
+
 pub enum Effect {
     Spawn { pid: Pid, image: Arc<Vec<u8>>, argv: Vec<String>, asy: Option<AsySnap> },
     // M3: the presentation layer's feed — a window's fresh pixels (r8g8b8a8,
@@ -114,6 +150,7 @@ pub enum Effect {
     SnarfGet,
     ConsWrite(Vec<u8>),
     Timer { ms: u64, token: u64 },
+    Host { tag: u64, op: HostOp },
     Shutdown(i32),
 }
 
@@ -557,10 +594,27 @@ fn new_fdt() -> FdtR {
     Rc::new(RefCell::new(Fdt { refs: 1, fds: Vec::new() }))
 }
 
+// On wasm32 the host feeds the clock (clock_set); native asks the OS.
+#[cfg(target_arch = "wasm32")]
+static CLOCK_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(target_arch = "wasm32")]
+pub fn clock_set(ms: u64) {
+    CLOCK_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
+}
+#[cfg(target_arch = "wasm32")]
+fn now_secs() -> u32 {
+    (CLOCK_MS.load(std::sync::atomic::Ordering::Relaxed) / 1000) as u32
+}
+#[cfg(target_arch = "wasm32")]
+fn now_nanos() -> u64 {
+    CLOCK_MS.load(std::sync::atomic::Ordering::Relaxed) * 1_000_000
+}
+#[cfg(not(target_arch = "wasm32"))]
 fn now_secs() -> u32 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0)
 }
+#[cfg(not(target_arch = "wasm32"))]
 fn now_nanos() -> u64 {
     use std::time::{SystemTime, UNIX_EPOCH};
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
@@ -576,6 +630,8 @@ struct KState {
     snaps: Vec<(String, u32, RamRef)>, // name, snap time, frozen root — '#V'
     canvas_caps: String, // what the attached surface offers; virtual = the suite's user
     snarf: Vec<u8>,                 // /dev/snarf's buffer — the host clipboard's twin
+    host_tags: HashMap<u64, Completer<Result<HostReply, String>>>,
+    host_tag_next: u64,
     snarf_waiters: Vec<(usize, u64, Completer<RRes>)>, // n, off, completer
     hostfs_root: Option<std::path::PathBuf>,
     live_root: bool,
@@ -1451,8 +1507,78 @@ impl Kernel {
     /// writes persisting across restarts.
     pub fn set_hostfs(&self, dir: std::path::PathBuf, live: bool) {
         let mut kb = self.k.borrow_mut();
-        kb.hostfs_root = Some(dir);
+        let _ = dir;                    // the HOST keeps the real root
+        kb.hostfs_root = Some(std::path::PathBuf::new());
         kb.live_root = live;
+    }
+
+    /// The embedding answers a delegated '#Z' operation.
+    pub fn hostop_done(&mut self, tag: u64, r: Result<HostReply, String>) {
+        let c = self.k.borrow_mut().host_tags.remove(&tag);
+        if let Some(c) = c {
+            c.complete(r);
+        }
+        self.ex.run_until_stalled();
+    }
+
+    /// Merge a seed-shaped subtree into the live ramfs — the demo's
+    /// streamed toolchain overlays land through this.
+    pub fn graft(&mut self, seed: &Seed) {
+        fn add(k: &K, node: &RamRef, sk: &Seed, eve: &str) {
+            for kd in &sk.kids {
+                if kd.dir {
+                    let d = kid(node, &kd.name).filter(|d| d.borrow().dir);
+                    let d = match d {
+                        Some(d) => d,
+                        None => {
+                            let q = {
+                                let mut kb = k.borrow_mut();
+                                let q = kb.qgen;
+                                kb.qgen += 1;
+                                q
+                            };
+                            let n = Rc::new(RefCell::new(RNode {
+                                name: kd.name.clone(), qpath: q, dir: true,
+                                data: Rc::default(), kids: Vec::new(),
+                                uid: eve.into(), mode: 0o755,
+                                atime: now_secs(), mtime: now_secs(),
+                                symlink: None, ro: false,
+                            }));
+                            node.borrow_mut().kids.push((kd.name.clone(), n.clone()));
+                            n
+                        }
+                    };
+                    add(k, &d, kd, eve);
+                } else {
+                    let q = {
+                        let mut kb = k.borrow_mut();
+                        let q = kb.qgen;
+                        kb.qgen += 1;
+                        q
+                    };
+                    let n = Rc::new(RefCell::new(RNode {
+                        name: kd.name.clone(), qpath: q, dir: false,
+                        data: Rc::new(kd.data.clone()), kids: Vec::new(),
+                        uid: eve.into(), mode: 0o755,
+                        atime: now_secs(), mtime: now_secs(),
+                        symlink: None, ro: false,
+                    }));
+                    let mut nb = node.borrow_mut();
+                    nb.kids.retain(|(n2, _)| n2 != &kd.name);
+                    nb.kids.push((kd.name.clone(), n));
+                }
+            }
+        }
+        let (root, eve) = {
+            let kb = self.k.borrow();
+            (kb.ram_root.clone(), kb.eve.clone())
+        };
+        add(&self.k, &root, seed, &eve);
+    }
+
+    /// The host mirrors its clipboard into /dev/snarf (the shell's cmd-C).
+    pub fn snarf_put(&mut self, text: &str) {
+        self.k.borrow_mut().snarf = text.as_bytes().to_vec();
     }
 
     /// M3: the presentation layer's input — keys into a window's cons,
@@ -1604,6 +1730,8 @@ impl Kernel {
                 snaps: Vec::new(),
                 canvas_caps: "virtual".into(),
                 snarf: Vec::new(),
+                host_tags: HashMap::new(),
+                host_tag_next: 1,
                 snarf_waiters: Vec::new(),
                 hostfs_root: None,
                 live_root: false,
@@ -1987,9 +2115,9 @@ fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
         'H' => Ok(DN { dev: DevId::Web, node: Node::WebRoot, path: None }),
         'V' => Ok(DN { dev: DevId::Snap, node: Node::SnapRoot, path: None }),
         'Z' => {
-            let root = k.borrow().hostfs_root.clone()
+            k.borrow().hostfs_root.clone()
                 .ok_or_else(|| "no host directory configured (#Z)".to_string())?;
-            Ok(DN { dev: DevId::Host, node: Node::Host(root), path: None })
+            Ok(DN { dev: DevId::Host, node: Node::Host(std::path::PathBuf::new()), path: None })
         }
         _ => Err(format!("unknown device #{}", letter)),
     }
@@ -2017,12 +2145,12 @@ async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>
             } else { None })
         }
         (DevId::Host, Node::Host(hp)) => {
-            let root = k.borrow().hostfs_root.clone().ok_or("no host root")?;
+            k.borrow().hostfs_root.clone().ok_or("no host root")?;
             let next = hp.join(name);
-            if !host_secure(&root, &next) || !next.exists() {
-                return Ok(None);
+            match hostq(k, HostOp::Meta { path: hpstr(&next) }).await? {
+                HostReply::Missing => Ok(None),
+                _ => Ok(Some(DN { dev: DevId::Host, node: Node::Host(next), path: None })),
             }
-            Ok(Some(DN { dev: DevId::Host, node: Node::Host(next), path: None }))
         }
         (DevId::Ram, Node::Ram(r)) => {
             Ok(kid(r, name).map(|kd| DN { dev: DevId::Ram, node: Node::Ram(kd), path: None }))
@@ -2220,9 +2348,9 @@ async fn walk_once(k: &K, pid: Pid, path: &str, nofollow_last: bool) -> Result<W
         None => {
             let kb = k.borrow();
             if kb.live_root {
-                if let Some(root) = kb.hostfs_root.clone() {
+                if kb.hostfs_root.is_some() {
                     drop(kb);
-                    DN { dev: DevId::Host, node: Node::Host(root), path: None }
+                    DN { dev: DevId::Host, node: Node::Host(std::path::PathBuf::new()), path: None }
                 } else {
                     let r = kb.ram_root.clone();
                     drop(kb);
@@ -2448,7 +2576,7 @@ async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
         (DevId::Snap, Node::SnapCtl) => Ok(marshal_stat(&StatIn {
             name: "ctl", uid: "eve", gid: "eve", mode: 0o666, ..Default::default()
         })),
-        (DevId::Host, Node::Host(hp)) => host_stat_bytes(k, hp),
+        (DevId::Host, Node::Host(hp)) => host_stat_bytes(k, hp).await,
         (DevId::Cons, n) => {
             let (name, dir) = match n {
                 Node::ConsRoot => ("/", true),
@@ -2541,16 +2669,15 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
     }
     match (dev, node) {
         (DevId::Host, Node::Host(hp)) => {
-            let out = if hp.is_dir() {
-                host_dir_read(k, &hp, n, off)?
+            let dir = matches!(hostq(k, HostOp::Meta { path: hpstr(&hp) }).await?,
+                               HostReply::Meta { dir: true, .. });
+            let out = if dir {
+                host_dir_read(k, &hp, n, off).await?
             } else {
-                use std::io::{Read, Seek, SeekFrom};
-                let mut f = std::fs::File::open(&hp).map_err(|e| format!("{}: {}", hp.display(), e))?;
-                f.seek(SeekFrom::Start(off)).map_err(|e| e.to_string())?;
-                let mut buf = vec![0u8; n];
-                let got = f.read(&mut buf).map_err(|e| e.to_string())?;
-                buf.truncate(got);
-                buf
+                match hostq(k, HostOp::Read { path: hpstr(&hp), off, n }).await? {
+                    HostReply::Bytes(b) => b,
+                    _ => return Err(format!("{}: read failed", hp.display())),
+                }
             };
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
@@ -2980,17 +3107,7 @@ fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Re
             }
             data.len()
         }
-        (DevId::Host, Node::Host(hp)) => {
-            use std::io::{Seek, SeekFrom, Write};
-            if hp.is_dir() {
-                return Err("write on directory".into());
-            }
-            let mut f = std::fs::OpenOptions::new().write(true).open(&hp)
-                .map_err(|e| format!("{}: {}", hp.display(), e))?;
-            f.seek(SeekFrom::Start(off)).map_err(|e| e.to_string())?;
-            f.write_all(data).map_err(|e| e.to_string())?;
-            data.len()
-        }
+
         (DevId::Ram, Node::Ram(r)) => {
             let off = off as usize;
             let mut n = r.borrow_mut();
@@ -3139,6 +3256,22 @@ async fn dev_write_async(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid
         }
         return Ok(wrote);
     }
+    let hostp = {
+        let c = chan.borrow();
+        match &c.node {
+            Node::Host(hp) => Some((hp.clone(), c.offset)),
+            _ => None,
+        }
+    };
+    if let Some((hp, cur_off)) = hostp {
+        let cur = off_in == u64::MAX;
+        let off = if cur { cur_off } else { off_in };
+        hostq(k, HostOp::Write { path: hpstr(&hp), off, data: data.to_vec() }).await?;
+        if cur {
+            chan.borrow_mut().offset += data.len() as u64;
+        }
+        return Ok(data.len());
+    }
     dev_write_sync(k, chan, data, off_in, pid)
 }
 
@@ -3198,9 +3331,7 @@ fn dev_len(chan: &ChanR) -> u64 {
             let n = r.borrow();
             if n.dir { 0 } else { n.data.len() as u64 }
         }
-        (DevId::Host, Node::Host(hp)) => {
-            std::fs::metadata(hp).map(|m| if m.is_dir() { 0 } else { m.len() }).unwrap_or(0)
-        }
+        (DevId::Host, Node::Host(_)) => 0, // length is the host's; seek(2) end-relative on '#Z' reads as 0 (recorded)
         (DevId::Wsys, Node::Wsys { kind: WKind::Rgb, win: Some(w), .. }) => {
             let img = w.borrow().img.clone();
             let back = img.borrow().back.clone();
@@ -3501,7 +3632,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                 mnt_open(k, &m2, a[1] as u32 & 0x0f).await?;
                 DN { dev: DevId::Mnt, node: Node::Mnt(m2), path: dn.path.clone() }
             } else {
-                open_perm(k, &dn, a[1] as u32, pid)?;
+                open_perm(k, &dn, a[1] as u32, pid).await?;
                 dn
             };
             let cwd = k.borrow().procs.get(&pid).unwrap().cwd.clone();
@@ -3529,7 +3660,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                         }));
                         return Ok(ok(fd_alloc(k, pid, chan, None)));
                     }
-                    open_perm(k, &dn, mode | OTRUNC, pid)?;
+                    open_perm(k, &dn, mode | OTRUNC, pid).await?;
                     if let Node::Ram(r) = &dn.node {
                         Rc::make_mut(&mut r.borrow_mut().data).clear();
                     }
@@ -3595,19 +3726,11 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                 return Ok(ok(fd_alloc(k, pid, chan, None)));
             }
             if let Node::Host(hp) = &parent.node {
-                use std::os::unix::fs::PermissionsExt;
-                let root = k.borrow().hostfs_root.clone().ok_or("no host root")?;
+                k.borrow().hostfs_root.clone().ok_or("no host root")?;
                 let target = hp.join(&base);
-                if !host_secure(&root, &target) {
-                    return Err("create escapes the host root".into());
-                }
-                if isdir {
-                    std::fs::create_dir(&target).map_err(|e| e.to_string())?;
-                } else {
-                    std::fs::File::create(&target).map_err(|e| e.to_string())?;
-                }
-                let _ = std::fs::set_permissions(&target,
-                    std::fs::Permissions::from_mode(perm & !umask & 0o777));
+                hostq(k, HostOp::Create {
+                    path: hpstr(&target), dir: isdir, perm: perm & !umask & 0o777,
+                }).await?;
                 let chan = Rc::new(RefCell::new(Chan {
                     dev: DevId::Host, node: Node::Host(target), path: Some(cpath),
                     mode, offset: 0, refs: 1,
@@ -3649,12 +3772,9 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
             }
             if let Node::Host(hp) = &parent.node {
                 let target = hp.join(&base);
-                let r = if target.is_dir() { std::fs::remove_dir(&target) }
-                        else { std::fs::remove_file(&target) };
-                return match r {
-                    Ok(_) => Ok(ok(0)),
-                    Err(e) => Err(format!("{}: {}", base, e)),
-                };
+                hostq(k, HostOp::Remove { path: hpstr(&target) }).await
+                    .map_err(|e| format!("{}: {}", base, e))?;
+                return Ok(ok(0));
             }
             let cred = k.borrow().procs.get(&pid).unwrap().cred.clone();
             if let Node::Ram(pr) = &parent.node {
@@ -4126,7 +4246,7 @@ fn wstat_ram(node: &RamRef, parent: &DN, base: &str, st: &stat9::StatOut,
     Ok(())
 }
 
-fn open_perm(k: &K, dn: &DN, mode: u32, pid: Pid) -> Result<(), KErr> {
+async fn open_perm(k: &K, dn: &DN, mode: u32, pid: Pid) -> Result<(), KErr> {
     if let Node::Wsys { kind: WKind::Snarf, .. } = &dn.node {
         if mode & OTRUNC != 0 {
             k.borrow_mut().snarf.clear();
@@ -4135,9 +4255,8 @@ fn open_perm(k: &K, dn: &DN, mode: u32, pid: Pid) -> Result<(), KErr> {
     }
     if let Node::Host(hp) = &dn.node {
         let _ = pid;
-        if mode & OTRUNC != 0 && hp.is_file() {
-            std::fs::OpenOptions::new().write(true).truncate(true).open(hp)
-                .map_err(|e| format!("{}: {}", hp.display(), e))?;
+        if mode & OTRUNC != 0 {
+            hostq(k, HostOp::Trunc { path: hpstr(hp) }).await?;
         }
         return Ok(());
     }
@@ -4197,52 +4316,69 @@ fn ram_create(k: &K, parent: &DN, name: &str, perm: u32, isdir: bool,
 // ---- hostfs: '#Z' — a host directory as files (M4) ----
 // uid mapping, decided 2026-08-29 (design.md): host files present as EVE's;
 // mode bits map 1:1 (perm & 0o777); sidecar metadata is deferred until the
-// profile milestone needs distinct on-disk roles. Symlinks are resolved by
-// the KERNEL in the walker's namespace (the V12 rule), so hostfs refuses to
-// follow host symlinks that escape the exposed root.
-fn host_secure(root: &std::path::Path, p: &std::path::Path) -> bool {
-    // an existing path must canonicalize under the root; a not-yet-existing
-    // one is judged by its parent (create targets)
-    let probe = if p.exists() { p.to_path_buf() } else {
-        match p.parent() { Some(pp) => pp.to_path_buf(), None => return false }
-    };
-    match (probe.canonicalize(), root.canonicalize()) {
-        (Ok(cp), Ok(cr)) => cp.starts_with(&cr),
-        _ => false,
-    }
+// '#Z' asks the embedding and parks: hostq queues the op as an effect,
+// the caller awaits the completer, hostop_done resumes it. The kernel
+// holds no std::fs — the host owns the root, the bytes, and the
+// symlink-escape check (the V12 rule's enforcement moved with it).
+fn hostq(k: &K, op: HostOp) -> exec::Waiting<Result<HostReply, String>> {
+    let (c, w) = oneshot();
+    let mut kb = k.borrow_mut();
+    let tag = kb.host_tag_next;
+    kb.host_tag_next += 1;
+    kb.host_tags.insert(tag, c);
+    kb.effects.push(Effect::Host { tag, op });
+    w
 }
 
-fn host_stat_bytes(k: &K, path: &std::path::Path) -> Result<Vec<u8>, KErr> {
-    use std::os::unix::fs::MetadataExt;
-    let md = std::fs::metadata(path).map_err(|e| format!("{}: {}", path.display(), e))?;
+fn hpstr(p: &std::path::Path) -> String {
+    p.to_string_lossy().into_owned()
+}
+
+// marshal a stat record from the host's metadata answer
+fn host_stat_from(k: &K, path: &std::path::Path, dir: bool, len: u64, mtime: u32,
+                  ino: u64, mode: u32) -> Vec<u8> {
     let eve = k.borrow().eve.clone();
     let name = path.file_name().map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/".into());
-    let dir = md.is_dir();
-    Ok(marshal_stat(&StatIn {
+    marshal_stat(&StatIn {
         name: &name,
         qtype: if dir { QTDIR } else { QTFILE },
-        qpath: md.ino(),
-        mode: (md.mode() & 0o777) | if dir { DMDIR } else { 0 },
-        atime: md.mtime().max(0) as u32,
-        mtime: md.mtime().max(0) as u32,
-        length: if dir { 0 } else { md.len() },
+        qpath: ino,
+        mode: (mode & 0o777) | if dir { DMDIR } else { 0 },
+        atime: mtime,
+        mtime,
+        length: if dir { 0 } else { len },
         uid: &eve, gid: &eve, muid: &eve,
         ..Default::default()
-    }))
+    })
 }
 
-fn host_dir_read(k: &K, path: &std::path::Path, n: usize, off: u64) -> Result<Vec<u8>, KErr> {
-    let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(path)
-        .map_err(|e| format!("{}: {}", path.display(), e))?
-        .flatten().map(|e| e.path()).collect();
-    names.sort();
+async fn host_stat_bytes(k: &K, path: &std::path::Path) -> Result<Vec<u8>, KErr> {
+    match hostq(k, HostOp::Meta { path: hpstr(path) }).await? {
+        HostReply::Meta { dir, len, mtime, ino, mode } =>
+            Ok(host_stat_from(k, path, dir, len, mtime, ino, mode)),
+        _ => Err(format!("{}: does not exist", path.display())),
+    }
+}
+
+async fn host_dir_read(k: &K, path: &std::path::Path, n: usize, off: u64)
+    -> Result<Vec<u8>, KErr> {
+    let ents = match hostq(k, HostOp::ReadDir { path: hpstr(path) }).await? {
+        HostReply::Entries(e) => e,
+        _ => return Err(format!("{}: not a directory", path.display())),
+    };
     let mut skip = off as usize;
     let mut out = Vec::new();
-    for kd in names {
-        let rec = match host_stat_bytes(k, &kd) { Ok(r) => r, Err(_) => continue };
-        if skip >= rec.len() { skip -= rec.len(); continue; }
-        if out.len() + rec.len() > n { break; }
+    for e in ents {
+        let rec = host_stat_from(k, &path.join(&e.name), e.dir, e.len, e.mtime,
+                                 e.ino, e.mode);
+        if skip >= rec.len() {
+            skip -= rec.len();
+            continue;
+        }
+        if out.len() + rec.len() > n {
+            break;
+        }
         out.extend_from_slice(&rec);
     }
     Ok(out)

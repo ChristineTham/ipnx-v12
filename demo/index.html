@@ -33,9 +33,10 @@
 running in this tab</p>
 
 <p><b>IPNX is a new operating system</b> — not a distribution of an old one,
-not an emulator. Its kernel is original, written twice over — in Rust for
-native hosts and in JavaScript for this tab — and proven to be one system by
-one conformance suite, identical on both. The architecture takes what
+not an emulator. Its kernel is original, written in Rust — and <b>the very
+same kernel runs native on macOS and, compiled to WebAssembly, inside this
+tab</b>: one core, one conformance suite green on both, plus a JavaScript
+twin held as the frozen conformance oracle. The architecture takes what
 Plan&nbsp;9 proved and Unix never shipped — <b>per-process namespaces</b>, 9P
 as the only IPC, everything a file — with none of Plan&nbsp;9's kernel code,
 and <b>WebAssembly</b> as the executable format.</p>
@@ -170,7 +171,7 @@ pipes 1989 into 1992.</p>
 Everything runs in your browser — nothing you type leaves this tab, and
 reloading forgets it all unless you chose a persistent home. <b>Measured
 green in Chromium (Chrome, Edge, Brave, Arc) and in Safari</b> — the full
-conformance suite (150 tests today; the floor is 131) passes in both.
+conformance suite (151 tests today; the floor is 131) passes in both.
 (Safari needed real engineering: WebKit deterministically fails concurrent
 module-worker loads through a service worker — minimal repro and file-ready
 report in the repository under <code>demo/webkit-repro/</code> — so this

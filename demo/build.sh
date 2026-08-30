@@ -9,6 +9,10 @@ mkdir -p dist/build
 cp -R ../poc/browser dist/browser
 cp -R supervisor dist/supervisor            # the demo's own kernel lineage
 cp ../userspace/build/rootfs.json dist/build/rootfs.json
+# the kernel itself: the Rust core compiled to wasm (the browser surface's
+# kernel half; rustkern.mjs drives it)
+( cd .. && cargo build --release --target wasm32-unknown-unknown -p browserhost )
+cp ../target/wasm32-unknown-unknown/release/browserhost.wasm dist/build/kernel.wasm
 cp index.html NOTICES.html _headers coi-sw.js coi-register.js dist/
 cp -R shell dist/shell
 cp -R vendor dist/vendor
@@ -39,6 +43,24 @@ touch dist/.nojekyll
 sed -i '' 's|<meta charset="utf-8">|<meta charset="utf-8">\
 <script src="../coi-register.js"></script>|' dist/browser/index.html
 grep -q coi-register dist/browser/index.html || { echo "coi injection failed" >&2; exit 1; }
+# the suite page runs the RUST CORE: swap the dist copy's kernel import and
+# boot call to rustkern + kernel.wasm (dist-only, the frozen source untouched)
+node -e '
+const fs = require("fs"), f = "dist/browser/main.mjs";
+let t = fs.readFileSync(f, "utf8");
+const a = `import { boot } from "../supervisor/kernel.mjs";`;
+const b = `import { boot } from "../supervisor/rustkern.mjs";`;
+if (!t.includes(a)) { console.error("kernel import line not found"); process.exit(1); }
+t = t.replace(a, b);
+const c = `const booted = await boot(host, { rootSeed: seedFromJson(files), interactive });`;
+const d = `const kernelWasm = await (await fetch("../build/kernel.wasm")).arrayBuffer();
+const booted = await boot(host, { rootSeed: seedFromJson(files), interactive, kernelWasm });`;
+if (!t.includes(c)) { console.error("boot line not found"); process.exit(1); }
+t = t.replace(c, d);
+fs.writeFileSync(f, t);
+'
+grep -q "rustkern" dist/browser/main.mjs || { echo "rust-core rewrite failed" >&2; exit 1; }
+
 # the guard message in the dist COPY speaks to visitors, not developers:
 # Safari (WebKit) takes isolation only from real response headers, which this
 # host cannot send — measured live, 2026-08-29

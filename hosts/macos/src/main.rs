@@ -10,7 +10,7 @@
 
 mod wasi;
 
-use kernel::{AsySnap, Effect, KAction, KReply, Kernel, Pid, Seed, TXSIZE};
+use kernel::{AsySnap, Effect, HostEnt, HostOp, HostReply, KAction, KReply, Kernel, Pid, Seed, TXSIZE};
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -265,13 +265,14 @@ fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
     // itself AND makes it the implicit root — boot from the real tree,
     // writes persist. Otherwise a per-boot temp dir backs '#Z' so the
     // suite's hostfs test has something real to exercise.
-    if live {
-        kern.set_hostfs(std::fs::canonicalize(&rootdir).expect("rootdir"), true);
+    let host_root = if live {
+        std::fs::canonicalize(&rootdir).expect("rootdir")
     } else {
         let t = std::env::temp_dir().join(format!("ipnx-z-{}", std::process::id()));
         let _ = std::fs::create_dir_all(&t);
-        kern.set_hostfs(t, false);
-    }
+        t
+    };
+    kern.set_hostfs(host_root.clone(), live);
     kern.interactive = interactive;
     kern.verbose = verbose;
     if app_mode {
@@ -329,7 +330,7 @@ fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
 
     // the kernel loop: pure state machine + effects
     loop {
-        run_effects(&mut kern, &engine, &ev_tx, &ui);
+        run_effects(&mut kern, &engine, &ev_tx, &ui, &host_root);
         let ev = match ev_rx.recv() {
             Ok(e) => e,
             Err(_) => break,
@@ -354,10 +355,21 @@ fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
 }
 
 fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
-               ui: &Option<winit::event_loop::EventLoopProxy<ui::UiMsg>>) {
+               ui: &Option<winit::event_loop::EventLoopProxy<ui::UiMsg>>,
+               host_root: &std::path::Path) {
     use std::io::Write;
-    for e in kern.take_effects() {
+    loop {
+    let effects = kern.take_effects();
+    if effects.is_empty() { break; }
+    for e in effects {
         match e {
+            // '#Z': the kernel's delegated host-file ops, served here with
+            // the code that used to live kernel-side — root, security check
+            // and std::fs are the host's now (the kernel has no OS)
+            Effect::Host { tag, op } => {
+                let r = host_serve(host_root, op);
+                kern.hostop_done(tag, r);
+            }
             Effect::ConsWrite(bytes) => {
                 let mut out = std::io::stdout();
                 out.write_all(&bytes).ok();
@@ -435,6 +447,107 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
                     let _ = ev.send(Ev::FetchDone { url, result });
                 });
             }
+        }
+    }
+    }
+}
+
+// The '#Z' op server: root-relative paths in, the V12 symlink-escape rule
+// enforced by canonicalization under the root (moved from the kernel).
+fn host_secure(root: &std::path::Path, p: &std::path::Path) -> bool {
+    let probe = if p.exists() { p.to_path_buf() } else {
+        match p.parent() { Some(pp) => pp.to_path_buf(), None => return false }
+    };
+    match (probe.canonicalize(), root.canonicalize()) {
+        (Ok(cp), Ok(cr)) => cp.starts_with(&cr),
+        _ => false,
+    }
+}
+
+fn host_serve(root: &std::path::Path, op: HostOp) -> Result<HostReply, String> {
+    use std::os::unix::fs::MetadataExt;
+    let at = |rel: &str| -> Result<std::path::PathBuf, String> {
+        let p = if rel.is_empty() { root.to_path_buf() } else { root.join(rel) };
+        if !host_secure(root, &p) {
+            return Err("path escapes the host root".into());
+        }
+        Ok(p)
+    };
+    match op {
+        HostOp::Meta { path } => {
+            let p = at(&path)?;
+            match std::fs::metadata(&p) {
+                Ok(md) => Ok(HostReply::Meta {
+                    dir: md.is_dir(), len: md.len(), mtime: md.mtime().max(0) as u32,
+                    ino: md.ino(), mode: md.mode(),
+                }),
+                Err(_) => Ok(HostReply::Missing),
+            }
+        }
+        HostOp::Read { path, off, n } => {
+            use std::io::{Read, Seek, SeekFrom};
+            let p = at(&path)?;
+            let mut f = std::fs::File::open(&p).map_err(|e| format!("{}: {}", path, e))?;
+            f.seek(SeekFrom::Start(off)).map_err(|e| e.to_string())?;
+            let mut buf = vec![0u8; n];
+            let got = f.read(&mut buf).map_err(|e| e.to_string())?;
+            buf.truncate(got);
+            Ok(HostReply::Bytes(buf))
+        }
+        HostOp::Write { path, off, data } => {
+            use std::io::{Seek, SeekFrom, Write};
+            let p = at(&path)?;
+            if p.is_dir() {
+                return Err("write on directory".into());
+            }
+            let mut f = std::fs::OpenOptions::new().write(true).open(&p)
+                .map_err(|e| format!("{}: {}", path, e))?;
+            f.seek(SeekFrom::Start(off)).map_err(|e| e.to_string())?;
+            f.write_all(&data).map_err(|e| e.to_string())?;
+            Ok(HostReply::Unit)
+        }
+        HostOp::Create { path, dir, perm } => {
+            use std::os::unix::fs::PermissionsExt;
+            let p = at(&path)?;
+            if dir {
+                std::fs::create_dir(&p).map_err(|e| e.to_string())?;
+            } else {
+                std::fs::File::create(&p).map_err(|e| e.to_string())?;
+            }
+            let _ = std::fs::set_permissions(&p, std::fs::Permissions::from_mode(perm));
+            Ok(HostReply::Unit)
+        }
+        HostOp::Remove { path } => {
+            let p = at(&path)?;
+            let r = if p.is_dir() { std::fs::remove_dir(&p) } else { std::fs::remove_file(&p) };
+            r.map_err(|e| e.to_string())?;
+            Ok(HostReply::Unit)
+        }
+        HostOp::Trunc { path } => {
+            let p = at(&path)?;
+            if p.is_file() {
+                std::fs::OpenOptions::new().write(true).truncate(true).open(&p)
+                    .map_err(|e| format!("{}: {}", path, e))?;
+            }
+            Ok(HostReply::Unit)
+        }
+        HostOp::ReadDir { path } => {
+            let p = at(&path)?;
+            let mut names: Vec<std::path::PathBuf> = std::fs::read_dir(&p)
+                .map_err(|e| format!("{}: {}", path, e))?
+                .flatten().map(|e| e.path()).collect();
+            names.sort();
+            let mut out = Vec::new();
+            for kd in names {
+                let Ok(md) = std::fs::metadata(&kd) else { continue };
+                out.push(HostEnt {
+                    name: kd.file_name().map(|n| n.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                    dir: md.is_dir(), len: md.len(),
+                    mtime: md.mtime().max(0) as u32, ino: md.ino(), mode: md.mode(),
+                });
+            }
+            Ok(HostReply::Entries(out))
         }
     }
 }

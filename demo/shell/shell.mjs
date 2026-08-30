@@ -1,10 +1,11 @@
-// The demo shell: the browser host's presentation layer, arriving ahead of M5.
-// The kernel underneath is the frozen reference (../supervisor/*, byte-identical);
-// this file replaces only the page — the part the demo owns. Character windows
-// are real terminals (xterm.js, per the design's own naming of it); draw
-// windows are the real libdraw raster, shown crisp; windows carry macOS-style
-// chrome. Worker startup is serialized (WebKit defect, demo/webkit-repro/).
-import { boot } from "../supervisor/kernel.mjs";
+// The demo shell: the browser surface's presentation layer. The kernel
+// underneath is THE RUST CORE compiled to wasm (rustkern.mjs drives
+// build/kernel.wasm — the same kernel/ crate the macOS host runs), with
+// Workers, mailboxes and guestcore untouched. Character windows are real
+// terminals (xterm.js); draw windows are the real libdraw raster; canvas
+// windows are the presenter. Worker startup is serialized (WebKit defect,
+// demo/webkit-repro/).
+import { boot, makeHandleHostServer } from "../supervisor/rustkern.mjs";
 import { createCanvasView } from "./presenter.mjs";
 
 const desktop = document.getElementById("desktop");
@@ -505,8 +506,12 @@ if (resp.body && total) {
 setStatus("unpacking…");
 await new Promise((r) => setTimeout(r, 0));      // let the status paint
 const files = JSON.parse(text);
+setStatus("fetching the kernel…");
+const kernelWasm = await (await fetch("../build/kernel.wasm?v=BUILDSTAMP")).arrayBuffer();
 setStatus("booting…");
-const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: true });
+const zserver = makeHandleHostServer();
+const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: true,
+  kernelWasm, caps: "interactive input", hostServe: zserver });
 // ---- the home chooser: play (ramfs) · browser storage (OPFS) · a real
 // local folder (File System Access). A granted directory IS a bind.
 {
@@ -520,12 +525,12 @@ const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: tr
         toast("home: the shipped examples — nothing persists");
       } else if (want === "browser") {
         const h = await navigator.storage.getDirectory();
-        booted.grantHostfs(h);
+        zserver.grant(h);
         feedCons("bind -c '#Z' /n/host; cd /n/host");
         toast("home: browser storage — /n/host persists in this browser, private to this site");
       } else if (want === "folder") {
         const h = await window.showDirectoryPicker({ mode: "readwrite" });
-        booted.grantHostfs(h);
+        zserver.grant(h);
         feedCons("bind -c '#Z' /n/host; cd /n/host");
         toast("home: " + h.name + " — /n/host is your real folder; Put writes to your disk");
       }

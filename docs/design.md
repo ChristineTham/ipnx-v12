@@ -618,6 +618,29 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   beyond the tour's chapters is likewise declined. Cadence: an iteration
   reruns with each deployment-ledger review and after any validation event.
 
+- **(2026-08-31) The demo runs the Rust core — and the kernel loses its
+  last OS dependency.** Her directive ("now continue with replacing the
+  demo with the browser surface") executed the 2026-08-27 decision's
+  second half: the one kernel crate now compiles native for macOS and
+  to wasm for the page, and the page is the product. The load-bearing
+  architecture note is what the landing forced: '#Z' hostfs was the
+  kernel's only std::fs, and the browser cannot block on a filesystem —
+  so every host-file operation became a delegated effect
+  (Effect::Host{tag,op} out, hostop_done back), the exact webfs/fetch
+  pattern already in the kernel. Consequences, all measured: the
+  kernel is now literally free of OS calls ("no OS dependencies" was
+  the design line; now it is a fact of the build); the macOS host
+  gained the op server the kernel lost and stayed 151; the browser
+  serves OPFS and picked directories over the same op protocol; a
+  Node harness drives the identical wasm kernel headless (151, the
+  fast iteration loop the browser lacks); and the guest world runs
+  UNCHANGED — same worker.mjs, same guestcore, same mailboxes — the
+  proof that the mach-layer seam sits exactly where the 2026-08-27
+  decision drew it. Chrome runs the suite at 151 on the Rust core;
+  cc-to-Hello-Kitty and reload-surviving browser storage verified by
+  hand. The demo's JS kernel lineage retires to reference-in-tree;
+  the frozen oracle remains the oracle.
+
 - **(2026-08-31) Parity is measured against the running reference.**
   Christine: "I am comparing the acme from the demo vs acme from
   plan9port, and there seem to be differences" — and she separated the

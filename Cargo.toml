@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["kernel", "hosts/macos"]
+members = ["kernel", "hosts/macos", "hosts/browser"]
 
 [workspace.package]
 edition = "2021"
