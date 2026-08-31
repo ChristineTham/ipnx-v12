@@ -203,6 +203,43 @@ if(~ $"cvok virtual){
 }
 if not echo PASS 'canvas: no /dev/canvas on this host — skipped'
 
+# /dev/window (docs/window.md): the CONTROL interface — IPNX declares the
+# chrome, the surface speaks back, and the window's TYPE IS IN THE PATH.
+# The whole point is that this is not emca's: any program mints through
+# `#w/<type>/clone`, the DEVICE announces it on the root events file, and
+# both halves watch. So emca needs no privilege and a window opens with no
+# emca running at all — which is what this test actually proves.
+# Self-skips where the window server has no control interface (the frozen
+# oracle; the JS supervisor until parity lands).
+wtid=`{cat '#w/pkg/clone' >[2]/dev/null}
+if(! ~ $"wtid ''){
+	wp='#w/pkg/'^$wtid
+	# the DEVICE announced the mint — nobody had to be told. The root queue
+	# is shared, so skip whatever earlier tests left in it.
+	wev=''
+	while(! ~ $"wev 'new pkg '*) wev=`{read < '#w/events'}
+	# IPNX declares the chrome, one control per line, and ACTIONS NAME A SIDE
+	echo 'Install ipnx:Install
+Wrap host:toggle-wrap' > $wp/toolbar
+	# content is a PATH the host opens over 9P — there is no renderer here
+	echo -n /pkg/index > $wp/content
+	echo -n 'pkg Install Wrap | ' > $wp/tag
+	wtb=`{cat $wp/toolbar}
+	wct=`{cat $wp/content}
+	wtg=`{cat $wp/tag}
+	# the type in the path is validated, not decoration: a wrong type misses
+	wbad=`{cat '#w/text/'^$wtid^'/content' >[2]/dev/null}
+	# and the same window still answers on its plain number — nothing broke
+	wnum=`{cat '#w/'^$wtid^'/content'}
+	# the surface speaks back; writing events is the virtual surface's door
+	echo 'exec Install' > $wp/events
+	wu1=`{read < $wp/events}
+	wu2=`{{ echo delete > '#w/'$wtid^'/wctl'; read } < '#w/events'}
+	if(~ $"wev 'new pkg '^$wtid && ~ $"wtb 'Install ipnx:Install Wrap host:toggle-wrap' && ~ $"wct /pkg/index && ~ $"wtg 'pkg Install Wrap |' && ~ $"wbad '' && ~ $"wnum /pkg/index && ~ $"wu1 'exec Install' && ~ $"wu2 'del '^$wtid) echo PASS '/dev/window: chrome is files — typed path, declared toolbar, lifecycle announced, surface speaks back'
+	if not fails=bad
+}
+if not echo PASS '/dev/window: no control interface on this host — skipped'
+
 # console-today (M5, docs/userland.md): the console is an editable
 # transcript — one edit node, a mark separating history from input,
 # Enter sends the line. con(1) mediates on the wasm libthread; the test

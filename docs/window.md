@@ -1,4 +1,13 @@
-# /dev/window — the control interface (v0, specified 2026-08-31, NOT BUILT)
+# /dev/window — the control interface (v0)
+
+> **The device half LANDED 2026-08-31.** `#w` grew the control interface and the
+> suite proves it headlessly: a window minted through `#w/pkg/clone`, the mint
+> announced on the root `events`, a toolbar declared with `ipnx:` and `host:`
+> actions, content set to a path, the type in the path **validated** (`#w/text/<n>`
+> correctly misses), the plain `#w/<n>` still answering (nothing broke), and the
+> surface's voice round-tripping. **152 PASS / 0 FAIL** on the Rust host; the
+> frozen oracle self-skips. What is NOT built: the host half — no surface reads
+> any of this yet.
 
 The contract for the 2026-08-31 redesign (design.md): the bidirectional
 device through which IPNX declares a window's chrome and the host reports what
@@ -284,5 +293,6 @@ every renderer emca would have needed, and most of its display machinery.
 - ~~The transcript's shape~~ — **specified above**: a growing file the host tails,
   typed lines back as `insert`, con(1)'s mark arithmetic deleted.
 
-Nothing is open in this contract. What remains is that **none of it is built** —
-`/dev/window` is specified and M14a is unstarted.
+Nothing is open in this contract. **The device half is built** (see the header);
+what remains is the **host half** — no surface reads `events`, opens `content`
+over 9P, or renders a declared toolbar yet.

@@ -535,7 +535,7 @@ iPad → the surface's; differs between one workspace and another →
 IPNX's*. Staged so each stage is separately demonstrable and the suite
 grows with it.
 
-**a. The channels *(M — restructured 2026-08-31)*.** Not additions to
+**a. The channels *(M — restructured 2026-08-31; the DEVICE HALF LANDED the same day)*.** Not additions to
 `/dev/canvas` — that was the wrong shape (decision log; the framing
 error was calling canvas "the display protocol" when 9P is the only
 protocol). **Four semantics over one protocol**: content is **9P
@@ -548,6 +548,12 @@ over-derivation stated — three of its four founding benchmarks were
 never drawing consumers). Controls name a side: `ipnx:Put` round-trips,
 `host:toggle-wrap` never does. This stage is *narrow canvas, specify and
 build `/dev/window`* — and it **deletes** far more than it adds.
+**Landed 2026-08-31**: `#w` grew the control interface — root `clone` and parked
+`events`, a type-indexed path (`#w/<type>/<n>`, validated, with `#w/<n>` untouched
+so nothing broke), and per-window `content`/`toolbar`/`tag`/`ui`/`events`. Proven
+headlessly by one suite test in rc — *a UI you can cat, echo and grep* — at **152
+PASS / 0 FAIL** on the Rust host, self-skipping on the frozen oracle. **Still
+unbuilt**: the host half, and canvas's narrowing.
 
 **b. `/type` and the manager types *(M)*.** The registry: a directory
 per type holding `ns`, optional `cmd`, and `window` — house style, small

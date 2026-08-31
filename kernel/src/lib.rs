@@ -237,7 +237,7 @@ enum Node {
     Union(Rc<Vec<MountEl>>),
     Proc { kind: u8, pid: Pid }, // 0 root, 1 dir, 2 ctl, 3 status, 4 note, 5 notepg
     Mnt(MntRef),
-    Wsys { kind: WKind, win: Option<WinR>, conn: Option<DConnR> },
+    Wsys { kind: WKind, win: Option<WinR>, conn: Option<DConnR>, ty: Option<String> },
     Cv { win: WinR, id: u32, file: u8 }, // canvas node: file 255 dir, 0 kind, 1 attrs, 2 addr, 3 data
     SnapRoot,
     SnapCtl,
@@ -265,6 +265,14 @@ enum WKind {
     CvDir,
     CvCtl,
     CvEvents,
+    // /dev/window (docs/window.md): the control interface
+    TypeDir,
+    RootEvents,
+    WContent,
+    WToolbar,
+    WTag,
+    WUi,
+    WEvents,
     CvCaps,
     Snarf,
 }
@@ -519,6 +527,14 @@ struct Win {
     mouseparked: Vec<Waiter>,
     cv: Option<Canvas>,
     dead: bool,
+    // /dev/window: the control interface's per-window files
+    wtype: String,
+    content: String,
+    toolbar: String,
+    tag: String,
+    uifile: String,
+    wevents: VecDeque<String>,
+    wparked: Vec<Waiter>,
 }
 type WinR = Rc<RefCell<Win>>;
 
@@ -649,6 +665,9 @@ struct KState {
     verbose: bool,
     wins: HashMap<u32, WinR>,
     nextwid: u32,
+    // /dev/window's ROOT events: window lifecycle, read by both halves
+    winev: VecDeque<String>,
+    winev_parked: Vec<Waiter>,
 }
 
 type K = Rc<RefCell<KState>>;
@@ -660,10 +679,16 @@ enum WalkRes {
 
 // ---- devwsys implementation ----
 fn wnode(kind: WKind, win: Option<WinR>, conn: Option<DConnR>) -> DN {
-    DN { dev: DevId::Wsys, node: Node::Wsys { kind, win, conn }, path: None }
+    DN { dev: DevId::Wsys, node: Node::Wsys { kind, win, conn, ty: None }, path: None }
 }
 
-fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, name: &str) -> Option<DN> {
+// a node addressed through #w/<type>/… — the type is a PATH COMPONENT
+// (docs/window.md), so it is carried down the walk and validated at the leaf
+fn wnode_ty(kind: WKind, win: Option<WinR>, ty: Option<String>) -> DN {
+    DN { dev: DevId::Wsys, node: Node::Wsys { kind, win, conn: None, ty }, path: None }
+}
+
+fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: &Option<String>, name: &str) -> Option<DN> {
     match kind {
         WKind::Root => {
             if name == "clone" {
@@ -672,8 +697,25 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, name
             if name == "snarf" {
                 return Some(wnode(WKind::Snarf, None, None));
             }
+            if name == "events" {
+                return Some(wnode(WKind::RootEvents, None, None));
+            }
+            if let Ok(wid) = name.parse::<u32>() {
+                let w = k.borrow().wins.get(&wid).cloned()?;
+                return Some(wnode(WKind::WinDir, Some(w), None));
+            }
+            // anything else is a TYPE: #w/<type>/… (docs/window.md)
+            Some(wnode_ty(WKind::TypeDir, None, Some(name.to_string())))
+        }
+        WKind::TypeDir => {
+            let t = ty.clone()?;
+            if name == "clone" {
+                return Some(wnode_ty(WKind::Clone, None, Some(t)));
+            }
             let wid: u32 = name.parse().ok()?;
             let w = k.borrow().wins.get(&wid).cloned()?;
+            // the type in the path is not decoration — it must match
+            if w.borrow().wtype != t { return None; }
             Some(wnode(WKind::WinDir, Some(w), None))
         }
         WKind::WinDir => {
@@ -689,6 +731,11 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, name
                 "cursor" => WKind::Cursor,
                 "draw" => WKind::DrawDir,
                 "canvas" => { mkcv(&w); WKind::CvDir }
+                "content" => WKind::WContent,
+                "toolbar" => WKind::WToolbar,
+                "tag" => WKind::WTag,
+                "ui" => WKind::WUi,
+                "events" => WKind::WEvents,
                 _ => return None,
             };
             Some(wnode(kd, Some(w), None))
@@ -753,6 +800,13 @@ fn new_window(k: &K) -> WinR {
         mouseparked: Vec::new(),
         cv: None,
         dead: false,
+        wtype: String::new(),
+        content: String::new(),
+        toolbar: String::new(),
+        tag: String::new(),
+        uifile: String::new(),
+        wevents: VecDeque::new(),
+        wparked: Vec::new(),
     }));
     kb.wins.insert(wid, win.clone());
     drop(kb);
@@ -876,6 +930,37 @@ fn serve_cv(k: &K, win: &WinR) {
     }
 }
 
+// /dev/window's ROOT events: window lifecycle, read by the host AND by emca
+// (docs/window.md — the device mints, both halves watch)
+fn win_announce(k: &K, line: String) {
+    k.borrow_mut().winev.push_back(line);
+    loop {
+        let fired = {
+            let mut kb = k.borrow_mut();
+            if kb.winev_parked.is_empty() || kb.winev.is_empty() { return; }
+            let waiter = kb.winev_parked.remove(0);
+            let give = kb.winev.pop_front().unwrap_or_default().into_bytes();
+            (waiter.kind, give)
+        };
+        wake(k, fired.0, fired.1);
+    }
+}
+
+// a window's own events: what the user did inside it
+fn serve_wev(k: &K, win: &WinR) {
+    loop {
+        let fired = {
+            let mut w = win.borrow_mut();
+            let dead = w.dead;
+            if w.wparked.is_empty() || (w.wevents.is_empty() && !dead) { return; }
+            let waiter = w.wparked.remove(0);
+            let give = w.wevents.pop_front().unwrap_or_default().into_bytes();
+            (waiter.kind, give)
+        };
+        wake(k, fired.0, fired.1);
+    }
+}
+
 // a user edit event mutates the node before notifying — the tree is the truth
 fn cv_apply(win: &WinR, line: &str) {
     let f: Vec<&str> = line.trim().split_whitespace().collect();
@@ -985,7 +1070,7 @@ fn inject_mouse(k: &K, win: &WinR, x: i32, y: i32, buttons: i32) {
     serve_wmouse(k, win);
 }
 
-async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
+async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: &Option<String>,
                    chan: &ChanR, n: usize, off: u64) -> Result<RRes, KErr> {
     let one = |s: String| -> RRes {
         RRes::Data(if off == 0 { s.into_bytes() } else { Vec::new() })
@@ -1052,6 +1137,50 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
             return Ok(wt.await);
         }
         WKind::CvDir | WKind::CvCtl => return Ok(RRes::Data(Vec::new())),
+        WKind::TypeDir => return Ok(RRes::Data(Vec::new())),
+        WKind::WContent => {
+            let w = win.as_ref().ok_or("no window")?;
+            let s = w.borrow().content.clone();
+            return Ok(one(s));
+        }
+        WKind::WToolbar => {
+            let w = win.as_ref().ok_or("no window")?;
+            let s = w.borrow().toolbar.clone();
+            return Ok(one(s));
+        }
+        WKind::WTag => {
+            let w = win.as_ref().ok_or("no window")?;
+            let s = w.borrow().tag.clone();
+            return Ok(one(s));
+        }
+        WKind::WUi => {
+            let w = win.as_ref().ok_or("no window")?;
+            let s = w.borrow().uifile.clone();
+            return Ok(one(s));
+        }
+        WKind::RootEvents => {
+            let now = {
+                let mut kb = k.borrow_mut();
+                kb.winev.pop_front().map(|l| l.into_bytes())
+            };
+            if let Some(give) = now { return Ok(RRes::Data(give)); }
+            let (c, wt) = oneshot::<RRes>();
+            k.borrow_mut().winev_parked.push(Waiter { n, kind: WaitKind::Wake { pid: 0, c } });
+            return Ok(wt.await);
+        }
+        WKind::WEvents => {
+            let w = win.as_ref().ok_or("no window")?;
+            let now = {
+                let mut wb = w.borrow_mut();
+                let dead = wb.dead;
+                if let Some(line) = wb.wevents.pop_front() { Some(line.into_bytes()) }
+                else if dead { Some(Vec::new()) } else { None }
+            };
+            if let Some(give) = now { return Ok(RRes::Data(give)); }
+            let (c, wt) = oneshot::<RRes>();
+            w.borrow_mut().wparked.push(Waiter { n, kind: WaitKind::Wake { pid: 0, c } });
+            return Ok(wt.await);
+        }
         WKind::Clone => {
             // reading clone mints the window and pins it on this chan
             let have = {
@@ -1065,8 +1194,16 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
                 Some(w) => w,
                 None => {
                     let w = new_window(k);
+                    // the type is a PATH COMPONENT: #w/<type>/clone mints one
+                    // (docs/window.md). The device announces it; BOTH halves
+                    // are watching, which is why emca needs no privilege.
+                    if let Some(t) = ty {
+                        w.borrow_mut().wtype = t.clone();
+                        let wid = w.borrow().wid;
+                        win_announce(k, format!("new {} {}\n", t, wid));
+                    }
                     let mut cb = chan.borrow_mut();
-                    cb.node = Node::Wsys { kind: WKind::Clone, win: Some(w.clone()), conn: None };
+                    cb.node = Node::Wsys { kind: WKind::Clone, win: Some(w.clone()), conn: None, ty: ty.clone() };
                     w
                 }
             };
@@ -1159,6 +1296,32 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
 fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
               data: &[u8]) -> Result<usize, KErr> {
     match kind {
+        // /dev/window: IPNX declares the chrome; the surface speaks back
+        WKind::WContent | WKind::WToolbar | WKind::WTag | WKind::WUi => {
+            let w = win.as_ref().ok_or("no window")?;
+            let s = String::from_utf8_lossy(data).to_string();
+            {
+                let mut wb = w.borrow_mut();
+                match kind {
+                    WKind::WContent => wb.content = s,
+                    WKind::WToolbar => wb.toolbar = s,
+                    WKind::WTag => wb.tag = s,
+                    _ => wb.uifile = s,
+                }
+            }
+            return Ok(data.len());
+        }
+        // writing a window's events is the surface's voice — and the virtual
+        // surface's door, the same house precedent as canvas's `event` verb
+        WKind::WEvents => {
+            let w = win.as_ref().ok_or("no window")?;
+            for line in String::from_utf8_lossy(data).lines() {
+                if line.trim().is_empty() { continue; }
+                w.borrow_mut().wevents.push_back(format!("{}\n", line.trim()));
+            }
+            serve_wev(k, w);
+            return Ok(data.len());
+        }
         WKind::Cons => {
             // window text: buffered per window, emitted at the credited tick
             // (a direct effect per write is unbounded when the UI stalls —
@@ -1231,6 +1394,8 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                     serve_wcons(k, w);
                     serve_wmouse(k, w);
                     serve_cv(k, w);
+                    serve_wev(k, w);
+                    win_announce(k, format!("del {}\n", wid));
                     let mut kb = k.borrow_mut();
                     kb.wins.remove(&wid);
                     kb.win_dirty.remove(&wid);
@@ -1267,8 +1432,8 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
     }
 }
 
-fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>) -> Vec<u8> {
-    let dir = matches!(kind, WKind::Root | WKind::WinDir | WKind::DrawDir | WKind::ConnDir | WKind::CvDir);
+fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: &Option<String>) -> Vec<u8> {
+    let dir = matches!(kind, WKind::Root | WKind::WinDir | WKind::DrawDir | WKind::ConnDir | WKind::CvDir | WKind::TypeDir);
     let name = match kind {
         WKind::Root => "wsys".to_string(),
         WKind::WinDir => win.as_ref().map(|w| w.borrow().wid.to_string()).unwrap_or_default(),
@@ -1292,6 +1457,12 @@ fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>) -> Vec<u8> 
         WKind::CvEvents => "events".to_string(),
         WKind::CvCaps => "caps".to_string(),
         WKind::Snarf => "snarf".to_string(),
+        WKind::TypeDir => ty.clone().unwrap_or_else(|| "type".to_string()),
+        WKind::RootEvents | WKind::WEvents => "events".to_string(),
+        WKind::WContent => "content".to_string(),
+        WKind::WToolbar => "toolbar".to_string(),
+        WKind::WTag => "tag".to_string(),
+        WKind::WUi => "ui".to_string(),
     };
     let wid = win.as_ref().map(|w| w.borrow().wid).unwrap_or(0) as u64;
     let cid = conn.as_ref().map(|c| c.borrow().id).unwrap_or(0) as u64;
@@ -1698,6 +1869,8 @@ impl Kernel {
             }
             serve_wcons(&self.k, &w);
             serve_wmouse(&self.k, &w);
+            serve_wev(&self.k, &w);
+            win_announce(&self.k, format!("del {}\n", wid));
             let mut kb = self.k.borrow_mut();
             kb.wins.remove(&wid);
             kb.win_dirty.remove(&wid);
@@ -1722,6 +1895,8 @@ impl Kernel {
         }
         Kernel {
             k: Rc::new(RefCell::new(KState {
+                winev: VecDeque::new(),
+                winev_parked: Vec::new(),
                 procs: HashMap::new(),
                 nextpid: 1,
                 next_note_group: 1,
@@ -2110,7 +2285,7 @@ fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
         'd' => Ok(DN { dev: DevId::Dup, node: Node::DupRoot, path: None }),
         'p' => Ok(DN { dev: DevId::Proc, node: Node::Proc { kind: 0, pid: 0 }, path: None }),
         'M' => Ok(DN { dev: DevId::Ram, node: Node::Ram(k.borrow().ram_root.clone()), path: None }),
-        'w' => Ok(DN { dev: DevId::Wsys, node: Node::Wsys { kind: WKind::Root, win: None, conn: None }, path: None }),
+        'w' => Ok(DN { dev: DevId::Wsys, node: Node::Wsys { kind: WKind::Root, win: None, conn: None, ty: None }, path: None }),
         's' => Ok(DN { dev: DevId::Srv, node: Node::SrvRoot, path: None }),
         'H' => Ok(DN { dev: DevId::Web, node: Node::WebRoot, path: None }),
         'V' => Ok(DN { dev: DevId::Snap, node: Node::SnapRoot, path: None }),
@@ -2216,7 +2391,7 @@ async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>
             };
             Ok(Some(DN { dev: DevId::Proc, node: Node::Proc { kind: kd, pid: *q }, path: None }))
         }
-        (DevId::Wsys, Node::Wsys { kind, win, conn }) => Ok(wsys_walk(k, *kind, win, conn, name)),
+        (DevId::Wsys, Node::Wsys { kind, win, conn, ty }) => Ok(wsys_walk(k, *kind, win, conn, ty, name)),
         (DevId::Mnt, Node::Mnt(m)) => {
             let conn = m.conn.clone();
             let newfid = {
@@ -2620,7 +2795,7 @@ async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
             mode: if *file == 255 { DMDIR | 0o555 } else { 0o666 },
             ..Default::default()
         })),
-        (DevId::Wsys, Node::Wsys { kind, win, conn }) => Ok(wsys_stat(*kind, win, conn)),
+        (DevId::Wsys, Node::Wsys { kind, win, conn, ty }) => Ok(wsys_stat(*kind, win, conn, ty)),
         (DevId::Web, Node::WebRoot) => Ok(marshal_stat(&StatIn {
             name: "web", qtype: QTDIR, mode: DMDIR | 0o555, ..Default::default()
         })),
@@ -2969,8 +3144,8 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
         }
-        (DevId::Wsys, Node::Wsys { kind, win, conn }) => {
-            let out = wsys_read(k, kind, &win, &conn, chan, n, off).await?;
+        (DevId::Wsys, Node::Wsys { kind, win, conn, ty }) => {
+            let out = wsys_read(k, kind, &win, &conn, &ty, chan, n, off).await?;
             if let RRes::Data(d) = &out {
                 advance(chan, cur, d.len());
             }
@@ -3179,7 +3354,7 @@ fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Re
         (DevId::Proc, Node::Proc { kind, pid: q }) if kind >= 2 => {
             proc_write(k, kind, q, data, pid)?
         }
-        (DevId::Wsys, Node::Wsys { kind, win, conn }) => {
+        (DevId::Wsys, Node::Wsys { kind, win, conn, .. }) => {
             wsys_write(k, kind, &win, &conn, data)?
         }
         (DevId::Wsys, Node::Cv { win, id, file }) => {
@@ -3620,7 +3795,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                 };
                 DN {
                     dev: DevId::Wsys,
-                    node: Node::Wsys { kind: WKind::DrawNew, win: Some(w.clone()), conn: Some(conn) },
+                    node: Node::Wsys { kind: WKind::DrawNew, win: Some(w.clone()), conn: Some(conn), ty: None },
                     path: dn.path.clone(),
                 }
             } else {
