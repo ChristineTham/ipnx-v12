@@ -670,6 +670,64 @@ gating question, to be proven FIRST and not assumed: **can `execute` and
 acceptance test depends on it, so a spike answering that precedes the
 rest of this stage.
 
+**The gating question is ANSWERED, and the component is CodeMirror, not
+Monaco** (2026-08-31). CodeMirror 6 has **no menu of its own** — it uses the
+platform's — which turns out to be *stronger* for property 1 than Monaco's
+action API would have been: the verbs ride the surface the user already
+right-clicks, rather than a component-specific menu that a different surface
+would have to reimplement. Observed putting `look 29 36 surface` where a plain
+guest read it, byte-correct across a multi-byte em-dash.
+
+**Landed 2026-08-31.** The four chrome surfaces are complete: **the floating
+bar** now appears AT THE SELECTION (it was a right-click menu), carrying the
+closed range set with the range **snapshotted when the bar appears** — the known
+trap, since the tap that presses a button collapses the selection first. Always-
+applicable verbs render immediately and Open/Jump arrive when emca answers, so
+the bar never waits on a round trip.
+
+**Two channels, and the reason each exists.** `verbs`, per window, is
+emca.txt's third sanctioned protocol addition (verb applicability) in the form
+the narrowed architecture allows — a FILE, the exact parallel of `toolbar` one
+operand narrower. `/dev/window/pin`, at the root, is a **gap the build found**:
+the pin is IPNX's by the design's own test (it differs between workspaces) and
+`execute` is emca's, so emca must hold it — but the design named no
+workspace-scope channel, and the status line cannot show what it cannot read.
+
+**The responsive rules are measured in characters**, from the *rendered* font:
+`leaves = floor(cols / 72)`, `bodies = floor(height / (10 lines + tag))`, and
+the class follows — 3+ leaves xlarge, 2 large, 1 medium if a detached rail still
+fits beside it, else small. Grow the text and the breakpoints move for free.
+Overrides are remembered **per size class**. And **collapsed is not hidden**:
+the first implementation read "panes: none" at small as *hide them*, which
+deleted the listing and the console outright — the exact information loss the
+invariant forbids. Small INLINES both panes as concertina rows showing their
+tags. Which exposed the structural bug behind it: only `/dev/window` windows had
+a tag row, so the console had nothing to collapse *to* and vanished. Every
+window now carries one, and IPNX's chrome **enriches** that row rather than
+building a rival — which is what "a concertina row, a rail entry, a tab and a
+minimised window are the same object" actually requires in code.
+
+**The keyboard grammar** is the table from emca.txt, complete — `⌘↵` execute,
+`⌘⇧↵` look, `⌘⌥↵` pin (on the selection, or acme's own fallback, the word under
+the caret), `⌘S`/`⌘⌥S`, `⌘W`, `⌘N`, `⌘T`/`⌘⇧T`, `⌘B`/`⌘J`/`⌘⌥B`, `⌘1..9`,
+`⌘⌥→ ←`, `⌃⇥`. Cut/Copy/Paste/Undo/Redo/Find are deliberately NOT intercepted
+inside a focused editor: they are the platform's, and taking them would replace
+working IME, clipboard and find-in-file with worse copies.
+
+**The status line's right zone** carries what the design named and nothing else:
+running commands with tap-to-kill, the pin, the dirty count, line:col. Naming a
+running command needed **`/proc/<pid>/args`** — proc(3)'s own file, whose data
+was always in the proc record with nothing able to read it, so nothing could
+name a process rather than number it.
+
+**157 PASS / 0 FAIL** on both hosts (`/proc/<pid>/args` and the applicability +
+pin test both self-skip on the frozen oracle), plus both surface proofs.
+**Still unbuilt in this stage**: native text input for a soft keyboard beyond
+what the component gives, and the type's extra verbs on the floating bar —
+decided item 6 says extras appear on both surfaces, but the registry declares
+one verb list and `Wrap host:toggle-wrap` is plainly not a range verb, so the
+merge wants a second field rather than a guess.
+
 **e. `/project` *(M)*.** Templates instantiate, workspaces open;
 `/project` is a union of system and personal so promotion is moving a
 file between union elements; promotion promotes the *declaration*, not

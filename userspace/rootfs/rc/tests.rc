@@ -323,12 +323,66 @@ if(! ~ $"emok ''){
 }
 if not echo PASS 'emca: no window control interface on this host — skipped'
 
+# M14d, the parts that are IPNX's: VERB APPLICABILITY and THE PIN.
+#
+# The floating bar is the surface's, but WHICH VERBS APPLY is emca's — the
+# third of emca.txt's four protocol additions. This is where emca beats acme
+# rather than porting it: acme's look silently picks one of open/jump/search,
+# which is why nobody can predict a right-click. emca reports the judgement and
+# the bar SHOWS it. The parsing is unchanged; it populates a menu now.
+emvok=`{cat '#w/text/clone' >[2]/dev/null}
+if(! ~ $"emvok ''){
+	emca &
+	echo -n hello > /tmp/emcad.txt
+	vw=`{rc /rc/emcaopen text /tmp/emcad.txt}
+	vd=/dev/window/text/$vw
+	emwait $vd/toolbar '*Snarf*'
+	# a path that EXISTS opens; a path that does not is neither
+	echo 'select 0 9 /etc/motd' > $vd/events
+	emwait $vd/verbs '*Open*'
+	v1=`{grep -c '^(Open|Jump)$' $vd/verbs}
+	v1o=`{grep -c '^Open$' $vd/verbs}
+	echo 'select 0 3 :42' > $vd/events
+	emwait $vd/verbs '*Jump*'
+	v2=`{grep -c '^Jump$' $vd/verbs}
+	v2o=`{grep -c '^Open$' $vd/verbs}
+	# and a plain word is neither — the always-set only
+	echo 'select 0 5 ramfs' > $vd/events
+	sleep 1
+	v3=`{grep -c '^(Open|Jump)$' $vd/verbs}
+	v3c=`{grep -c '^Cut$' $vd/verbs}
+	# THE PIN: acme's 2-1 chord had no touch analogue, so it becomes two
+	# explicit acts. The pinned range persists, is published at workspace
+	# scope so it can be SEEN, and the next execute consumes it — once.
+	echo 'pin 0 10 PINNED%2DARG' > $vd/events
+	emwait /dev/window/pin 'PINNED-ARG'
+	p1=`{cat /dev/window/pin}
+	echo 'execute 0 4 echo%20>/tmp/pinout' > $vd/events
+	emwait /tmp/pinout 'PINNED-ARG'
+	p2=`{cat /tmp/pinout >[2]/dev/null}
+	p3=`{cat /dev/window/pin}
+	if(~ $"v1o 1 && ~ $"v1 1 && ~ $"v2 1 && ~ $"v2o 0 && ~ $"v3 0 && ~ $"v3c 1 && ~ $"p1 PINNED-ARG && ~ $"p2 PINNED-ARG && ~ $"p3 '') echo PASS 'emca: the bar SHOWS look'^''''^'s choice — a real path offers Open and not Jump, an address the reverse, a word neither; and the pin is published, consumed by execute, and cleared'
+	if not fails=bad
+}
+if not echo PASS 'emca applicability: no window control interface on this host — skipped'
+
+# proc(3)'s args file: the data was always in the proc record and nothing could
+# read it, so nothing could NAME a running command — which the status line's
+# "running commands with tap-to-kill" needs (emca.txt).
+sleep 4 &
+pgargs=`{cat /proc/$apid/args >[2]/dev/null}
+if(! ~ $"pgargs ''){
+	if(~ $"pgargs 'sleep 4') echo PASS '/proc/<pid>/args: a running command can be named, not just numbered'
+	if not fails=bad
+}
+if not echo PASS '/proc/<pid>/args: no args file on this host — skipped'
+
 # /proc/<pid> was walkable but not LISTABLE, so a process manager saw an empty
 # directory. Fixed in the Rust core; self-skips on the frozen oracle, which
 # still answers empty (the floor is what matters, not parity here).
 pidls=`{ls /proc/1 >[2]/dev/null}
 if(! ~ $"pidls ''){
-	if(~ $"pidls '/proc/1/ctl /proc/1/note /proc/1/notepg /proc/1/status') echo PASS '/proc/<pid>: the per-pid directory lists its files, not just walks them'
+	if(~ $"pidls '/proc/1/args /proc/1/ctl /proc/1/note /proc/1/notepg /proc/1/status') echo PASS '/proc/<pid>: the per-pid directory lists its files, not just walks them'
 	if not fails=bad
 }
 if not echo PASS '/proc/<pid>: not listable on this host — skipped'

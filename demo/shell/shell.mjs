@@ -16,6 +16,186 @@ const td = new TextDecoder();
 const enc = new TextEncoder();
 
 const setStatus = (s) => { statusEl.textContent = s; };
+
+const winRecs = new WeakMap();   // element -> its window record
+const leftPane = document.getElementById("emcaLeft");
+const bottomPane = document.getElementById("emcaBottom");
+
+// ---------- the responsive rules, MEASURED IN CHARACTERS ----------
+// "A pixel breakpoint is device-specific thinking wearing a number, and it
+// breaks under accessibility text sizing: a user at large Dynamic Type gets a
+// two-way split they cannot read." So the unit is the character, and WCAG 1.4.4
+// holds by construction rather than by testing — grow the text and the
+// breakpoints move with it, for free.
+//
+//   a leaf needs   >= 72 columns   (the classic measure)
+//   a body needs   >= 10 lines + its tag to be worth expanding
+//
+// THE RESPONSIVE INVARIANT: nothing disappears as the viewport grows. Every
+// transition ADDS. That is why medium detaches the rail rather than collapsing
+// it into tabs — tabs would show four truncated basenames where the concertina
+// showed every tag, a strict loss of information at the moment more space
+// became available.
+const LEAFCOLS = 72;      // the classic measure; these documents wrap at 72
+const RAILCOLS = 24;      // a detached rail needs this much beside a full leaf
+const BODYLINES = 10;     // below this a body is not worth expanding
+
+// measured from the ACTUAL rendered font, so the numbers follow the user's
+// text size rather than a stylesheet's guess
+let CH = 8, LH = 18;
+function measureType() {
+  const probe = document.createElement("div");
+  probe.style.cssText = "position:absolute;visibility:hidden;white-space:pre;" +
+    "font: 13px/1.35 ui-monospace, 'SF Mono', Menlo, monospace;";
+  probe.textContent = "0".repeat(100);
+  document.body.appendChild(probe);
+  CH = probe.getBoundingClientRect().width / 100 || 8;
+  LH = probe.getBoundingClientRect().height || 18;
+  probe.remove();
+}
+
+// an explicit user act overrides the breakpoint's default, and the override is
+// remembered PER SIZE CLASS — without that clause, resizing silently closes the
+// errors pane someone deliberately opened
+const overrides = { small: {}, medium: {}, large: {}, xlarge: {} };
+let sizeClass = "";
+
+function applyLayout() {
+  // clientWidth, not innerWidth: innerWidth reads 0 in isolated and offscreen
+  // contexts, and a layout that computes "small" from a zero width is worse
+  // than one that declines to compute at all.
+  const vw = document.documentElement.clientWidth;
+  const vh = document.documentElement.clientHeight;
+  if (vw < 100 || vh < 100) return;
+
+  const cols = Math.floor(vw / CH);
+  const leaves = Math.max(1, Math.floor(cols / LEAFCOLS));
+  const tagLines = 3;                        // title + toolbar + tag bar
+  const bodies = Math.max(1, Math.floor(vh / (LH * (BODYLINES + tagLines))));
+
+  const cls = leaves >= 3 ? "xlarge"
+            : leaves === 2 ? "large"
+            : cols >= LEAFCOLS + RAILCOLS ? "medium"
+            : "small";
+
+  //   small    rail inline (concertina)  1 leaf   1 body   no panes
+  //   medium   rail detached (sidebar)   1-2      1-2      panes on demand
+  //   large    rail sidebar              2-3      N        panes COLLAPSED
+  //   xlarge   rail sidebar              3+       N        panes OPEN
+  //
+  // COLLAPSED IS NOT HIDDEN. A collapsed pane still shows every window's tag —
+  // that is the concertina, and it is the same object as a tab or a minimised
+  // window. Reading "collapsed" as "hidden" would make the console vanish as
+  // the viewport GREW, which is precisely the loss the invariant forbids.
+  // NOTHING DISAPPEARS. At small the rail does not go away — it INLINES, and
+  // its windows become concertina rows showing their tags. Hiding it would lose
+  // the listing and the console outright, which is the information loss the
+  // invariant exists to forbid; collapsing to a tag loses nothing but height.
+  // Only medium may close the bottom pane, and only because a detached rail
+  // plus one leaf is already the whole width — there it is "on demand".
+  const wantLeft   = true;
+  const wantBottom = cls !== "medium";
+
+  const o = overrides[cls];
+  document.body.dataset.size = cls;
+  document.body.dataset.leaves = String(leaves);
+  document.body.dataset.bodies = String(bodies);
+  leftPane.classList.toggle("hidden",   !(o.left   ?? wantLeft));
+  bottomPane.classList.toggle("hidden", !(o.bottom ?? wantBottom));
+  document.getElementById("tLeft").classList.toggle("off", leftPane.classList.contains("hidden"));
+  document.getElementById("tBottom").classList.toggle("off", bottomPane.classList.contains("hidden"));
+
+  // ONE STRUCTURE WITH TWO KNOBS: a concertina row, a rail entry, a tab and a
+  // minimised window are the same object — a window showing its TAG and not its
+  // body. So one control drives the whole responsive story, and `bodies` is
+  // simply how many may be expanded at once.
+  if (sizeClass !== cls) {
+    sizeClass = cls;
+    setStatus(`emca — ${cls}, ${leaves} ${leaves === 1 ? "leaf" : "leaves"}`);
+  }
+  enforceBodies(cls === "small" ? 0 : cls === "large" ? 1 : bodies);
+}
+
+// how many windows in a pane may show their body. Beyond that they collapse to
+// their tag, newest kept — never fewer than one, so nothing is ever invisible.
+function enforceBodies(n) {
+  for (const pane of [leftPane, bottomPane]) {
+    const wins = [...pane.querySelectorAll(".ewin")];
+    // n === 0 is the concertina: EVERY window shows its tag and no body. Never
+    // its absence — a collapsed window is still there, and one control expands it.
+    wins.forEach((el, i) => {
+      // a deliberate collapse (or expansion) survives a resize — the
+      // breakpoint sets the DEFAULT, an explicit act overrides it
+      const rec = winRecs.get(el);
+      if (rec && rec.userCollapsed !== undefined) {
+        el.classList.toggle("collapsed", rec.userCollapsed);
+        return;
+      }
+      el.classList.toggle("collapsed", n === 0 || (wins.length > n && i < wins.length - n));
+    });
+  }
+}
+
+// ---------- the status line's right zone: ambient, read-only ----------
+// "It must earn its place; a status bar is the easiest surface in any app to
+// fill with noise." So exactly four things, each named by the design: running
+// commands with tap-to-kill, the pin, the dirty count, line:col.
+const pinChip = document.getElementById("pinChip");
+const runEl = document.getElementById("running");
+const dirtyEl = document.getElementById("dirty");
+const lcEl = document.getElementById("linecol");
+
+let pinned = "";
+function setPin(text) {
+  pinned = text || "";
+  pinChip.hidden = !pinned;
+  if (!pinned) return;
+  const one = pinned.replace(/\s+/g, " ").trim();
+  pinChip.textContent = `📌 ${one.length > 28 ? one.slice(0, 27) + "…" : one}`;
+  pinChip.title = `pinned: ${one}\nthe next Execute consumes it — click to drop`;
+}
+pinChip.addEventListener("click", () => writePath("/dev/window/pin", new Uint8Array()));
+
+function setLineCol(view) {
+  if (!view) { lcEl.textContent = ""; return; }
+  const p = view.state.selection.main.head;
+  const line = view.state.doc.lineAt(p);
+  lcEl.textContent = `${line.number}:${p - line.from + 1}`;
+}
+
+function setDirty(n) {
+  dirtyEl.hidden = n === 0;
+  dirtyEl.textContent = n === 1 ? "1 unsaved" : `${n} unsaved`;
+}
+
+// running commands, from /proc — which is a FILESYSTEM, so there is no process
+// table here and no ps: the status line reads the same files the Processes
+// window shows, and killing is a write to the same ctl file.
+async function pollRunning() {
+  try {
+    const mine = new Set();
+    for (const e of dirEntries(await readPath("/proc"))) {
+      if (!e.dir) continue;
+      // proc(3)'s args file names the command. The workspace's own furniture
+      // is not "a running command" to the person using it, so it is filtered.
+      const argv = new TextDecoder().decode(await readPath(`/proc/${e.name}/args`)).trim();
+      const name = argv.split(/\s+/)[0] || "";
+      if (!name || ["init", "rc", "emca"].includes(name)) continue;
+      mine.add(`${e.name}\u0000${argv}`);
+    }
+    runEl.replaceChildren();
+    for (const s of mine) {
+      const [pid, argv] = s.split("\u0000");
+      const b = document.createElement("button");
+      b.className = "runchip";
+      b.textContent = argv.split(/\s+/)[0];
+      b.title = `${argv}\npid ${pid} — click to kill`;
+      b.addEventListener("click", () =>
+        writePath(`/proc/${pid}/ctl`, new TextEncoder().encode("kill\n")).catch(() => {}));
+      runEl.appendChild(b);
+    }
+  } catch { /* no /proc yet, or it went away mid-read */ }
+}
 const toast = (msg, ms = 2600) => {
   const t = document.createElement("div");
   t.className = "toast"; t.textContent = msg;
@@ -162,10 +342,42 @@ function makeWindow({ title, type, closable, onClose }) {
   const pane = paneFor(type);
   const div = document.createElement("div");
   div.className = "ewin";
-  div.innerHTML = `<div class="wbody"></div>`;
+  // EVERY WINDOW SHOWS A TAG. That is the one structure the whole responsive
+  // story rests on — a concertina row, a rail entry, a tab and a minimised
+  // window are the same object, a window showing its tag and not its body — so
+  // a window with no tag row has nothing to collapse TO, and disappears. The
+  // console found that the hard way. /dev/window's chrome enriches this row;
+  // it never replaces it.
+  div.innerHTML =
+    '<div class="wchrome"><div class="wtitle">' +
+    '<span class="wdir"></span><span class="wbase"></span><span class="wgrow"></span>' +
+    '<button class="wctl wcollapse" title="collapse to its title">\u2013</button>' +
+    (closable ? '<button class="wctl wclose" title="close">\u00d7</button>' : "") +
+    '</div></div><div class="wbody"></div>';
   PANES[pane].appendChild(div);
 
+  // collapse is LAYOUT, which is the surface's half — so it works on every
+  // window, including ones IPNX has never declared chrome for, and it never
+  // round-trips. An explicit collapse is remembered as such: the responsive
+  // rules re-derive the default, they do not overrule a deliberate act.
+  div.querySelector(".wcollapse").addEventListener("click", () => {
+    const off = div.classList.toggle("collapsed");
+    rec.userCollapsed = off;
+    div.dispatchEvent(new CustomEvent("emca:collapse", { bubbles: true, detail: off }));
+  });
+  if (closable)
+    div.querySelector(".wclose")?.addEventListener("click", () => { onClose?.(); });
+
   const rec = { div, title, dirty: false, focusInner: null, pane };
+  winRecs.set(div, rec);
+  queueMicrotask(() => { try { applyLayout(); } catch { /* pre-boot */ } });
+  // paint the tag row NOW: a collapsed window that shows no name is not a tag,
+  // it is a blank strip — which is how the console came back nameless
+  {
+    const cut = String(title).replace(/\/$/, "").lastIndexOf("/");
+    div.querySelector(".wdir").textContent = cut >= 0 ? title.slice(0, cut + 1) : "";
+    div.querySelector(".wbase").textContent = cut >= 0 ? title.slice(cut + 1) || "/" : title;
+  }
   if (pane === "main") { mainTabs.push(rec); selectTab(rec); }
 
   const sized = [];
@@ -179,7 +391,13 @@ function makeWindow({ title, type, closable, onClose }) {
 
   return {
     div, body: div.querySelector(".wbody"),
-    setTitle: (s) => { rec.title = s; if (pane === "main") renderTabs(); },
+    setTitle: (s) => {
+      rec.title = s;
+      const cut = String(s).replace(/\/$/, "").lastIndexOf("/");
+      div.querySelector(".wdir").textContent = cut >= 0 ? s.slice(0, cut + 1) : "";
+      div.querySelector(".wbase").textContent = cut >= 0 ? s.slice(cut + 1) || "/" : s;
+      if (pane === "main") renderTabs();
+    },
     setPid: () => {},                       // the tab strip carries identity now
     setDirty: (d) => { rec.dirty = !!d; if (pane === "main") renderTabs(); },
     onResize: (f) => sized.push(f), focus,
@@ -592,6 +810,9 @@ const host = {
     const gw = gwins.get(id);
     if (!gw) return;
     gw.win.setPane?.(PANES[ch.pane] ? ch.pane : paneFor(ch.type));
+    // the layout is derived from what is THERE, and windows arrive long after
+    // boot — so re-derive on placement, or the first pane keeps a stale default
+    applyLayout();
     if (ch.content) gw.win.setTitle(ch.content.split("/").filter(Boolean).pop() || ch.content);
     gw.termEl && (gw.termEl.style.display = "none");
     gw.canvas && (gw.canvas.style.display = "none");
@@ -600,23 +821,22 @@ const host = {
 
     let ch3 = gw.chromeEl;
     if (!ch3) {
-      ch3 = document.createElement("div");
-      ch3.className = "wchrome";
-      ch3.innerHTML =
-        '<div class="wtitle"><span class="wdir"></span><span class="wbase"></span>' +
-        '<span class="wgrow"></span>' +
-        '<button class="wctl wcollapse" title="collapse to its title">\u2013</button>' +
-        '<button class="wctl wclose" title="close">\u00d7</button></div>' +
+      // the tag row already exists — every window has one. IPNX's declaration
+      // ENRICHES it with the verbs and the tag bar; it never builds a rival.
+      ch3 = gw.win.div.querySelector(".wchrome");
+      ch3.insertAdjacentHTML("beforeend",
         '<div class="wtoolbar"></div>' +
-        '<input class="wtag" spellcheck="false" placeholder="commands run in this window\u2019s directory">';
-      gw.win.div.prepend(ch3);
+        '<input class="wtag" spellcheck="false" placeholder="commands run in this window\u2019s directory">');
+      if (!ch3.querySelector(".wclose"))
+        ch3.querySelector(".wtitle").insertAdjacentHTML("beforeend",
+          '<button class="wctl wclose" title="close">\u00d7</button>');
       gw.chromeEl = ch3;
       // collapse and close. NOT maximise: expanded/collapsed is a two-state
       // machine, and a third state makes four with "normal" (emca.txt).
-      ch3.querySelector(".wcollapse").addEventListener("click", () => {
-        const off = gw.win.div.classList.toggle("collapsed");
-        wsys?.winEvent?.(id, off ? "collapse 1" : "collapse 0");
-      });
+      // the collapse control is already live (it is layout, and layout is
+      // ours); IPNX only wants to be TOLD, so it can dump and restore a set
+      gw.win.div.addEventListener("emca:collapse", (e) =>
+        wsys?.winEvent?.(id, e.detail ? "collapse 1" : "collapse 0"));
       ch3.querySelector(".wclose").addEventListener("click", () => {
         wsys?.winEvent?.(id, "close");
         closeGuest(gw);
@@ -671,11 +891,21 @@ const host = {
     const tag = ch3.querySelector(".wtag");
     if (document.activeElement !== tag) tag.value = ch.tag || "";
 
+    // VERB APPLICABILITY — emca answered the select event, so the floating bar
+    // grows from the always-applicable set to the set that actually applies
+    if (ch.verbs) gw.editor?.setVerbs?.(ch.verbs);
+
     if (ch.content && ch.content !== gw.shownContent) {
       gw.shownContent = ch.content;
       showContent(gw, ch.content, ch.type);
     }
   },
+
+  // THE PIN is workspace state, so it arrives on its own effect rather than any
+  // window's chrome, and it lands in the status line — which is where ambient
+  // read-only state belongs, and the reason the design accepts the pin's cost:
+  // two acts instead of a chord, and one piece of invisible state MADE VISIBLE.
+  pinChanged: (text) => setPin(text),
 
   winCanvas: (id, snap) => {
     const gw = gwins.get(id);
@@ -790,7 +1020,7 @@ cons = booted.cons;
 wsys = booted.wsys;
 readPath = booted.readPath;
 writePath = booted.writePath;
-window.__emca = { readPath, writePath, wsys, PANE_OF };   // debug affordance, as __consW
+window.__emca = { readPath, writePath, wsys, PANE_OF, gwins, applyLayout };   // debug affordance, as __consW
 loadTypes();
 setStatus("running");
 (async () => {                                    // the toolchains stream in
@@ -866,17 +1096,89 @@ for (const b of ovf.querySelectorAll("button[data-cmd]"))
   b.addEventListener("click", () => { ovf.hidden = true; feedCons(b.dataset.cmd); });
 
 // the pane toggles: how the responsive layout is driven by hand. host: side —
-// these never round-trip, because layout is the surface's half.
-const togglePane = (el, btn) => { el.classList.toggle("hidden"); btn.classList.toggle("off"); };
-document.getElementById("tLeft").addEventListener("click",
-  () => togglePane(document.getElementById("emcaLeft"), document.getElementById("tLeft")));
-document.getElementById("tBottom").addEventListener("click",
-  () => togglePane(document.getElementById("emcaBottom"), document.getElementById("tBottom")));
+// these never round-trip, because layout is the surface's half. An explicit act
+// OVERRIDES the breakpoint's default, and the override is remembered per size
+// class, so resizing never silently closes a pane someone opened on purpose.
+const togglePane = (which) => {
+  const el = which === "left" ? leftPane : bottomPane;
+  const btn = document.getElementById(which === "left" ? "tLeft" : "tBottom");
+  const now = !el.classList.contains("hidden");
+  overrides[sizeClass][which] = !now;
+  el.classList.toggle("hidden", now);
+  btn.classList.toggle("off", now);
+};
+document.getElementById("tLeft").addEventListener("click", () => togglePane("left"));
+document.getElementById("tBottom").addEventListener("click", () => togglePane("bottom"));
+
+// tab navigation, shared by ⌘1..9, ⌘⌥→ ← and ⌃⇥
+function selectNth(i) { if (mainTabs[i]) selectTab(mainTabs[i]); }
+function cycleTab(d) {
+  if (mainTabs.length < 2) return;
+  const i = mainTabs.indexOf(activeTab);
+  selectTab(mainTabs[(i + d + mainTabs.length) % mainTabs.length]);
+}
+
+// ---------- THE KEYBOARD GRAMMAR (emca.txt) ----------
+// Keyboard-complete is a stated law (WCAG 2.1.1), and iPad-with-keyboard and
+// Mac are primary surfaces. THE RULE: every floating-bar verb and every toolbar
+// button has a shortcut, and Tab reaches everything. No verb is unreachable.
+//
+// Cut/Copy/Paste/Undo/Redo/Find are deliberately ABSENT here: they are the
+// platform's inside a focused editor, and intercepting them would take away
+// working IME, clipboard and find-in-file to reimplement them worse.
+const focused = () => [...gwins.values()].find((g) => g.win.div.contains(document.activeElement))
+                   ?? [...gwins.values()].find((g) => g.win.div === activeWinDiv());
+const activeWinDiv = () => document.querySelector("#emcaStack .ewin:not(.off)");
+
 addEventListener("keydown", (e) => {
-  if (!(e.metaKey || e.ctrlKey)) return;
-  if (e.key === "b") { e.preventDefault(); document.getElementById("tLeft").click(); }
-  if (e.key === "j") { e.preventDefault(); document.getElementById("tBottom").click(); }
+  const mod = e.metaKey || e.ctrlKey;
+  if (!mod) return;
+  const gw = focused();
+  const ed = gw?.editor;
+  const k = e.key.toLowerCase();
+  const stop = () => { e.preventDefault(); e.stopPropagation(); };
+
+  // ⌘↵ EXECUTE, ⌘⇧↵ LOOK, ⌘⌥↵ PIN — the input convention's acme tempo, and
+  // the two acme verbs paired. The selection, or the word under the caret.
+  if (e.key === "Enter") {
+    if (!ed || !gw) return;
+    stop();
+    const verb = e.altKey ? "pin" : e.shiftKey ? "look" : "execute";
+    ed.rangeVerb?.(verb);
+    return;
+  }
+  switch (k) {
+    case "s":                                          // Put / Putall
+      stop();
+      if (e.altKey) for (const g of gwins.values()) g.putFn?.();
+      else gw?.putFn?.();
+      return;
+    case "w": stop(); if (gw) wsys?.winEvent?.(gw.id, "exec Del"); return;   // Del
+    case "n": stop(); feedCons("rc /rc/emcaopen text"); return;              // New
+    case "t": stop();                                                        // the tags
+      (e.shiftKey ? document.getElementById("globalTag")
+                  : gw?.chromeEl?.querySelector(".wtag"))?.focus();
+      return;
+    case "b": stop(); togglePane(e.altKey ? "bottom" : "left"); return;      // ⌘B / ⌘⌥B
+    case "j": stop(); togglePane("bottom"); return;                          // ⌘J
+    case "1": case "2": case "3": case "4":
+    case "5": case "6": case "7": case "8": case "9":                        // nth in leaf
+      stop(); selectNth(+k - 1); return;
+  }
+  if (e.key === "ArrowRight" && e.altKey) { stop(); cycleTab(1); }           // ⌘⌥→
+  if (e.key === "ArrowLeft"  && e.altKey) { stop(); cycleTab(-1); }          // ⌘⌥←
 });
+// ⌃⇥ next window — separate, because it is the one shortcut without ⌘
+addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.key === "Tab") { e.preventDefault(); cycleTab(e.shiftKey ? -1 : 1); }
+});
+
+// the layout follows the type, so it must be re-derived when either changes
+measureType();
+applyLayout();
+new ResizeObserver(applyLayout).observe(document.documentElement);
+document.fonts?.ready.then(() => { measureType(); applyLayout(); });
+setInterval(pollRunning, 2000);
 
 // THE SYSTEM BOOTS INTO EMCA. The default workspace declares itself — emca
 // itself, then motd in an editor tab and the home directory in the left pane —

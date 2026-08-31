@@ -97,11 +97,16 @@ gains the interface it should have had.
 /dev/window/
   clone            mint a window; reading it returns the new number
   events           reads PARK — one line per window lifecycle change
+  pin              THE PINNED RANGE, at workspace scope — emca declares it,
+                   the surface shows it in the status line
   <type>/<n>/
     wctl           panes, layout, tabs, lifecycle — rio's file, grown
                    a `pane <name>` verb; reads unchanged (rio parses it)
     content        the PATH the host opens over 9P and renders
     toolbar        one control per line: <label> <action>
+    verbs          VERB APPLICABILITY: which of the closed RANGE set applies
+                   to the live selection, one per line — emca's answer to a
+                   `select` event, and the surface renders what it is told
     tag            the tag line — the host's way back into sam
     events         the host speaks: clicks, tag commands, dirty, resize, close
 ```
@@ -271,7 +276,10 @@ surface reopens an existing window on a different file.
 exec <label>              a toolbar control was activated
 tag <text>                a command typed in the tag line — sam's language
 execute <q0> <q1> <text>  the execute verb landed on this range
-look <q0> <q1> <text>     the look verb landed
+open <q0> <q1> <text>     open the range as a path, in a window of its type
+look <q0> <q1> <text>     open's older name; the same verb
+pin <q0> <q1> <text>      pin the range as the next execute's argument
+snarf <text>              the surface copied — /dev/snarf is the sync point
 insert <q0> <text>        the user typed or pasted
 delete <q0> <q1>          the user removed a range
 select <q0> <q1>          the selection (or collapsed caret) changed
@@ -297,6 +305,33 @@ The hash is FNV-1a **over the bytes**, not over UTF-16 code units: the offsets
 in this vocabulary are byte offsets, and a check measured in different units
 than its coordinates false-positives on exactly the multi-byte content it exists
 to protect. Everything else here is a user action.
+
+## The range verbs, and which side runs them
+
+Splitting acme's `look` into **Open / Jump / Search** is not only a display
+change — it **re-divides the labour**, along the line the toolbar already draws
+between `ipnx:` and `host:`.
+
+| verb | side | why |
+|---|---|---|
+| Open | IPNX | mints a window and resolves against the namespace |
+| Execute | IPNX | runs a command in the window's directory, and consumes the pin |
+| Pin | IPNX | workspace state, and `execute` is emca's, so emca must hold it |
+| Edit | IPNX | sam's structural language |
+| Jump, Search | surface | moving a caret inside a buffer the surface already holds |
+| Cut, Copy, Paste | surface | the platform's clipboard, IME and permissions |
+
+Sending Jump or Search down would be a round trip to accomplish nothing; taking
+Cut/Copy/Paste would replace working platform behaviour with a worse copy.
+`/dev/snarf` stays the sync point, written by the surface after a copy.
+
+**Applicability is emca's judgement, and the bar SHOWS it.** A path that exists
+offers Open; an address offers Jump; a word offers neither. **A path takes
+precedence over an address**, which is acme's own order — `look` tries the file
+first — so `/usr/kitty/` is a directory and not the regexp `usr/kitty`. And a
+regexp address is **delimited at both ends**: without that rule every absolute
+path reads as one, and `/etc/motd` offers Jump, which is exactly the silent
+misjudgement the bar exists to expose.
 
 ## `ui` — what the surface actually rendered
 

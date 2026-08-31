@@ -79,6 +79,8 @@ static int rootfd;
 /* the core verbs — emca's, on every window whatever its type */
 static char *core[] = { "Del", "Snarf", "Get", "Look", "Edit", nil };
 
+static void dolook(Win*, char*);	/* the toolbar's Look and the bar's are one verb */
+
 static Win*
 winof(int wid)
 {
@@ -514,7 +516,10 @@ verb(Win *w, char *label)
 	else if(strcmp(label, "Del") == 0) dodel(w);
 	else if(strcmp(label, "Zerox") == 0) dozerox(w);
 	else if(strcmp(label, "Snarf") == 0){ /* the host clipboard IS snarf */ }
-	else if(strcmp(label, "Look") == 0){ /* the plumber's, when it lands */ }
+	else if(strcmp(label, "Search") == 0){ /* the surface's find — never here */ }
+	else if(strcmp(label, "Look") == 0){ /* whole-window Look: its own name */
+		if(w->buf != nil) dolook(w, w->buf->path);
+	}
 	else if(strcmp(label, "Edit") == 0){ /* sam's language, when it lands */ }
 	else run(w, label);		/* anything else is a command */
 }
@@ -591,6 +596,134 @@ bufdelete(Buf *b, long from, long to)
 	b->text[b->len] = 0;
 }
 
+static char pin[NMAX];		/* THE PIN: workspace state, so emca's, not a window's */
+
+/* resolve a range against the window's directory — the context, which is
+ * acme's own invention and the thing native furniture has no concept of
+ */
+static void
+resolve(Win *w, char *s, char *out, int max)
+{
+	if(s[0] == '/' || w->dir[0] == 0) snprint(out, max, "%s", s);
+	else snprint(out, max, "%s%s", w->dir, s);
+	cleanname(out);
+}
+
+/* Is this range an ADDRESS? sam's forms, unchanged — what changes is that
+ * emca now REPORTS the judgement instead of silently acting on it, which is
+ * the whole of "the bar SHOWS the choice" (emca.txt).
+ */
+static int
+isaddr(char *s)
+{
+	char *p;
+	long n;
+
+	if(*s == 0) return 0;
+	if(*s == ':') s++;
+	if(*s == 0) return 0;
+	if(*s == '/'){
+		/* A REGEXP ADDRESS IS DELIMITED AT BOTH ENDS. Without that, every
+		 * absolute path reads as one — /etc/motd offered Jump, which is
+		 * precisely the silent misjudgement the bar exists to expose.
+		 */
+		n = strlen(s);
+		return n >= 3 && s[n-1] == '/';
+	}
+	if(*s == '#' || *s == '$' || *s == '.') return 1;
+	for(p = s; *p; p++)
+		if(*p < '0' || *p > '9') return 0;
+	return 1;				/* a bare line number */
+}
+
+static int
+ispath(Win *w, char *s, char *out, int max)
+{
+	Dir *d;
+
+	if(*s == 0 || strlen(s) > 200) return 0;
+	if(strchr(s, ' ') != nil || strchr(s, '\n') != nil) return 0;
+	resolve(w, s, out, max);
+	d = dirstat(out);
+	if(d == nil) return 0;
+	free(d);
+	return 1;
+}
+
+/* VERB APPLICABILITY — emca.txt's third protocol addition. The verb set is
+ * CLOSED, so this is not an open menu: emca says which of the fixed set apply
+ * to THIS range, and the surface renders what it is told. Always-applicable
+ * verbs are the surface's own and never wait on this answer.
+ */
+static void
+pushverbs(Win *w, char *sel)
+{
+	char out[NMAX * 2], p[NMAX];
+	long o = 0;
+
+	o += snprint(out + o, sizeof out - o, "Execute\nSearch\nPin\nEdit\n");
+	if(*sel != 0)
+		o += snprint(out + o, sizeof out - o, "Cut\nCopy\n");
+	o += snprint(out + o, sizeof out - o, "Paste\n");
+	/* A PATH THAT EXISTS TAKES PRECEDENCE, which is acme's own order: look
+	 * tries the file first. So `/usr/kitty/` is a directory, not the regexp
+	 * `usr/kitty` — the ambiguity is real and the resolution is not a guess.
+	 */
+	if(ispath(w, sel, p, sizeof p))
+		o += snprint(out + o, sizeof out - o, "Open\n");
+	else if(isaddr(sel))
+		o += snprint(out + o, sizeof out - o, "Jump\n");
+	wfile(w, "verbs", out, o);
+}
+
+/* the pinned range is invisible state, and the design's own cost clause says
+ * it must be made visible — so emca publishes it at workspace scope
+ */
+static void
+setpin(char *s)
+{
+	int fd;
+
+	strncpy(pin, s, sizeof pin - 1);
+	pin[sizeof pin - 1] = 0;
+	fd = open("/dev/window/pin", OWRITE|OTRUNC);
+	if(fd < 0) return;
+	write(fd, pin, strlen(pin));
+	close(fd);
+}
+
+/* LOOK is the plumber's judgement. Until the plumber lands, emca does what
+ * acme's look does in the overwhelming case: a path opens in a window of the
+ * type the file's own shape implies.
+ */
+static void
+dolook(Win *w, char *sel)
+{
+	char full[NMAX], p[NMAX], num[32];
+	char *type;
+	Dir *d;
+	int fd;
+	long n;
+
+	if(!ispath(w, sel, full, sizeof full)) return;
+	d = dirstat(full);
+	if(d == nil) return;
+	type = (d->qid.type & QTDIR) ? "dir" : "text";
+	free(d);
+	snprint(p, sizeof p, "/dev/window/%s/clone", type);
+	fd = open(p, OREAD);
+	if(fd < 0) return;
+	n = read(fd, num, sizeof num - 1);
+	close(fd);
+	if(n <= 0) return;
+	num[n] = 0;
+	snprint(p, sizeof p, "/dev/window/%s/%d/content", type, atoi(num));
+	fd = open(p, OWRITE|OTRUNC);
+	if(fd < 0) return;
+	write(fd, full, strlen(full));
+	close(fd);
+}
+
 static void
 onwinline(Win *w, char *line)
 {
@@ -605,6 +738,67 @@ onwinline(Win *w, char *line)
 	}
 	if(strncmp(line, "tag ", 4) == 0){	/* the user's own text, executed */
 		run(w, line + 4);
+		return;
+	}
+	if(strncmp(line, "select ", 7) == 0){	/* select <q0> <q1> [text] */
+		char *q, *r;
+		q = strchr(line + 7, ' ');
+		r = q != nil ? strchr(q + 1, ' ') : nil;
+		if(r == nil) pushverbs(w, "");
+		else {
+			r++;
+			unquote(r);
+			pushverbs(w, r);
+		}
+		return;
+	}
+	if(strncmp(line, "snarf ", 6) == 0){	/* the surface copied — /dev/snarf is the sync point */
+		char *s = line + 6;
+		int fd;
+		unquote(s);
+		fd = open("/dev/snarf", OWRITE|OTRUNC);
+		if(fd >= 0){ write(fd, s, strlen(s)); close(fd); }
+		return;
+	}
+	if(strncmp(line, "pin ", 4) == 0){	/* pin <q0> <q1> <text> */
+		char *q, *r;
+		q = strchr(line + 4, ' ');
+		r = q != nil ? strchr(q + 1, ' ') : nil;
+		if(r == nil) setpin("");
+		else { r++; unquote(r); setpin(r); }
+		return;
+	}
+	if(strncmp(line, "execute ", 8) == 0){	/* execute <q0> <q1> <text> */
+		char cmd[NMAX * 2];
+		char *q, *r;
+		q = strchr(line + 8, ' ');
+		r = q != nil ? strchr(q + 1, ' ') : nil;
+		if(r == nil) return;
+		r++;
+		unquote(r);
+		/* THE PIN IS EXECUTE-WITH-ARGUMENT, DECOMPOSED (emca.txt): acme's
+		 * 2-1 chord had no touch analogue, so it becomes two explicit acts.
+		 * Consumed here, and cleared — one pin, one use, which is what the
+		 * chord did.
+		 */
+		if(pin[0] != 0){
+			snprint(cmd, sizeof cmd, "%s %s", r, pin);
+			setpin("");
+			run(w, cmd);
+		} else
+			run(w, r);
+		return;
+	}
+	/* `look` was ONE verb; the bar shows three, and Open is the one that is
+	 * IPNX's — it mints a window and resolves against the namespace. Jump and
+	 * Search never arrive here: they are the surface's, by the same rule that
+	 * separates ipnx: from host: on the toolbar.
+	 */
+	if(strncmp(line, "look ", 5) == 0 || strncmp(line, "open ", 5) == 0){
+		char *q, *r;
+		q = strchr(line + 5, ' ');
+		r = q != nil ? strchr(q + 1, ' ') : nil;
+		if(r != nil){ r++; unquote(r); dolook(w, r); }
 		return;
 	}
 	if(strcmp(line, "put") == 0){

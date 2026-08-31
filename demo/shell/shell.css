@@ -203,3 +203,68 @@ body { display: flex; flex-direction: column;
 .divider.vert { cursor: col-resize; }
 .divider.horz { cursor: row-resize; flex-basis: 5px; }
 .divider:hover { background: #2d4155; }
+
+/* ---- M14d: the four size classes, driven by CHARACTERS ----------------
+   The class is computed in shell.mjs from the measured character cell, never
+   from a pixel media query — so accessibility text sizing moves the
+   breakpoints for free. What CSS does here is only what the class MEANS.
+
+   THE RESPONSIVE INVARIANT: nothing disappears as the viewport grows. Every
+   transition adds. Which is why small INLINES the rail rather than dropping
+   it: the concertina still shows every tag.                              */
+/* SMALL: one leaf, one body, and NO PANES — which means no separate pane
+   regions, not vanished windows. The rail and the console inline as concertina
+   rows above and below the leaf, each showing its tag. That is the whole
+   responsive story in one control: a concertina row, a rail entry, a tab and a
+   minimised window are the same object.                                     */
+body[data-size="small"] #emcaBody { flex-direction: column; }
+body[data-size="small"] #emcaLeft { flex: 0 0 auto; max-height: 45%;
+    border-right: 0; border-bottom: 1px solid #000; }
+body[data-size="small"] #emcaBottom { flex: 0 0 auto; }
+body[data-size="small"] #dLeft { display: none; }
+body[data-size="small"] #emcaLeft .ewin, body[data-size="small"] #emcaBottom .ewin
+  { position: relative; inset: auto; }
+/* the top toolbar SCROLLS rather than wrapping: two stacked rows cost 12% of a
+   phone's height, and scrolling loses nothing — every manager is still there */
+body[data-size="small"] #emcaTop { flex-wrap: nowrap; overflow-x: auto; }
+body[data-size="small"] #emcaTop .tgroup { flex: 0 0 auto; }
+/* and the collapsed tag stays tappable: 44px is the platform's own floor */
+body[data-size="small"] .ewin.collapsed .wtitle { min-height: 44px; align-items: center; }
+/* an EXPANDED concertina row needs a body height of its own — inside a
+   `flex: 0 0 auto` pane a terminal has no intrinsic size, so it opens to
+   nothing, which reads exactly like the control not working */
+body[data-size="small"] #emcaLeft .ewin:not(.collapsed) .wbody,
+body[data-size="small"] #emcaBottom .ewin:not(.collapsed) .wbody { height: 34vh; }
+
+/* a window showing its TAG and not its body — one control, four appearances.
+   In an absolutely-positioned pane the windows stack, so a collapsed one must
+   leave the flow it was never in: the pane becomes a column of tags.        */
+.ewin.collapsed .wbody { display: none; }
+.ewin.collapsed { flex: 0 0 auto; }
+#emcaLeft .paneBody:has(.ewin.collapsed), #emcaBottom .paneBody:has(.ewin.collapsed)
+  { display: flex; flex-direction: column; }
+#emcaLeft .ewin.collapsed, #emcaBottom .ewin.collapsed { position: relative; inset: auto; }
+
+/* ---- the floating bar: operand is a RANGE, so it sits AT THE TEXT ----
+   Position encodes what the verbs act on. That is the discoverability acme
+   never had, delivered by geometry instead of by documentation.          */
+.fbar { position: fixed; z-index: 9999; display: flex; gap: 1px;
+        background: #0e1720; border: 1px solid #3a5064; border-radius: 7px;
+        padding: 2px; box-shadow: 0 6px 22px rgba(0,0,0,.45); }
+.fbar button { font: 500 12px/1 inherit; padding: 6px 10px; min-height: 30px;
+               border: 0; border-radius: 5px; background: none; color: #cfe3f2;
+               cursor: pointer; white-space: nowrap; }
+.fbar button:hover, .fbar button:focus-visible { background: #23384a; outline: none; }
+.fbar button:focus-visible { box-shadow: inset 0 0 0 2px #6cf; }
+
+/* ---- the status line's right zone: ambient, read-only ---------------- */
+#ambient { display: flex; align-items: center; gap: 8px; margin-left: auto;
+           font-size: 11px; color: #7b8b9b; }
+#pinChip, .runchip { font: 500 11px/1 inherit; border: 1px solid #3a5064;
+                     border-radius: 999px; padding: 2px 8px; cursor: pointer;
+                     background: #17212c; color: #9fc4dd; white-space: nowrap; }
+#pinChip { border-color: #7a6a3a; color: #e8d59a; background: #241f10; }
+#pinChip:hover, .runchip:hover { background: #23384a; }
+#running { display: flex; gap: 4px; }
+#dirty { color: #d9a441; }
+#linecol { font: 500 11px/1 ui-monospace, Menlo, monospace; color: #6a7d8e; min-width: 40px; }

@@ -79,11 +79,15 @@ ABI. The conformance suite binds all three.
 `/dev/window` by `/lib/namespace` and specified in full in
 [window.md](window.md). Root: `clone` mints (reading it returns the number) and
 `events` parks, one line per lifecycle change — `new <type> <n>`,
-`content <type> <n> <path>`, `del <n>`. Per window, under `<type>/<n>/`:
+`content <type> <n> <path>`, `del <n>`; and `pin` carries the workspace's
+pinned range, which emca declares and the surface shows in its status line.
+Per window, under `<type>/<n>/`:
 `content` (the PATH the surface opens over 9P — **IPNX implements no
 renderers**), `toolbar` (one control per line, `<label> <action>`, where the
 action names the side that performs it: `ipnx:` round-trips, `host:` never
-leaves the surface), `tag`, `ui`, `events` (the surface's voice), and `wctl`
+leaves the surface), `tag`, `verbs` (which of the closed RANGE verb set applies to the live
+selection — emca's answer to a `select` event), `ui`, `events` (the surface's
+voice), and `wctl`
 (rio's file, grown a `pane <name>` verb; its reads are unchanged, because real
 Plan 9 programs parse them). The plain `#w/<n>` path still resolves — the type
 segment was added additively.

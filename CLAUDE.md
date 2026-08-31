@@ -119,7 +119,7 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 bash userspace/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints the suite's PASS lines (floor 131; currently 155 — the count grows as features add self-skipping tests; the final "poc: all N tests passed" line counts only init.c's C-level tranche, not the whole suite), exits 0:
+Boot the kernel — init (pid 1) runs the acceptance tests, prints the suite's PASS lines (floor 131; currently 157 — the count grows as features add self-skipping tests; the final "poc: all N tests passed" line counts only init.c's C-level tranche, not the whole suite), exits 0:
 
 ```bash
 bash poc/run.sh
@@ -373,9 +373,13 @@ global tag), the editor component (CodeMirror behind a mirrored buffer), and
 window set, each window's one tag string, the core verbs merged with the type's,
 dirty state, aliasing buffers, and placement. It is a **watcher, not a
 gatekeeper** — with no emca running a window still opens in its type's default
-pane. **155 PASS / 0 FAIL** on both hosts, plus two headless surface proofs
-(`winproof.mjs` with no emca, `emcaproof.mjs` with it). Still design-only: the
-responsive breakpoints (M14d), `/project` (M14e), and the SwiftUI surface (M14g).
+pane. **And the web surface (M14d)**: the floating bar at the selection with
+emca answering verb applicability (a path offers Open, an address Jump, a word
+neither — acme's `look` decomposed and SHOWN), the pin replacing the 2-1 chord,
+the responsive rules measured in CHARACTERS not pixels, and the keyboard grammar
+entire. **157 PASS / 0 FAIL** on both hosts, plus two headless surface proofs
+(`winproof.mjs` with no emca, `emcaproof.mjs` with it). Still design-only:
+`/project` (M14e) and the SwiftUI surface (M14g).
 
 
 **The PoC is complete — declared 2026-08-29** (decision log; full record in

@@ -462,7 +462,7 @@ pub extern "C" fn bh_drain() -> *const u8 {
                     ev.push(if ok { 1 } else { 0 });
                     w32(&mut ev, n);
                 }
-                Effect::WinChrome { wid, wtype, pane, content, toolbar, tag } => {
+                Effect::WinChrome { wid, wtype, pane, content, toolbar, tag, verbs } => {
                     ev.push(13);
                     w32(&mut ev, wid);
                     wstr16(&mut ev, &wtype);
@@ -470,6 +470,13 @@ pub extern "C" fn bh_drain() -> *const u8 {
                     wstr16(&mut ev, &content);
                     wstr16(&mut ev, &toolbar);
                     wstr16(&mut ev, &tag);
+                    wstr16(&mut ev, &verbs);
+                }
+                // the pin is workspace scope, so it is its own effect rather
+                // than riding any window's chrome (emca.txt: the status line)
+                Effect::Pin { text } => {
+                    ev.push(16);
+                    wstr16(&mut ev, &text);
                 }
                 Effect::Fetch { url } => {
                     ev.push(9);

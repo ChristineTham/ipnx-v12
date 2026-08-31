@@ -145,7 +145,8 @@ pub enum Effect {
     WinCanvas { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, snap: Vec<CvSnap> },
     // /dev/window: the chrome IPNX declared, for the host to render natively.
     // Small and rare (unlike WinCanvas), so it rides outside the credit system.
-    WinChrome { wid: u32, wtype: String, pane: String, content: String, toolbar: String, tag: String },
+    WinChrome { wid: u32, wtype: String, pane: String, content: String, toolbar: String, tag: String, verbs: String },
+    Pin { text: String },
     // the SURFACE opened a file. In-process this is a function call, not
     // marshalled 9P — "wire 9P at boundaries, a Dev table inside" (design.md).
     // A remote surface marshals; a surface sharing the address space calls.
@@ -278,6 +279,8 @@ enum WKind {
     TypeDir,
     RootEvents,
     WContent,
+    WVerbs,        // per window: which RANGE verbs apply (emca.txt's third addition)
+    RootPin,       // workspace scope: the pinned range, made visible
     WToolbar,
     WTag,
     WUi,
@@ -539,6 +542,7 @@ struct Win {
     // /dev/window: the control interface's per-window files
     wtype: String,
     pane: String,          /* where emca placed it — its ctl said so */
+    verbs: String,         /* which RANGE verbs apply to the live selection */
     content: String,
     toolbar: String,
     tag: String,
@@ -677,6 +681,7 @@ struct KState {
     nextwid: u32,
     // /dev/window's ROOT events: window lifecycle, read by both halves
     winev: VecDeque<String>,
+    pin: String,           // the workspace's pinned range (emca.txt: the 2-1 chord, decomposed)
     winev_parked: Vec<Waiter>,
 }
 
@@ -710,6 +715,13 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: 
             if name == "events" {
                 return Some(wnode(WKind::RootEvents, None, None));
             }
+            // THE PIN is workspace state, so it lives at workspace scope — one
+            // level above any window, which is where the status line's operand
+            // is. emca declares it; the surface renders it (emca.txt: "a piece
+            // of invisible state that must be made visible").
+            if name == "pin" {
+                return Some(wnode(WKind::RootPin, None, None));
+            }
             if let Ok(wid) = name.parse::<u32>() {
                 let w = k.borrow().wins.get(&wid).cloned()?;
                 return Some(wnode(WKind::WinDir, Some(w), None));
@@ -742,6 +754,7 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: 
                 "draw" => WKind::DrawDir,
                 "canvas" => { mkcv(&w); WKind::CvDir }
                 "content" => WKind::WContent,
+                "verbs" => WKind::WVerbs,
                 "toolbar" => WKind::WToolbar,
                 "tag" => WKind::WTag,
                 "ui" => WKind::WUi,
@@ -812,6 +825,7 @@ fn new_window(k: &K) -> WinR {
         dead: false,
         wtype: String::new(),
         pane: String::new(),
+        verbs: String::new(),
         content: String::new(),
         toolbar: String::new(),
         tag: String::new(),
@@ -959,12 +973,12 @@ fn win_announce(k: &K, line: String) {
 
 // the host learns a window's chrome the moment IPNX declares it
 fn win_chrome(k: &K, w: &WinR) {
-    let (wid, wtype, pane, content, toolbar, tag) = {
+    let (wid, wtype, pane, content, toolbar, tag, verbs) = {
         let wb = w.borrow();
         (wb.wid, wb.wtype.clone(), wb.pane.clone(), wb.content.clone(),
-         wb.toolbar.clone(), wb.tag.clone())
+         wb.toolbar.clone(), wb.tag.clone(), wb.verbs.clone())
     };
-    k.borrow_mut().effects.push(Effect::WinChrome { wid, wtype, pane, content, toolbar, tag });
+    k.borrow_mut().effects.push(Effect::WinChrome { wid, wtype, pane, content, toolbar, tag, verbs });
 }
 
 // a window's own events: what the user did inside it
@@ -1164,6 +1178,15 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
             let s = w.borrow().content.clone();
             return Ok(one(s));
         }
+        WKind::WVerbs => {
+            let w = win.as_ref().ok_or("no window")?;
+            let s = w.borrow().verbs.clone();
+            return Ok(one(s));
+        }
+        WKind::RootPin => {
+            let s = k.borrow().pin.clone();
+            return Ok(one(s));
+        }
         WKind::WToolbar => {
             let w = win.as_ref().ok_or("no window")?;
             let s = w.borrow().toolbar.clone();
@@ -1319,13 +1342,20 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
               data: &[u8]) -> Result<usize, KErr> {
     match kind {
         // /dev/window: IPNX declares the chrome; the surface speaks back
-        WKind::WContent | WKind::WToolbar | WKind::WTag | WKind::WUi => {
+        WKind::RootPin => {
+            let s = String::from_utf8_lossy(data).trim().to_string();
+            k.borrow_mut().pin = s.clone();
+            k.borrow_mut().effects.push(Effect::Pin { text: s });
+            return Ok(data.len());
+        }
+        WKind::WContent | WKind::WToolbar | WKind::WTag | WKind::WUi | WKind::WVerbs => {
             let w = win.as_ref().ok_or("no window")?;
             let s = String::from_utf8_lossy(data).to_string();
             {
                 let mut wb = w.borrow_mut();
                 match kind {
                     WKind::WContent => wb.content = s,
+                    WKind::WVerbs => wb.verbs = s,
                     WKind::WToolbar => wb.toolbar = s,
                     WKind::WTag => wb.tag = s,
                     _ => wb.uifile = s,
@@ -1503,6 +1533,8 @@ fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: &Option
         WKind::TypeDir => ty.clone().unwrap_or_else(|| "type".to_string()),
         WKind::RootEvents | WKind::WEvents => "events".to_string(),
         WKind::WContent => "content".to_string(),
+        WKind::WVerbs => "verbs".to_string(),
+        WKind::RootPin => "pin".to_string(),
         WKind::WToolbar => "toolbar".to_string(),
         WKind::WTag => "tag".to_string(),
         WKind::WUi => "ui".to_string(),
@@ -1976,6 +2008,7 @@ impl Kernel {
         Kernel {
             k: Rc::new(RefCell::new(KState {
                 winev: VecDeque::new(),
+                pin: String::new(),
                 winev_parked: Vec::new(),
                 procs: HashMap::new(),
                 nextpid: 1,
@@ -2467,6 +2500,10 @@ async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>
                 "status" => 3,
                 "note" => 4,
                 "notepg" => 5,
+                // proc(3)'s own file: the argument list. The data was always
+                // in the proc record; nothing could read it, so nothing could
+                // name a running command.
+                "args" => 6,
                 _ => return Ok(None),
             };
             Ok(Some(DN { dev: DevId::Proc, node: Node::Proc { kind: kd, pid: *q }, path: None }))
@@ -2901,7 +2938,7 @@ async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
             mode: DMDIR | 0o555, ..Default::default()
         })),
         (DevId::Proc, Node::Proc { kind, pid: q }) => {
-            let name = match kind { 2 => "ctl", 3 => "status", 4 => "note", _ => "notepg" };
+            let name = match kind { 2 => "ctl", 3 => "status", 4 => "note", 6 => "args", _ => "notepg" };
             Ok(marshal_stat(&StatIn { name, qpath: *q as u64, mode: 0o600, ..Default::default() }))
         }
         _ => Err("no stat on this device (v0)".into()),
@@ -3120,6 +3157,18 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
         }
+        (DevId::Proc, Node::Proc { kind: 6, pid: q }) => {
+            if off > 0 {
+                return Ok(RRes::Data(Vec::new()));
+            }
+            let s = {
+                let kb = k.borrow();
+                kb.procs.get(&q).map(|tp| format!("{}\n", tp.argv.join(" "))).unwrap_or_default()
+            };
+            let out = s.into_bytes();
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
         (DevId::Proc, Node::Proc { kind: 3, pid: q }) => {
             if off > 0 {
                 return Ok(RRes::Data(Vec::new()));
@@ -3210,7 +3259,7 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
             if !k.borrow().procs.contains_key(&q) { return Ok(RRes::Data(Vec::new())); }
             let mut skip = off as usize;
             let mut out = Vec::new();
-            for (nm, qp) in [("ctl", 2u64), ("status", 3), ("note", 4), ("notepg", 5)] {
+            for (nm, qp) in [("ctl", 2u64), ("status", 3), ("note", 4), ("notepg", 5), ("args", 6)] {
                 let rec = marshal_stat(&StatIn {
                     name: nm, qpath: ((q as u64) << 8) | qp, mode: 0o600, ..Default::default()
                 });

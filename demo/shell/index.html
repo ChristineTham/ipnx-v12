@@ -62,8 +62,18 @@
 <!-- the status line: the GLOBAL TAG on the left — acme's root tag, finding a
      home — and ambient read-only state on the right. Operand determines
      surface, and this surface's operand is nothing. -->
+<!-- Two zones, and it must earn its place — a status bar is the easiest surface
+     in any app to fill with noise (emca.txt). LEFT: the global tag, free,
+     editable, executable text at workspace scope — acme's ROOT TAG finding a
+     home. RIGHT: ambient state, read-only, and nothing else. -->
 <div id="emcaStatus">
   <input id="globalTag" spellcheck="false" placeholder="⌘⇧T — commands run in the workspace">
+  <span id="ambient">
+    <button id="pinChip" hidden title="the pinned range — the next Execute consumes it. Click to drop."></button>
+    <span id="running" title="running commands — click one to kill it"></span>
+    <span id="dirty" hidden title="windows with unwritten changes"></span>
+    <span id="linecol" title="line:column"></span>
+  </span>
   <span id="status"></span>
 </div>
 <script type="module" src="shell.mjs"></script>

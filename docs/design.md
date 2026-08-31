@@ -810,6 +810,47 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   Put appear in a clean window and so made the dirty indicator lie. The rule is
   now enforced in emca and asserted in the suite over `/type/*/window`.
 
+- **(2026-08-31) Building the web surface answered the gating question and
+  corrected the responsive rules' own reading.** M14d's stated precondition was
+  *can `execute` and `look` ride Monaco's action and context-menu API?* — to be
+  proven first, not assumed. Answered, and with a different component:
+  **CodeMirror 6, which has no menu of its own and uses the platform's.** That
+  is *stronger* than the Monaco route, not a compromise: the verbs ride the
+  surface the user already right-clicks, rather than a component-specific menu a
+  different surface would have to reimplement. Property 1 survives a rich editor.
+  **The floating bar moved from right-click to the selection**, which is what
+  *operand determines surface* actually requires — position encodes what a verb
+  acts on. And splitting `look` into Open/Jump/Search **re-divided the labour**:
+  Open, Execute, Pin and Edit are IPNX's; Jump and Search are the surface's,
+  because they move a caret inside a buffer it already holds; Cut/Copy/Paste stay
+  the platform's. Two ambiguities had to be settled to make the bar honest, and
+  both resolve to acme's own order rather than to a guess: **a path that exists
+  beats an address**, and **a regexp address is delimited at both ends** —
+  without that second rule every absolute path reads as `/regexp/` and
+  `/etc/motd` offers Jump, which is precisely the silent misjudgement the bar
+  exists to expose.
+  **The correction worth recording** is in the responsive rules. The table's
+  `panes: none` at small was implemented as *hide them*, and the result deleted
+  the home listing and the console outright — the exact information loss
+  "nothing disappears as the viewport grows" was written to forbid, arriving from
+  the other direction. **Collapsed is not hidden**: small INLINES both panes as
+  concertina rows showing their tags. Which exposed the structural bug beneath
+  it — only windows IPNX had declared chrome for owned a tag row, so the console
+  had nothing to collapse *to* and vanished at zero height. Every window now
+  carries one and IPNX's chrome **enriches** it. That is what *"a concertina row,
+  a rail entry, a tab and a minimised window are the same object"* costs in code,
+  and the design asserted it without anything enforcing it.
+  **Two channels the design had not named.** `verbs` per window is the sanctioned
+  third protocol addition (verb applicability) in the only form the narrowed
+  architecture allows — a file, the parallel of `toolbar` one operand narrower;
+  its stated form, "an attr in response to a select event", belonged to the
+  canvas protocol that has since narrowed. `/dev/window/pin` is a genuine **gap
+  the build found**: the pin is IPNX's by the design's own test and `execute` is
+  emca's, so emca must hold it — but nothing carried workspace-scope state to a
+  surface, and a status line cannot show what it cannot read. And naming a
+  running command needed **`/proc/<pid>/args`**, proc(3)'s own file, whose data
+  sat in the proc record all along with nothing able to read it.
+
 - **(2026-08-31) The open questions, resolved in one pass — and what it revealed
   about them.** Eleven items stood open across [emca.txt](emca.txt) and
   [window.md](window.md); worked through together on Christine's instruction,
