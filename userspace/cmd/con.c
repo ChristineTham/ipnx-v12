@@ -1,5 +1,5 @@
-/* con: the console as an editable transcript — console-today (M5,
- * docs/userland.md). The transcript is one canvas edit node; a mark
+/* con: the console as an editable window — console-today (M5,
+ * docs/userland.md). The session is one canvas edit node; a mark
  * separates history from the input region; Enter sends the line to the
  * command; everything above the mark is ordinary text — scrollback is
  * the buffer, search is the editor, copy is selection. win(1) was this
@@ -8,7 +8,7 @@
  *
  * Shape: three coroutines on the wasm libthread. A pipe reader and an
  * event reader feed one consumer through a channel, so a single thread
- * owns every canvas write and all mark arithmetic — the transcript
+ * owns every canvas write and all mark arithmetic — the session
  * needs no locks and is never re-read (shadow state only). A tiny
  * presenter/device offset race between an output insert and an unsynced
  * local echo is accepted for v0 and noted here.
@@ -203,7 +203,7 @@ threadmain(int argc, char *argv[])
 			blen += m->n;
 			fprint(ctlfd, "sync");
 			break;
-		case 1: {			/* the user edited the transcript */
+		case 1: {			/* the user edited the session */
 			nf = tokenize(m->buf, f, nelem(f));
 			if(nf >= 3 && strcmp(f[0], "insert") == 0){
 				q0 = atol(f[2]);

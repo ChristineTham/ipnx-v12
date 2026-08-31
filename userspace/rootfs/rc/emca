@@ -1,5 +1,11 @@
 # emca — the default workspace (docs/emca.txt PART SIX). What a namespace
-# file will declare once boot is emca's; for now, two lines of rc, which is
-# policy exactly where policy belongs.
+# file will declare once boot is emca's; for now, rc, which is policy exactly
+# where policy belongs.
+#
+# emca starts first, but nothing depends on that: /dev/window/events is a
+# QUEUE, so a watcher that arrives late drains the backlog and adopts what it
+# finds. And with emca not running at all the windows still open, bare, in
+# their types' default panes — emca has no privilege.
+emca &
 rc /rc/emcaopen dir /usr/kitty >/dev/null
 rc /rc/emcaopen text /etc/motd >/dev/null

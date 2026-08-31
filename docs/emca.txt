@@ -422,7 +422,8 @@ The starting type set
                                        Save-as
   net           bind '#I' /net         Dial, Announce, Close
   type          /type                  New, Edit
-  transcript    inherited              con(1) as cmd
+  shell         inherited              rc as cmd; the line editor and
+                                       history are the HOST's
   credential    /usr/$user/            Add, Revoke, Rotate, Use-for
                 credentials            — OPAQUE; never shows bytes
 
@@ -769,7 +770,7 @@ system: tapping a filename in a listing to open it.
 
 TYPE DRIVES INTERACTIVITY, and that is what buys the tap back:
 
-  dir, errors, transcript, proc,   every LINE is a look target;
+  dir, errors, shell, proc,        every LINE is a look target;
   pkg, project, usr, net, type     one tap (role=look on the line)
   tag bar, toolbar                 words are buttons; one tap
   file, scratch                    select-then-tap; two acts
@@ -827,7 +828,7 @@ The default workspace is a NAMESPACE FILE — declarative, which is the
 
   motd            an editor window, main area
   a listing       the user's home, left pane
-  an rc           bottom pane, transcript type
+  an rc           bottom pane, shell type
   the top toolbar the system's managers
 
 Consequences:
@@ -1023,9 +1024,8 @@ PART EIGHT — WHAT IS DECIDED
       clipboard, command history, line editing and terminal emulation
       are all host-side; /dev/snarf is the sync point.
   30. emca is a file server with a workspace, not an editor.
-  31. xterm.js returns as the RAW-INPUT door beside the transcript's
-      line door — the console's "AND, not XOR" given its architectural
-      reason.
+  31. xterm.js returns as the RAW-INPUT door beside the console's line
+      door — the "AND, not XOR" given its architectural reason.
   32. FOUR SEMANTICS, ONE PROTOCOL. Content is 9P directly and the
       host renders it natively — IPNX implements no renderers.
       /dev/window/<type>/<n> is the bidirectional control interface,

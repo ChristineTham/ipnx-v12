@@ -462,10 +462,11 @@ pub extern "C" fn bh_drain() -> *const u8 {
                     ev.push(if ok { 1 } else { 0 });
                     w32(&mut ev, n);
                 }
-                Effect::WinChrome { wid, wtype, content, toolbar, tag } => {
+                Effect::WinChrome { wid, wtype, pane, content, toolbar, tag } => {
                     ev.push(13);
                     w32(&mut ev, wid);
                     wstr16(&mut ev, &wtype);
+                    wstr16(&mut ev, &pane);
                     wstr16(&mut ev, &content);
                     wstr16(&mut ev, &toolbar);
                     wstr16(&mut ev, &tag);

@@ -198,7 +198,19 @@ $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/con.o build/libt
   --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
   --enable-nontrapping-float-to-int \
   -o rootfs/bin/con.tmp && mv rootfs/bin/con.tmp rootfs/bin/con
-echo "  bin/con  $(wc -c < rootfs/bin/con | tr -d ' ') bytes (console-today: the editable transcript)"
+echo "  bin/con  $(wc -c < rootfs/bin/con | tr -d ' ') bytes (console-today)"
+# emca: the IPNX half of the user interface (implementation.md M14c). con's
+# shape exactly — reader threads feeding one consumer — so it wants the same
+# libthread and the same asyncify: a thread blocked in read() must park while
+# the others keep running.
+$P9CC -c cmd/emca.c -o build/emca.o
+$LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/emca.o build/libthread.o build/libp9.a -o rootfs/bin/emca
+"$BINARYEN/bin/wasm-opt" rootfs/bin/emca \
+  --asyncify --pass-arg=asyncify-imports@env.forka,env.setj,env.longj,env.tsave,env.tjump -O2 \
+  --enable-mutable-globals --enable-sign-ext --enable-bulk-memory \
+  --enable-nontrapping-float-to-int \
+  -o rootfs/bin/emca.tmp && mv rootfs/bin/emca.tmp rootfs/bin/emca
+echo "  bin/emca  $(wc -c < rootfs/bin/emca | tr -d ' ') bytes (the workspace: windows, tags, verbs, placement)"
 $P9CC -c cmd/sam.c -o build/samtoday.o
 $LD build/crt9.o build/lib9.o build/lib9p.o build/draw9.o build/samtoday.o build/libthread.o build/libp9.a -o rootfs/bin/sam
 "$BINARYEN/bin/wasm-opt" rootfs/bin/sam \
@@ -326,7 +338,7 @@ for c in plan9/sys/src/cmd/*.c; do
 done
 for c in cmd/*.c; do
   b=$(basename "$c" .c)
-  case "$b" in drtest|threadtest|con|acme|sam) continue;; esac   # built above, against the real headers
+  case "$b" in drtest|threadtest|con|emca|acme|sam) continue;; esac   # built above, against the real headers
   $CC -c "$c" -o "build/$b.o"
   $LD build/crt0.o build/lib9.o build/lib9p.o build/draw9.o "build/$b.o" build/libp9.a -o "rootfs/bin/$b"
   case " $ASYNCIFY " in *" $b "*)

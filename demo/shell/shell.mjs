@@ -129,6 +129,27 @@ function renderTabs() {
     b.addEventListener("click", () => selectTab(w));
     tabsEl.appendChild(b);
   }
+  // the LEAF's verbs, at the leaf. acme's column tag had New Cut Paste Snarf
+  // Sort Zerox Delcol; every word had a different operand, so every word went
+  // to a different surface (emca.txt). These two are the leaf's own.
+  const grow = document.createElement("span");
+  grow.className = "tgrow";
+  tabsEl.appendChild(grow);
+  for (const [label, title, fn] of [
+    ["New", "a new window in this leaf", () => feedCons("rc /rc/emcaopen text")],
+    ["Sort", "sort this leaf by name", () => {
+      mainTabs.sort((a, b2) => a.title.localeCompare(b2.title)); renderTabs();
+    }],
+    ["\u00d7", "close this leaf (Delcol)", () => {
+      for (const w of [...mainTabs]) { const g = [...gwins.values()].find((x) => x.win.div === w.div); if (g) closeGuest(g); }
+    }],
+  ]) {
+    const lb = document.createElement("button");
+    lb.className = "leafctl";
+    lb.textContent = label; lb.title = title;
+    lb.addEventListener("click", fn);
+    tabsEl.appendChild(lb);
+  }
 }
 function selectTab(w) {
   activeTab = w;
@@ -165,8 +186,11 @@ function makeWindow({ title, type, closable, onClose }) {
     setFocusInner: (f) => { rec.focusInner = f; },
     // emca places by writing ctl; with NO EMCA RUNNING the surface falls back
     // to the type's default pane — the "degrades correctly" property, in code
-    setPane: (type) => {
-      const want = paneFor(type);
+    // `want` is a PANE NAME, not a type: emca places a window by writing its
+    // wctl, and that placement arrives on the chrome. The type default is only
+    // the fallback for when no emca is running — the degrades-correctly rule.
+    setPane: (want) => {
+      if (!PANES[want]) return;
       if (want === rec.pane) return;
       const i = mainTabs.indexOf(rec);
       if (i >= 0) {
@@ -209,9 +233,8 @@ const consW = createShellWindow({
 });
 consWin.setFocusInner(() => consW.focus());
 consWin.onResize(() => consW.fit());
-consW.write("ipnx-v12 — a reimagining of Unix, booting in this tab\n");
-if (!new URLSearchParams(location.search).has("lite"))
-  consW.write("the toolchains stream in behind — cc, go, python, pip (watch the corner)\n");
+// no banner: a system booting into emca does not advertise itself. /etc/motd
+// is already open in a window, which is where a system message belongs.
 
 // ---------- guest windows (#w) ----------
 // The SURFACE opens the file and the BROWSER renders it — IPNX implements no
@@ -306,8 +329,9 @@ async function showContent(gw, path, type) {
       onPut: async (s) => {
         try {
           const wrote = await writePath(path, new TextEncoder().encode(s));
-          wsys?.winEvent?.(gw.id, "dirty 0");
-          wsys?.winEvent?.(gw.id, `exec Put`);
+          // `put` NOTIFIES; it does not ask emca to write. The bytes above are
+          // the editor's own, and emca re-reads them — one writer per file.
+          wsys?.winEvent?.(gw.id, "put");
           console.log(`Put ${path}: ${wrote} bytes`);
         } catch (e) { console.error("Put failed:", e.message); }
       },
@@ -325,8 +349,7 @@ let writePath = null;  // and Put, streaming the edited file back
 async function edPut(ed, path, gw) {
   try {
     const wrote = await writePath(path, new TextEncoder().encode(ed.text()));
-    wsys?.winEvent?.(gw.id, "dirty 0");
-    wsys?.winEvent?.(gw.id, "exec Put");
+    wsys?.winEvent?.(gw.id, "put");     // notify, don't command — see onPut
     console.log(`Put ${path}: ${wrote} bytes`);
   } catch (e) { console.error("Put failed:", e.message); }
 }
@@ -561,71 +584,99 @@ const host = {
   // /dev/window: IPNX declared this window's chrome and the host renders it
   // NATIVELY. Nothing here parses content — that is a path the host opens over
   // 9P. Actions name a side: ipnx: round-trips, host: never leaves the surface.
+  // A WINDOW HAS FOUR PARTS (docs/emca.txt PART FOUR). IPNX declares them; the
+  // surface renders them natively, as separate rows — a title carrying the
+  // window's identity and its controls, the closed method set as buttons, the
+  // user's own free executable text, and the body.
   winChrome: (id, ch) => {
     const gw = gwins.get(id);
     if (!gw) return;
-    gw.win.setPane?.(ch.type);
+    gw.win.setPane?.(PANES[ch.pane] ? ch.pane : paneFor(ch.type));
     if (ch.content) gw.win.setTitle(ch.content.split("/").filter(Boolean).pop() || ch.content);
     gw.termEl && (gw.termEl.style.display = "none");
     gw.canvas && (gw.canvas.style.display = "none");
-    gw.win.div.querySelector(".mswitch")?.remove();   // not a raster window
+    gw.win.div.querySelector(".mswitch")?.remove();
     gw.win.div.classList.remove("drawwin");
-    let bar = gw.chromeEl;
-    if (!bar) {
-      bar = document.createElement("div");
-      bar.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;" +
-        "padding:4px 6px;background:#eaffff;border-bottom:1px solid #000;" +
-        "font:500 12px/1 'Lucida Grande',system-ui,sans-serif;color:#123;";
-      gw.win.body.prepend(bar);
-      gw.chromeEl = bar;
+
+    let ch3 = gw.chromeEl;
+    if (!ch3) {
+      ch3 = document.createElement("div");
+      ch3.className = "wchrome";
+      ch3.innerHTML =
+        '<div class="wtitle"><span class="wdir"></span><span class="wbase"></span>' +
+        '<span class="wgrow"></span>' +
+        '<button class="wctl wcollapse" title="collapse to its title">\u2013</button>' +
+        '<button class="wctl wclose" title="close">\u00d7</button></div>' +
+        '<div class="wtoolbar"></div>' +
+        '<input class="wtag" spellcheck="false" placeholder="commands run in this window\u2019s directory">';
+      gw.win.div.prepend(ch3);
+      gw.chromeEl = ch3;
+      // collapse and close. NOT maximise: expanded/collapsed is a two-state
+      // machine, and a third state makes four with "normal" (emca.txt).
+      ch3.querySelector(".wcollapse").addEventListener("click", () => {
+        const off = gw.win.div.classList.toggle("collapsed");
+        wsys?.winEvent?.(id, off ? "collapse 1" : "collapse 0");
+      });
+      ch3.querySelector(".wclose").addEventListener("click", () => {
+        wsys?.winEvent?.(id, "close");
+        closeGuest(gw);
+      });
+      // the tag bar: the user's half, free and executable. This is where "any
+      // text can be a menu item" lives, and why the toolbar may be closed.
+      ch3.querySelector(".wtag").addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        wsys?.winEvent?.(id, `tag ${e.target.value}`);   // the way back into sam
+      });
     }
-    bar.replaceChildren();
-    if (ch.content) {
-      const t = document.createElement("span");
-      t.textContent = ch.content;
-      t.title = `${ch.type} window — content opened by the surface`;
-      t.style.cssText = "font-weight:600;margin-right:4px;white-space:nowrap;";
-      bar.appendChild(t);
-      if (ch.content !== gw.shownContent) { gw.shownContent = ch.content; showContent(gw, ch.content, ch.type); }
-    }
-    for (const line of ch.toolbar.split("\n")) {
-      const s = line.trim();
-      if (!s) continue;
-      const sp = s.indexOf(" ");
-      const label = sp < 0 ? s : s.slice(0, sp);
-      const action = sp < 0 ? "" : s.slice(sp + 1).trim();
+
+    // the title, as TWO elements. Native title treatments truncate the front
+    // of a path, which is precisely the directory — and the directory is the
+    // context every command in this window resolves against (property 2).
+    const full = ch.content || "";
+    const cut = full.replace(/\/$/, "").lastIndexOf("/");
+    ch3.querySelector(".wdir").textContent = cut >= 0 ? full.slice(0, cut + 1) : "";
+    ch3.querySelector(".wbase").textContent = cut >= 0 ? full.slice(cut + 1) || "/" : full;
+    ch3.querySelector(".wdir").title = full;
+
+    // the method set, as real buttons — closed, app-declared, one per line
+    const tb = ch3.querySelector(".wtoolbar");
+    tb.replaceChildren();
+    for (const s2 of (ch.toolbar || "").split("\n")) {
+      const line = s2.trim();
+      if (!line) continue;
+      const sp = line.indexOf(" ");
+      const label = sp < 0 ? line : line.slice(0, sp);
+      const action = sp < 0 ? "" : line.slice(sp + 1).trim();
       const b = document.createElement("button");
       b.textContent = label;
       b.title = action;
       const hostSide = action.startsWith("host:");
-      b.style.cssText = "font:500 12px/1 inherit;padding:3px 8px;min-height:22px;" +
-        "border:1px solid #9aa;border-radius:4px;cursor:pointer;white-space:nowrap;" +
-        (hostSide ? "background:#f4f4ff;color:#334;" : "background:#f6ffff;color:#123;");
+      if (hostSide) b.classList.add("hostside");
       b.addEventListener("click", () => {
-        if (hostSide) {
-          // never round-trips — layout is the surface's half
-          if (action === "host:toggle-wrap") gw.win.body.style.whiteSpace =
-            gw.win.body.style.whiteSpace === "pre" ? "pre-wrap" : "pre";
+        if (hostSide) {                      // never round-trips: layout is ours
+          if (action === "host:toggle-wrap") {
+            const c = gw.contentEl;
+            if (c) c.style.whiteSpace = c.style.whiteSpace === "pre" ? "pre-wrap" : "pre";
+          }
           return;
         }
         if (label === "Put" && gw.putFn) { gw.putFn(); return; }
         wsys?.winEvent?.(id, `exec ${label}`);
       });
-      bar.appendChild(b);
+      tb.appendChild(b);
     }
-    if (ch.tag) {
-      const f = document.createElement("input");
-      f.value = ch.tag;
-      f.style.cssText = "flex:1 1 8ch;min-width:8ch;border:1px solid #9aa;border-radius:4px;" +
-        "padding:3px 5px;font:inherit;background:rgba(255,255,255,.6);color:#123;";
-      f.addEventListener("keydown", (e) => {
-        if (e.key !== "Enter") return;
-        e.preventDefault();
-        wsys?.winEvent?.(id, `tag ${f.value}`);   // the way back into sam
-      });
-      bar.appendChild(f);
+    tb.hidden = tb.children.length === 0;
+
+    const tag = ch3.querySelector(".wtag");
+    if (document.activeElement !== tag) tag.value = ch.tag || "";
+
+    if (ch.content && ch.content !== gw.shownContent) {
+      gw.shownContent = ch.content;
+      showContent(gw, ch.content, ch.type);
     }
   },
+
   winCanvas: (id, snap) => {
     const gw = gwins.get(id);
     if (!gw) return;
@@ -711,10 +762,10 @@ const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: tr
 // ---- the home chooser: play (ramfs) · browser storage (OPFS) · a real
 // local folder (File System Access). A granted directory IS a bind.
 {
-  const sel = document.getElementById("mHome");
-  let current = "play";
-  sel?.addEventListener("change", async () => {
-    const want = sel.value;
+  for (const b of document.querySelectorAll("#emcaOverflow button[data-home]"))
+    b.addEventListener("click", () => setHome(b.dataset.home));
+  async function setHome(want) {
+    document.getElementById("emcaOverflow").hidden = true;
     try {
       if (want === "play") {
         feedCons("unmount /n/host >[2]/dev/null; cd /usr/kitty");
@@ -730,12 +781,10 @@ const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: tr
         feedCons("bind -c '#Z' /n/host; cd /n/host");
         toast("home: " + h.name + " — /n/host is your real folder; Put writes to your disk");
       }
-      current = want;
     } catch (e) {
-      sel.value = current;               // picker cancelled or refused
       if (want === "folder") toast("no folder granted — home unchanged");
     }
-  });
+  }
 }
 cons = booted.cons;
 wsys = booted.wsys;
@@ -783,7 +832,6 @@ setStatus("running");
   setStatus("running");
 })();
 statusEl.title = "build BUILDSTAMP";
-document.getElementById("brand").title = "build BUILDSTAMP";
 const bs = document.createElement("button");
 bs.style.cssText = "all:unset;cursor:pointer;color:#4a5866;font-size:10.5px;margin-left:8px;user-select:text";
 bs.textContent = "bBUILDSTAMP";
@@ -807,8 +855,15 @@ const BIGFONT = "/lib/font/bit/go/regular.13.font";
 // why "adding a manager is adding a file" (docs/emca.txt).
 for (const b of document.querySelectorAll("#managers button"))
   b.addEventListener("click", () => feedCons(`rc /rc/emcaopen ${b.dataset.open}`));
-document.getElementById("mAcme").addEventListener("click", () => feedCons("acme9 &"));
-document.getElementById("mTour").addEventListener("click", () => feedCons("rc /rc/tour"));
+// the workspace's rarer verbs, one click away
+const ovf = document.getElementById("emcaOverflow");
+document.getElementById("tOverflow").addEventListener("click", (e) => {
+  e.stopPropagation();
+  ovf.hidden = !ovf.hidden;
+});
+document.addEventListener("click", () => { ovf.hidden = true; });
+for (const b of ovf.querySelectorAll("button[data-cmd]"))
+  b.addEventListener("click", () => { ovf.hidden = true; feedCons(b.dataset.cmd); });
 
 // the pane toggles: how the responsive layout is driven by hand. host: side —
 // these never round-trip, because layout is the surface's half.
@@ -823,11 +878,11 @@ addEventListener("keydown", (e) => {
   if (e.key === "j") { e.preventDefault(); document.getElementById("tBottom").click(); }
 });
 
-// the GLOBAL TAG — acme's root tag, at workspace scope, in the status line
-// THE SYSTEM BOOTS INTO EMCA. The default workspace declares itself — motd in
-// an editor tab, the home directory in the rail — and rc is already the
-// transcript below. No menu, no desktop, no shell in front of it.
-setTimeout(() => feedCons("rc /rc/emca"), 900);
+// THE SYSTEM BOOTS INTO EMCA. The default workspace declares itself — emca
+// itself, then motd in an editor tab and the home directory in the left pane —
+// and rc is already running in the pane below. No menu, no desktop, no shell
+// sitting in front of it.
+feedCons("rc /rc/emca");
 
 const gt = document.getElementById("globalTag");
 gt.addEventListener("keydown", (e) => {

@@ -302,7 +302,7 @@ export async function boot(host, opts) {
           if (w) { reads.delete(tok); ok ? w.res(data) : w.rej(new Error("read failed")); }
         } else if (tag === 13) { // WinChrome — /dev/window's declared furniture
           const wid = u32();
-          host.winChrome?.(wid, { type: str16(), content: str16(), toolbar: str16(), tag: str16() });
+          host.winChrome?.(wid, { type: str16(), pane: str16(), content: str16(), toolbar: str16(), tag: str16() });
         } else if (tag === 8) { // WinCanvas
           const wid = u32();
           const label = str16();

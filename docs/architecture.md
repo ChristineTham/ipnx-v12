@@ -75,13 +75,31 @@ ABI. The conformance suite binds all three.
         `#V/<name>/…` walks the frozen root read-only; restore is a `bind`
         (native + demo hosts; the frozen oracle self-skips) |
 
-**Specified, not built (2026-08-31)** — recorded here as a pointer rather than a
-contract, because this document's rule is that contracts change *in the same
-commit as the code*: `#w` is specified to grow into **`/dev/window/<type>/<n>`**,
-the bidirectional control interface ([window.md](window.md)), and `/dev/canvas`
-narrows to genuine drawing ([canvas.md](canvas.md)). Content stops crossing a
-display protocol altogether — the host mounts the file over 9P and renders it
-natively. Nothing below changes until it lands.
+**`#w` is the window control interface (landed 2026-08-31)**, bound at
+`/dev/window` by `/lib/namespace` and specified in full in
+[window.md](window.md). Root: `clone` mints (reading it returns the number) and
+`events` parks, one line per lifecycle change — `new <type> <n>`,
+`content <type> <n> <path>`, `del <n>`. Per window, under `<type>/<n>/`:
+`content` (the PATH the surface opens over 9P — **IPNX implements no
+renderers**), `toolbar` (one control per line, `<label> <action>`, where the
+action names the side that performs it: `ipnx:` round-trips, `host:` never
+leaves the surface), `tag`, `ui`, `events` (the surface's voice), and `wctl`
+(rio's file, grown a `pane <name>` verb; its reads are unchanged, because real
+Plan 9 programs parse them). The plain `#w/<n>` path still resolves — the type
+segment was added additively.
+
+Three invariants hold across it. **The type is in the path**, and it is
+validated, not decoration. **Content is an event, not a sample**: a window is
+minted before its file is known, so the write announces itself. **Any program
+may mint** — the device announces, and both halves watch — so `emca` needs no
+privilege and a window opens with no emca running at all.
+
+`/type` is the registry both halves read: a directory per window type holding
+`ns`, optional `cmd`, `window` and `pane`, each a small file, so a field is
+separately editable, greppable and bindable and a personal override is a union
+element. A type declares only what is EXTRA — the core verbs are emca's and a
+type may not redeclare one. `/dev/canvas` narrows to genuine drawing
+([canvas.md](canvas.md)).
 
 - **Blocking without blocking**: the dispatcher is async end to end. A device
   read may *park* (complete later); in the Rust core a parked operation is a

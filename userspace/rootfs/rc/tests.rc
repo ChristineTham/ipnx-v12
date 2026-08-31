@@ -231,11 +231,17 @@ Wrap host:toggle-wrap' > $wp/toolbar
 	wbad=`{cat '#w/text/'^$wtid^'/content' >[2]/dev/null}
 	# and the same window still answers on its plain number — nothing broke
 	wnum=`{cat '#w/'^$wtid^'/content'}
+	# CONTENT IS AN EVENT, not a sample: a window is minted before its file is
+	# known, so a watcher that read `content` once at mint would race whoever
+	# fills it in. The write above therefore announced itself on the same root
+	# queue — which is also how the surface reopens a window on another file.
+	wcv=''
+	while(! ~ $"wcv 'content pkg '*) wcv=`{read < '#w/events'}
 	# the surface speaks back; writing events is the virtual surface's door
 	echo 'exec Install' > $wp/events
 	wu1=`{read < $wp/events}
 	wu2=`{{ echo delete > '#w/'$wtid^'/wctl'; read } < '#w/events'}
-	if(~ $"wev 'new pkg '^$wtid && ~ $"wtb 'Install ipnx:Install Wrap host:toggle-wrap' && ~ $"wct /pkg/index && ~ $"wtg 'pkg Install Wrap |' && ~ $"wbad '' && ~ $"wnum /pkg/index && ~ $"wu1 'exec Install' && ~ $"wu2 'del '^$wtid) echo PASS '/dev/window: chrome is files — typed path, declared toolbar, lifecycle announced, surface speaks back'
+	if(~ $"wev 'new pkg '^$wtid && ~ $"wcv 'content pkg '^$wtid^' /pkg/index' && ~ $"wtb 'Install ipnx:Install Wrap host:toggle-wrap' && ~ $"wct /pkg/index && ~ $"wtg 'pkg Install Wrap |' && ~ $"wbad '' && ~ $"wnum /pkg/index && ~ $"wu1 'exec Install' && ~ $"wu2 'del '^$wtid) echo PASS '/dev/window: chrome is files — typed path, declared toolbar, lifecycle announced, content announced, surface speaks back'
 	if not fails=bad
 }
 if not echo PASS '/dev/window: no control interface on this host — skipped'
@@ -251,19 +257,71 @@ if(~ $"tyok left && ! ~ $"tycw ''){
 	# the chrome a type declares, and the namespace it constructs
 	typw=`{cat /type/proc/window}
 	tynn=`{cat /type/proc/ns}
-	# opening through the registry: the toolbar is the type's, not the caller's
+	# opening through the registry: the caller knows nothing about the type
 	tyw=`{rc /rc/emcaopen dir /usr/kitty}
-	tytb=`{cat '#w/dir/'^$tyw^'/toolbar'}
 	tyct=`{cat '#w/dir/'^$tyw^'/content'}
+	# a type declares only what is EXTRA. The core verbs are emca's, so no
+	# type may name one — a type that redeclared Put would make the dirty
+	# indicator lie, since Put's presence IS the indicator.
+	tycore=`{cat /type/*/window | grep -c '^(Del|Snarf|Get|Look|Edit|Put|Zerox) '}
 	# the ns file is APPLIED: proc's bind makes /proc exist for this window
 	rc /rc/emcaopen proc /proc >/dev/null >[2=1]
 	typroc=`{ls /proc >[2]/dev/null | wc -l}
 	# and a type that does not exist is refused, not invented
 	tybad=`{rc /rc/emcaopen nosuchtype /x >[2]/dev/null}
-	if(~ $"typw 'Kill ipnx:Kill Note ipnx:Note Ns ipnx:Ns' && ~ $"tynn 'bind ''#p'' /proc' && ~ $"tytb 'Look ipnx:Look Get ipnx:Get' && ~ $"tyct /usr/kitty && ! ~ $"typroc 0 && ~ $"tybad '') echo PASS '/type: a manager is files — the registry declares chrome, namespace and placement, and no manager program exists'
+	if(~ $"typw 'Kill ipnx:Kill Note ipnx:Note Ns ipnx:Ns' && ~ $"tynn 'bind ''#p'' /proc' && ~ $"tycore 0 && ~ $"tyct /usr/kitty && ! ~ $"typroc 0 && ~ $"tybad '') echo PASS '/type: a manager is files — the registry declares chrome, namespace and placement, and no manager program exists'
 	if not fails=bad
 }
 if not echo PASS '/type: no registry on this host — skipped'
+
+# emca, the IPNX half (implementation.md M14c). A FILE SERVER WITH A WORKSPACE,
+# NOT AN EDITOR: no caret, no selection, no line editor — those are the
+# surface's. What is tested here is precisely what IPNX owns.
+#
+# emca has NO PRIVILEGE. It learns of a window from the device, exactly as the
+# surface does, and everything below is driven by writing the window's `events`
+# file — which is the surface's voice. So this test IS a surface, in rc.
+fn emwait {	# emwait <file> <pattern> — bounded; emca is another process
+	for(i in 1 2 3 4 5 6 7 8){
+		if(~ `{cat $1 >[2]/dev/null} $2) return
+		sleep 1
+	}
+}
+emok=`{cat '#w/text/clone' >[2]/dev/null}
+if(! ~ $"emok ''){
+	echo -n hello > /tmp/emca.txt
+	emca &
+	emw=`{rc /rc/emcaopen text /tmp/emca.txt}
+	emd=/dev/window/text/$emw
+	emwait $emd/toolbar '*Snarf*'
+	# THE VERB SET: emca's core, merged with what the type declares. The type
+	# contributes Wrap, which names the HOST — it never round-trips.
+	emtb=`{cat $emd/toolbar}
+	# the dynamic block (acme.c:383): Put is absent while the file is clean,
+	# and its APPEARANCE is the dirty indicator
+	emp1=`{grep '^Put' $emd/toolbar | wc -l}
+	# the surface reports what it did to its mirror; the buffer is EMCA's
+	echo 'insert 0 xy%20' > $emd/events
+	emwait $emd/toolbar '*Put*'
+	emp2=`{grep '^Put' $emd/toolbar | wc -l}
+	# ...and Put writes EMCA'S buffer, not the bytes emca read
+	echo 'exec Put' > $emd/events
+	emwait /tmp/emca.txt 'xy hello'
+	emfile=`{cat /tmp/emca.txt}
+	emp3=`{grep '^Put' $emd/toolbar | wc -l}
+	# Zerox ALIASES: a second window on the same buffer, which is what retires
+	# acme's recorded copy-not-alias divergence
+	echo 'exec Zerox' > $emd/events
+	emz=`{rc /rc/emcaopen text /tmp/emca.txt}
+	emzc=`{cat /dev/window/text/$emz/content}
+	# and Del is emca's, through the same door
+	echo 'exec Del' > $emd/events
+	emwait $emd/toolbar ''
+	emgone=`{cat $emd/toolbar >[2]/dev/null}
+	if(~ $"emtb 'Del ipnx:Del Snarf ipnx:Snarf Get ipnx:Get Look ipnx:Look Edit ipnx:Edit Zerox ipnx:Zerox Wrap host:toggle-wrap' && ~ $"emp1 0 && ~ $"emp2 1 && ~ $"emfile 'xy hello' && ~ $"emp3 0 && ~ $"emzc /tmp/emca.txt && ~ $"emgone '') echo PASS 'emca: the workspace is a program — core verbs merged with the type'^''''^'s, Put appears only while dirty and writes emca'^''''^'s buffer, Zerox aliases, Del closes'
+	if not fails=bad
+}
+if not echo PASS 'emca: no window control interface on this host — skipped'
 
 # /proc/<pid> was walkable but not LISTABLE, so a process manager saw an empty
 # directory. Fixed in the Rust core; self-skips on the frozen oracle, which
@@ -276,7 +334,7 @@ if(! ~ $"pidls ''){
 if not echo PASS '/proc/<pid>: not listable on this host — skipped'
 
 # console-today (M5, docs/userland.md): the console is an editable
-# transcript — one edit node, a mark separating history from input,
+# console-today — one edit node, a mark separating history from input,
 # Enter sends the line. con(1) mediates on the wasm libthread; the test
 # drives it through the virtual surface's event door and proves the
 # full loop with output the typed text never contained. AND, not XOR:
@@ -300,7 +358,7 @@ if(~ $"cnok virtual){
 	echo 'event close 0' > $cnp/ctl
 	# the round trip is the invariant; the prompt's exact bytes under a
 	# pipe are rc's tty-world cosmetics and differ by host
-	if(! ~ $"cnoff 0 && ~ $"cnt *abcdef*) echo PASS 'console-today: the transcript is the console — line in, output back through one edit node'; if not fails=bad
+	if(! ~ $"cnoff 0 && ~ $"cnt *abcdef*) echo PASS 'console-today: the console is one editable window — line in, output back through one edit node'; if not fails=bad
 }
 if not echo PASS 'console-today: no canvas on this host — skipped'
 

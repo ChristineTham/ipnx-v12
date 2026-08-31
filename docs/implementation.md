@@ -570,7 +570,7 @@ menu, observed putting `look 29 36 surface` where a plain guest read it.
 **And the SURFACE ITSELF, the same day**: the demo no longer runs a
 floating-window desktop with a menu bar — it **is** emca. Full viewport, a top
 toolbar carrying the system's managers (each only a typed window onto a
-filesystem), a rail, an editor area with **tabs**, a transcript pane, a status
+filesystem), a rail, an editor area with **tabs**, a console pane, a status
 line with the global tag, and `⌘B`/`⌘J` pane toggles that never round-trip.
 Placement is by TYPE, and with **no emca program running** the surface falls
 back to each type's default pane — the recorded "degrades correctly" property,
@@ -580,8 +580,8 @@ files per type (`ns`, optional `cmd`, `window`, `pane`), read by BOTH halves —
 `/rc/emcaopen` knows nothing about any type, and `dir` is the only placement
 compiled into the shell. Twelve types ship, `/type` is itself a type, and
 clicking Processes opens a live `/proc` with no process-manager program in
-existence. **Still unbuilt**: emca as a watching program, the responsive
-breakpoints, and canvas's narrowing.
+existence. **Still unbuilt after this stage**: the responsive breakpoints and
+canvas's narrowing. (emca as a watching program landed the same day — M14c.)
 
 **b. `/type` and the manager types *(M)*.** The registry: a directory
 per type holding `ns`, optional `cmd`, and `window` — house style, small
@@ -589,7 +589,7 @@ files, so each field is separately editable, greppable and bindable, and
 a personal override is a union element. One built-in type (`dir`) is the
 bootstrap floor, because `/type` is itself a type. The starting set is
 emca.txt's table — `dir file errors proc usr pkg project net type
-transcript credential` — each at most three small files. **This stage is
+shell credential` — each at most three small files. **This stage is
 where "no manager programs" becomes true**: `/proc` gets a process
 manager without a process manager being written.
 
@@ -604,6 +604,49 @@ divergence retires), the tag as one string with the auto-block preserved,
 context resolution, the verb set, the running-command table as a view of
 `/proc`, and the file interface at `/srv/emca`. `acme.c`'s behaviour is
 the floor: emca is a new program and must pass acme's suite unchanged.
+
+**Landed 2026-08-31** — `userspace/cmd/emca.c`, ~700 lines, con(1)'s libthread
+shape (reader threads feeding one consumer through a channel, so a single thread
+owns every window write and all tag arithmetic; no locks, shadow state only).
+What it owns is what IPNX owns:
+
+- **The window set and each window's ONE TAG STRING.** Title / toolbar / tag bar
+  are three views of `<name> <builtins> <dynamic> | <scratch>`; the dynamic block
+  is tracked by OFFSET, so the user co-authors the string and their text never
+  shifts under them. `acme.c:383`'s rebuildauto, kept.
+- **The core verbs** — `Del Snarf Get Look Edit`, plus `Put` and `Zerox`. The
+  toolbar a window shows is that set merged with `/type/<t>/window`, and a type
+  **may not redeclare a core verb** (compared by LABEL, not by whole line): a
+  type that redeclared `Put` would make the dirty indicator lie, since Put's
+  presence *is* the indicator. Six type files shed verbs to this rule.
+- **Dirty state**, and therefore Put's appearance.
+- **Buffers**, on the heap — N windows may view one, so `Zerox` **aliases** and
+  the recorded copy-not-alias divergence retires.
+- **Placement**: emca reads `/type/<t>/pane` and writes the window's `wctl`,
+  which grew a `pane <name>` verb. A **watcher, not a gatekeeper** — it learns of
+  windows from the device exactly as the surface does, has no privilege, and with
+  emca not running a window still opens in its type's default pane.
+
+Two contract changes came with it, both in [window.md](window.md): **`content` is
+an event** (a window is minted before its file is known, so sampling it once
+races whoever fills it in), and **`put` notifies rather than commands** (the
+surface holds the byte-exact text; emca re-reads what landed — one writer per
+file, so a mirror error can no longer overwrite correct bytes).
+
+Proved twice, because the claim has two halves. In rc — *emca driven entirely by
+writing a window's `events`, which is the surface's own voice*: the merged
+toolbar, Put absent while clean and present while dirty, `Put` writing **emca's**
+buffer rather than the bytes it read, Zerox aliasing, Del closing. And headlessly
+at the surface, `node demo/supervisor/emcaproof.mjs userspace/rootfs`: the
+placement reaches the host on the chrome, and the toolbar that arrives is the
+merged set. Its sibling `winproof.mjs` still runs with **no emca at all** — that
+pair is the degrades-correctly rule, in code. **155 PASS / 0 FAIL** on the Rust
+host and on the frozen oracle, which self-skips.
+
+Also landed: `/lib/namespace` binds `#w` at `/dev/window`, so the contract's path
+is the real one. **Still unbuilt in this stage**: sam's structural language
+(`Edit`), the plumber (`Look`), the running-command table as a view of `/proc`,
+and the file interface at `/srv/emca`.
 
 **d. The web surface *(L)*.** The four chrome surfaces under
 *operand determines surface* (system → top toolbar; window → its
@@ -621,7 +664,7 @@ renderer is a real editor component —
 **Monaco** on the web, TextKit on Apple — which brings selection,
 clipboard, keystroke undo, syntax highlighting, folding, multi-cursor
 and find-in-file for free, and carries command history and line editing
-for the transcript. **xterm.js returns as the raw-input door.** The
+for the console. **xterm.js returns as the raw-input door.** The
 gating question, to be proven FIRST and not assumed: **can `execute` and
 `look` ride Monaco's action and context-menu API?** Property 1 of the
 acceptance test depends on it, so a spike answering that precedes the

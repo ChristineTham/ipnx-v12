@@ -20,10 +20,14 @@ import { EditorView, minimalSetup } from "../vendor/codemirror.bundle.mjs";
 
 const enc = new TextEncoder();
 
-// the divergence check: cheap, and its absence is the failure nobody notices
+// the divergence check: cheap, and its absence is the failure nobody notices.
+// Over the BYTES, not the code units — the offsets above are byte offsets, and
+// an em-dash is one charCode here but three bytes there. Hashing code units
+// would false-positive on exactly the content the check exists to protect.
 function hash(s) {
+  const b = enc.encode(s);
   let h = 0x811c9dc5;
-  for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193) >>> 0; }
+  for (let i = 0; i < b.length; i++) { h ^= b[i]; h = Math.imul(h, 0x01000193) >>> 0; }
   return h.toString(16);
 }
 

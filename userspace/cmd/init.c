@@ -343,9 +343,7 @@ rcinteractive(void)
 	char *av[] = { "rc", "-i", nil };
 
 	chdir("/usr/kitty");			/* home: the person starts in their own tree */
-	print("ipnx-v12: interactive rc (EOF to shut down)\n");
-	print("          home is /usr/kitty — cat README to look around\n");
-	print("          the guided tour: rc /rc/tour\n");
+	/* no banner: the system boots into emca, and /etc/motd is a window */
 	exec("/bin/rc", av);
 	fprint(2, "init: exec /bin/rc: %r\n");
 	exits("exec");

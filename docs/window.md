@@ -98,7 +98,8 @@ gains the interface it should have had.
   clone            mint a window; reading it returns the new number
   events           reads PARK — one line per window lifecycle change
   <type>/<n>/
-    ctl            panes, layout, tabs, lifecycle
+    wctl           panes, layout, tabs, lifecycle — rio's file, grown
+                   a `pane <name>` verb; reads unchanged (rio parses it)
     content        the PATH the host opens over 9P and renders
     toolbar        one control per line: <label> <action>
     tag            the tag line — the host's way back into sam
@@ -254,8 +255,15 @@ host):
 
 ```
 new <type> <n>            a window was minted
+content <type> <n> <path> a window's content file was written
 del <n>                   a window is gone
 ```
+
+**`content` is an event, not a sample** (landed 2026-08-31). A window is minted
+*before* its file is known — `clone` first, `content` after — so a watcher that
+read `content` once at mint would race whoever fills it in, and emca is a
+watcher. Announcing the write closes that race, and the same line is how a
+surface reopens an existing window on a different file.
 
 **Per window — `/dev/window/<type>/<n>/events`** (what the user did):
 
@@ -268,13 +276,27 @@ insert <q0> <text>        the user typed or pasted
 delete <q0> <q1>          the user removed a range
 select <q0> <q1>          the selection (or collapsed caret) changed
 dirty <0|1>               the buffer's dirty state changed
+put                       THE SURFACE PUT — it already wrote the file
 seq <n> <hash>            the mirror's sequence and buffer hash
 resize <w> <h>
 close
 ```
 
+`put` is a **notification, not a command**, and the distinction is load-bearing:
+the surface holds the real editor's byte-exact text, where emca's buffer is
+reconstructed from the change stream above. So the surface writes the file and
+emca **re-reads what landed** — one writer per file. Were it the other way round
+(surface writes, then `exec Put`), any reconstruction error would silently
+overwrite correct bytes. `exec Put` remains the road for a window with no editor
+component behind it, where emca's buffer *is* the only copy.
+
 `seq` is the divergence check from *The buffer* above: emca compares and
-resyncs on mismatch. Everything else is a user action.
+reports on mismatch. Because `put` re-reads, a divergence can no longer corrupt
+a file — it is a diagnostic, which is what makes it cheap enough to always send.
+The hash is FNV-1a **over the bytes**, not over UTF-16 code units: the offsets
+in this vocabulary are byte offsets, and a check measured in different units
+than its coordinates false-positives on exactly the multi-byte content it exists
+to protect. Everything else here is a user action.
 
 ## `ui` — what the surface actually rendered
 
@@ -291,9 +313,9 @@ keyboard-reachable*) runs on every surface, headless included.
 It also converts a claim into a measurement: the input convention holds that
 accessibility is *"enforced by construction"*, and until now nothing checked it.
 
-## The transcript
+## The console window
 
-A transcript window is not a special mechanism. Its `content` is a **growing
+A console window is not a special mechanism. Its `content` is a **growing
 file the host tails**; typed lines arrive back through the window's `events` as
 ordinary `insert` lines terminated by a newline. History and line editing are the
 host's (*editing is the surface's*), which **deletes con(1)'s mark arithmetic** —
@@ -348,7 +370,7 @@ every renderer emca would have needed, and most of its display machinery.
   gatekeeper.
 - ~~Event granularity on the way back~~ — **specified above**, reusing canvas's
   vocabulary rather than inventing one.
-- ~~The transcript's shape~~ — **specified above**: a growing file the host tails,
+- ~~The console window's shape~~ — **specified above**: a growing file the host tails,
   typed lines back as `insert`, con(1)'s mark arithmetic deleted.
 
 **Nothing is open in this contract, and every half is built** — the device, the

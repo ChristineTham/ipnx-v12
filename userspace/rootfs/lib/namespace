@@ -7,3 +7,6 @@ bind #e /env
 bind #d /fd
 bind #s /srv
 bind #p /proc
+# the control interface lives at a path, not at a device letter
+# (docs/window.md): #w/<type>/<n> is reached as /dev/window/<type>/<n>.
+bind #w /dev/window

@@ -1,9 +1,13 @@
 # emcaopen <type> [path] — open a typed window.
 #
-# THE REGISTRY DOES THE WORK. Nothing about a type is known here: the
-# namespace, the chrome and the placement all come out of /type/<name>/,
-# which is why "adding a manager is adding a file" (docs/emca.txt). Any
-# program may do this; emca has no privilege, and none is running.
+# THE REGISTRY DOES THE WORK, and what little is left here is deliberately
+# little: mint a window of the type, and say which file it is on. Everything
+# else — the toolbar, the tag, the placement — belongs to emca, which learns
+# of the window from the device and furnishes it (docs/emca.txt PART SIX).
+#
+# With emca not running this still opens a window: it lands in its type's
+# default pane, bare. That is the degrades-correctly property, and it is why
+# any program may mint — emca has no privilege.
 t=$1
 r=/type/$t
 if(! test -d $r){
@@ -15,8 +19,5 @@ if(test -s $r/ns) eval `{cat $r/ns}
 p=$2
 if(~ $#p 0) p=`{cat $r/path >[2]/dev/null}
 w=`{cat '#w/'^$t^'/clone'}
-d='#w/'^$t^'/'^$w
-if(! ~ $#p 0) echo -n $p > $d/content
-if(test -s $r/window) cat $r/window > $d/toolbar
-echo -n $"p^' | ' > $d/tag
+if(! ~ $#p 0) echo -n $p > '#w/'^$t^'/'^$w^'/content'
 echo $w

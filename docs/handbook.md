@@ -207,6 +207,32 @@ window's events. **No emca is involved**, which is the point:
 node demo/supervisor/winproof.mjs userspace/rootfs
 ```
 
-Exits 0 on the round trip, 1 on a 20-second timeout. Needs
-`cargo build --release --target wasm32-unknown-unknown -p browserhost` first
-(or a `bash demo/build.sh`, which does it).
+Exits 0 on the round trip, 1 on a 20-second timeout.
+
+Its sibling proves the other half — that **emca** places windows, and that the
+placement reaches a surface, which is the part rc cannot see:
+
+```bash
+node demo/supervisor/emcaproof.mjs userspace/rootfs
+```
+
+It boots the unmodified default workspace (`/rc/emca`) and asserts each window
+landed in the pane its type declares, that the toolbar arriving at the host is
+emca's core set merged with the type's extras, and that `Put` is absent because
+nothing is dirty. The two proofs are a pair: **with** emca the window lands where
+emca says, **without** it the surface falls back to the type's default. That is
+the degrades-correctly rule, in code.
+
+**Both need the wasm kernel built first** — and this is a real trap, because
+`cargo build --release` builds the NATIVE kernel while these harnesses (and the
+whole browser surface) load `target/wasm32-unknown-unknown/release/browserhost.wasm`.
+Editing `kernel/src/lib.rs` and re-running a proof without this rebuilds nothing
+the proof can see, and the symptom is a change that plainly landed and plainly
+is not running:
+
+```bash
+cargo build --release --target wasm32-unknown-unknown -p browserhost
+```
+
+`bash demo/build.sh` does it as its first step, so a full demo build never has
+the problem.

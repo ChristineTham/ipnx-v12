@@ -144,6 +144,13 @@ body { display: flex; flex-direction: column;
                    white-space: nowrap; flex: 0 0 auto;
                    background: #17212c; color: #8fa4b6; }
 #emcaTabs button.on { background: #ffffea; color: #112; box-shadow: inset 0 -2px 0 #557; }
+/* OPERAND DETERMINES SURFACE, so the leaf's own verbs must not read as tabs.
+   A tab names a WINDOW and selects it; New/Sort/× act on the LEAF that holds
+   them. Same strip, because that is where the leaf's edge is — different
+   treatment, because they are different operands. */
+#emcaTabs button.leafctl { background: none; border-right: 0; color: #5d7182;
+                           padding: 7px 9px; font-size: 11px; }
+#emcaTabs button.leafctl:hover { color: #cfe3f2; background: #17212c; }
 #emcaStack { flex: 1 1 auto; min-height: 0; position: relative; background: #fff; }
 
 /* a window IS its pane's content — no chrome of its own beyond what /dev/window
@@ -161,3 +168,38 @@ body { display: flex; flex-direction: column;
              border: 1px solid #2b3a4a; border-radius: 4px; padding: 3px 6px;
              font: inherit; }
 #emcaStatus #status { flex: 0 0 auto; color: #7b8b9b; }
+
+/* ---- the window, in four parts (docs/emca.txt PART FOUR) --------------
+   title + controls · toolbar · tag bar · body. Separate rows, because they
+   are separate things: identity, the closed method set, the user's own
+   free executable text, and the content.                              */
+.wchrome { flex: 0 0 auto; background: #eaffff; color: #123;
+           border-bottom: 1px solid #000; font: 500 12px/1.2 "Lucida Grande", system-ui, sans-serif; }
+.wtitle { display: flex; align-items: center; gap: 0; padding: 4px 6px; min-width: 0; }
+/* the DIRECTORY is the context every command here resolves against, so it
+   truncates from its own left rather than being cut off by the basename */
+.wdir { color: #667; opacity: .8; white-space: nowrap; overflow: hidden;
+        text-overflow: ellipsis; direction: rtl; max-width: 30ch; flex: 0 1 auto; }
+.wbase { font-weight: 700; color: #112; white-space: nowrap; flex: 0 0 auto; }
+.wgrow { flex: 1 1 auto; }
+.wctl { width: 20px; height: 20px; margin-left: 3px; padding: 0; line-height: 1;
+        border: 1px solid #9aa; border-radius: 4px; background: #f6ffff; color: #345;
+        cursor: pointer; font: 600 13px/1 system-ui; }
+.wctl:hover { background: #dff; }
+.wtoolbar { display: flex; flex-wrap: wrap; gap: 3px; padding: 0 6px 5px; }
+.wtoolbar button { font: 500 12px/1 inherit; padding: 3px 8px; min-height: 22px;
+                   border: 1px solid #9aa; border-radius: 4px; background: #f6ffff;
+                   color: #123; cursor: pointer; white-space: nowrap; }
+.wtoolbar button:hover { background: #dff; }
+.wtoolbar button.hostside { background: #f4f4ff; color: #334; }   /* never round-trips */
+.wtag { display: block; width: calc(100% - 12px); margin: 0 6px 5px; padding: 3px 5px;
+        border: 1px solid #9aa; border-radius: 4px; background: rgba(255,255,255,.65);
+        color: #123; font: inherit; }
+.ewin.collapsed .wtoolbar, .ewin.collapsed .wtag, .ewin.collapsed .wbody { display: none; }
+.ewin.collapsed { position: relative; inset: auto; }
+
+/* resize comes free from split dividers (emca.txt): no window is dragged */
+.divider { flex: 0 0 5px; background: #0b1219; }
+.divider.vert { cursor: col-resize; }
+.divider.horz { cursor: row-resize; flex-basis: 5px; }
+.divider:hover { background: #2d4155; }

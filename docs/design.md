@@ -776,6 +776,40 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   construction, since type already determines default placement, so it never
   appears somewhere *wrong* — only somewhere provisional, moving at most once.
 
+- **(2026-08-31) Building emca amended two things the design had settled, and
+  both amendments came from the code refusing to be written the stated way.**
+  Recorded because each is a genuine correction, not a detail.
+  **(1) `content` is an EVENT, not a sample.** The window contract had emca and
+  the surface both *reading* a window's `content` file. But a window is minted
+  before its file is known — `clone` first, `content` after — so a watcher that
+  reads it once at mint races whoever fills it in, and emca is a watcher by the
+  decision immediately above. The device now announces the write on the root
+  `events` file. What the fix revealed: the race was already there for the
+  surface, hidden only because the surface is push-driven; and the same line
+  turns out to be how a surface reopens an existing window on a different file,
+  which the design had no mechanism for.
+  **(2) `put` notifies; it does not command — ONE WRITER PER FILE.** The buffer
+  contract above is right that emca holds the authoritative buffer, and the four
+  reasons for it stand. But it does not follow that emca should perform the
+  *write*: with a real editor component behind the window, the surface holds
+  byte-exact text where emca's copy is RECONSTRUCTED from the change stream. The
+  first implementation had the surface write the file and then send `exec Put`,
+  so emca wrote again — meaning any reconstruction error would silently overwrite
+  correct bytes, which is precisely the failure the sequence-and-hash exists to
+  catch, arriving too late to help. Inverted: the surface writes, then notifies,
+  and emca re-reads what landed. `exec Put` remains the road for a window with no
+  editor behind it, where emca's buffer is the only copy. The divergence hash
+  becomes a pure diagnostic — it can no longer corrupt a file — which is what
+  makes it cheap enough to always send. **And a measurement fell out**: the hash
+  was over UTF-16 code units while the offsets beside it were byte offsets, so it
+  would have false-positived on exactly the multi-byte content it exists to
+  protect. Both now run over the bytes.
+  **A third, smaller**: a window type may not redeclare a core verb, compared by
+  LABEL rather than by whole line. Six of the eleven shipped type files declared
+  one — mostly `Look` and `Get`, harmlessly, but `text` declared `Put`, which made
+  Put appear in a clean window and so made the dirty indicator lie. The rule is
+  now enforced in emca and asserted in the suite over `/type/*/window`.
+
 - **(2026-08-31) The open questions, resolved in one pass — and what it revealed
   about them.** Eleven items stood open across [emca.txt](emca.txt) and
   [window.md](window.md); worked through together on Christine's instruction,

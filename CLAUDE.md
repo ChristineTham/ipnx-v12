@@ -119,7 +119,7 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 bash userspace/mk.sh
 ```
 
-Boot the kernel — init (pid 1) runs the acceptance tests, prints the suite's PASS lines (floor 131; currently 152 — the count grows as features add self-skipping tests; the final "poc: all N tests passed" line counts only init.c's C-level tranche, not the whole suite), exits 0:
+Boot the kernel — init (pid 1) runs the acceptance tests, prints the suite's PASS lines (floor 131; currently 155 — the count grows as features add self-skipping tests; the final "poc: all N tests passed" line counts only init.c's C-level tranche, not the whole suite), exits 0:
 
 ```bash
 bash poc/run.sh
@@ -290,8 +290,8 @@ every host including the frozen oracle, and the 131 stay the permanent floor.
 2026-08-30** — design.md "compatibility kissed goodbye" + docs/userland.md:
 the curation survives, the verbatim does not; the vendored raster world is
 now the heritage exhibit holding the suite floor, and the product userland
-is redesigned native to /dev/canvas — one editor, an editable-transcript
-console, rio-today as policy files): the real Plan 9 userspace entire —
+is redesigned native to /dev/canvas — one editor, an editable console,
+rio-today as policy files): the real Plan 9 userspace entire —
 the designers' curation of Unix — plus a measured modern personality proven by three
 benchmarks (git via a `libunix` source port, CPython and Go via the WASI ABI). The V10
 binaries stay as the exhibit, each userspace on its own libc over the kernel (`libc/`
@@ -361,11 +361,21 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Current state (design: 2026-08-31; code: 2026-08-29)
 
-**The system's interface is designed and nothing of it is built** (2026-08-31): emca
-is the IPNX user interface, `/dev/canvas` grows four additions and no more, `/pkg`
-and `/project` split the old package concept, and the hosts become *surfaces* rather
-than demos. Design only — [docs/emca.txt](docs/emca.txt), decision log 2026-08-31.
-The code state below is unchanged by it.
+**emca is designed AND the IPNX half of it runs** (2026-08-31): emca is the IPNX
+user interface — `/dev/canvas` narrows to genuine drawing, `/pkg` and `/project`
+split the old package concept, and the hosts become *surfaces* rather than demos
+([docs/emca.txt](docs/emca.txt), decision log 2026-08-31). Landed the same day
+(implementation.md M14a–c): the `/dev/window/<type>/<n>` control interface, `/type`
+as a real registry of four small files per type, the browser surface rebuilt as
+emca itself (top toolbar of managers, panes, tabs, a status line carrying the
+global tag), the editor component (CodeMirror behind a mirrored buffer), and
+**`userspace/cmd/emca.c`** — a file server with a workspace, not an editor: the
+window set, each window's one tag string, the core verbs merged with the type's,
+dirty state, aliasing buffers, and placement. It is a **watcher, not a
+gatekeeper** — with no emca running a window still opens in its type's default
+pane. **155 PASS / 0 FAIL** on both hosts, plus two headless surface proofs
+(`winproof.mjs` with no emca, `emcaproof.mjs` with it). Still design-only: the
+responsive breakpoints (M14d), `/project` (M14e), and the SwiftUI surface (M14g).
 
 
 **The PoC is complete — declared 2026-08-29** (decision log; full record in

@@ -145,7 +145,7 @@ pub enum Effect {
     WinCanvas { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, snap: Vec<CvSnap> },
     // /dev/window: the chrome IPNX declared, for the host to render natively.
     // Small and rare (unlike WinCanvas), so it rides outside the credit system.
-    WinChrome { wid: u32, wtype: String, content: String, toolbar: String, tag: String },
+    WinChrome { wid: u32, wtype: String, pane: String, content: String, toolbar: String, tag: String },
     // the SURFACE opened a file. In-process this is a function call, not
     // marshalled 9P — "wire 9P at boundaries, a Dev table inside" (design.md).
     // A remote surface marshals; a surface sharing the address space calls.
@@ -538,6 +538,7 @@ struct Win {
     dead: bool,
     // /dev/window: the control interface's per-window files
     wtype: String,
+    pane: String,          /* where emca placed it — its ctl said so */
     content: String,
     toolbar: String,
     tag: String,
@@ -810,6 +811,7 @@ fn new_window(k: &K) -> WinR {
         cv: None,
         dead: false,
         wtype: String::new(),
+        pane: String::new(),
         content: String::new(),
         toolbar: String::new(),
         tag: String::new(),
@@ -957,11 +959,12 @@ fn win_announce(k: &K, line: String) {
 
 // the host learns a window's chrome the moment IPNX declares it
 fn win_chrome(k: &K, w: &WinR) {
-    let (wid, wtype, content, toolbar, tag) = {
+    let (wid, wtype, pane, content, toolbar, tag) = {
         let wb = w.borrow();
-        (wb.wid, wb.wtype.clone(), wb.content.clone(), wb.toolbar.clone(), wb.tag.clone())
+        (wb.wid, wb.wtype.clone(), wb.pane.clone(), wb.content.clone(),
+         wb.toolbar.clone(), wb.tag.clone())
     };
-    k.borrow_mut().effects.push(Effect::WinChrome { wid, wtype, content, toolbar, tag });
+    k.borrow_mut().effects.push(Effect::WinChrome { wid, wtype, pane, content, toolbar, tag });
 }
 
 // a window's own events: what the user did inside it
@@ -1328,6 +1331,19 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                     _ => wb.uifile = s,
                 }
             }
+            // Content is an EVENT, not a sample. A window is minted before its
+            // content is known, so a watcher that read `content` once at mint
+            // would race the program that fills it in. Announcing the write is
+            // what lets emca stay a watcher rather than a gatekeeper — and it
+            // is the same door by which the surface may open a different file
+            // in a window that already exists.
+            if matches!(kind, WKind::WContent) {
+                let (ty, wid, c) = {
+                    let wb = w.borrow();
+                    (wb.wtype.clone(), wb.wid, wb.content.clone())
+                };
+                win_announce(k, format!("content {} {} {}\n", ty, wid, c.trim()));
+            }
             win_chrome(k, w);
             return Ok(data.len());
         }
@@ -1377,6 +1393,13 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
             }
             let t: Vec<&str> = raw.trim().split_whitespace().collect();
             match t.as_slice() {
+                // emca places the window; the host renders where it was placed.
+                // With no emca running the surface falls back to the type's
+                // default pane, which is the degrades-correctly property.
+                ["pane", p] => {
+                    w.borrow_mut().pane = (*p).to_string();
+                    win_chrome(k, w);
+                }
                 ["move", x, y] => {
                     let mut wb = w.borrow_mut();
                     wb.x = x.parse().unwrap_or(wb.x);
