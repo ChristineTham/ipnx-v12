@@ -113,26 +113,21 @@ export function createEditor({ mount, text, send, onPut }) {
           send(`select ${boff(d, m.from)} ${boff(d, m.to)}`);
         }
       }),
-      // undo is EMCA's, not the editor's — one stack, and emca is not remote,
-      // so the round trip is microseconds (docs/window.md)
       EditorView.domEventHandlers({
-        keydown(e) {
-          if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "z") {
-            e.preventDefault();
-            send(e.shiftKey ? "redo" : "undo");
-            return true;
-          }
-          if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") {
-            e.preventDefault();
-            onPut?.(view.state.doc.toString());
-            return true;
-          }
-          return false;
-        },
         contextmenu(e) { e.preventDefault(); openMenu(e.clientX, e.clientY); return true; },
       }),
     ],
   });
+
+  // CAPTURE PHASE: this bundle exports no `keymap`/`Prec`, and CodeMirror's own
+  // history keymap also listens on keydown. Undo is EMCA's — one stack — so it
+  // must be certain to win (docs/window.md).
+  view.dom.addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    const k = e.key.toLowerCase();
+    if (k === "z") { e.preventDefault(); e.stopPropagation(); send(e.shiftKey ? "redo" : "undo"); }
+    else if (k === "s") { e.preventDefault(); e.stopPropagation(); onPut?.(view.state.doc.toString()); }
+  }, true);
 
   document.addEventListener("mousedown", (e) => { if (menu && !menu.contains(e.target)) closeMenu(); });
 

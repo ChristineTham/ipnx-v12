@@ -8,6 +8,7 @@
 import { boot, makeHandleHostServer } from "../supervisor/rustkern.mjs";
 import { createCanvasView } from "./presenter.mjs";
 import { createEditor } from "./editor.mjs";
+import { createShellWindow } from "./shellwin.mjs";
 
 const desktop = document.body;   // the fatal-error banner has no pane to live in
 const statusEl = document.getElementById("status");
@@ -97,7 +98,7 @@ const tabsEl = document.getElementById("emcaTabs");
 // Nothing about a type is compiled in here; `dir` is the bootstrap floor, and
 // everything else arrives from files. A HINT for placement, never a constraint
 // on capability: any window stays fully editable text wherever it lands.
-const PANE_OF = { dir: "left", cons: "bottom" };   // the floor, and the console
+const PANE_OF = { dir: "left", shell: "bottom" };   // the floor, and the console
 const paneFor = (type) => PANE_OF[type] ?? "main";
 
 // read the registry once the namespace is up. /type is itself a type, so this
@@ -194,36 +195,21 @@ function makeWindow({ title, type, closable, onClose }) {
 // ---------- the system console ----------
 let cons = null;               // set after boot; cooked line discipline below
 const consWin = makeWindow({
-  title: "rc — the transcript", type: "cons", closable: false,
+  title: "/dev/cons", type: "shell", closable: false,
 });
-const consTermEl = document.createElement("div");
-consTermEl.className = "term";
-consWin.body.appendChild(consTermEl);
-const consT = makeTerm(consTermEl);
-consWin.setFocusInner(() => consT.term.focus());
-consWin.onResize(() => consT.fit.fit());
-consT.term.writeln("\x1b[38;5;110mipnx-v12 — a reimagining of Unix, booting in this tab\x1b[0m");
+// The `shell` window: rc in an EDITABLE BUFFER. There is no terminal
+// emulation here and no line discipline — command-line editing, history and
+// selection are the host's, and rc reads lines without knowing any of it
+// (userland.md; "even command history and shell command line edit — host
+// implemented").
+const consW = createShellWindow({
+  mount: consWin.body,
+  send: (line) => cons && cons.feed(enc.encode(line)),
+});
+consWin.setFocusInner(() => consW.focus());
+consW.write("ipnx-v12 — a reimagining of Unix, booting in this tab\n");
 if (!new URLSearchParams(location.search).has("lite"))
-  consT.term.writeln("\x1b[38;5;110mthe toolchains stream in behind — cc, go, python, pip (watch the corner)\x1b[0m");
-
-// cooked line discipline for /dev/cons (the kernel's cons expects fed lines;
-// the echo is the host's job, as on the Node host's tty)
-let consLine = "";
-consT.term.onData((d) => {
-  if (!cons) return;
-  for (const ch of d) {
-    if (ch === "\r" || ch === "\n") {
-      consT.term.write("\r\n");
-      cons.feed(enc.encode(consLine + "\n"));
-      consLine = "";
-    } else if (ch === "\x7f" || ch === "\b") {
-      if (consLine.length) { consLine = consLine.slice(0, -1); consT.term.write("\b \b"); }
-    } else if (ch >= " " || ch === "\t") {
-      consLine += ch;
-      consT.term.write(ch);
-    }
-  }
-});
+  consW.write("the toolchains stream in behind — cc, go, python, pip (watch the corner)\n");
 
 // ---------- guest windows (#w) ----------
 // The SURFACE opens the file and the BROWSER renders it — IPNX implements no
@@ -530,8 +516,8 @@ const host = {
       terminate: () => { dead = true; if (w) w.terminate(); },
     };
   },
-  consWrite: (bytes) => consT.term.write(td.decode(bytes).replace(/\n/g, "\r\n")),
-  error: (text) => consT.term.write("\x1b[31m" + text + "\x1b[0m\r\n"),
+  consWrite: (bytes) => consW.write(td.decode(bytes)),
+  error: (text) => consW.write(text + "\n"),
   winCreate,
   winPresent: (id, w, h, rgba) => {
     const gw = gwins.get(id);
@@ -658,7 +644,7 @@ const host = {
   canvasCaps: () => "interactive input",
   exit: (code) => {
     setStatus(code === 0 ? "halted, clean" : "halted, exit " + code);
-    consT.term.write("\r\n\x1b[33m[system halted: exit " + code + "]\x1b[0m\r\n");
+    consW.write("\n[system halted: exit " + code + "]\n");
   },
 };
 
@@ -753,7 +739,7 @@ cons = booted.cons;
 wsys = booted.wsys;
 readPath = booted.readPath;
 writePath = booted.writePath;
-window.__emca = { readPath, writePath, wsys, PANE_OF };   // debug affordance, as __consT
+window.__emca = { readPath, writePath, wsys, PANE_OF };   // debug affordance, as __consW
 loadTypes();
 setStatus("running");
 (async () => {                                    // the toolchains stream in
@@ -804,14 +790,14 @@ bs.addEventListener("click", () => {
   navigator.clipboard?.writeText("bBUILDSTAMP").then(() => toast("build stamp copied: bBUILDSTAMP"));
 });
 statusEl.after(bs);
-consT.term.focus();
-window.__consT = consT;   // debug affordance
+consW.focus();
+window.__consW = consW;   // debug affordance
 
 // ---------- menu ----------
 const feedCons = (line) => {
-  consT.term.write(line + "\r\n");
+  consW.write(line + "\n");
   cons.feed(enc.encode(line + "\n"));
-  consT.term.focus();
+  consW.focus();
 };
 const BIGFONT = "/lib/font/bit/go/regular.13.font";
 // THE TOP SURFACE IS THE SYSTEM'S. Its operand is the system, so the managers

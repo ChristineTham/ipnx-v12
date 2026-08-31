@@ -31,6 +31,20 @@ born here.
 
 ## The console: an editable transcript
 
+> **Built 2026-08-31 as the `shell` window type** — Christine's name, and the
+> right one: it says what the window *is*, where "transcript" says what is *in*
+> it. rc runs in an editable buffer; command-line editing, history recall,
+> selection and copy are the **host's**, and rc reads lines without knowing any
+> of it. No terminal emulation, no line discipline, no escape sequences.
+> `demo/shell/shellwin.mjs`, registered at `/type/shell`.
+>
+> And a correction to the record, hers: Pike's *typescript* is not the thing
+> being replaced — it is output plus the echo of what you typed, which is
+> exactly what a session window should contain and precisely what makes it
+> snarfable into another window. What he called old was the typescript *style
+> of interaction*, being write-only. `win(1)` did not abolish the typescript;
+> it made it editable, which is what this is.
+
 > **Given its architectural reason, 2026-08-31 (decision log).** The
 > "AND, not XOR" amendment below was recorded as a concession to
 > familiarity. Under *editing is the surface's* it becomes the

@@ -24,6 +24,12 @@ sed -i '' "s/BUILDSTAMP/$STAMP/g" dist/shell/shell.mjs
 grep -q "v=$STAMP" dist/shell/shell.mjs || { echo "stamp inject failed" >&2; exit 1; }
 sed -i '' "s|src=\"shell.mjs\"|src=\"shell.mjs?v=$STAMP\"|" dist/shell/index.html
 grep -q "shell.mjs?v=$STAMP" dist/shell/index.html || { echo "entry bust failed" >&2; exit 1; }
+# ...and shell.mjs's OWN IMPORTS, which the entry stamp does not reach: a stale
+# editor.mjs or shellwin.mjs is served happily beside a fresh shell.mjs, and the
+# symptom is a fix that plainly landed and plainly is not running.
+sed -i '' "s|from \"\./\([a-z]*\)\.mjs\"|from \"./\1.mjs?v=$STAMP\"|g" dist/shell/shell.mjs
+sed -i '' "s|from \"\.\./vendor/\([a-z.]*\)\.mjs\"|from \"../vendor/\1.mjs?v=$STAMP\"|g" dist/shell/*.mjs
+grep -q "presenter.mjs?v=$STAMP" dist/shell/shell.mjs || { echo "import bust failed" >&2; exit 1; }
 grep -q "coi-$STAMP" dist/coi-sw.js || { echo "cache stamp failed" >&2; exit 1; }
 # the demo's package registry (regenerate with registry/fetch.sh): the
 # browser host installs from here — same origin, so no CORS wall
