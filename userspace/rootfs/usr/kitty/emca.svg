@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 120" width="240" height="120">
+  <rect width="240" height="120" fill="#eaffff" stroke="#000"/>
+  <text x="120" y="46" font-family="Lucida Grande, sans-serif" font-size="20"
+        text-anchor="middle" fill="#123">emca</text>
+  <text x="120" y="72" font-family="Lucida Grande, sans-serif" font-size="11"
+        text-anchor="middle" fill="#456">rendered by the host, not by IPNX</text>
+  <circle cx="40" cy="92" r="10" fill="#8888cc"/>
+  <circle cx="120" cy="92" r="10" fill="#9eeeee"/>
+  <circle cx="200" cy="92" r="10" fill="#eeee9e"/>
+</svg>

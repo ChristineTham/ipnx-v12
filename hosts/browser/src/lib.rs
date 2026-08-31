@@ -220,6 +220,13 @@ pub extern "C" fn bh_win_ack(wid: u32) {
     with(|w| w.kern.win_ack(wid));
 }
 
+/// the surface opens a file over the namespace — answered as ReadDone
+#[no_mangle]
+pub extern "C" fn bh_read(token: f64, p: *const u8, n: usize) {
+    let path = String::from_utf8_lossy(unsafe { bytes(p, n) }).into_owned();
+    with(|w| w.kern.read_path(token, &path));
+}
+
 /// the surface speaks back into /dev/window/<type>/<n>/events
 #[no_mangle]
 pub extern "C" fn bh_win_event(wid: u32, p: *const u8, n: usize) {
@@ -434,6 +441,12 @@ pub extern "C" fn bh_drain() -> *const u8 {
                         }
                         wbytes32(&mut ev, &nd.data);
                     }
+                }
+                Effect::ReadDone { token, ok, data } => {
+                    ev.push(14);
+                    ev.extend_from_slice(&token.to_le_bytes());
+                    ev.push(if ok { 1 } else { 0 });
+                    wbytes32(&mut ev, &data);
                 }
                 Effect::WinChrome { wid, wtype, content, toolbar, tag } => {
                     ev.push(13);

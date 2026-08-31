@@ -146,6 +146,10 @@ pub enum Effect {
     // /dev/window: the chrome IPNX declared, for the host to render natively.
     // Small and rare (unlike WinCanvas), so it rides outside the credit system.
     WinChrome { wid: u32, wtype: String, content: String, toolbar: String, tag: String },
+    // the SURFACE opened a file. In-process this is a function call, not
+    // marshalled 9P — "wire 9P at boundaries, a Dev table inside" (design.md).
+    // A remote surface marshals; a surface sharing the address space calls.
+    ReadDone { token: f64, ok: bool, data: Vec<u8> },
     // '#H': the host performs the GET off-thread and answers with FetchDone
     Fetch { url: String },
     // /dev/snarf: the host clipboard hears writes; reads ask it first
@@ -1852,6 +1856,21 @@ impl Kernel {
         }
     }
 
+    /// the surface opens a file. Answered later with Effect::ReadDone —
+    /// asynchronous because a read may park, exactly as a guest's would.
+    /// Resolved in INIT'S NAMESPACE (pid 1) for now; a window does not yet
+    /// record which process owns it.
+    pub fn read_path(&mut self, token: f64, path: &str) {
+        let k = self.k.clone();
+        let path = path.to_string();
+        self.ex.spawn(async move {
+            let r = read_whole(&k, 1, &path).await;
+            let (ok, data) = match r { Ok(d) => (true, d), Err(_) => (false, Vec::new()) };
+            k.borrow_mut().effects.push(Effect::ReadDone { token, ok, data });
+        });
+        self.ex.run_until_stalled();
+    }
+
     /// the surface's voice: a line into /dev/window/<type>/<n>/events
     pub fn win_event(&self, wid: u32, line: &str) {
         let win = self.k.borrow().wins.get(&wid).cloned();
@@ -3432,6 +3451,31 @@ fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Re
         chan.borrow_mut().offset += wrote as u64;
     }
     Ok(wrote)
+}
+
+// the host's read: walk a path in a namespace and take the whole file.
+// The host decides WHAT to open and WHEN, and renders it — which is the
+// property that matters; the kernel is only the filesystem.
+async fn read_whole(k: &K, pid: Pid, path: &str) -> Result<Vec<u8>, KErr> {
+    let dn = walk(k, pid, path, false).await?;
+    let chan = Rc::new(RefCell::new(Chan {
+        dev: dn.dev, node: dn.node, path: Some(path.to_string()),
+        mode: 0, offset: 0, refs: 1,
+    }));
+    let mut out: Vec<u8> = Vec::new();
+    let mut off: u64 = 0;
+    loop {
+        match dev_read_async(k, &chan, 65536, off, pid).await? {
+            RRes::Data(b) => {
+                if b.is_empty() { break; }
+                off += b.len() as u64;
+                out.extend_from_slice(&b);
+            }
+            RRes::Intr => break,
+        }
+        if out.len() > 4_000_000 { break; }   // a surface is not a pipe
+    }
+    Ok(out)
 }
 
 async fn dev_write_async(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Result<usize, KErr> {

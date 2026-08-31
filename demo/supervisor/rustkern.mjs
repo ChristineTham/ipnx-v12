@@ -195,6 +195,10 @@ export async function boot(host, opts) {
     return gw;
   }
 
+  // the surface's outstanding opens, keyed by token
+  const reads = new Map();
+  let nextRead = 1;
+
   // ---- the drain ----
   async function pump() {
     for (;;) {
@@ -212,6 +216,7 @@ export async function boot(host, opts) {
       const take = (n) => { const v = blob.subarray(o, o + n); o += n; return v; };
       const str16 = () => td.decode(take(u16()));
       const bytes32 = () => take(u32());
+      const f64v = () => { const v = b.getFloat64(o, true); o += 8; return v; };
 
       const ncompl = u32();
       let acted = ncompl > 0;
@@ -287,6 +292,10 @@ export async function boot(host, opts) {
         } else if (tag === 7) {
           const wid = u32();
           host.winText?.(wid, bytes32().slice());
+        } else if (tag === 14) { // ReadDone — the surface's open answered
+          const tok = f64v(), ok = u8() !== 0, data = bytes32().slice();
+          const w = reads.get(tok);
+          if (w) { reads.delete(tok); ok ? w.res(data) : w.rej(new Error("read failed")); }
         } else if (tag === 13) { // WinChrome — /dev/window's declared furniture
           const wid = u32();
           host.winChrome?.(wid, { type: str16(), content: str16(), toolbar: str16(), tag: str16() });
@@ -399,6 +408,13 @@ export async function boot(host, opts) {
   withBytes(te.encode(interactive ? "init\0-i\0" : "init\0"), (p, n) => call(X.bh_boot, p, n));
 
   return {
+    // the SURFACE opens a file. In-process this is a call, not marshalled 9P
+    // ("wire 9P at boundaries, a Dev table inside"); a remote surface marshals.
+    readPath: (path) => new Promise((res, rej) => {
+      const tok = nextRead++;
+      reads.set(tok, { res, rej });
+      withBytes(te.encode(path), (p, n) => call(X.bh_read, tok, p, n));
+    }),
     cons: {
       feed: (bytes) => withBytes(bytes, (p, n) => call(X.bh_cons_feed, p, n)),
       end: () => call(X.bh_cons_end),

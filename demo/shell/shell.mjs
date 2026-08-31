@@ -197,7 +197,48 @@ consT.term.onData((d) => {
 });
 
 // ---------- guest windows (#w) ----------
+// The SURFACE opens the file and the BROWSER renders it — IPNX implements no
+// renderers at all. What the file IS decides how it is shown, which is why an
+// SVG or a PNG costs this design nothing: the platform already knows.
+async function showContent(gw, path) {
+  let host = gw.contentEl;
+  if (!host) {
+    host = document.createElement("div");
+    host.style.cssText = "position:absolute;left:0;right:0;top:30px;bottom:0;overflow:auto;" +
+      "background:#fff;color:#111;";
+    gw.win.body.appendChild(host);
+    gw.contentEl = host;
+  }
+  host.replaceChildren();
+  let bytes;
+  try { bytes = await readPath(path); }
+  catch (e) { host.textContent = `${path}: ${e.message}`; return; }
+  const head = new TextDecoder().decode(bytes.slice(0, 512)).trimStart();
+  const ext = (path.split(".").pop() || "").toLowerCase();
+  const put = (el, css = "") => { el.style.cssText = css; host.appendChild(el); };
+  if (ext === "svg" || head.startsWith("<svg") || head.startsWith("<?xml")) {
+    const d = document.createElement("div");                 // the browser draws it
+    d.innerHTML = new TextDecoder().decode(bytes);
+    put(d, "padding:8px;");
+  } else if (["png","jpg","jpeg","gif","webp"].includes(ext)) {
+    const img = document.createElement("img");
+    img.src = URL.createObjectURL(new Blob([bytes]));
+    put(img, "max-width:100%;display:block;margin:8px;");
+  } else if (ext === "html" || ext === "htm") {
+    const f = document.createElement("iframe");
+    f.setAttribute("sandbox", "");                            // untrusted content
+    f.srcdoc = new TextDecoder().decode(bytes);
+    put(f, "width:100%;height:100%;border:0;");
+  } else {
+    const pre = document.createElement("pre");                // text, natively
+    pre.textContent = new TextDecoder().decode(bytes);
+    put(pre, "margin:0;padding:8px;white-space:pre-wrap;overflow-wrap:anywhere;" +
+      "font:500 13px/1.35 ui-monospace,'SF Mono',Menlo,monospace;");
+  }
+}
+
 let wsys = null;
+let readPath = null;   // the surface's own open (docs/window.md)
 const gwins = new Map();
 
 function winCreate(id, x, y, w, h, title) {
@@ -449,9 +490,10 @@ const host = {
     if (ch.content) {
       const t = document.createElement("span");
       t.textContent = ch.content;
-      t.title = `${ch.type} window — content opened over 9P`;
+      t.title = `${ch.type} window — content opened by the surface`;
       t.style.cssText = "font-weight:600;margin-right:4px;white-space:nowrap;";
       bar.appendChild(t);
+      if (ch.content !== gw.shownContent) { gw.shownContent = ch.content; showContent(gw, ch.content); }
     }
     for (const line of ch.toolbar.split("\n")) {
       const s = line.trim();
@@ -603,6 +645,7 @@ const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: tr
 }
 cons = booted.cons;
 wsys = booted.wsys;
+readPath = booted.readPath;
 setStatus("running");
 (async () => {                                    // the toolchains stream in
   if (params.has("lite")) return;

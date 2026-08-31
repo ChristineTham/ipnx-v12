@@ -2,7 +2,7 @@
 # HOST renders it and reports a click back, and this script — an ordinary
 # guest, no emca anywhere — reads that click out of the window's events.
 w=`{cat '#w/pkg/clone'}
-echo -n /pkg/index > '#w/pkg/'^$w/content
+echo -n /usr/kitty/emca.svg > '#w/pkg/'^$w/content
 echo Install ipnx:Install > '#w/pkg/'^$w/toolbar
 echo -n 'pkg | ' > '#w/pkg/'^$w/tag
 echo WINPROOF minted $w

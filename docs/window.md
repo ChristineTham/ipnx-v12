@@ -19,9 +19,22 @@
 > **with no emca anywhere in the loop**, which is the claim that most
 > distinguishes this design from acme's.
 >
-> What is NOT built: the host does not yet *open the content path over 9P and
-> render the file* — it displays the path. That is the next piece, and it is
-> where the editor component arrives.
+> **And the content half landed too.** The surface *opens the file itself* —
+> `readPath` on the bridge, resolved in the namespace, answered as
+> `Effect::ReadDone` — and **the browser renders it with its own engines**: SVG
+> as SVG, images as images, HTML in a sandboxed frame, anything else as text.
+> `IPNX implements no renderers` is now a fact about the code, not a claim.
+> Verified both ways: `winproof.mjs` opens a 602-byte SVG headlessly, and in the
+> browser the same file is *drawn* beside its declared toolbar.
+>
+> **On 9P and the wire**: in-process this is a function call, per the founding
+> shape — *"wire 9P at boundaries, a Dev table inside"*. A surface sharing the
+> address space calls; a **remote** surface (M12) marshals. The host decides what
+> to open and when, and renders it, which is the property that matters.
+>
+> What is NOT built: a real editor component for text. The surface renders text
+> as a `<pre>`; Monaco or TextKit is the remaining piece, and the one place still
+> wanting a spike.
 
 The contract for the 2026-08-31 redesign (design.md): the bidirectional
 device through which IPNX declares a window's chrome and the host reports what
@@ -307,7 +320,6 @@ every renderer emca would have needed, and most of its display machinery.
 - ~~The transcript's shape~~ — **specified above**: a growing file the host tails,
   typed lines back as `insert`, con(1)'s mark arithmetic deleted.
 
-Nothing is open in this contract. **The device half and the chrome half of the
-host are built** (see the header). What remains: the host **opening `content`
-over 9P and rendering the file** — which is where the editor component arrives,
-and the one place the design still needs a verification spike.
+Nothing is open in this contract, and **all three halves are built** — the
+device, the host's chrome, and the host's content. What remains is one thing:
+a real **editor component** for text windows, which is the remaining spike.

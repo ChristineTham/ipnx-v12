@@ -86,6 +86,8 @@ async function hostServe(op) {
 }
 
 let clicked = false;
+let opened = false;
+let gotContent = false;
 let seen = "";
 const host = {
   spawnWorker: (initMsg, transfer) => {
@@ -107,14 +109,27 @@ const host = {
     process.stdout.write(bytes);
     seen += Buffer.from(bytes).toString();
     if (seen.includes("WINPROOF got exec Install")) {
-      console.log("\nWINPROOF PASS: chrome declared in IPNX reached the host, the host's"
-        + " click reached the guest — /dev/window round trip, no emca involved");
-      process.exit(0);
+      setTimeout(() => {
+        if (!gotContent) { console.error("WINPROOF FAIL: the surface never opened the content"); process.exit(1); }
+        console.log("\nWINPROOF PASS: IPNX declared chrome and a PATH; the surface opened the"
+          + " file itself and rendered it; the surface's click reached a plain guest."
+          + " /dev/window round trip, no emca involved, no renderer in IPNX.");
+        process.exit(0);
+      }, 300);
     }
   },
   winChrome: (wid, ch) => {
     if (ch.type !== "pkg" || clicked) return;   // chrome arrives per declaration
     console.log(`WINPROOF host sees: type=${ch.type} content=${ch.content} toolbar=${JSON.stringify(ch.toolbar)}`);
+    // THE SURFACE OPENS THE FILE. IPNX handed over a path, nothing more.
+    if (ch.content && !opened) {
+      opened = true;
+      readPath(ch.content).then((b) => {
+        const s = new TextDecoder().decode(b);
+        console.log(`WINPROOF host opened ${ch.content}: ${b.length} bytes, first line ${JSON.stringify(s.split("\n")[0].slice(0, 60))}`);
+        gotContent = true;
+      }).catch((e) => console.log(`WINPROOF host open FAILED: ${e.message}`));
+    }
     for (const line of ch.toolbar.split("\n")) {
       const s = line.trim(); if (!s) continue;
       const sp = s.indexOf(" ");
@@ -132,7 +147,7 @@ const host = {
 
 const kernelWasm = fs.readFileSync(join(here, "..", "..", "target",
   "wasm32-unknown-unknown", "release", "browserhost.wasm"));
-const { cons, wsys } = await boot(host, {
+const { cons, wsys, readPath } = await boot(host, {
   rootSeed: loadSeed(rootdir), interactive: true, kernelWasm, hostServe,
 });
 

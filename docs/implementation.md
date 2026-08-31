@@ -557,8 +557,13 @@ landed the same day**: `WinChrome` crosses as an ordinary effect, the browser
 shell renders native furniture (content path, real buttons, tag field), a click
 returns through `bh_win_event`, and `host:` actions never leave the surface —
 proved headlessly by `node demo/supervisor/winproof.mjs userspace/rootfs`, **with
-no emca in the loop**. **Still unbuilt**: the host opening `content` over 9P and
-rendering it (where the editor component arrives), and canvas's narrowing.
+no emca in the loop**. **And the content half the same day**: the surface opens the file
+itself (`readPath` → `Effect::ReadDone`) and **the browser renders it with its
+own engines** — SVG as SVG, images as images, HTML sandboxed, else text. *IPNX
+implements no renderers* is now a fact about the code. In-process this is a
+function call, per *"wire 9P at boundaries, a Dev table inside"*; a remote
+surface (M12) marshals. **Still unbuilt**: a real editor component for text (the
+remaining spike), and canvas's narrowing.
 
 **b. `/type` and the manager types *(M)*.** The registry: a directory
 per type holding `ns`, optional `cmd`, and `window` — house style, small
