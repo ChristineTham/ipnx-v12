@@ -776,6 +776,61 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   construction, since type already determines default placement, so it never
   appears somewhere *wrong* — only somewhere provisional, moving at most once.
 
+- **(2026-08-31) The open questions, resolved in one pass — and what it revealed
+  about them.** Eleven items stood open across [emca.txt](emca.txt) and
+  [window.md](window.md); worked through together on Christine's instruction,
+  they resolved almost entirely by reasoning from decisions already taken, which
+  is itself the finding: **most of them were consequences waiting to be noticed
+  rather than questions waiting to be answered.** **Two were stale** — *who owns
+  undo* and *buffer fidelity* had been settled by the buffer-contract decision
+  and never struck out; a list that keeps answered items is a list that stops
+  being read. **One dissolved**: *how a type declares a view mode without
+  becoming a widget toolkit* has no answer because a type declares **nothing
+  about rendering** — the host opens the file and renders it natively, so there
+  is no vocabulary to grow into and the dozen-kinds tripwire has nothing to trip.
+  The canvas redesign removed the risk rather than bounding it, which is worth
+  noting: the right architecture deletes questions instead of answering them.
+  **One resolved by adoption rather than design**: the plumber takes Plan 9's
+  **plumb(6) rules syntax and message format verbatim** — *adopt the notation,
+  own the model*, the same move that took SVG path data, and the standing
+  instruction to maximise reuse of existing protocols applied where it was
+  cheapest. **One resolved by reframing**: *property 1 under Monaco* is not a
+  risk about Monaco but a **selection criterion for any editor component** —
+  expose the selection, accept custom context-menu commands, or be disqualified.
+  Monaco, CodeMirror and TextKit all qualify. The spike still runs to verify the
+  chosen one; it no longer gates the design. **And one produced genuinely new
+  mechanism**: *the surface's own suite*, flagged as the largest untested area
+  with no precedent to borrow. Resolved by having **the surface publish what it
+  rendered** — a `ui` file per window listing each control's label, role,
+  keyboard path and enabled state, **derived from the platform accessibility
+  tree** on real surfaces and synthesised on the virtual one. The a11y tree is
+  precisely the "can this be reached" answer, on the web and on Apple alike, so
+  one assertion — *every floating-bar verb and every toolbar button is present,
+  named and keyboard-reachable* — runs on every surface including headless. That
+  converts a claim into a measurement: the input convention has held since
+  2026-08-30 that accessibility is *"enforced by construction"*, and nothing
+  checked it until now. **The remainder, resolved plainly**: snapshot-vs-replay
+  is snapshot and it is *free*, because a workspace's writable layer already is a
+  tree and keeping it is the snapshot (replay stays available as recorded
+  provenance); an unnamed instance gets its layer at birth under
+  `/usr/$user/.inst/<id>` so saving is a **rename, not a copy**, and there is no
+  window in which work sits somewhere it could be lost; cross-window at small is
+  a **stated degradation** — operation works via the pin at every size, viewing
+  two bodies on one small screen is impossible for any design and is named rather
+  than solved; the floating bar's **set** is closed and derived from acme's layer
+  3 while its **order and grouping** stay empirical; and surface dependency
+  divergence was never open, being the input convention working as intended.
+  **Also specified in the same pass** ([window.md](window.md)): the event
+  vocabulary, reusing canvas's verbs rather than inventing a second set, with a
+  root `events` for lifecycle and a per-window one for user action; and the
+  **transcript**, which is not a special mechanism at all — its content is a
+  growing file the host tails, typed lines return as ordinary `insert`, and
+  con(1)'s mark arithmetic is **deleted** because the input region is just the
+  host's editable tail. **What actually remains** is small and honest: the
+  floating bar's arrangement, the editor component's verification spike, and the
+  fact that **none of it is built** — every decision here is design, M14 is
+  unstarted, and the suite's 151 pass because the code has not moved.
+
 - **(2026-08-27) The native host is a Rust kernel core plus per-platform embedding
   shims — after the PoC completes.** The kernel never executes guest code, so the
   core (proc table, namespaces, devices, 9P, the draw engine) compiles once in Rust

@@ -191,6 +191,64 @@ edit-granular and session-scoped. Neither substitutes, and because versioning is
 optional (decision log), **nothing may be built on it** — undo cannot be "walk to
 the previous version", or a user with versioning off would have none.
 
+## The event vocabulary
+
+Reused from canvas rather than invented — the verbs and their fields are the
+ones already in service, which keeps one vocabulary across the system.
+
+**Root — `/dev/window/events`** (window lifecycle; read by both emca and the
+host):
+
+```
+new <type> <n>            a window was minted
+del <n>                   a window is gone
+```
+
+**Per window — `/dev/window/<type>/<n>/events`** (what the user did):
+
+```
+exec <label>              a toolbar control was activated
+tag <text>                a command typed in the tag line — sam's language
+execute <q0> <q1> <text>  the execute verb landed on this range
+look <q0> <q1> <text>     the look verb landed
+insert <q0> <text>        the user typed or pasted
+delete <q0> <q1>          the user removed a range
+select <q0> <q1>          the selection (or collapsed caret) changed
+dirty <0|1>               the buffer's dirty state changed
+seq <n> <hash>            the mirror's sequence and buffer hash
+resize <w> <h>
+close
+```
+
+`seq` is the divergence check from *The buffer* above: emca compares and
+resyncs on mismatch. Everything else is a user action.
+
+## `ui` — what the surface actually rendered
+
+Each window also carries a **`ui`** file: the controls the surface produced, one
+per line — label, role, keyboard path, enabled state.
+
+This exists so the **grammar is testable**, which nothing else in the design
+made possible. On a real surface it is derived from the **platform accessibility
+tree** — which is precisely the "can this be reached" answer, on the web and on
+Apple alike — and the virtual surface synthesises it. So one assertion (*every
+floating-bar verb and every toolbar button is present, named and
+keyboard-reachable*) runs on every surface, headless included.
+
+It also converts a claim into a measurement: the input convention holds that
+accessibility is *"enforced by construction"*, and until now nothing checked it.
+
+## The transcript
+
+A transcript window is not a special mechanism. Its `content` is a **growing
+file the host tails**; typed lines arrive back through the window's `events` as
+ordinary `insert` lines terminated by a newline. History and line editing are the
+host's (*editing is the surface's*), which **deletes con(1)'s mark arithmetic** —
+the input region is just the host's editable tail.
+
+For programs wanting keystrokes rather than lines, the raw-input door is
+xterm.js, per the console's "AND, not XOR" (userland.md).
+
 ## `/type` — read by both sides
 
 The registry binds a type name to three things:
@@ -221,8 +279,10 @@ every renderer emca would have needed, and most of its display machinery.
   §7 and the thing that made acme extensible without plugins — is **discharged
   above**: any program mints through `clone`, and emca is a watcher rather than a
   gatekeeper.
-- **Event granularity on the way back** — a click is obvious; what a tag command,
-  a selection, or a dirty transition looks like as a line is not yet specified.
-- **The transcript's shape** — a growing file the host tails plus a line
-  back-channel is the natural fit, and would delete con(1)'s mark arithmetic, but
-  it is not yet confirmed.
+- ~~Event granularity on the way back~~ — **specified above**, reusing canvas's
+  vocabulary rather than inventing one.
+- ~~The transcript's shape~~ — **specified above**: a growing file the host tails,
+  typed lines back as `insert`, con(1)'s mark arithmetic deleted.
+
+Nothing is open in this contract. What remains is that **none of it is built** —
+`/dev/window` is specified and M14a is unstarted.

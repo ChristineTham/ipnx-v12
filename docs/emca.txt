@@ -1066,50 +1066,105 @@ PART EIGHT — WHAT IS DECIDED
       the type is in the path.
 
 
-PART NINE — WHAT IS OPEN
-========================
+PART NINE — THE OPEN QUESTIONS, RESOLVED (2026-08-31)
+=====================================================
 
-  - SNAPSHOT VS REPLAY. When a workspace is saved, are the installed
-    language packages captured as bytes or as instructions to
-    re-fetch? Docker took the first, Nix the second. Recommendation:
-    snapshot by default with provenance recorded for audit, but not
-    decided.
-  - THE PLUMBER. The floating bar's Open and Jump entries ARE plumber
-    rules deciding what applies, but the rules format and message
-    shape are undesigned — canvas.md calls it "the next measurement's
-    work". This design DEPENDS on it.
-  - THE SURFACE'S OWN SUITE. emca's behaviour stays testable through
-    the virtual surface. The GRAMMAR is not: nothing in the tree
-    proves a button was reachable, or that Tab reached it. Given "no
-    half-working" and the keyboard-complete law, this is the largest
-    untested area in the design and it has no precedent in the
-    repository to borrow from.
-  - CROSS-WINDOW AT SMALL. The pin answers execute-with-argument. It
-    does not answer reading errors beside their source on one body.
-    Possibly unanswerable; then say so.
-  - UNNAMED INSTANCE STORAGE. Between instantiating a template and
-    saving it as a workspace, the writable layer must survive
-    somewhere durable enough to be saved.
-  - THE FLOATING BAR'S EXACT CONTENTS, measured against real use
-    rather than derived.
-  - HOW A TYPE DECLARES A VIEW MODE without becoming a widget
-    toolkit. The discipline is stated; the ceiling is not.
-  - WHO OWNS UNDO. With editing host-side there are TWO undo stacks:
-    the surface's, at keystroke granularity, and emca's, at command
-    granularity (sam transformations, Get, Put — acme.c's sequence
-    numbers). Acme had one. Which one answers Cmd-Z, and how they
-    interleave, is undecided and will be felt immediately.
-  - BUFFER FIDELITY UNDER A RICH EDITOR. The shadow discipline is
-    "apps never re-read" (con(1)'s, load-bearing). Monaco must report
-    every edit as insert/delete, and multi-cursor emits many ranges
-    per keystroke. If a surface and emca ever diverge, the only repair
-    is a re-read — which breaks the discipline. Whether a resync path
-    exists, and what it costs, is open.
-  - PROPERTY 1 UNDER MONACO. "Any text can be a verb's operand" is the
-    claim the whole design rests on. Monaco owns the body's text, so
-    execute and look must ride ITS action and context-menu API. It
-    looks possible (addAction, selection API) and it must be PROVEN
-    before the approach is adopted, not assumed.
-  - SURFACE DEPENDENCY DIVERGENCE. Monaco on the web (~5MB), TextKit
-    on Apple: the surfaces now differ in dependencies, not only in
-    grammar. Accepted by the input convention, but named here.
+Worked through in one pass. Most resolved by reasoning from decisions
+already taken; two were stale (answered by later decisions and never
+struck out); one resolved by ADOPTING an existing protocol rather than
+designing one; one DISSOLVED by the canvas redesign. What genuinely
+remains is listed at the end and is small.
+
+SNAPSHOT VS REPLAY — RESOLVED: snapshot, and it is free.
+  A project's writable layer IS a tree, so keeping it is the snapshot;
+  nothing is captured because nothing was ever anywhere else. Replay
+  is the optional extra: the declaration records provenance (which
+  /pkg entries, which language installs) so a workspace can be audited
+  and rebuilt from scratch when someone wants that. Docker's answer by
+  default, Nix's available, neither implemented as machinery.
+
+THE PLUMBER — RESOLVED BY ADOPTION, not design.
+  Adopt Plan 9's plumb(6) rules syntax and message format verbatim;
+  own the model. The house move exactly — the same "adopt the
+  notation, own the model" that took SVG path data for canvas — and it
+  answers the standing instruction to maximise reuse of existing
+  protocols. The floating bar's Open and Jump entries are plumb rules
+  evaluating; nothing new is invented, and the plumber finally has a
+  face (it populates a menu instead of deciding silently).
+
+THE SURFACE'S OWN SUITE — RESOLVED: the surface publishes what it
+  rendered, and the suite asserts over that.
+  Each window grows a `ui` file listing the controls the surface
+  actually produced — label, role, keyboard path, enabled state. On a
+  real surface it is DERIVED FROM THE PLATFORM ACCESSIBILITY TREE (the
+  a11y tree is precisely the "can this be reached" answer, on the web
+  and on Apple alike); on the virtual surface it is synthesised. So
+  ONE test asserts "every floating-bar verb and every toolbar button
+  is present, named, and keyboard-reachable" and it runs on every
+  surface including headless.
+  This also turns an assertion into a measurement: the input
+  convention claims accessibility is "enforced BY CONSTRUCTION", and
+  until now nothing checked it. Now the suite does.
+
+CROSS-WINDOW AT SMALL — RESOLVED as a stated degradation.
+  Cross-window OPERATION works at every size: the pin carries a range
+  across navigation. Cross-window VIEWING does not and cannot at one
+  visible body — no design can show two bodies on one small screen.
+  So it is named rather than solved: at small, emca is a reduced emca,
+  and the reduction is exactly one thing.
+
+UNNAMED INSTANCE STORAGE — RESOLVED: it is a rename, not a copy.
+  An instantiated template gets its writable layer at birth, under
+  /usr/$user/.inst/<id>. "Save as workspace" RENAMES that tree into
+  /usr/$user/<name>. Nothing migrates, nothing is copied, and there is
+  no window during which work is somewhere it might be lost.
+
+THE FLOATING BAR'S CONTENTS — RESOLVED in the part that is derivable.
+  The SET is closed and comes from acme's layer 3, not from taste:
+  cut, copy, paste, execute, look (open/jump/search/plumb), pin, Edit.
+  What is not derivable is ORDER and GROUPING, which is genuinely
+  empirical and stays a measurement task rather than a design
+  question. The set can ship; the arrangement is tuned against use.
+
+HOW A TYPE DECLARES A VIEW MODE — DISSOLVED by the canvas redesign.
+  It does not. The host opens the file over 9P and RENDERS IT
+  NATIVELY according to what it is; a type declares a namespace, an
+  optional command, and chrome — and nothing whatever about
+  rendering. So there is no vocabulary for a type to grow into, and
+  the widget-toolkit tripwire has nothing to trip. The redesign
+  removed the risk rather than bounding it.
+
+WHO OWNS UNDO — STALE. Answered by decision 36: one stack, in emca,
+  the host's undo disabled, Cmd-Z round-trips because emca is not
+  remote.
+
+BUFFER FIDELITY — STALE. Answered by decision 35: sequence number per
+  edit, hash per sync, resync as a repair path, and "apps never
+  re-read" relaxed to "never re-read ROUTINELY".
+
+PROPERTY 1 UNDER MONACO — RESOLVED by reframing: it is a SELECTION
+  CRITERION, not a risk.
+  The design does not depend on Monaco; it depends on the editor
+  component exposing the selection and accepting custom commands in
+  its context menu. Monaco does (addAction, getSelection), CodeMirror
+  does, TextKit does. A component that does not is DISQUALIFIED — so
+  the question is how a component is chosen, not whether the approach
+  works. The spike still runs, to verify the chosen one; it no longer
+  gates the design.
+
+SURFACE DEPENDENCY DIVERGENCE — NOT OPEN. Accepted and named by the
+  input convention (2026-08-30): divergence between surfaces is
+  expected, and Monaco on the web against TextKit on Apple is that
+  convention working, not a problem to solve.
+
+
+PART TEN — WHAT ACTUALLY REMAINS
+================================
+
+  - THE FLOATING BAR'S ORDER AND GROUPING — empirical, tuned against
+    use once there is use. The set is settled.
+  - THE EDITOR COMPONENT'S SPIKE — verify the chosen component against
+    the selection criterion above. An afternoon, not a milestone.
+  - AND THE WHOLE OF IT IS UNBUILT. That is the real open item:
+    every decision in PART EIGHT is design, M14 is unstarted, and the
+    suite's 151 pass because the code is exactly where it was.
