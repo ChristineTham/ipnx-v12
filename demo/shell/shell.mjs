@@ -205,8 +205,10 @@ const consWin = makeWindow({
 const consW = createShellWindow({
   mount: consWin.body,
   send: (line) => cons && cons.feed(enc.encode(line)),
+  makeTerm,
 });
 consWin.setFocusInner(() => consW.focus());
+consWin.onResize(() => consW.fit());
 consW.write("ipnx-v12 — a reimagining of Unix, booting in this tab\n");
 if (!new URLSearchParams(location.search).has("lite"))
   consW.write("the toolchains stream in behind — cc, go, python, pip (watch the corner)\n");

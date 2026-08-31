@@ -1,103 +1,109 @@
-// shellwin.mjs — the `shell` window type. rc in an editable buffer.
+// shellwin.mjs — the `shell` window type: rc in a terminal pane, with the
+// LINE EDITOR implemented by the host.
 //
-// NOT a terminal, and not a "transcript" — Pike's word (typescript) is for the
-// thing being replaced, so naming the new thing after the old thing's shape was
-// backwards. This is a shell window: ONE EDITABLE BUFFER, a mark separating
-// what has happened from what you are typing, Enter sending the line, and
-// everything above ordinary editable, searchable, selectable text. acme's
-// win(1) was this design's prototype twenty years early.
+// This behaves like VS Code's terminal, and the difference from VS Code is the
+// whole point: there, bash provides readline, so the shell owns the line
+// editor. rc has no readline and is blissfully unaware — so the HOST provides
+// it, which is "even command history and shell command line edit — host
+// implemented" (design log, 2026-08-31).
 //
-// rc knows none of this. It reads lines and writes bytes. Command-line
-// editing, history recall, selection, copy and mouse editing are ALL the
-// host's — which is "editing is the surface's" applied to the shell, and it
-// is why there is no line discipline, no escape sequences and no terminal
-// emulation anywhere in this file.
+// Output is output: the caret never enters it and it is not editable. You can
+// still select and copy it — that is the terminal's own affordance, and it is
+// what makes a session snarfable into another window.
 //
-// The mark discipline, which is the only subtle part: output arriving while
-// the user is mid-line is inserted AT THE MARK, so the half-typed command
-// stays at the end where the cursor is. con(1) calls this its shadow-state
-// mark arithmetic, and it is load-bearing.
+// rc sees only complete lines. It never sees an arrow key, a backspace, or a
+// history recall; none of that reaches the guest.
 
-import { EditorView, minimalSetup } from "../vendor/codemirror.bundle.mjs";
+const ESC = "\x1b";
 
-export function createShellWindow({ mount, send }) {
-  let mark = 0;                 // where the input region begins
-  const hist = [];              // command history — the host's, not rc's
+export function createShellWindow({ mount, send, makeTerm }) {
+  const el = document.createElement("div");
+  el.className = "term";
+  el.style.cssText = "position:absolute;inset:0;";
+  mount.appendChild(el);
+  const t = makeTerm(el);
+  const term = t.term;
+
+  let line = "";        // the current input line — the host's, not rc's
+  let pos = 0;          // caret position within it
+  const hist = [];
   let hpos = 0;
+  let stash = "";       // what was being typed before history was walked
 
-  const view = new EditorView({
-    doc: "",
-    parent: mount,
-    extensions: [
-      minimalSetup,
-      EditorView.lineWrapping,
-      EditorView.theme({
-        "&": { height: "100%", fontSize: "13px", background: "#0f1720", color: "#d6dde4" },
-        ".cm-content": { fontFamily: "ui-monospace, 'SF Mono', Menlo, monospace", caretColor: "#9eeeee" },
-        ".cm-cursor": { borderLeftColor: "#9eeeee" },
-        "&.cm-focused": { outline: "none" },
-        ".cm-selectionBackground, ::selection": { background: "#2d4155" },
-      }),
-    ],
+  // repaint the input region only: back up over what is there, rewrite it,
+  // erase the tail, then put the caret where it belongs.
+  const setLine = (next, caret = next.length) => {
+    const prevPos = pos;
+    line = next;
+    pos = Math.max(0, Math.min(caret, next.length));
+    let s = "";
+    if (prevPos > 0) s += `${ESC}[${prevPos}D`;
+    s += line + `${ESC}[K`;
+    const back = line.length - pos;
+    if (back > 0) s += `${ESC}[${back}D`;
+    term.write(s);
+  };
+  const left = (n) => { if (n > 0) { term.write(`${ESC}[${n}D`); pos -= n; } };
+  const right = (n) => { if (n > 0) { term.write(`${ESC}[${n}C`); pos += n; } };
+
+  term.onData((d) => {
+    let i = 0;
+    while (i < d.length) {
+      const c = d[i];
+
+      // ---- escape sequences: arrows, Home/End, Delete ----
+      if (c === ESC && d[i + 1] === "[") {
+        const m = d.slice(i + 2).match(/^(\d*)([A-D~HF])/);
+        if (m) {
+          i += 2 + m[0].length;
+          const k = m[2], num = m[1];
+          if (k === "A" || k === "B") {                 // history — the HOST's
+            if (!hist.length) continue;
+            if (hpos === hist.length) stash = line;
+            hpos = Math.max(0, Math.min(hist.length, hpos + (k === "A" ? -1 : 1)));
+            setLine(hpos === hist.length ? stash : hist[hpos]);
+          } else if (k === "C") { if (pos < line.length) right(1); }
+          else if (k === "D") { if (pos > 0) left(1); }
+          else if (k === "H" || num === "1") { left(pos); }
+          else if (k === "F" || num === "4") { right(line.length - pos); }
+          else if (num === "3" && k === "~") {           // Delete
+            if (pos < line.length) setLine(line.slice(0, pos) + line.slice(pos + 1), pos);
+          }
+          continue;
+        }
+      }
+
+      i++;
+      if (c === "\r" || c === "\n") {
+        term.write("\r\n");
+        if (line.trim()) hist.push(line);
+        hpos = hist.length; stash = "";
+        send(line + "\n");
+        line = ""; pos = 0;
+        continue;
+      }
+      if (c === "\x7f" || c === "\b") {                  // Backspace
+        if (pos > 0) setLine(line.slice(0, pos - 1) + line.slice(pos), pos - 1);
+        continue;
+      }
+      if (c === "\x01") { left(pos); continue; }                                  // ^A
+      if (c === "\x05") { right(line.length - pos); continue; }                   // ^E
+      if (c === "\x15") { setLine("", 0); continue; }                             // ^U
+      if (c === "\x0b") { setLine(line.slice(0, pos), pos); continue; }           // ^K
+      if (c === "\x03") { term.write("^C\r\n"); line = ""; pos = 0; hpos = hist.length; continue; }
+      if (c === "\x04") { if (!line) send("\x04"); continue; }                    // ^D
+      if (c >= " " || c === "\t") {                      // ordinary text
+        setLine(line.slice(0, pos) + c + line.slice(pos), pos + 1);
+      }
+    }
   });
 
-  // CAPTURE PHASE, deliberately: CodeMirror's own keymap also listens on
-  // keydown, and this bundle exports neither `keymap` nor `Prec`, so the only
-  // way to be certain Enter means "send the line" rather than "insert a
-  // newline" is to run before the editor does.
-  view.dom.addEventListener("keydown", (e) => {
-    const doc = view.state.doc;
-    const end = doc.length;
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      e.stopPropagation();
-      const line = doc.sliceString(mark, end);
-      view.dispatch({ changes: { from: end, insert: "\n" }, selection: { anchor: end + 1 } });
-      mark = view.state.doc.length;
-      if (line.trim()) { hist.push(line); hpos = hist.length; }
-      send(line + "\n");
-      return;
-    }
-    // history is the HOST's: rc never sees an arrow key
-    if (e.key === "ArrowUp" || e.key === "ArrowDown") {
-      if (!hist.length) return;
-      if (view.state.selection.main.head < mark) return;   // editing scrollback
-      e.preventDefault();
-      e.stopPropagation();
-      hpos += e.key === "ArrowUp" ? -1 : 1;
-      hpos = Math.max(0, Math.min(hist.length, hpos));
-      const want = hpos === hist.length ? "" : hist[hpos];
-      view.dispatch({ changes: { from: mark, to: view.state.doc.length, insert: want },
-                      selection: { anchor: mark + want.length } });
-      return;
-    }
-    // Backspace must not eat what has already happened
-    if (e.key === "Backspace" && view.state.selection.main.empty &&
-        view.state.selection.main.head <= mark) { e.preventDefault(); e.stopPropagation(); }
-  }, true);
-
-
   return {
-    view,
-    // rc's output. Inserted AT THE MARK so a half-typed line stays put.
-    write(text) {
-      const sel = view.state.selection.main;
-      const tail = view.state.doc.sliceString(mark, view.state.doc.length);
-      const grew = text.length;
-      view.dispatch({
-        changes: { from: mark, insert: text },
-        selection: { anchor: Math.min(sel.anchor + grew, view.state.doc.length + grew) },
-        scrollIntoView: true,
-      });
-      mark += grew;
-      // keep the caret in the input region if it was there
-      if (sel.anchor >= mark - grew) {
-        const want = Math.min(sel.anchor + grew, view.state.doc.length);
-        view.dispatch({ selection: { anchor: want }, scrollIntoView: true });
-      }
-      void tail;
-    },
-    focus: () => view.focus(),
-    destroy: () => view.destroy(),
+    term,
+    // rc's output. It lands as output — not as text the caret can enter.
+    write(text) { term.write(text.replace(/\n/g, "\r\n")); },
+    focus: () => term.focus(),
+    fit: () => t.fit.fit(),
+    destroy: () => { try { term.dispose(); } catch { /* already gone */ } el.remove(); },
   };
 }

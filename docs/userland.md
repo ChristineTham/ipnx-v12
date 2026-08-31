@@ -31,19 +31,27 @@ born here.
 
 ## The console: an editable transcript
 
-> **Built 2026-08-31 as the `shell` window type** — Christine's name, and the
-> right one: it says what the window *is*, where "transcript" says what is *in*
-> it. rc runs in an editable buffer; command-line editing, history recall,
-> selection and copy are the **host's**, and rc reads lines without knowing any
-> of it. No terminal emulation, no line discipline, no escape sequences.
-> `demo/shell/shellwin.mjs`, registered at `/type/shell`.
+> **Built 2026-08-31 as the `shell` window type — a TERMINAL PANE, and the
+> word "transcript" should never have been introduced.** It was invented in this
+> document, it is in none of Christine's own writing, and it cost two wrong
+> implementations: it suggested an editable buffer, when what was wanted is what
+> everyone already means by a terminal. Her description, which needed no new
+> vocabulary: *"the window behaves like the terminal pane in VS Code. Command
+> line editing works, and history works (using arrow keys). In VSCode, all this
+> is handled by the shell itself (bash, using readline) but in IPNX rc is
+> blissfully unaware, so the host does it."*
 >
-> And a correction to the record, hers: Pike's *typescript* is not the thing
-> being replaced — it is output plus the echo of what you typed, which is
-> exactly what a session window should contain and precisely what makes it
-> snarfable into another window. What he called old was the typescript *style
-> of interaction*, being write-only. `win(1)` did not abolish the typescript;
-> it made it editable, which is what this is.
+> So: **output is output** — the caret never enters it and it is not editable,
+> though it selects and copies like any terminal, which is what makes a session
+> snarfable into another window. **The line editor is the host's**: insert,
+> arrows, Home/End, ^A ^E ^U ^K, and history on Up/Down. rc sees complete lines
+> and nothing else — no arrow key, no backspace, no recall ever reaches it.
+> `demo/shell/shellwin.mjs` over xterm (which is what VS Code's terminal is),
+> registered at `/type/shell`.
+>
+> Pike's *typescript*, for the record, is not the thing being replaced: it is
+> output plus the echo of what you typed. What he called old was the typescript
+> *style of interaction*, being write-only.
 
 > **Given its architectural reason, 2026-08-31 (decision log).** The
 > "AND, not XOR" amendment below was recorded as a concession to
