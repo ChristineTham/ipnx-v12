@@ -1,0 +1,7 @@
+# emca — the default workspace, as a namespace file would declare it
+# (docs/emca.txt PART SIX: "the system boots into emca").
+#   motd  in an editor window, in a tab
+#   home  as a directory listing, in the rail
+#   rc    already runs in the transcript pane below
+rc /rc/emcaopen dir /usr/kitty >/dev/null
+rc /rc/emcaopen text /etc/motd >/dev/null

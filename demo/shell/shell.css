@@ -99,3 +99,65 @@ body {
 
 #menubar select { background: #1a1d24; color: #cfd6e4; border: 1px solid #2a2f3a;
   border-radius: 4px; font: inherit; font-size: 12px; margin-left: 14px; padding: 1px 4px; }
+
+/* ---- emca: the surface (docs/emca.txt) ------------------------------
+   Panes carry kinds, rows and columns split the display, tabs switch
+   between windows of the same type. No floating windows: a window lives
+   in a pane, and which pane is decided by its TYPE.                    */
+html, body { height: 100%; margin: 0; overflow: hidden; }
+body { display: flex; flex-direction: column;
+       background: #1b2430; color: #d6dde4;
+       font: 500 13px/1.35 "Lucida Grande", "Lucida Sans Unicode", system-ui, sans-serif; }
+
+#emcaTop { flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+           padding: 5px 10px; background: #16202b; border-bottom: 1px solid #000;
+           flex-wrap: wrap; }
+#emcaTop #brand { font-weight: 700; letter-spacing: .04em; color: #9eeeee; }
+#emcaTop .tgroup { display: flex; align-items: center; gap: 4px; }
+#emcaTop #overflow { margin-left: auto; }
+#emcaTop button, #emcaTop select {
+  font: 500 12px/1 inherit; padding: 4px 9px; min-height: 24px;
+  border: 1px solid #3a4a5c; border-radius: 5px;
+  background: #22303f; color: #cfe; cursor: pointer; white-space: nowrap; }
+#emcaTop button:hover { background: #2d4155; }
+#emcaTop .mlink { color: #8ab; text-decoration: none; padding: 4px 6px; font-size: 12px; }
+
+#emcaBody { flex: 1 1 auto; display: flex; min-height: 0; }
+#emcaLeft { flex: 0 0 220px; display: flex; flex-direction: column;
+            background: #17212c; border-right: 1px solid #000; min-width: 0; }
+#emcaMain { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+#emcaBottom { flex: 0 0 200px; display: flex; flex-direction: column;
+              background: #131b24; border-top: 1px solid #000; min-height: 0; }
+#emcaLeft.hidden, #emcaBottom.hidden { display: none; }
+
+.paneHead { flex: 0 0 auto; padding: 3px 8px; font-size: 11px; letter-spacing: .06em;
+            text-transform: uppercase; color: #7b8b9b; background: #101820;
+            border-bottom: 1px solid #000; }
+.paneBody { flex: 1 1 auto; min-height: 0; overflow: auto; position: relative; }
+
+/* tabs: windows of the SAME TYPE, switched. Alternating between two of them
+   is a blink comparator — motion detection, which side-by-side cannot do. */
+#emcaTabs { flex: 0 0 auto; display: flex; gap: 2px; overflow-x: auto;
+            background: #101820; border-bottom: 1px solid #000; }
+#emcaTabs button { font: 500 12px/1 inherit; padding: 7px 12px; min-height: 28px;
+                   border: 0; border-right: 1px solid #263440; cursor: pointer;
+                   white-space: nowrap; flex: 0 0 auto;
+                   background: #17212c; color: #8fa4b6; }
+#emcaTabs button.on { background: #ffffea; color: #112; box-shadow: inset 0 -2px 0 #557; }
+#emcaStack { flex: 1 1 auto; min-height: 0; position: relative; background: #fff; }
+
+/* a window IS its pane's content — no chrome of its own beyond what /dev/window
+   declared. Only one is visible in a tabbed stack. */
+.ewin { position: absolute; inset: 0; display: flex; flex-direction: column;
+        background: #fff; color: #111; min-width: 0; min-height: 0; }
+.ewin.off { display: none; }
+.ewin .wbody { flex: 1 1 auto; position: relative; min-height: 0; overflow: auto; }
+#emcaLeft .ewin, #emcaBottom .ewin { position: absolute; inset: 0; }
+
+#emcaStatus { flex: 0 0 auto; display: flex; align-items: center; gap: 10px;
+              padding: 3px 8px; background: #101820; border-top: 1px solid #000;
+              font-size: 12px; color: #8fa4b6; }
+#globalTag { flex: 1 1 auto; min-width: 8ch; background: #17212c; color: #cfe;
+             border: 1px solid #2b3a4a; border-radius: 4px; padding: 3px 6px;
+             font: inherit; }
+#emcaStatus #status { flex: 0 0 auto; color: #7b8b9b; }

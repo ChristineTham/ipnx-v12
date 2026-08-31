@@ -9,7 +9,7 @@ import { boot, makeHandleHostServer } from "../supervisor/rustkern.mjs";
 import { createCanvasView } from "./presenter.mjs";
 import { createEditor } from "./editor.mjs";
 
-const desktop = document.getElementById("desktop");
+const desktop = document.body;   // the fatal-error banner has no pane to live in
 const statusEl = document.getElementById("status");
 const td = new TextDecoder();
 const enc = new TextEncoder();
@@ -61,11 +61,10 @@ if (!crossOriginIsolated) {
 }
 
 // ---------- windows ----------
-let ztop = 10;
+
 const vw = () => Math.max(innerWidth, 640);    // the pane can report 0 while hidden
 const vh = () => Math.max(innerHeight, 480);
-const clampX = (x, w) => Math.max(4, Math.min(x, vw() - Math.min(w, vw()) + 40));
-const clampY = (y) => Math.max(4, Math.min(y, vh() - 80));
+
 const DSCALE = 1;                            // draw windows: crisp 1.5x until real fonts land
 const MONO = 'ui-monospace, "SF Mono", Menlo, Consolas, "DejaVu Sans Mono", monospace';
 
@@ -83,90 +82,106 @@ function makeTerm(el) {
   return { term, fit };
 }
 
-function makeWindow({ title, x, y, w, h, closable, onClose }) {
-  const div = document.createElement("div");
-  div.className = "win";
-  div.style.left = clampX(x, w) + "px"; div.style.top = clampY(y) + "px";
-  div.style.width = w + "px"; div.style.height = h + "px";
-  div.style.zIndex = ++ztop;
-  // static chrome markup; every dynamic string below goes through textContent
-  div.innerHTML = `
-    <div class="tbar">
-      <span class="lights">
-        <button class="light close" title="close"></button>
-        <button class="light zoom" title="bigger"></button>
-      </span>
-      <span class="ttitle"></span><span class="pid"></span>
-    </div>
-    <div class="wbody"></div>
-    <div class="grip" title="resize"></div>`;
-  div.querySelector(".ttitle").textContent = title;
-  desktop.appendChild(div);
+// ---------- emca: panes, tabs, and placement by type ----------
+// A window does not float. It lives in a PANE, and which pane is decided by
+// its TYPE — panes carry kinds (lists, shells, logs), rows and columns split
+// the display, tabs switch between windows of the same type (docs/emca.txt).
+const PANES = {
+  left:   document.querySelector("#emcaLeft .paneBody"),
+  bottom: document.querySelector("#emcaBottom .paneBody"),
+  main:   document.getElementById("emcaStack"),
+};
+const tabsEl = document.getElementById("emcaTabs");
 
-  let focusInner = null;      // set by the owner: focuses the term/canvas
+// type -> pane. A HINT for placement, never a constraint on capability: any
+// window remains fully editable text wherever it lands (emca.txt's property 1).
+const PANE_OF = {
+  dir: "left", directory: "left", proc: "left", pkg: "left",
+  project: "left", usr: "left", net: "left", type: "left",
+  transcript: "bottom", errors: "bottom", cons: "bottom",
+};
+const paneFor = (type) => PANE_OF[type] ?? "main";
+
+const mainTabs = [];            // windows of the same type, switched
+let activeTab = null;
+
+function renderTabs() {
+  tabsEl.replaceChildren();
+  for (const w of mainTabs) {
+    const b = document.createElement("button");
+    b.textContent = (w.dirty ? "\u25CF " : "") + w.title;
+    b.title = w.title;
+    if (w === activeTab) b.className = "on";
+    b.addEventListener("click", () => selectTab(w));
+    tabsEl.appendChild(b);
+  }
+}
+function selectTab(w) {
+  activeTab = w;
+  for (const x of mainTabs) x.div.classList.toggle("off", x !== w);
+  renderTabs();
+  setTimeout(() => w.focusInner?.(), 0);
+}
+
+function makeWindow({ title, type, closable, onClose }) {
+  const pane = paneFor(type);
+  const div = document.createElement("div");
+  div.className = "ewin";
+  div.innerHTML = `<div class="wbody"></div>`;
+  PANES[pane].appendChild(div);
+
+  const rec = { div, title, dirty: false, focusInner: null, pane };
+  if (pane === "main") { mainTabs.push(rec); selectTab(rec); }
+
+  const sized = [];
   const focus = () => {
-    div.style.zIndex = ++ztop;
-    document.querySelectorAll(".win.focused").forEach((e) => e.classList.remove("focused"));
-    div.classList.add("focused");
-    if (focusInner) setTimeout(focusInner, 0);
+    if (pane === "main" && activeTab !== rec) selectTab(rec);
+    else setTimeout(() => rec.focusInner?.(), 0);
   };
   div.addEventListener("pointerdown", focus, true);
+  const ro = new ResizeObserver(() => sized.forEach((f) => f()));
+  ro.observe(div);
 
-  // drag by titlebar
-  const tbar = div.querySelector(".tbar");
-  tbar.addEventListener("pointerdown", (e) => {
-    if (e.target.closest(".light")) return;
-    const sx = e.clientX - div.offsetLeft, sy = e.clientY - div.offsetTop;
-    const move = (ev) => {
-      div.style.left = Math.max(0, ev.clientX - sx) + "px";
-      div.style.top = Math.max(0, ev.clientY - sy) + "px";
-    };
-    const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
-    addEventListener("pointermove", move); addEventListener("pointerup", up);
-  });
-
-  // resize by grip
-  const grip = div.querySelector(".grip");
-  const sized = [];           // callbacks after resize
-  grip.addEventListener("pointerdown", (e) => {
-    e.preventDefault(); e.stopPropagation();
-    const sw = div.offsetWidth - e.clientX, sh = div.offsetHeight - e.clientY;
-    const move = (ev) => {
-      div.style.width = Math.max(240, ev.clientX + sw) + "px";
-      div.style.height = Math.max(140, ev.clientY + sh) + "px";
-      sized.forEach((f) => f());
-    };
-    const up = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); };
-    addEventListener("pointermove", move); addEventListener("pointerup", up);
-  });
-
-  const closeBtn = div.querySelector(".light.close");
-  if (closable) closeBtn.addEventListener("click", () => onClose && onClose());
-  else closeBtn.disabled = true;
-  div.querySelector(".light.zoom").addEventListener("click", () => {
-    const big = div.dataset.big === "1";
-    if (big) { div.style.width = div.dataset.w; div.style.height = div.dataset.h; div.dataset.big = "0"; }
-    else {
-      div.dataset.w = div.style.width; div.dataset.h = div.style.height;
-      div.style.width = Math.min(innerWidth - 40, 980) + "px";
-      div.style.height = Math.min(innerHeight - 80, 640) + "px";
-      div.dataset.big = "1";
-    }
-    sized.forEach((f) => f());
-  });
-
-  return { div, body: div.querySelector(".wbody"),
-           setTitle: (t) => { div.querySelector(".ttitle").textContent = t; },
-           setPid: (t) => { div.querySelector(".pid").textContent = t; },
-           onResize: (f) => sized.push(f), focus,
-           setFocusInner: (f) => { focusInner = f; },
-           remove: () => div.remove() };
+  return {
+    div, body: div.querySelector(".wbody"),
+    setTitle: (s) => { rec.title = s; if (pane === "main") renderTabs(); },
+    setPid: () => {},                       // the tab strip carries identity now
+    setDirty: (d) => { rec.dirty = !!d; if (pane === "main") renderTabs(); },
+    onResize: (f) => sized.push(f), focus,
+    setFocusInner: (f) => { rec.focusInner = f; },
+    // emca places by writing ctl; with NO EMCA RUNNING the surface falls back
+    // to the type's default pane — the "degrades correctly" property, in code
+    setPane: (type) => {
+      const want = paneFor(type);
+      if (want === rec.pane) return;
+      const i = mainTabs.indexOf(rec);
+      if (i >= 0) {
+        mainTabs.splice(i, 1);
+        if (activeTab === rec) { activeTab = null; if (mainTabs.length) selectTab(mainTabs[mainTabs.length - 1]); }
+      }
+      rec.pane = want;
+      div.classList.remove("off");
+      PANES[want].appendChild(div);
+      if (want === "main") { mainTabs.push(rec); selectTab(rec); }
+      renderTabs();
+    },
+    remove: () => {
+      ro.disconnect(); div.remove();
+      const i = mainTabs.indexOf(rec);
+      if (i >= 0) {
+        mainTabs.splice(i, 1);
+        if (activeTab === rec) { activeTab = null; if (mainTabs.length) selectTab(mainTabs[mainTabs.length - 1]); else renderTabs(); }
+        else renderTabs();
+      }
+      if (closable && onClose) { /* the owner already decided */ }
+    },
+  };
 }
 
 // ---------- the system console ----------
 let cons = null;               // set after boot; cooked line discipline below
 const consWin = makeWindow({
-  title: "console — ipnx-v12", x: 60, y: 46, w: 720, h: 460, closable: false,
+  title: "rc — the transcript", type: "cons", closable: false,
 });
 const consTermEl = document.createElement("div");
 consTermEl.className = "term";
@@ -201,7 +216,28 @@ consT.term.onData((d) => {
 // The SURFACE opens the file and the BROWSER renders it — IPNX implements no
 // renderers at all. What the file IS decides how it is shown, which is why an
 // SVG or a PNG costs this design nothing: the platform already knows.
-async function showContent(gw, path) {
+// stat(5): size[2] type[2] dev[4] qid[13] mode[4] atime[4] mtime[4] length[8]
+// name[s] … — a directory read returns these, and the host knows the format,
+// so the HOST renders it. Same claim as SVG or PNG: IPNX ships no renderer.
+function dirEntries(bytes) {
+  const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const td2 = new TextDecoder();
+  const out = [];
+  let o = 0;
+  while (o + 2 <= bytes.length) {
+    const sz = dv.getUint16(o, true);
+    if (sz < 41 || o + 2 + sz > bytes.length) break;
+    const rec = o + 2;
+    const mode = dv.getUint32(rec + 19, true);
+    const len = dv.getUint16(rec + 39, true);
+    out.push({ name: td2.decode(bytes.subarray(rec + 41, rec + 41 + len)),
+               dir: (mode & 0x80000000) !== 0 });
+    o += 2 + sz;
+  }
+  return out;
+}
+
+async function showContent(gw, path, type) {
   let host = gw.contentEl;
   if (!host) {
     host = document.createElement("div");
@@ -217,6 +253,29 @@ async function showContent(gw, path) {
   const head = new TextDecoder().decode(bytes.slice(0, 512)).trimStart();
   const ext = (path.split(".").pop() || "").toLowerCase();
   const put = (el, css = "") => { el.style.cssText = css; host.appendChild(el); };
+  const ents = (type === "dir" || type === "directory") ? dirEntries(bytes) : null;
+  if (ents && ents.length) {
+    // every LINE is a look target — type drives interactivity, which is what
+    // buys back the single tap for structured output (docs/emca.txt)
+    const ul = document.createElement("div");
+    ul.style.cssText = "padding:4px 0;font:500 12px/1.5 ui-monospace,Menlo,monospace;";
+    for (const e of ents) {
+      const a = document.createElement("a");
+      a.href = "#";
+      a.textContent = e.name + (e.dir ? "/" : "");
+      a.style.cssText = "display:block;padding:2px 10px;color:#123;text-decoration:none;";
+      a.addEventListener("mouseenter", () => { a.style.background = "#eaffff"; });
+      a.addEventListener("mouseleave", () => { a.style.background = "none"; });
+      a.addEventListener("click", (ev) => {
+        ev.preventDefault();
+        const full = (path.endsWith("/") ? path : path + "/") + e.name;
+        feedCons(`rc /rc/emcaopen ${e.dir ? "dir" : "text"} ${full}`);
+      });
+      ul.appendChild(a);
+    }
+    put(ul);
+    return;
+  }
   if (ext === "svg" || head.startsWith("<svg") || head.startsWith("<?xml")) {
     const d = document.createElement("div");                 // the browser draws it
     d.innerHTML = new TextDecoder().decode(bytes);
@@ -273,8 +332,7 @@ const gwins = new Map();
 function winCreate(id, x, y, w, h, title) {
   // cascade new windows clear of the console (which sits at 60,46 720x460)
   const win = makeWindow({
-    title, x: 560 + (id * 30) % 200, y: 60 + (id * 26) % 260,
-    w: Math.max(w + 16, 460), h: Math.max(h + 46, 340), closable: true,
+    title, closable: true,
     onClose: () => {
       if (gw.cvMode) { wsys?.canvasEvent(id, "close 0"); return; }  // advisory: the app decides
       closeGuest(gw);
@@ -391,14 +449,11 @@ function sizeDrawWin(gw, scale) {
   gw.canvas.style.height = Math.round(h * k) + "px";
   // integer scales stay pixel-crisp; fractional ones smooth
   gw.canvas.style.imageRendering = Number.isInteger(k) ? "pixelated" : "auto";
-  gw.win.div.style.width = (Math.round(w * k) + 2) + "px";
-  gw.win.div.style.height = (Math.round(h * k) + 32) + "px";
-  const d = gw.win.div;
-  d.style.left = clampX(d.offsetLeft, d.offsetWidth) + "px";
-  d.style.top = clampY(d.offsetTop) + "px";
+  // the window fills its pane; only the raster is scaled
 }
 function addMouseSwitch(gw) {
-  const bar = gw.win.div.querySelector(".tbar");
+  // the raster exhibit's button switch lived in the old titlebar; under emca a
+  // window has no chrome of its own, so it rides above the raster instead
   const sw = document.createElement("span");
   sw.className = "mswitch";
   sw.title = "which mouse button a plain click sends — 1 select · 2 execute · 3 look (or: ⌥-click = 2, ⌘/ctrl-click = 3, right-click = 3)";
@@ -414,7 +469,7 @@ function addMouseSwitch(gw) {
     });
     sw.appendChild(b);
   }
-  bar.insertBefore(sw, bar.querySelector(".pid"));
+  gw.win.div.insertBefore(sw, gw.win.body);
 }
 function enterDrawMode(gw) {
   if (gw.drawMode) return;
@@ -506,6 +561,12 @@ const host = {
   winChrome: (id, ch) => {
     const gw = gwins.get(id);
     if (!gw) return;
+    gw.win.setPane?.(ch.type);
+    if (ch.content) gw.win.setTitle(ch.content.split("/").filter(Boolean).pop() || ch.content);
+    gw.termEl && (gw.termEl.style.display = "none");
+    gw.canvas && (gw.canvas.style.display = "none");
+    gw.win.div.querySelector(".mswitch")?.remove();   // not a raster window
+    gw.win.div.classList.remove("drawwin");
     let bar = gw.chromeEl;
     if (!bar) {
       bar = document.createElement("div");
@@ -522,7 +583,7 @@ const host = {
       t.title = `${ch.type} window — content opened by the surface`;
       t.style.cssText = "font-weight:600;margin-right:4px;white-space:nowrap;";
       bar.appendChild(t);
-      if (ch.content !== gw.shownContent) { gw.shownContent = ch.content; showContent(gw, ch.content); }
+      if (ch.content !== gw.shownContent) { gw.shownContent = ch.content; showContent(gw, ch.content, ch.type); }
     }
     for (const line of ch.toolbar.split("\n")) {
       const s = line.trim();
@@ -677,6 +738,7 @@ cons = booted.cons;
 wsys = booted.wsys;
 readPath = booted.readPath;
 writePath = booted.writePath;
+window.__emca = { readPath, writePath, wsys };   // debug affordance, as __consT
 setStatus("running");
 (async () => {                                    // the toolchains stream in
   if (params.has("lite")) return;
@@ -736,7 +798,37 @@ const feedCons = (line) => {
   consT.term.focus();
 };
 const BIGFONT = "/lib/font/bit/go/regular.13.font";
-document.getElementById("mCon").addEventListener("click", () => feedCons("con &"));
-document.getElementById("mEdit").addEventListener("click", () => feedCons("acme &"));
-document.getElementById("mNew").addEventListener("click", () => feedCons("win rc &"));
+// THE TOP SURFACE IS THE SYSTEM'S. Its operand is the system, so the managers
+// live here — and each one is only a typed window onto a filesystem, which is
+// why "adding a manager is adding a file" (docs/emca.txt).
+for (const b of document.querySelectorAll("#managers button"))
+  b.addEventListener("click", () => feedCons(`rc /rc/emcaopen ${b.dataset.open}`));
+document.getElementById("mAcme").addEventListener("click", () => feedCons("acme9 &"));
 document.getElementById("mTour").addEventListener("click", () => feedCons("rc /rc/tour"));
+
+// the pane toggles: how the responsive layout is driven by hand. host: side —
+// these never round-trip, because layout is the surface's half.
+const togglePane = (el, btn) => { el.classList.toggle("hidden"); btn.classList.toggle("off"); };
+document.getElementById("tLeft").addEventListener("click",
+  () => togglePane(document.getElementById("emcaLeft"), document.getElementById("tLeft")));
+document.getElementById("tBottom").addEventListener("click",
+  () => togglePane(document.getElementById("emcaBottom"), document.getElementById("tBottom")));
+addEventListener("keydown", (e) => {
+  if (!(e.metaKey || e.ctrlKey)) return;
+  if (e.key === "b") { e.preventDefault(); document.getElementById("tLeft").click(); }
+  if (e.key === "j") { e.preventDefault(); document.getElementById("tBottom").click(); }
+});
+
+// the GLOBAL TAG — acme's root tag, at workspace scope, in the status line
+// THE SYSTEM BOOTS INTO EMCA. The default workspace declares itself — motd in
+// an editor tab, the home directory in the rail — and rc is already the
+// transcript below. No menu, no desktop, no shell in front of it.
+setTimeout(() => feedCons("rc /rc/emca"), 900);
+
+const gt = document.getElementById("globalTag");
+gt.addEventListener("keydown", (e) => {
+  if (e.key !== "Enter") return;
+  e.preventDefault();
+  const line = gt.value.trim();
+  if (line) feedCons(line);
+});

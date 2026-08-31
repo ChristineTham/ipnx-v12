@@ -567,7 +567,17 @@ retires the spike: CodeMirror 6 vendored offline, the buffer mirrored as
 insert/delete with a sequence and a hash, `⌘Z` routed to emca's single stack,
 `⌘S` streaming the file back — and the verbs riding the *platform's* context
 menu, observed putting `look 29 36 surface` where a plain guest read it.
-**Still unbuilt**: canvas's narrowing.
+**And the SURFACE ITSELF, the same day**: the demo no longer runs a
+floating-window desktop with a menu bar — it **is** emca. Full viewport, a top
+toolbar carrying the system's managers (each only a typed window onto a
+filesystem), a rail, an editor area with **tabs**, a transcript pane, a status
+line with the global tag, and `⌘B`/`⌘J` pane toggles that never round-trip.
+Placement is by TYPE, and with **no emca program running** the surface falls
+back to each type's default pane — the recorded "degrades correctly" property,
+in code. The default workspace is `/rc/emca`, two lines of rc, which is emca's
+policy exactly where policy belongs. **Still unbuilt**: `/type` as a real
+registry (the toolbars are `/rc/emcaopen`'s for now), emca as a watching
+program, the responsive breakpoints, and canvas's narrowing.
 
 **b. `/type` and the manager types *(M)*.** The registry: a directory
 per type holding `ns`, optional `cmd`, and `window` — house style, small

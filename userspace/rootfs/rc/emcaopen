@@ -1,0 +1,31 @@
+# emcaopen <type> <path> — open a typed window onto a filesystem.
+# This is the whole "manager" story: there is no manager program, only a
+# window type and a tree (docs/emca.txt). Any program may do this; emca has
+# no privilege, and none is running here.
+t=$1
+p=$2
+w=`{cat '#w/'^$t^'/clone'}
+d='#w/'^$t^'/'^$w
+echo -n $p > $d/content
+if(~ $t proc) echo 'Kill ipnx:Kill
+Note ipnx:Note
+Wrap host:toggle-wrap' > $d/toolbar
+if(~ $t pkg) echo 'Install ipnx:Install
+Remove ipnx:Remove
+Verify ipnx:Verify' > $d/toolbar
+if(~ $t project) echo 'Instantiate ipnx:Instantiate
+Promote ipnx:Promote' > $d/toolbar
+if(~ $t usr) echo 'Login-as ipnx:Login
+Profile ipnx:Profile' > $d/toolbar
+if(~ $t net) echo 'Dial ipnx:Dial
+Close ipnx:Close' > $d/toolbar
+if(~ $t type) echo 'New ipnx:New
+Edit ipnx:Edit' > $d/toolbar
+if(~ $t dir) echo 'Look ipnx:Look
+Get ipnx:Get' > $d/toolbar
+if(~ $t text) echo 'Put ipnx:Put
+Get ipnx:Get
+Look ipnx:Look
+Wrap host:toggle-wrap' > $d/toolbar
+echo -n $p^' | ' > $d/tag
+echo $w
