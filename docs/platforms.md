@@ -12,7 +12,13 @@ provide: [architecture.md](architecture.md).
 
 One kernel, one rootfs, one suite — per platform, only the host shim and the
 engine change (the engine matrix is a dated decision in
-[design.md](design.md)):
+[design.md](design.md)). **Amended 2026-08-31**: each form below is also a
+**surface of `emca`**, the shell of **Saranos** — the user-experience layer
+named 2026-08-31, sitting on IPNX (kernel and userspace); see
+[emca.txt](emca.txt) —
+so a form is complete when a person can work in it, not merely when the suite
+runs green. The surface half is unbuilt (M14); the engines and states below
+are unaffected.
 
 | form | host | engine (guests) | state (2026-08-30) |
 |---|---|---|---|
@@ -126,6 +132,57 @@ question for a home). External-goods question, asked: the depth was built
 to the user's stated acceptance (python.org, gobyexample), not to
 impress-metrics; the one telemetry artifact found (a localStorage debug
 ring) was removed the day it was noticed. **Next review** unchanged.
+
+### Review 2026-08-31 — the forms become *surfaces*: an unscheduled review
+
+Unscheduled, and taken because a decision changed what every form *is*
+rather than how it performs (decision log 2026-08-31; the design is
+[emca.txt](emca.txt)). The ledger exists to catch exactly this.
+
+**What changed.** The browser page, the macOS app and the iPadOS app were
+hosts that ran a system. They are now **surfaces of `emca`** — the system's
+user interface, which is what IPNX boots into. The distinction is not
+cosmetic: a host is judged on whether the suite runs green in it, a surface
+is judged on whether *a person can work in it*. Every row of the table above
+keeps its engine and its state; what changes is the acceptance bar, and the
+bar just rose a long way. The public page stops being a demonstration of the
+system and becomes the system's face.
+
+**What has shipped since the last entry: nothing.** This is a design review,
+not a delivery one, and the honest reading is that the deployment story now
+has a large unbuilt front half (M14, staged a–g). Recording it here rather
+than at delivery is the point of the cadence.
+
+**The bet, restated.** The wave's four forms were a hedge against any one
+platform closing. Under the reframe they are a hedge against something else
+as well: **a surface that nobody can use is a form that has not shipped**,
+whatever the suite says. Amoeba and Plan 9 died of their deployment wave,
+and the specific way this project could repeat that is now visible — build
+four surfaces, make none of them livable, and call the suite's green a
+result. The named guard is emca.txt's acceptance test (any text is an
+operand; context is location; the working set is visible) plus "no
+half-working": a surface ships its grammar whole or not at all.
+
+**The new form.** The phone re-enters the wave. It was refused 2026-08-29
+on persona evidence and the refusal is reversed on new evidence — breakpoints
+measured in *characters rather than pixels* make the phone one value of a
+knob built anyway. It is the smallest surface and the one where the
+acceptance test degrades furthest (one body visible, so cross-window
+operation is unavailable), and that degradation is stated in the design
+rather than discovered in the field.
+
+**The external-goods question** (virtue-ethics.md): has any external good
+displaced the internal one? A candidate appeared this round and is worth
+naming — *the reframe makes the project far more demonstrable*, and
+demonstrability is exactly the kind of external good that can start steering
+design. The check: the reframe was not adopted because it demos well; it was
+adopted because "everything is managed as a file" makes manager programs
+unnecessary, which is the founding principle reaching its limit. If a future
+round finds features being added for the page rather than for the system,
+this is the entry that predicted it.
+
+**Next scheduled review**: after M14c (emca's IPNX half) lands, or 2026-11,
+whichever first.
 
 ### Review 2026-08-30 — the scheduled review: M1 and M3 have landed
 

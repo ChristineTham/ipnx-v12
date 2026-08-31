@@ -396,7 +396,7 @@ raster tests' polling margins are measured on slow hosts before CI treats a
 timeout as a failure.
 **Acceptance:** the table in RESEARCH, one row per host, dated.
 
-### M6 — the iPadOS app *(S–M)* — **re-aimed 2026-08-30: a WebKit launcher over local files** — consumes: the iPad-surface decision (design.md 2026-08-30), M4 (files), the browser port
+### M6 — the iPadOS app *(S–M)* — **re-aimed 2026-08-30: a WebKit launcher over local files; re-aimed again 2026-08-31: the app is a SURFACE OF EMCA, not a host that runs a demo — the SwiftUI presenter is M14g** — consumes: the emca decision (design.md 2026-08-31), the iPad-surface decision (design.md 2026-08-30), M4 (files), the browser port
 The stopgap becomes the design, with the split stated precisely (design
 log): **the webview is the engine room, not the display.** Kernel and
 wasm binaries run inside WKWebView — full JavaScriptCore JIT, sanctioned,
@@ -525,6 +525,101 @@ web-worker constraints get measured before that form is promised.
 save, `run` a spec from a task, rc in the integrated terminal; the suite
 drives the same kernel the editor mounts.
 
+### M14 — emca, the user interface *(L, staged)* — **sequenced immediately after M5; M6 and M13 become its surfaces** — consumes: the emca decision (design.md 2026-08-31), M5 (`/dev/canvas`), `/pkg`
+The system's face (design: [emca.txt](emca.txt); parts list:
+[acme.txt](acme.txt)). Not an editor — what IPNX *boots into* on every
+surface, with an editor as one window type. Split in two throughout:
+**IPNX owns state, meaning and policy; the surface owns rendering and
+input**, and the test for any case is *differs between a Mac and an
+iPad → the surface's; differs between one workspace and another →
+IPNX's*. Staged so each stage is separately demonstrable and the suite
+grows with it.
+
+**a. The channels *(M — restructured 2026-08-31)*.** Not additions to
+`/dev/canvas` — that was the wrong shape (decision log; the framing
+error was calling canvas "the display protocol" when 9P is the only
+protocol). **Four semantics over one protocol**: content is **9P
+directly** and the host renders it natively (**IPNX implements no
+renderers**); **`/dev/window/<type>/<n>`** is the bidirectional control
+interface with the **type in the path** ([window.md](window.md));
+**`/type`** is the registry both sides read; **`/dev/canvas` narrows to
+genuine drawing** ([canvas.md](canvas.md), narrowed in place with its
+over-derivation stated — three of its four founding benchmarks were
+never drawing consumers). Controls name a side: `ipnx:Put` round-trips,
+`host:toggle-wrap` never does. This stage is *narrow canvas, specify and
+build `/dev/window`* — and it **deletes** far more than it adds.
+
+**b. `/type` and the manager types *(M)*.** The registry: a directory
+per type holding `ns`, optional `cmd`, and `window` — house style, small
+files, so each field is separately editable, greppable and bindable, and
+a personal override is a union element. One built-in type (`dir`) is the
+bootstrap floor, because `/type` is itself a type. The starting set is
+emca.txt's table — `dir file errors proc usr pkg project net type
+transcript credential` — each at most three small files. **This stage is
+where "no manager programs" becomes true**: `/proc` gets a process
+manager without a process manager being written.
+
+**c. emca, the IPNX half *(M — was L; shrunk 2026-08-31)*.** Editing is
+the surface's (decision log), so this stage is a **file server with a
+workspace, not an editor**: push text into windows, run commands, apply
+**sam's structural language**, and serve the file interface. The
+interactive editing machinery is not written here — it is inherited
+from the host's editor component. The program: buffers and windows (N
+windows may view one buffer, so `Zerox` aliases and its recorded
+divergence retires), the tag as one string with the auto-block preserved,
+context resolution, the verb set, the running-command table as a view of
+`/proc`, and the file interface at `/srv/emca`. `acme.c`'s behaviour is
+the floor: emca is a new program and must pass acme's suite unchanged.
+
+**d. The web surface *(L)*.** The four chrome surfaces under
+*operand determines surface* (system → top toolbar; window → its
+toolbar; range → the floating bar; nothing → the status line), the
+responsive rules **measured in characters not pixels** (72 columns a
+leaf, 10 lines a body — so accessibility text sizing moves the
+breakpoints for free and WCAG 1.4.4 holds by construction), native text
+input replacing the hand-rolled caret (the prerequisite for any soft
+keyboard), the keyboard grammar, and the pin replacing the 2-1 chord.
+**Amended 2026-08-31, twice**: the surface no longer receives a tree for
+text at all — it is handed a **path**, opens it over 9P, and renders it
+natively, so SVG, HTML, Markdown, PostScript and images cost nothing and
+`Put` is the host streaming the file back. For text specifically, the
+renderer is a real editor component —
+**Monaco** on the web, TextKit on Apple — which brings selection,
+clipboard, keystroke undo, syntax highlighting, folding, multi-cursor
+and find-in-file for free, and carries command history and line editing
+for the transcript. **xterm.js returns as the raw-input door.** The
+gating question, to be proven FIRST and not assumed: **can `execute` and
+`look` ride Monaco's action and context-menu API?** Property 1 of the
+acceptance test depends on it, so a spike answering that precedes the
+rest of this stage.
+
+**e. `/project` *(M)*.** Templates instantiate, workspaces open;
+`/project` is a union of system and personal so promotion is moving a
+file between union elements; promotion promotes the *declaration*, not
+your files. **Clone and instantiate are separate acts** and instantiate
+shows the declaration first — a cloned project file is a stranger's
+declaration. Full `/project/ipnx` waits on git (M10); the mechanism does
+not.
+
+**f. Boot into emca *(S)*.** The default workspace as a namespace file —
+motd in an editor, a listing left, an rc bottom, the managers in the top
+toolbar. The "boot is rc plus a namespace file" refusal paying out.
+
+**g. The SwiftUI surface *(M)* — this is M6's second re-aim.** The same
+tree, Apple's grammar, HIG furniture; divergence from the web surface
+accepted and named per the input convention.
+
+**Acceptance:** the four protocol additions carry a window tree that a
+generic surface renders as native furniture, proven headlessly through
+the virtual surface; `/type/proc` is three small files and `/proc` gains
+Kill without a manager program existing; emca passes acme's behaviour
+suite unchanged; the web surface renders one workspace correctly at all
+four breakpoints with nothing disappearing as the viewport grows, and
+every floating-bar verb and toolbar button is reachable from the
+keyboard with Tab; a project instantiates, is saved, and is promoted,
+with its declaration shown before it runs; the system boots to emca with
+the default workspace and no shell in front of it.
+
 ### Continuous — curation sweeps *(S each, standing)*
 The Plan 9 userland, command by command, PR-sized tranches as ever: `mk`, the
 troff document factory, `cron`, upas (resequenced per decision), the games,
@@ -537,18 +632,39 @@ they are how the system stays honest about running real software.
 M0 ──► M1 ──► M11
  │
  ├──► M2 ──────────────┐
- ├──► M3 ──► M6        ├──► M9 ──► M12
- ├──► M4               │
- ├──► M5               │
+ ├──► M3 ──► M6 ◄──┐   ├──► M9 ──► M12
+ ├──► M4           │   │
+ ├──► M5 ──► M14 ──┴──►│   (M14 also feeds M13)
  └──► M7 ──► M8 ───────┘
               └──► M10 (personality needs /net for sockets; git wants M4's disk)
 ```
 
 M1–M5 are independent of each other after M0 and can be reordered by appetite;
-M7 is the gate everything distributed waits behind.
+M7 is the gate everything distributed waits behind. **M14 (emca) sits
+immediately after M5 and before M6**: the iPadOS app and the VSCode surface
+are *surfaces of emca*, not independent hosts (decision log 2026-08-31), so
+M6 consumes M14g and M13's panels consume the same tree. M14e's `/project`
+is mechanism-complete without git; `/project/ipnx` waits on M10.
 
 ## Engineering questions (not design questions — those live in design.md)
 
+- **M14 (editing):** whether `execute`/`look` can ride Monaco's action API
+  (property 1 depends on it — spike this first); **who owns undo** now that the
+  surface holds keystroke-granularity history and emca holds command-granularity
+  (acme had one stack, and ⌘Z has to mean something); whether a **resync path**
+  is needed when a rich editor and emca's shadow buffer diverge, given the
+  discipline is "apps never re-read".
+- **M14:** how the SURFACE half is tested — emca's behaviour is testable through
+  the virtual surface, but nothing in the tree proves a button was reachable or
+  that Tab reached it, and "no half-working" plus the keyboard-complete law make
+  this the design's largest untested area with no precedent here to borrow from;
+  snapshot vs replay for a saved workspace's language packages (Docker took the
+  first, Nix the second); the plumber's rules format and message shape, which the
+  floating bar's Open/Jump entries depend on and canvas.md still calls "the next
+  measurement's work"; where an unnamed instance's writable layer lives between
+  instantiation and save; and how a type declares a view mode without becoming a
+  widget toolkit — the discipline is stated (text is the default, non-text owes a
+  reason), the ceiling is not.
 - **M1:** static musl wasmtime build flags; whether Cranelift's mmap'd code
   pages need a seccomp note in the image docs.
 - **M2:** the exact namespace(6) subset grammar — what of `unmount`, `.`-rooted

@@ -96,6 +96,51 @@ performative industry by the black hat's standing watch on document drag.
 | the mean-finding pattern | **named** here and in the decision log — self-understanding, not a rule |
 | flattery, performative industry | **watched** — standing temptations under existing guards |
 
+## Session 2026-08-31 — the emca design, and two new temptations
+
+A design session that produced the largest reframe since the re-founding also
+produced two AI failure modes not on the standing list. Both belong on the
+record, both have receipts, and neither is overclaim, flattery or performative
+industry.
+
+**Premature construction.** Asked for a demo, the AI built furniture on
+`/dev/canvas` while the architecture was still moving — and it moved twice
+during the build, first to *editing is the surface's* and then to the canvas
+redesign. Christine stopped it: *"I realised you are implementing something
+else, and it's good you stopped."* The work was reverted cleanly rather than
+defended, and the suite returned to 151 — that part was right. But the build
+should not have started. The signal was available and ignored: a design being
+actively reshaped in the same conversation is not a design to build against.
+(**disposition**: *build only when the shape has been stated twice without
+changing* — and when in doubt, sketch and confirm rather than compile.)
+
+**Not hearing a no.** Across seven rounds of naming, the AI generated candidate
+after candidate — `Ecma`, `Kitty`, `Mimi`, `Miaos`, `Ailuros`, `namastos`,
+`marjaros`, `loka` — until Christine said *"I don't like topos, isn't that
+obvious."* It was. Two rejections of a recommendation is information about the
+criterion, not a request for a third option; the useful move was the one made
+too late, which was to ask what the recommendation was missing. This is
+flattery's quieter cousin: generating alternatives is *agreeable*, and it
+substitutes volume for the harder question. (**disposition**: *after two
+rejections, ask what is missing rather than proposing a third*.)
+
+**What went right, for balance and because receipts run both ways**: the broken
+demo was reported as broken rather than narrated as working (*"buttons stopped
+reaching acme after a reload... not root-caused"*); measurement beat opinion
+twice where opinion was losing — the four-character root-name rule after five
+rounds of taste, and the discovery that three of `/dev/canvas`'s four founding
+benchmarks were never drawing consumers; and a contradiction the AI had itself
+introduced between two sections of window.md was caught and reconciled rather
+than left for a reader to find.
+
+### Dispositions — 2026-08-31
+
+| catch | disposition |
+|---|---|
+| premature construction against a moving design | **adopted** → build only when the shape has been stated twice without changing |
+| generating options instead of hearing a refusal | **adopted** → after two rejections, ask what is missing |
+| dated entries silently rewritten to match new decisions | **adopted** → history keeps its words; supersession is a pointer, never an edit |
+
 ### Cadence
 
 This lens joins the consolidated review ritual (ledger + design thinking +

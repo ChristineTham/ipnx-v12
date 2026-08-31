@@ -1,4 +1,38 @@
-# /dev/canvas — the display protocol (v0)
+# /dev/canvas — the drawing device
+
+> **NARROWED 2026-08-31 (decision log), and the title above is the
+> correction.** This document was called *"the display protocol"* — but
+> **9P is the only protocol** (founding decision). Naming canvas a
+> protocol invited treating it as the place all host/IPNX exchange
+> happens, and it grew until it carried layout, chrome, text and
+> drawing. It was always files.
+>
+> **The over-derivation, stated plainly.** v0 below was measured against
+> four benchmarks. Under the redesign: *console-today* is a text file
+> plus a line back-channel; *acme-today* is a file plus chrome;
+> *rio-today* is window management; **only the plot was drawing.**
+> Three of the four were never canvas consumers, so `stack`, `text` and
+> `edit` are generalisations from things that wanted files and chrome —
+> which is also why `frame` and `image` never found a consumer. The
+> measurement discipline caught its own over-derivation.
+>
+> **What canvas is now**: genuine drawing, the classic turtle
+> vocabulary — open a rectangle, draw a circle, place text. The
+> **exception**, for programs that actually draw. `path` survives (it
+> came from the one real benchmark). `stack`, `text` and `edit` retire
+> to `/dev/window`; content is a file the host opens over 9P and renders
+> natively.
+>
+> **Where the rest went**: content → **9P**, the host mounts the file and
+> renders it (IPNX implements no renderers); chrome and layout →
+> **`/dev/window/<type>/<n>`**, bidirectional, type in the path; what a
+> type means → **`/type`**, read by both sides. All of it 9P; these are
+> conventions, not protocols.
+>
+> **The text below is v0 AS BUILT and is retained as the record**, not as
+> the target. It still describes what runs today, and the 151 depend on
+> it; it is superseded in scope, not yet in code.
+
 
 The contract for the 2026-08-30 canvas decision (design.md: six kinds, four
 clauses, the tripwire). **v0 is measured**: every element below is justified
@@ -118,6 +152,11 @@ applies `insert` and `delete` to the node's data *before* queueing the
 event, so presenter echo and node data are one thing and typed-ahead
 text survives the app's next sync. Apps shadow their buffers from
 events and never re-read them — con(1)'s discipline, load-bearing.
+**Amended 2026-08-31 (decision log): "never re-read ROUTINELY."** With the
+host holding a mirror buffer, each edit carries a sequence number and each
+sync a hash; on mismatch a resync re-reads. Silent divergence is the
+failure mode worth spending bytes to detect — a repair path, not normal
+operation.
 
 **Transport**: `sync` marks the window dirty; the snapshot travels to an
 interactive surface only under the host's credit system — one frame in
@@ -137,6 +176,54 @@ typing and report it as insert/delete events, paths become inline SVG,
 web grammar). Layout resolution is the surface's; divergence between
 surfaces is accepted and named. SwiftUI (M6) and VSCode panels (M13)
 consume the same tree over their bridges.
+
+## The emca additions (specified 2026-08-31 — SUPERSEDED THE SAME DAY)
+
+> **These belong on `/dev/window`, not here** (decision log, 2026-08-31).
+> They were specified while canvas was still believed to be the display
+> protocol; under the narrowing, structure roles, window type and the
+> chrome vocabulary are `/dev/window`'s, and `type` is a path component
+> there rather than an attribute. Retained because the *needs* they name
+> are real and carry forward unchanged — a surface must be able to
+> recognise a window, know its type, know which verbs apply, and be
+> asked to show something.
+
+## The emca additions, as first specified
+
+emca (the system's user interface, [emca.txt](emca.txt)) is the benchmark
+that demands the span/role vocabulary v0 deferred — *"span attrs arrive
+with the web presenter's real links, later"*. **Four additions and no
+more**, generic rather than emca-specific: con(1) and any future client
+get the same furniture from the same roles. Nothing below is built.
+
+- **structure roles** — `role=` on a node, so a generic surface can
+  recognise a window and give it native furniture rather than rendering
+  anonymous stacks: `split` (a container of leaves, nests, `dir=row|col`)
+  · `leaf` (holds windows; the rail's unit) · `window` · `title` ·
+  `toolbar` · `tagbar` · `body` · `status`.
+- **`type=<name>`** — the window's type, resolved through `/type`. Drives
+  placement, furniture and interactivity (a `dir` or `proc` window's
+  lines are look targets, so one tap opens; a `file` window's are not).
+- **verb applicability** — for a selected range, which of the closed verb
+  set applies. The app answers a `select` event with it; the surface
+  renders what it is told. This is what makes acme's silent `look`
+  dispatch *visible*: the parsing is unchanged, it populates a menu
+  instead of deciding.
+- **`show=1`** — "the user needs to see this window". The app asks, the
+  surface decides how (expand, scroll, switch leaf). The `sel` attr's
+  precedent exactly — the app steers and does not command, so an
+  `+Errors` tail never steals focus.
+
+The v0 statement that this amends is acme.txt's constraint 2 ("expect
+little or no protocol change"); the amendment is deliberate and dated,
+recorded in the decision log rather than absorbed silently.
+
+Also newly benchmarked: **`frame`/`image`**, declared in v0 and left
+unimplemented "until a benchmark demands them". An emca window rendering
+an image demands them; a credential window does not (its metadata is
+text). Text remains the default and *a type that renders non-text owes a
+reason* — the second axis of growth gets the same discipline as the
+dozen-kinds tripwire below.
 
 ## What v0 refuses, and where the rest lives
 

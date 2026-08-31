@@ -143,9 +143,15 @@ Design thinking without a cut list is marketing. Not for: the
 POSIX-compatibility seeker (refused at founding), the general-purpose desktop
 switcher, the enterprise platform buyer, anyone needing Linux-binary
 compatibility, the performance-first HPC user — and, made explicit by the
-formal iteration: **no phone form factor** (no persona's journey includes
-one; iPad is the smallest screen here), and **no Windows host** until a
-persona demands it with evidence. When one of these asks, the answer is a
+formal iteration: ~~**no phone form factor**~~ — **reversed 2026-08-31**
+(decision log): the refusal stood on the evidence that no persona's journey
+included a phone, and the new evidence is that emca's breakpoints are
+measured in *characters rather than pixels*, which makes the phone one value
+of a knob built anyway rather than a separate design. Reversal by evidence,
+per the standing rule, not by fresh opinion — and the honest cost is stated
+in [emca.txt](emca.txt): at one visible body, cross-window operation is
+unavailable, so the phone is a *reduced* surface by design. **No Windows
+host** stands, until a persona demands it with evidence. When one of these asks, the answer is a
 pointer to the refusals in [design.md](design.md), not a roadmap promise.
 
 ## The coverage map
@@ -161,8 +167,23 @@ pointer to the refusals in [design.md](design.md), not a roadmap promise.
 | M7–M9 | **P4, P5** | the timing bet; M9 ships the quickstart |
 | M10 | P1, P3, P5 — and credibility for all | git is every persona's proof |
 | M11, M12 | P4, ops | |
+| **M14 (emca)** | **all five** | the system's interface; P1's daily-driver gate |
 
 Every milestone serves someone concrete — the spine survives the exercise.
+
+**Finding, 2026-08-31 — the widening this exercise did not anticipate.** Every
+persona above assumes a reader who already wants a Plan 9-shaped system: P2 is
+the diaspora, P3 teaches it, P4 and P5 want its *properties*. emca changes the
+entry condition — a system whose managers are windows and whose verbs are
+visible can be used by someone who has never read the acme paper, which is
+emca.txt's own acceptance test ("a person who has never read the acme paper,
+holding an iPad, can open a file from a listing, edit it, save it, run a
+command on a selection, search, and undo — without being told any secret").
+That is a *new* audience and it has no card here yet, deliberately: a persona
+without a validation event is a wish. The event that would earn one is
+concrete — **someone outside the Plan 9 world doing real work in emca and
+saying so** — and until it fires, the widening stays a hypothesis recorded
+here rather than a sixth persona.
 The full process that produced this page — POV statements, the ideation
 record, the rederived will/won't list and its reconciliation with standing
 decisions, the documentation review — is

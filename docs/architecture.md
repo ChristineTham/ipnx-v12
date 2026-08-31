@@ -63,8 +63,10 @@ ABI. The conformance suite binds all three.
   | `e` | `/env` |
   | `w` | the window server — `#w/clone` mints windows; a window is a
         directory (`cons ctl mouse wctl label rgb draw/…` and, on hosts
-        with canvas v0, `canvas/…` — the display protocol, contract in
-        [canvas.md](canvas.md)) a namespace can `bind` over `/dev` |
+        with canvas v0, `canvas/…` — the display device; **the v0 name
+        "display protocol" was itself the error**, 9P being the only
+        protocol, and canvas narrows to drawing in the design
+        ([canvas.md](canvas.md))) a namespace can `bind` over `/dev` |
   | `d` | `/fd` — dup by open |
   | `s` | `/srv` — a posted fd's channel, kept alive by name |
   | `H` | webfs — `#H/<hex-of-url>` reads an http(s) body (native + demo hosts) |
@@ -72,6 +74,14 @@ ABI. The conformance suite binds all three.
   | `V` | the versioning layer — `#V/ctl` takes `snap [name]` / `del name`;
         `#V/<name>/…` walks the frozen root read-only; restore is a `bind`
         (native + demo hosts; the frozen oracle self-skips) |
+
+**Specified, not built (2026-08-31)** — recorded here as a pointer rather than a
+contract, because this document's rule is that contracts change *in the same
+commit as the code*: `#w` is specified to grow into **`/dev/window/<type>/<n>`**,
+the bidirectional control interface ([window.md](window.md)), and `/dev/canvas`
+narrows to genuine drawing ([canvas.md](canvas.md)). Content stops crossing a
+display protocol altogether — the host mounts the file over 9P and renders it
+natively. Nothing below changes until it lands.
 
 - **Blocking without blocking**: the dispatcher is async end to end. A device
   read may *park* (complete later); in the Rust core a parked operation is a

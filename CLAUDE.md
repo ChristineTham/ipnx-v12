@@ -24,6 +24,41 @@ system" — a choice, which is what makes it undoable.* This project takes that 
 undoes the break: their curation of the userland preserved above, Unix's interface
 restored as personalities, the kernel unable to bloat by construction.
 
+**And as of 2026-08-31 the claim is larger, and deliberately so** (decision log):
+ipnx-v12 is not a barebones Unix reimagined but **a whole operating system with its
+own semantics, user interface and artifacts**. The face of it is **`emca`** — the
+IPNX user interface, what the system *boots into* on every surface: the browser
+page, the macOS app, the iPadOS app. Not an editor; an editor is one window type
+inside it. Its mechanism is the founding principle taken to its limit — **everything
+is managed as a file, so there are no manager programs**: no `ps`, no package-manager
+GUI, no network panel. There is a filesystem, a **window type** declaring which verbs
+its files accept, and a surface rendering those verbs natively. Adding a manager to
+the system is adding a file. A rich system UI normally destroys acme's central
+property (any text can be a verb's operand) because a process table becomes a widget;
+here it cannot, **because the managers are already text filesystems**. The design is
+[docs/emca.txt](docs/emca.txt), derived from the acme anatomy in
+[docs/acme.txt](docs/acme.txt); nothing of it has shipped.
+
+**The layers have names** (decision log, 2026-08-31): **IPNX** is the kernel
+**and the userspace** — the whole file world, Darwin's slot rather than XNU's;
+**Saranos** is the user experience on top of it — `emca` the shell, the window
+types, the presenters, the surfaces' furniture; wasm and the surfaces are the
+machine it runs on. **The interface between them is 9P and nothing else**
+(redesigned 2026-08-31): content is a file the host mounts and renders natively
+(so **IPNX implements no renderers**), `/dev/window/<type>/<n>` is the
+bidirectional control interface with the type in the path, `/type` is the
+registry both sides read, and `/dev/canvas` narrows to genuine drawing — the
+exception, not the rule.
+Saranos is Sanskrit *śaraṇa* (शरण), *refuge* — Christine's reading: *a refuge
+from the complexities of the modern computing environment*, a refuge for the
+person, which is why it names the experience and not the kernel. A process
+also runs in a refuge bounded by what it was given; one word, both layers. Note the symmetry that produced the layering: **XNU is
+"X is Not Unix" and IPNX is "IP is Not UNIX"** — the same joke, so the layer
+above wanted a human name rather than a second acronym, exactly as Darwin did.
+**Dated entries across the records keep the words they were written with** — a
+log is not retroactively renamed; only present-tense statements of what the
+system *is* carry the new layering.
+
 The architecture runs, boots to a shell, forks both ways, and speaks its protocol in
 both directions: `poc/` is a working slice (hosted kernel in Node and the browser from
 one neutral core, freestanding-C wasm guests, per-process namespaces with union
@@ -139,6 +174,11 @@ is indistinguishable from a shipped one.
 | `docs/design-thinking.md` | **the iteration record** — method (cited), POVs, the ideation table with rejected ideas, the rederived will/won't and its reconciliation, the doc review, the validation plan and cadence |
 | `docs/six-hats.md` | **the completeness check** — dated parallel-thinking sessions (facts/feelings/risks/value/alternatives/process), each catch dispositioned; runs on the consolidated review cadence |
 | `docs/virtue-ethics.md` | **the character record** — the telos, the virtues as means with receipts, habituation (the rituals are the character), the practitioners' temptations named, dispositions per session |
+| `docs/emca.txt` | **the user interface** — emca: the system's face, the two halves (IPNX/surface), window types, `/pkg` and `/project`, the responsive rules |
+| `docs/acme.txt` | **the anatomy** — acme decomposed into four layers and 38 operations; the parts list emca derives from |
+| `docs/window.md` | **the control interface** — `/dev/window/<type>/<n>`: chrome, actions that name a side, the type in the path |
+| `docs/canvas.md` | `/dev/canvas`, **narrowed 2026-08-31 to genuine drawing** — the v0 text is kept as the record of what runs today |
+| `docs/userland.md` | the userland reimagined on the new paradigms; the heritage exhibit's scope |
 | `poc/README.md` | the frozen reference implementation's layout and its deliberate v0 deviations |
 
 Findings go in RESEARCH.md with provenance; decisions go in the design (docs/design.md);
@@ -319,7 +359,14 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
   Guest C is Plan 9 style (tabs, `nil`, no const clutter); the build silences the
   builtin-redeclaration warnings that style causes.
 
-## Current state (2026-08-29)
+## Current state (design: 2026-08-31; code: 2026-08-29)
+
+**The system's interface is designed and nothing of it is built** (2026-08-31): emca
+is the IPNX user interface, `/dev/canvas` grows four additions and no more, `/pkg`
+and `/project` split the old package concept, and the hosts become *surfaces* rather
+than demos. Design only — [docs/emca.txt](docs/emca.txt), decision log 2026-08-31.
+The code state below is unchanged by it.
+
 
 **The PoC is complete — declared 2026-08-29** (decision log; full record in
 `docs/poc.md`). Final state: **131 acceptance tests green on three hosts** — the

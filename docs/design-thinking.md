@@ -192,3 +192,85 @@ each push produced a clause the decision needed.
 Naming en route: `draw` rejected for the pixel leaf ("draw implies a
 pencil — a vector operation"); `frame` chosen (a framebuffer holds pixels
 in a grid; video falls out). The full decision: design.md 2026-08-30.
+
+## Iteration record: the emca session (2026-08-31)
+
+The parked problem in [acme.txt](acme.txt) — acme beyond the three-button
+mouse — was opened for its full session and did not stay the problem it was
+filed as. Recorded here because the METHOD carried it again, and because
+this run inverts the textbook order in a way worth keeping.
+
+1. **The wrong axis, corrected (hers).** The first pass decomposed acme by
+   *provenance* — what came from Oberon, from Plan 9, from sam, from the
+   mouse. Christine: *"You are not separating the concepts properly"*, and
+   then the right axis, in four layers: tiled window management; the tag
+   line; the operations; the mouse bindings. The lesson generalises and is
+   worth stating as method: **provenance explains a system but does not
+   license changing it; anatomy names parts, and a part with no dependents
+   can be replaced.** The first analysis was sound and answered the wrong
+   question.
+2. **The census as the payload.** Re-decomposed by anatomy, acme's 38
+   operations sorted into 26 that already carry names (measured in
+   `acme.c`), 4 native on every modern surface, and **8 gesture-only** — of
+   which only **three** are verbs needing a home. The brief had assumed the
+   inventory was eleven mouse bindings; the anatomy showed the surface area
+   was three verbs. Measuring before designing changed the size of the
+   problem by an order of magnitude.
+3. **The window model, argued down.** Tiled / floating / tabbed was put as a
+   three-way choice; the reframe that settled it was that the real question
+   is whether *cross-window operation* survives, since every distinguishing
+   acme flow needs two bodies visible. Her hybrid (VS Code: tiled *and*
+   tabbed) then produced the synthesis — a tab and a tag are the same object
+   at different orientations — and from there the responsive rules.
+4. **The reframe, and where it came in the order (hers).** *"What we have
+   been designing is not acme, or a replacement for acme. It is the shell
+   that IPNX boots into… Emca is the user interface."* **This arrived after
+   four rounds of detailed design, not before them** — the design work
+   produced the understanding rather than executing it. Textbook design
+   thinking runs empathise → define → ideate; this ran ideate → *define*,
+   and the define step reframed everything upstream. Recorded as a genuine
+   adaptation, not an accident of one session: for systems work, the problem
+   statement can be an OUTPUT.
+5. **The principle taken to its limit (hers).** *"In IPNX everything is
+   managed as a file. That's what makes emca work."* No process manager, no
+   package GUI, no network panel — a filesystem, a type declaring its verbs,
+   a surface rendering them. The check that made it more than an aspiration:
+   a rich system UI normally kills acme's central property, and here it
+   cannot, because the managers are already text filesystems.
+6. **Naming: four rounds of taste, then one measurement.** `recipe` →
+   `rec` → `menu` → `kit`/`app` → `spec` → `proj` produced no winner, each
+   rejected for a different reason. A single grep over the vendored Plan 9
+   source settled the rule instead — sixteen root names, **not one over four
+   characters** — and the house rule (measure rather than assume) beat five
+   rounds of opinion. The rejections are kept in the decision log so the
+   search is not redone.
+7. **The naming agony was a symptom, and that is the finding.** `recipe`
+   resisted naming because it was **two concepts wearing one name** —
+   ingredients and dishes, leaves and combinations. Her split into `/pkg`
+   and `/project` ended the search immediately. **Method note worth
+   keeping: persistent difficulty naming a thing is evidence the thing is
+   not one thing.** Reach for decomposition before reaching for the
+   thesaurus.
+
+**The adversarial pattern recurs.** As with the canvas brainstorm
+(2026-08-30), every correction Christine made produced a clause the design
+needed — the axis, the hybrid, the reframe, the split, and the top toolbar
+she was insistent about for a reason that only became visible at step 4.
+Two sessions is a pattern: the pushes are the method, not interruptions to
+it.
+
+**Reconciliation with standing decisions.** Unlike iteration 1 (zero
+conflicts), this session overturned two dated decisions, both recorded as
+reversals with evidence rather than silent changes: **"no phone form
+factor"** (2026-08-29 — reversed, because character-measured breakpoints
+make the phone one value of a knob built anyway) and **acme.txt's
+constraint 2**, "little or no protocol change" (amended — four additions to
+`/dev/canvas` and no more). Both are in the decision log, dated 2026-08-31.
+
+**Validation plan.** emca's own acceptance test is a belief event as written:
+*a person who has never read the acme paper, holding an iPad, can open a file
+from a listing, edit it, save it, run a command on a selection, search, and
+undo — without being told any secret.* That is a testable claim about a
+stranger, and it names an audience no persona card covers yet
+([personas.md](personas.md) records the widening as a hypothesis rather than
+inventing a sixth persona). Earliest: M14d.

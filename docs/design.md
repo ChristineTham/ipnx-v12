@@ -380,6 +380,367 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
 
 ## Decisions (2026-08-26; native-host, OCI, storage, toolchain, userland-curation and V10-completeness decisions added 2026-08-27)
 
+- **(2026-08-31) emca is the user interface, and IPNX is a whole operating
+  system.** The largest reframe since the re-founding, and it reorders much of
+  what follows. Christine, after four days of designing what everyone assumed
+  was an editor: *"What we have been designing is not acme, or a replacement
+  for acme. It is the shell that IPNX boots into, it is the IPNX primary user
+  interface, it is the browser surface, the macos app, the ios app. The system
+  boots into emca. Emca is the user interface."* And on what that makes the
+  project: *"It's not just a barebones UNIX reimagined, it is a full operating
+  system with our own semantics, user interface, artifacts."* The full design is
+  [emca.txt](emca.txt); the parts list it derives from is [acme.txt](acme.txt).
+  **The mechanism, and why it is an IPNX design rather than a portable one**:
+  *"Traditional Unix and Linux manages different types differently, using
+  separate commands. ps list processes, there are separate commands to manage
+  network connections, packages, users, etc. In IPNX everything is managed as a
+  file. That's what makes emca work."* There is no process manager program, no
+  package-manager GUI, no network panel — there is a filesystem, a **window
+  type** declaring which verbs its files accept, and a surface rendering those
+  verbs natively. Adding a manager to the system is adding a file. A rich system
+  UI normally destroys acme's central property (any text can be a verb's
+  operand) because a process table becomes a native widget; **here it cannot,
+  because the managers are already text filesystems** — `/proc/1/status` *is*
+  text, so a process window is a text window that happens to carry `Kill`. The
+  property holds by construction. On a system where the process table is a
+  syscall, the widget toolkit returns and acme dies inside it. **The
+  architecture, hers**: *"you need to split emca design into two halves — a half
+  that lives in IPNX, and a half that is native to the surface."* IPNX owns
+  state, meaning and policy; the surface owns rendering and input; the test that
+  settles any case is *differs between a Mac and an iPad → the surface's;
+  differs between one workspace and another → IPNX's*. It earned its keep
+  immediately on an unanticipated question — credential key custody is the
+  surface's (Keychain, WebCrypto, a passphrase), the credential listing and its
+  verbs are IPNX's. **A window type is a triple** — namespace, *optional*
+  command, window configuration — and the command being optional dissolves the
+  types-vs-programs fork: no command means emca renders the tree, a command
+  means the program drives the window through `/mnt/emca` (acme's client model,
+  unchanged), so `/proc` can start as a one-line type and grow a live `ps`
+  without the type system changing. `/type` is itself a type, so the interface
+  is configured by editing files *in* the interface — no plugin API, no manifest,
+  no restart; one built-in type (`dir`) is the bootstrap floor. **`/pkg` and
+  `/project` are different kinds** (hers, replacing an earlier single "recipe"
+  registry that was trying to be both): a package is a toolchain, command or
+  library and is a *leaf*, bound not instantiated; a project *combines* packages
+  into a namespace and becomes a process. A two-level graph, not an arbitrary
+  DAG — and it is what `pkg.c` already was ("installing BINDS it; the namespace
+  is the installation record"). **A project is a proto-process**, which names the
+  symmetry: `/pkg/go` is what it is made of, `/project/ipnx` the process that
+  could be, `/proc/1741` the process that is — so "save as project" is reading
+  `/proc/N/ns`. Templates instantiate, workspaces open; `/project` is a union of
+  system and personal, so promotion is moving a file between union elements, and
+  **promotion promotes the declaration, not your files**. Clone and instantiate
+  are separate acts, and instantiate shows the declaration first — a cloned
+  project file is a stranger's declaration, the hole Docker and devcontainers
+  both have, and IPNX's answer is not a mitigation: the blast radius is readable
+  in one small file, and the namespace bounds it whether you read it or not.
+  **Naming, measured** (the house rule beating four rounds of opinion): sixteen
+  root names across the vendored Plan 9 source, **not one over four characters**
+  — so a root is ≤4 characters, abbreviation is what you do when the word is
+  longer, and a directory is named for what one of its *entries is* (`/proc/17`
+  is a proc), which is why Unix never wrote `/procs`. Expanding everything was
+  refused by two standing decisions, not by taste: "modern software must run"
+  (CPython, Go and git carry hardcoded `/tmp`, `/bin`, `/lib`, `/usr`) and
+  "vendored sources are verbatim" (571 references to `/lib`). `/project` is the
+  **one exception**, recorded with its reason so it constrains rather than
+  licenses: `/proj` is one keystroke from `/proc` and adjacent in meaning, so it
+  is a tab-completion footgun rather than merely a longer word. Rejected en
+  route, with reasons kept so the search is not redone: `recipe` (6), `rec`
+  (opaque), `menu` (32 uses in the UI sense in these documents, and the design's
+  founding quote is *"Acme doesn't need menus"*), `kit`/`app` (overloaded),
+  `spec` (geeky). **The protocol amendment**: acme.txt's constraint 2 expected
+  "little or no protocol change" and this exceeds it — four additions to
+  `/dev/canvas` and no more (structure roles, window type, verb applicability,
+  show request), recorded as deliberate. Canvas v0 anticipated the direction
+  ("span attrs arrive with the web presenter's real links, later"); emca is the
+  benchmark that demands them, which is how every element of v0 was derived.
+  **Consequences, dispositioned**: "one editor" ([userland.md](userland.md))
+  becomes **one surface** — the editor is one window type; **rio-today retires**
+  as a separate design, absorbed (`#w` still mints windows; a program's own
+  canvas window appears as an emca window of a canvas type); the browser page,
+  the macOS app and the iPadOS app **stop being hosts that run a demo and become
+  surfaces of emca**, so the public page is the system's face rather than a
+  demonstration of it; and **the "no phone form factor" refusal is reversed** —
+  it was recorded 2026-08-29 on the evidence that no persona's journey contained
+  one, and the new evidence is that responsive design in *characters rather than
+  pixels* makes the phone one value of a knob built anyway, not a separate
+  design. Reversal by evidence, per the standing rule, not by fresh opinion.
+  Largest open item, named rather than buried: **the surface half has no test
+  story** — emca's behaviour stays testable through the virtual surface, but
+  nothing in the tree proves a button was reachable or that Tab reached it, and
+  "no half-working" plus the keyboard-complete law make that the design's biggest
+  untested area, with no precedent in this repository to borrow from.
+
+- **(2026-08-31) The system is named Saranos; IPNX is the kernel; emca is the
+  interface.** The companion to the reframe above: once emca became the user
+  interface and the project became "a full operating system with our own
+  semantics, user interface, artifacts", the layer that had no name was the
+  system itself. Christine's observation that opened it: Apple names XNU, Darwin,
+  SwiftUI, macOS and MacBook separately, and IPNX had one name doing several
+  jobs. **The layering, decided**:
+
+  | | |
+  |---|---|
+  | **Saranos** | **the user experience** — emca the shell ([emca.txt](emca.txt)), the window types, the presenters, the surfaces' furniture |
+  | **IPNX** | **the kernel AND the userspace** — the file world (Darwin's slot, not XNU's) |
+  | wasm, and the surfaces | the machine it runs on |
+
+  Christine's correction, which settled where the line falls: *"IPNX is still
+  there, it is still the userspace and kernel. Saranos is what goes on the top —
+  a user experience."* So IPNX keeps everything it already named — kernel,
+  libcs, commands, `/pkg`, the whole file world — and Saranos names only what
+  a person sees and touches. `/dev/canvas` is the interface between them: an
+  IPNX device that Saranos consumes.
+
+  A symmetry worth recording, because it says the layering is not arbitrary:
+  **XNU stands for "X is Not Unix", and IPNX is "IP is Not UNIX"** (README's own
+  etymology) — the two kernels carry the same joke, and Apple's answer to the
+  layer above it was a human name, not a second acronym. **Saranos** is from
+  Sanskrit *śaraṇa* (शरण) — **refuge, shelter, sanctuary**. Her reading, which
+  is the naming rationale and leads: it is *"a refuge from the complexities of
+  the modern computing environment"* — a refuge for the PERSON, which is what
+  makes it a name for the experience layer rather than for the kernel. Her
+  criteria, in her words: *"easy to pronounce, mixed etymology, it sounds like a
+  word but isn't, and conveys serenity"* — the phonetic reading (*saran-* /
+  *seren-*) and the Sanskrit agree, which is rare in a coinage. A second reading
+  runs underneath and is structural rather than felt: a *process* also runs in a
+  refuge bounded by what it was given — from the README, *"IPNX v12 processes are
+  secure by design. It assumes from day one that the running application is
+  malicious"* — which is P4's *"what could it touch?"* answerable by
+  construction. The two readings are one word doing both jobs, at the two layers
+  the name now separates. **The mixed etymology is a feature, not a compromise**:
+  a Sanskrit root with a Greek-shaped ending, for a system that is itself a
+  synthesis — Plan 9's architecture, Unix's interface, wasm's world. The name's
+  construction mirrors the thing's. **Searched before committing, and clean**: zero
+  software, zero operating systems, zero developer tools; the hits are a South
+  African restaurant franchise, a surname, and an Elder Scrolls NPC.
+  **The rejections, kept so the search is never re-run** — nine candidates over
+  seven rounds, every one killed by measurement rather than taste:
+  `Ecma` (Ecma International / ECMAScript, in a system built on JS engines — and
+  acme backwards is *emca*, not *ecma*) · `Kitty`/`KittyOS` (kitty the terminal
+  emulator, plus two existing operating systems, the most prominent headlined
+  *"Writing A Toy OS"*) · `Mimmy`/`Mimi` (Sanrio's actively enforced portfolio —
+  and *Sanrio v Dong-A Pencil* found against **KITTY** alone; naming the system
+  after a defended character would turn IPNX's own IP-litigation joke into the
+  thing) · `MimiOS` (free, but roots in *mimic* — which argues against the
+  2026-08-30 decision that IPNX is not a modified Plan 9 — and files beside
+  Minix, Mimix, Mimiker, all teaching systems) · `Miaos` (two existing OSes, one
+  of them a recursive acronym, the same genus as IPNX) · `Ailuros` (a live
+  local-first AI-agent studio at ailouros.io, in P4/P5's territory — and it
+  begins with `AI`, which in 2026 is read before any Greek) · `namastos` (a weld,
+  homage names nothing about the system, and reads as a yoga pun) · `loka`
+  (Sanskrit *world*, apt — but Loka Inc. is an AWS Innovation Partner of the Year
+  selling to the same audience since 2004) · `viharos` (Sanskrit *dwelling* — but
+  already a word in **Hungarian**, meaning *stormy*) · `marjaros` (Sanskrit
+  *cat*, clean in search — but two characters from **Manjaro**, an operating
+  system) · and `topos` (Greek *place*, free, apt, seriously-neighboured — and
+  declined; recorded because it cleared every test and still was not the name,
+  which is data about how naming actually resolves). **The transferable rule,
+  measured across all of them**: *the company a name keeps in search results is a
+  positioning decision made before anyone reads a word you wrote* — and for a
+  project whose recorded anxiety is "I feel like we are underselling what has
+  been achieved", that is not a tiebreaker but an argument. **And the cat goes
+  where Bell Labs always kept it**: glenda is Plan 9's mascot and Plan 9 is the
+  name. Six of the nine rejections were cats; the affection was fighting for the
+  wrong slot. A cat becomes Saranos's mascot, costs nothing, clears nothing, and
+  `/usr/kitty` stays exactly as it reads in every example.
+  **Scope of the rename, and its limit**: dated entries in this log and in the
+  other records are HISTORY and keep the words they were written with — a log is
+  not retroactively renamed. Only present-tense statements of what the system
+  *is* take the new layering ([CLAUDE.md](../CLAUDE.md), [emca.txt](emca.txt),
+  [platforms.md](platforms.md), and architecture.md when the contracts land).
+  README.md is Christine's and is not touched.
+
+- **(2026-08-31) Editing is the surface's: emca implements sam, not a WYSIWYG
+  editor.** The two-halves split taken to its conclusion — and the first draft
+  of [emca.txt](emca.txt) had the rule and stopped short of it. Christine:
+  *"emca doesn't really need to implement a WYSIWYG editor on the IPNX side. It
+  can implement sam, a batch editor. The job of emca is to push a file into a
+  window via /dev/canvas. The host side can display and scroll the file, and
+  more importantly edit it using Monaco or TextEdit or similar."* Extended over
+  three further messages: *"selecting, copying, pasting can all be host side
+  operations, with sync to /dev/snarf"* · *"even command history and shell
+  command line edit — host implemented"* · *"we can even bring xterm/js back"*.
+  **The split test already decided this and was not followed through**: does
+  editing behaviour differ between a Mac and an iPad? Profoundly — TextKit is
+  not Monaco. So editing is the surface's, and "the surface owns text input"
+  was the same rule applied only as far as the caret. **What moves**: the caret,
+  selection, insertion and deletion, keystroke undo, syntax highlighting,
+  folding, multi-cursor, find-in-file, IME, autocorrect, dictation, the
+  clipboard (synced to `/dev/snarf`), **command history and line editing**, and
+  **terminal emulation**. **What IPNX keeps**: the authoritative buffer
+  (shadowed from events), the file (`Get`/`Put`), commands and `+Errors` and the
+  `| < >` filters, **sam's structural language**, context, what the verbs *mean*,
+  and the file interface. **So emca is a file server with a workspace, not an
+  editor** — it pushes text into windows, runs commands, applies
+  transformations. **Why this is "best of both worlds" rather than a
+  concession**: Monaco and sam are *complementary, not competing*. Monaco is
+  interactive, local and cursor-scoped; sam is batch, structural and file-scoped
+  — `x/re/` over every match, `s//repl/` through an address, transformations no
+  cursor can express. Every other system has one or the other, or bolts a macro
+  language onto an editor that owns the buffer; here the buffer is a **file** and
+  the surface is a **view**, so the halves compose by construction. Nobody has
+  shipped both well together because nobody else had this boundary. **What it
+  retires, none of it to be written**: the hand-rolled caret, guest-side
+  readline, escape-sequence history, syntax highlighting, folding, multi-cursor,
+  find-in-file — inherited rather than implemented, which is the same move as
+  borrowing V8 and wasmtime under the kernel (the founding pattern: borrow the
+  era's engines through a narrow waist). **And it reconciles the console's "AND,
+  not XOR"** ([userland.md](userland.md), 2026-08-30): the transcript is the
+  **line-oriented door**, where history and editing are the host's; **xterm.js is
+  the raw-input door**, for programs wanting keystrokes rather than lines. That
+  was recorded as a concession to familiarity and is now the consistent answer,
+  with an architectural reason. **Four risks, recorded as open rather than
+  waved past**: (1) **property 1** — *any text can be a verb's operand* is the
+  claim the design rests on, and Monaco owns the body's text, so `execute` and
+  `look` must ride *its* action and context-menu API; it looks possible and must
+  be PROVEN before adoption. (2) **Undo has two owners now** — the surface's at
+  keystroke granularity, emca's at command granularity (`acme.c`'s sequence
+  numbers); acme had one, and which answers ⌘Z is undecided and will be felt
+  immediately. (3) **Buffer fidelity** — the shadow discipline is *apps never
+  re-read* (con(1)'s, load-bearing); Monaco must report every edit, multi-cursor
+  emits many ranges per keystroke, and if surface and app ever diverge the only
+  repair is a re-read, which breaks the discipline. (4) **The surfaces now differ
+  in dependencies**, not only in grammar — Monaco (~5MB) on the web, TextKit on
+  Apple. Consequence for the plan: **M14c shrinks substantially** (emca's IPNX
+  half is a file-pusher plus sam) and **M14d gains the editor component**;
+  implementation.md is amended in the same commit.
+
+- **(2026-08-31) `/dev/canvas` was over-derived: the redesign into 9P, `/dev/window`,
+  `/type`, and a canvas narrowed to drawing.** The largest correction to a landed
+  contract so far, and it was forced by the founding decisions rather than chosen.
+  Christine, stopping a build that was going the wrong way: *"You are trying to
+  push everything through a protocol that should have been an exception rather
+  than the rule."* And the test she applied to the result: *"This is the only
+  solution that fits the principle (everything is a file, per process namespace,
+  and 9P is the only protocol)."* **The framing error, named**: canvas.md's own
+  title is *"the display protocol"* — but **9P is the only protocol** (founding).
+  Calling canvas a protocol invited treating it as the place all host/IPNX
+  exchange happens, and it grew until it carried layout, chrome, text and
+  drawing. It was always files; the name is what made it universal.
+  **The measurement record shows exactly where it went wrong.** v0 was derived
+  from four benchmarks — console-today, acme-today, rio-today, one plot. Under
+  the split: console-today is a text file plus a line back-channel; acme-today is
+  a file plus chrome; rio-today is window management; **only the plot was
+  drawing.** Three of the four were never canvas consumers, so `stack`, `text`
+  and `edit` are generalisations from things that wanted files and chrome — which
+  is also why `frame` and `image` never found a consumer. The measurement
+  discipline caught its own over-derivation, a day late, which is the system
+  working. **The redesign, four semantics over ONE protocol** (9P throughout —
+  these are not four protocols but four conventions):
+  **(1) Content is 9P, directly.** emca names a file; the host mounts it and
+  renders it natively — text, SVG, HTML, Markdown, PostScript, images.
+  **IPNX IMPLEMENTS NO RENDERERS AT ALL**, which is the deletion that makes the
+  redesign worth doing, and is the founding pattern again (borrow the era's
+  engines through a narrow waist — the host's renderers *are* the era's engines,
+  as V8 and wasmtime are under the kernel).
+  **(2) `/dev/window/<type>/<n>` is the control interface**, bidirectional, a
+  numbered directory of small files in the house shape (`/proc/17`,
+  `/net/tcp/0`, `/mnt/acme/27`): IPNX declares the chrome — these buttons, this
+  one runs `Put` in IPNX, that one toggles wrap host-side — and the host reports
+  back what the user did. **The window's TYPE IS IN THE PATH**, not an attribute:
+  `/dev/window/proc/1` tells the host it is drawing a proc window, exactly as
+  `/net/tcp/0` differs from `/net/udp/0`. This is `#w` grown up — the device
+  keeps minting and owning windows and gains the interface it should have had.
+  **(3) `/type` is the registry both sides read**: what window types exist, what
+  IPNX command drives each, and what the semantics of that type's host/IPNX
+  exchange are. It answers "how does the host know what this is" without
+  sniffing, and it is the same registry the emca design already needed.
+  **(4) `/dev/canvas` narrows to its name** — genuine drawing, the classic
+  turtle vocabulary: open a rectangle, draw a circle, place text. The
+  **exception**, for programs that actually draw. `path` survives (it came from
+  the one real benchmark); `stack`, `text` and `edit` retire to `/dev/window`
+  and to files.
+  **Editing and `Put`** *(refined by the next entry: emca holds the AUTHORITATIVE
+  buffer and the host mirrors it — the phrasing here predates that question being
+  raised)*: the host holds the edited buffer, and on Save *"tells
+  IPNX here is the edited file and streams it over 9P"* — so writing back is an
+  ordinary 9P write, and dirty state is reported for `Putall` and for `Exit`
+  refusing. This completes the 2026-08-31 *editing is the surface's* decision:
+  not only does the host edit, it returns the result through the one protocol.
+  **What retires, none of it to be written**: canvas's `stack`/`text`/`edit`
+  kinds, the shadow-buffer discipline *for display*, every renderer emca would
+  have needed, most of acme.c's canvas-writing machinery, and the `role=`/`type=`
+  canvas attrs added earlier the same day (they belong on `/dev/window`).
+  **Open, and worth deciding early**: whether `/dev/window/<type>/<n>` and
+  acme's own `/mnt/acme/<n>` are ONE window vocabulary or two that rhyme — same
+  files, opposite directions, and the only difference today is that
+  `/dev/window` declares toolbars and actions, which acme's interface arguably
+  should have had. Consequence for the plan: canvas.md is narrowed with its
+  over-derivation stated in place, `/dev/window` is specified, and M14 is
+  restructured — its protocol stage shrinks to *narrow canvas, specify
+  `/dev/window`*, and its surface stage gains the host's renderers for free.
+
+- **(2026-08-31) The buffer contract: mirrored with detectable divergence, one
+  undo stack, `/mnt/acme` merged, and versioning as policy.** Four consequences
+  of *editing is the surface's*, settled together because they interlock.
+  **(1) emca holds the authoritative buffer; the host mirrors it.** Christine:
+  *"we can't just let host edit and send the completed file to emca. We must
+  notify emca of every edit, so essentially emca and the host are maintaining
+  mirror buffers."* Four independent reasons force it, only one of which is
+  undo: **the suite runs headless** (against a virtual surface there is no host
+  buffer, so every acme behaviour test would break), sam's structural commands
+  operate on text, `Put` and the `| < >` filters need it, and the `body` file
+  serves client programs. **The risk this creates, named**: emca writes too (sam,
+  `Get`, `+Errors`, steering `sel`), so mirroring is not replication with one
+  writer — it is two writers on one buffer, which is collaborative editing and
+  OT/CRDT territory. **The existing canvas design already solves it** and the
+  solution is lifted rather than reinvented: *"a user edit event is a mutation
+  that happened — the device applies insert and delete to the node's data BEFORE
+  queueing the event, so presenter echo and node data are one thing."* Single
+  source of truth, optimistic local echo. **And divergence must be detectable**,
+  because its failure mode is not a crash but silent disagreement — one dropped
+  or misapplied edit and every later `s//` operates on text that is not there.
+  Each edit carries a **sequence number**, each sync a **hash of the buffer**;
+  mismatch triggers resync. Which amends a load-bearing discipline deliberately:
+  con(1)'s *"apps never re-read"* becomes **"apps never re-read ROUTINELY"** — a
+  resync on detected divergence is a repair path, not normal operation.
+  **(2) One undo stack, and it lives in emca.** The host's undo is DISABLED;
+  `⌘Z` round-trips. The realisation that makes this simple rather than a
+  compromise: **emca is not remote.** It is a process on the same machine
+  reached through a SAB mailbox, so a round trip is microseconds. *Every*
+  argument that forces web editors into local optimistic undo stacks is a
+  latency argument, and none of them apply — so the two-stack problem is one we
+  would be inventing rather than one we are forced into. Acme's infinite undo is
+  preserved exactly, with no interleaving semantics to explain and no "sometimes
+  it undoes a keystroke, sometimes a command". The one exception, flagged for
+  later: a *remote* surface under M12's distributed story would feel the trip,
+  and only then is local undo worth its complexity.
+  **(3) `/mnt/acme` retires, merged into `/dev/window`.** Christine: *"I think we
+  may need to retire /mnt/acme."* It is a merge, not a loss — the two are the
+  same files pointing opposite ways (a program driving emca; emca driving the
+  host), and the only difference was that `/dev/window` declares toolbars and
+  actions, which acme's interface arguably should have had. This answers
+  window.md's open question in favour of **one window vocabulary**, and it
+  carries an obligation: **`/dev/window` must be usable by ordinary programs**,
+  not only by emca and the host, because that client interface is the paper's §7
+  and the thing that made acme extensible without plugins. Designed for from the
+  start, not retrofitted.
+  **(4) Versioning is policy over `#V`, and nothing may depend on it.** The
+  distinction that settles it: **undo is edit-granular and session-scoped**
+  ("un-type that"); **versioning is tree-granular and durable** ("what did this
+  look like on Tuesday?"). Neither substitutes — hourly snapshots cannot unpick a
+  keystroke, and editor undo cannot recover last week. `#V` as built is already
+  the right shape and already explicitly triggered (`#V/ctl` takes `snap [name]`;
+  *"a snapshot is a tree; restore is a bind"*, architecture.md), so **the
+  mechanism exists and only policy is missing — and policy is a file.** Plan 9
+  made the same separation with fossil and venti: the live filesystem and the
+  archival store are different concerns and the editor knows about neither.
+  Christine's shape, adopted: **optional, off by default, user-configurable, and
+  not realtime.** Two trigger axes rather than one — **on `Put`** for anything a
+  human authors (a clock snapshot catches a half-finished edit; a version at
+  `Put` catches a state somebody *meant*), and **hourly or daily** for things
+  that change with no human intention to align to: logs, state, databases. Off
+  for `/tmp`, scratch and build output. **Per-namespace**, which falls out of
+  per-process namespaces for free and yields a product feature: **an agent's
+  sandbox can be versioned aggressively as audit** — P4's *"what could it
+  touch?"* becomes *"what did it change?"*, with `restore is a bind` as the undo
+  button. **And the rule that keeps the layers independent: because versioning is
+  optional, nothing may be built on it.** Undo cannot be "walk to the previous
+  version", since a user with versioning off would then have none. `#V` is a
+  safety net underneath, never a mechanism anything requires — which is what
+  protects (2).
+
 - **(2026-08-27) The native host is a Rust kernel core plus per-platform embedding
   shims — after the PoC completes.** The kernel never executes guest code, so the
   core (proc table, namespaces, devices, 9P, the draw engine) compiles once in Rust

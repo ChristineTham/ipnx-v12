@@ -1,0 +1,1103 @@
+emca — the Saranos user interface
+=================================
+
+The layers, named 2026-08-31 (decision log):
+
+  Saranos    THE USER EXPERIENCE — emca the shell (this document), the
+             window types, the presenters, the surfaces' furniture
+  IPNX       THE KERNEL AND THE USERSPACE — the whole file world
+  wasm       the machine it runs on, and the surfaces it wears
+
+/dev/canvas is the interface between the two: an IPNX device that
+Saranos consumes.
+
+Saranos is Sanskrit sharana (शरण) — refuge, shelter. Christine's
+reading: a refuge from the complexities of the modern computing
+environment — a refuge for the PERSON, which is why it names the
+experience rather than the kernel. Underneath, a process also runs in
+a refuge bounded by what it was given; one word, both layers.
+
+emca is acme backwards. IPNX is "IP is Not UNIX", the same joke as
+XNU — which is why the layer above it wanted a human name rather than
+a second acronym.
+
+Status: DESIGN, complete first pass (2026-08-31). Nothing has shipped.
+This document is the design record for emca; the decision that adopts
+it is dated in design.md, and the milestones that build it are in
+implementation.md.
+
+emca is not an editor, and not a replacement for acme. In Christine's
+words, the reframe that produced this document (2026-08-31):
+
+  "What we have been designing is not acme, or a replacement for
+   acme. It is the shell that IPNX boots into, it is the IPNX primary
+   user interface, it is the browser surface, the macos app, the ios
+   app. The system boots into emca. Emca is the user interface."
+
+And what it makes the system:
+
+  "It's not just a barebones UNIX reimagined, it is a full operating
+   system with our own semantics, user interface, artifacts."
+
+The name is acme backwards, because the mouse comes off and the verbs
+go on. An editor is one window type inside it.
+
+The parts list this design works from is docs/acme.txt — acme's four
+layers, its 38 operations, and the census that found only three verbs
+genuinely homeless. Read that first; this document does not repeat it,
+and the split it discovered runs right through emca:
+
+  acme's L1 (tiled window management) and L4 (the bindings) belong to
+  EMCA-THE-SHELL — system-wide.
+  acme's L2 (the tag) and L3 (the operations) belong to THE WINDOW
+  TYPE — per-window.
+
+The anatomy already had the seam; nobody knew what was on the far
+side of it.
+
+The governing directive, hers (2026-08-31): "We implement the
+concepts and the benefits, not the shape."
+
+
+The acceptance test
+-------------------
+"acme intent" stated so it can be checked. Three properties, derived
+from the anatomy. A surface that keeps all three delivers acme
+whatever it looks like; one that drops any is a different system
+wearing the name.
+
+  1. ANY TEXT CAN BE A VERB'S OPERAND — output, tags, listings alike.
+     No read-only regions, no privileged text.
+  2. CONTEXT IS LOCATION — a command means what the window's
+     directory says it means. Acme's own invention (Pike: "the
+     context-dependent properties of execution and searching"), and
+     the one most easily lost, because no native furniture on any
+     platform has a notion of a working directory.
+  3. THE WORKING SET IS VISIBLE — you see what you are working on,
+     not one thing at a time.
+
+Property 3 degrades by viewport and that is accepted: at the smallest
+size every window's TAG stays visible though only one BODY does.
+Reduced, not abandoned. A tabbed interface would abandon it, which is
+why emca has no tabs at any size.
+
+WHY PROPERTY 1 SURVIVES A SYSTEM UI, which is the claim this whole
+design rests on: a rich system interface normally destroys it. A
+process manager with sortable columns is a native table, and a native
+table is not text you can sweep — you gain a manager and lose acme.
+In IPNX that trade does not arise, BECAUSE THE MANAGERS ARE ALREADY
+TEXT FILESYSTEMS. /proc/1/status IS text. A process window is a text
+window that happens to carry Kill in its toolbar. The property holds
+by construction, not by discipline.
+
+That is why this is an IPNX design and not a portable one. On a
+system where the process table is a syscall, you must invent a widget
+toolkit and acme dies inside it. Here the filesystem did the work in
+1990.
+
+
+PART ONE — THE SPLIT
+====================
+
+Her instruction (2026-08-31): "I think you need to split emca design
+into two halves — a half that lives in IPNX, and a half that is
+native to the surface."
+
+The line, and the test for it
+-----------------------------
+  IPNX owns STATE, MEANING and POLICY.
+  The surface owns RENDERING and INPUT.
+
+  If the answer differs between a Mac and an iPad — the surface's.
+  If it differs between one workspace and another — IPNX's.
+
+Worked: "how many bodies are expanded" differs by device, so it is
+the surface's. "Which windows exist" differs by workspace, so it is
+IPNX's. "What Open means when you tap a path" is identical on every
+device and differs per namespace — IPNX's. "Where the credential
+decryption key lives" differs by host (Keychain, WebCrypto, a
+passphrase) — the surface's.
+
+The half that lives in IPNX
+---------------------------
+  - the buffers and their text; every edit, every undo record
+  - the window set: which windows exist, their names, their types
+  - the tag, as ONE string per window
+  - context: each window's directory, and every name resolved
+    against it
+  - what every verb MEANS: execute forks a process, look resolves a
+    path or an address, the filters pipe dot
+  - which verbs APPLY to a given range (the plumber's judgement)
+  - the file interface: /srv/emca and /mnt/emca
+  - the running-command table (a view of /proc)
+  - Dump and Load: the window set, not the geometry
+
+The half that is native to the surface
+--------------------------------------
+  - layout entire: breakpoints, leaves, rails, panes, splits, which
+    bodies are expanded, what is collapsed
+  - all furniture: window toolbars, the tag bar's field, the floating
+    bar, the status line, the menu or overflow, window controls,
+    scrollbars
+  - all input: taps, clicks, gestures, keyboard shortcuts, the soft
+    keyboard, IME, autocorrect policy
+  - the caret and the selection, natively owned
+  - key custody for credentials
+  - which of the applicable verbs it shows, and where it puts them
+
+Consequences, stated so they are not discovered later:
+
+  - The surface may be replaced entirely without touching emca. The
+    SwiftUI surface and the web SPA are peers; divergence between
+    them is accepted and named (the input convention, design.md
+    2026-08-30).
+  - emca never learns what a button is, and never will.
+  - GEOMETRY IS NOT SAVED. Acme's Dump saved a layout; emca's saves
+    the window set, because layout is derived from the viewport and
+    cannot be restored onto a different one. A dated simplification,
+    and a real loss on a single-device workflow.
+
+The channels — REDESIGNED 2026-08-31
+------------------------------------
+Her correction, which stopped a build going the wrong way: "You are
+trying to push everything through a protocol that should have been an
+exception rather than the rule." And the test the result had to pass:
+"This is the only solution that fits the principle (everything is a
+file, per process namespace, and 9P is the only protocol)."
+
+FOUR SEMANTICS OVER ONE PROTOCOL. These are not four protocols —
+everything is 9P; what differs is what the files mean.
+
+  9P, directly        THE FILE ITSELF. emca names a path; the host
+                      mounts it and RENDERS IT NATIVELY — text, SVG,
+                      HTML, Markdown, PostScript, images. IPNX
+                      IMPLEMENTS NO RENDERERS AT ALL.
+  /dev/window/        THE CONTROL INTERFACE, bidirectional, per
+    <type>/<n>/       window. IPNX declares the chrome; the host
+                      reports what the user did. The TYPE IS IN THE
+                      PATH, as /net/tcp/0 differs from /net/udp/0.
+                      Specified in docs/window.md.
+  /type               the registry BOTH SIDES READ: what types exist,
+                      what IPNX command drives each, what that type's
+                      exchange means.
+  /dev/canvas         GENUINE DRAWING ONLY — open a rectangle, draw a
+                      circle, place text. The exception, for programs
+                      that actually draw. Narrowed; docs/canvas.md.
+
+THE FRAMING ERROR THIS CORRECTS: canvas.md called itself "the display
+protocol", but 9P is the only protocol. Naming it one invited treating
+it as the place all host/IPNX exchange happens, and it grew until it
+carried layout, chrome, text and drawing. It was always files.
+
+AND THE MEASUREMENT RECORD SHOWS WHERE: canvas v0 was derived from
+four benchmarks — console-today is a text file plus a line
+back-channel; acme-today is a file plus chrome; rio-today is window
+management; ONLY THE PLOT WAS DRAWING. Three of four were never canvas
+consumers, which is why frame and image never found one either.
+
+Editing and Put: the host EDITS and holds a mirror; emca holds the
+authoritative buffer (decided below, 35). On Save the host streams the
+edited file back to IPNX OVER 9P — an ordinary write, no new
+mechanism, and it doubles as a resync. Dirty state needs no channel of
+its own: emca knows the buffer and knows what was last written.
+
+What this retires, none of it to be written: canvas's stack, text and
+edit kinds; the shadow-buffer discipline FOR DISPLAY; every renderer
+emca would have needed; most of the display machinery; and the role=
+and type= canvas attrs specified earlier the same day, which belong on
+/dev/window.
+
+The superseded protocol delta (kept as the record)
+--------------------------------------------------
+What must cross the line is exactly what neither half can know
+alone. Four additions to /dev/canvas (docs/canvas.md). acme.txt's
+constraint 2 expected "little or no protocol change"; this exceeds
+it, recorded as a deliberate amendment rather than an oversight.
+Canvas v0 anticipated the direction — "no pre-marked span roles in v0
+... span attrs arrive with the web presenter's real links, later" —
+and emca is the benchmark that demands them, which is how every
+element of v0 was derived in the first place.
+
+  1. STRUCTURE ROLES — so a generic surface can recognise a window
+     and give it native furniture:
+
+       role=split     a container of leaves (nests; dir=row|col)
+       role=leaf      holds windows; the rail's unit
+       role=window    a window
+       role=title     the name segment
+       role=toolbar   the builtin segment
+       role=tagbar    the user segment
+       role=body      the text
+       role=status    the workspace's ambient line
+
+     Generic, not emca-specific: con(1) and any future client get the
+     same furniture from the same roles.
+
+  2. WINDOW TYPE — type=<name>, resolved through /type. Drives
+     placement, furniture and interactivity.
+
+  3. VERB APPLICABILITY — for a given range, which of the closed verb
+     set applies. Sent as an attr in response to a select event; the
+     surface renders what it is told.
+
+  4. SHOW REQUEST — show=1 on a window: "the user needs to see this".
+     The app asks, the surface decides how. The sel attr's precedent
+     exactly — the app steers and does not command, so an +Errors
+     tail never steals focus.
+
+Nothing else crosses. The surface never learns what a command is, and
+emca never learns the viewport's width.
+
+
+PART TWO — THE WORLD AS FILES
+=============================
+
+Her statement of the principle (2026-08-31):
+
+  "Traditional Unix and Linux manages different types differently,
+   using separate commands. ps list processes, there are separate
+   commands to manage network connections, packages, users, etc. In
+   IPNX everything is managed as a file. That's what makes emca
+   work."
+
+There is no process manager program, no package manager GUI, no
+network settings panel. There is a filesystem, a type that says which
+verbs its files accept, and a surface that renders those verbs
+natively. ADDING A MANAGER TO THE SYSTEM IS ADDING A FILE.
+
+This is more Plan 9 than acme ever was: acme made ITSELF a file
+server; emca makes the whole system's UI a view over the file servers
+that already exist.
+
+The roots
+---------
+  /proc      processes — the process manager
+  /dev       devices
+  /net       network connections
+  /srv       posted services
+  /env       environment
+  /usr       users: /usr/kitty/{profile,home,credentials,project}
+  /pkg       packages: toolchains, commands, libraries
+  /project   project templates and workspaces
+  /type      window types — the registry emca reads
+  /lib /bin /tmp /mnt /etc /rc      as they are
+
+Note on /usr: this is PLAN 9's /usr — home directories, /usr/glenda —
+not Unix's retconned "Unix System Resources" holding /usr/bin. Every
+Linux-shaped reader will assume the other.
+
+The naming convention, measured
+-------------------------------
+Measured across the vendored Plan 9 source: sixteen root names, NOT
+ONE over four characters. lib bin tmp dev usr mnt etc sys srv env
+(3), proc acme draw (4), rc fd n (1-2). acme and draw look like
+exceptions and are not — they are words that already fitted.
+
+  THE RULE: a root name is at most four characters. Abbreviation is
+  what you do when the word is longer. A directory is named for what
+  one of its ENTRIES IS, not for the collection — /proc/17 is a proc,
+  /pkg/go is a pkg — which is why Unix never wrote /procs or /devs.
+
+Expanding everything was refused, and not on taste: "modern software
+must run" (CPython, Go and git carry hardcoded /tmp, /dev/null, /bin,
+/lib, /usr) and "vendored sources are verbatim — never edit them"
+(571 references to /lib, 139 to /bin in source committed never to be
+touched).
+
+  THE ONE EXCEPTION: /project, seven characters. Recorded with its
+  reason so it constrains rather than licenses — /proj is one
+  keystroke from /proc and adjacent in meaning (templates for
+  processes beside running processes), ambiguous under tab
+  completion. A future root claiming this exception must show the
+  same: a real collision, not merely a longer word.
+
+The naming search that produced it, so it is not redone: recipe (6,
+too long), rec (opaque), menu (32 uses in the UI sense in these very
+documents, and the design's founding quote is "Acme doesn't need
+menus"), kit and app (overloaded), spec (geeky), proj (collides with
+/proc). The concept split in two and the agony ended — /pkg was
+always the ingredients and /project always the dish; "recipe" was
+trying to be both.
+
+
+PART THREE — WINDOW TYPES
+=========================
+
+Her definition (2026-08-31): "Each window type is associated with a
+namespace, a command, and window configuration — what toolbar
+commands to display etc."
+
+The triple
+----------
+  /type/<name>/ns        the namespace to construct (bind lines)
+  /type/<name>/cmd       the command to run — OPTIONAL
+  /type/<name>/window    the furniture: toolbar verbs, view mode
+
+House style is a directory of small files (/net/tcp/0/ctl), not one
+config blob: each field is separately editable, greppable, bindable,
+and a personal override is a union element.
+
+THE COMMAND IS OPTIONAL, and that is what dissolves the types-vs-
+programs fork:
+
+  no command   emca renders the tree directly — a listing, a file
+               body. Most types. /type/proc's ns is one line,
+               bind '#p' /proc, and needs nothing else.
+  a command    the program drives the window through /mnt/emca —
+               acme's client model, unchanged.
+
+So /proc can start as a listing with verbs and grow a live sorted ps
+WITHOUT CHANGING THE TYPE SYSTEM. Simple types stay one line; rich
+ones are programs.
+
+Both directions meet in one registry
+------------------------------------
+  type-first   the toolbar's Processes button: instantiate the type
+  path-first   look at /proc/17: what furniture does this get?
+
+Because the type declares its namespace, the path->type map is the
+reverse lookup of the same table. One registry answers both. Type is
+never inferred from a path pattern, and a filesystem never declares
+its own type — THE TYPE OWNS THE PATH.
+
+Verbs: one rule, two surfaces
+-----------------------------
+  CORE VERBS ARE EMCA'S; EXTRA VERBS ARE THE TYPE'S.
+
+Del, Snarf, Get, Look always in the window toolbar; Kill only in
+/proc. Cut, Copy, Paste, Execute, Look, Pin always in the floating
+bar; Instantiate only on a /project line. Same shape on both
+surfaces, and the same closed-core-plus-extension rule the rest of
+the design uses.
+
+Text is the default, and non-text owes a reason
+-----------------------------------------------
+Not every file is text. Three modes:
+
+  text        the default: sweepable, editable, executable
+  rendered    an image, a plot — needs canvas's frame/image kind
+  opaque      visible metadata, withheld content — the credential
+              case; the same shape as a device, something you
+              OPERATE rather than READ
+
+  THE DISCIPLINE: text is the default, and a type that renders
+  non-text owes a reason. The more types render non-text, the less
+  the system is acme, and the drift ends in a GUI of opaque panels —
+  the thing this design refuses. Same shape as canvas.md's dozen-
+  kinds tripwire, applied to the second axis of growth.
+
+Consequence for the protocol: the credential window does not demand
+frame (metadata is text); an image window does. That is the first
+real benchmark for canvas's frame/image kinds, which v0 declared and
+left unimplemented "until a benchmark demands them".
+
+/type is itself a type
+----------------------
+You configure the system's interface by editing files IN the
+interface: open /type, edit proc's toolbar list, and the process
+manager changes. No plugin API, no extension host, no manifest
+format, no restart. The UI is files, and emca already edits files —
+acme's /mnt/acme move, turned on the UI itself. This is what makes
+"infinitely extensible" (hers) true rather than aspirational.
+
+THE BOOTSTRAP FLOOR: emca carries one built-in type, dir, and reads
+everything else with it. Like a bootstrap compiler. Without this
+stated, /type being a type is a mystery rather than a design.
+
+The starting type set
+---------------------
+  type          namespace              furniture
+  -----------   --------------------   -------------------------
+  dir           inherited              Look; lines are look
+                                       targets (BUILT IN)
+  file          inherited              Del Snarf Get Look Edit,
+                                       Put/Undo/Redo when apt
+  errors        inherited              Del Snarf Kill; lines are
+                                       look targets
+  proc          bind '#p' /proc        Kill, Note, Ns, New-as
+  usr           /usr                   Login-as, New, Profile,
+                                       Credentials
+  pkg           /pkg                   Install, Remove, Verify
+  project       /project               Instantiate, Open, Promote,
+                                       Save-as
+  net           bind '#I' /net         Dial, Announce, Close
+  type          /type                  New, Edit
+  transcript    inherited              con(1) as cmd
+  credential    /usr/$user/            Add, Revoke, Rotate, Use-for
+                credentials            — OPAQUE; never shows bytes
+
+Each is a directory of at most three small files. That is the whole
+manager story.
+
+
+PART FOUR — THE WINDOW
+======================
+
+Four parts, natively rendered:
+
+  +--------------------------------------------------+
+  | ~/Repositories/ipnx-v12/  x.c        [-] [x]     |  title
+  +--------------------------------------------------+
+  | [Del] [Snarf] [Get] [Look] [Edit]  [Put] [Undo]  |  toolbar
+  +--------------------------------------------------+
+  | mk test                                          |  tag bar
+  +--------------------------------------------------+
+  |  the body                                        |  body
+  +--------------------------------------------------+
+
+  TITLE     the name. Editable — editing it renames or redirects the
+            window, a real acme operation. Rendered as TWO ELEMENTS,
+            directory and basename, never one string: native title
+            treatments truncate, and they eat the front or middle of
+            a path, which is precisely the directory. The furniture
+            would silently hide property 2 of the acceptance test at
+            exactly the sizes where it matters most. Tapping the
+            directory expands it, and is where changing a window's
+            context lives.
+
+  TOOLBAR   core verbs plus the type's, as real buttons. Closed set,
+            not user-editable. Dynamic builtins APPEAR and DISAPPEAR
+            (Put only while dirty — the paper's deliberate rule, and
+            the appearance IS the dirty indicator) but THE SLOTS ARE
+            RESERVED, so nothing reflows and no tap lands on a button
+            that arrived a frame ago. Acme's semantics, HIG's
+            stability.
+
+  TAG BAR   the user's segment: free, editable, executable text.
+            This is where "any text can be a menu item" lives, and it
+            is why the toolbar may be closed without loss. Type
+            Indent here and it works. Enter executes the line;
+            selecting part of it and executing runs that part.
+
+  BODY      natively rendered and natively edited. Wrapping by
+            default; no-wrap with horizontal scroll is a per-window
+            setting in the toolbar's overflow. Acme has no horizontal
+            scroll at all.
+
+Window controls: COLLAPSE and CLOSE. Not maximise — expanded and
+collapsed is a two-state machine, and maximise makes four with
+"normal". Zoom is a view mode, not a window state. Resize comes free
+from split dividers.
+
+One tag string underneath
+-------------------------
+The model keeps acme's single tag string:
+
+  /usr/kitty/x.c  Del Snarf Get Look Edit  Put Undo  |  mk test
+  '--- name ----' '--- fixed builtins ---' '-dynamic-' ^ '-scratch-'
+
+It stays one string for a reason that is not extensibility: the 9P
+tag file exposes it as one buffer, the behaviour suite reads and
+writes it, and those tests must pass. THE SPLIT INTO TITLE / TOOLBAR
+/ TAG BAR IS PRESENTATIONAL — the surface reconstructs the regions
+from the roles emca emits. rebuildauto()'s tracked auto-block
+(acme.c:383) survives unchanged.
+
+What the split fixes: acme's conflation of methods with subprocesses.
+Del and mk are typographically identical in acme and behave
+completely differently — one a method on the window, one a
+subprocess. The toolbar/tagbar boundary IS that distinction, made
+visible for the first time.
+
+
+PART FIVE — THE SURFACE
+=======================
+
+Responsive rules
+----------------
+Her directive: "let's design responsively rather than device
+specific. Tablets can be 7-13 inches — they sometimes look like a big
+phone, and sometimes a laptop screen."
+
+BREAKPOINTS ARE MEASURED IN CHARACTERS, NOT PIXELS. A pixel
+breakpoint is device-specific thinking wearing a number, and it
+breaks under accessibility text sizing: a user at large Dynamic Type
+gets a two-way split they cannot read. Characters adapt for free, so
+WCAG 1.4.4 is satisfied by construction rather than by testing.
+
+  a leaf needs   >= 72 columns   (the classic measure; these
+                                  documents wrap at 72)
+  a body needs   >= 10 lines + its tag to be worth expanding
+
+  leaves   = floor(width  / 72ch)
+  expanded = floor(height / (10 lines + tag))
+
+  breakpoint   rail            leaves   bodies   panes
+  ----------   -------------   ------   ------   ----------------
+  small        inline          1        1        none
+               (concertina)
+  medium       detached        1-2      1-2      on demand
+               (sidebar)
+  large        sidebar         2-3      N        collapsed by
+                                                 default
+  xlarge       sidebar         3+       N        open by default
+
+THE RESPONSIVE INVARIANT: nothing disappears as the viewport grows.
+Every transition adds. This is why medium detaches the rail rather
+than collapsing it into tabs — tabs would show four truncated
+basenames where the concertina showed every tag, a strict loss of
+information at the moment more space became available.
+
+The four rows are ONE STRUCTURE WITH TWO KNOBS. A concertina row, a
+rail entry, a tab and a minimised window are the same object — A
+WINDOW SHOWING ITS TAG AND NOT ITS BODY. One control (collapse)
+drives the whole responsive story, and the suite tests one thing.
+
+The rail scrolls. Acme's column does not, which is a real limitation
+at twenty windows.
+
+Defaults and overrides: the breakpoint sets the DEFAULT pane state;
+an explicit user act overrides it; the override is remembered PER
+SIZE CLASS. Without that last clause, resizing silently closes the
+errors pane someone deliberately opened.
+
+The four surfaces, and the rule that makes them navigable
+---------------------------------------------------------
+emca has four chrome surfaces where acme had one mechanism. Acme's
+rule fitted in a sentence — any text is a command — and was invisible
+but learnable in one go. Four surfaces need an answer to "which
+surface does this verb live on?" for every verb, and an arbitrary
+answer is WORSE than acme's invisibility, because acme's rule at
+least existed.
+
+  THE RULE: OPERAND DETERMINES SURFACE. Derived from acme's layer 3,
+  not chosen — the operations already sort by operand.
+
+  operand           surface              verbs
+  ---------------   ------------------   -----------------------
+  the system        top toolbar / menu   the managers: Processes,
+                                         Packages, Projects, Users,
+                                         Network, Types; and
+                                         Putall Dump Load Exit
+  a window          its own toolbar      core verbs + the type's
+  a range of text   the floating bar     execute, look (open/jump/
+                                         search/plumb), cut, copy,
+                                         paste, pin, Edit, + the
+                                         type's
+  nothing           the status line      read-only; no verbs
+
+And the rule explains POSITION, which is why it is a design principle
+and not a filing system: EACH SURFACE SITS WHERE ITS OPERAND IS. The
+floating bar appears at the text; the toolbar rides the window; the
+menu is at the screen edge. Spatial position encodes what a verb acts
+on — the discoverability acme never had, delivered by geometry
+instead of by documentation.
+
+The rule also DISSOLVES acme's column tag. Every word in "New Cut
+Paste Snarf Sort Zerox Delcol" has a different operand and finds its
+own surface: New and Sort to the leaf, Delcol to the leaf's close
+control, Zerox to the window toolbar, Cut/Paste/Snarf to the floating
+bar. No column tag is needed — evidence the rule is load-bearing
+rather than decorative.
+
+The top toolbar
+---------------
+This is IPNX's face, and it is where the reframe becomes visible: the
+top toolbar exposes THE SYSTEM — process orchestration, packages,
+projects, users, network, namespaces, types. Those are not rare
+workspace verbs; they are the system's primary controls, and they
+earn permanent space.
+
+It is one thing rendered responsively, not a toolbar-or-menu choice:
+
+  small        a single overflow button, contents in a menu
+  medium       2-3 high-value items + overflow
+  large/xl     full toolbar
+  Mac          the real menu bar; toolbar optional
+
+The overflow control is visible at every size even when its contents
+are not. This matters specifically because ON IPAD THE MENU BAR IS
+HIDDEN BY DEFAULT (her correction) — menu contents are unfindable by
+looking, and discoverability is the entire brief.
+
+The pane toggles (rail, bottom, right) live here too: they are how
+the responsive layout is driven by hand.
+
+The floating bar
+----------------
+Appears at the selection. Carries the CLOSED verb set — closed
+because the verbs that take a range operand are fixed by acme's layer
+3, not by the user. The apparent objection ("any command can take a
+selection as its argument") answers itself: THE VERB SET IS CLOSED,
+THE COMMAND SET REACHED THROUGH EXECUTE IS OPEN. Extension lives
+behind execute, never in the bar.
+
+It is a list of buttons or menu items, NOT text, and not user-
+editable (hers). Fixed contents, filtered display: Cut, Copy, Paste,
+Execute, Search always; Open and Jump only when the range is a path
+or an address; Pin always; Edit opens sam's language, and is where
+Replace is reached.
+
+THIS IS WHERE EMCA BEATS ACME rather than porting it. Acme's look
+parses your text and silently picks one of open/jump/search/plumb —
+which is exactly why nobody can predict a right-click. The bar SHOWS
+the choice. The parsing is unchanged; it now populates a menu instead
+of deciding for you, and the plumber acquires a face for the first
+time.
+
+Latency: always-applicable verbs render immediately; conditional ones
+appear when emca answers the select event with verb applicability.
+Progressive, so the bar never waits on a round trip.
+
+Timing, the known trap: THE BAR MUST SNAPSHOT THE RANGE WHEN IT
+APPEARS. The tap that presses its button collapses the native
+selection first. Underneath it is a conflation: dot is insertion
+point, operand, and clipboard source at once — three lifetimes, which
+a mouse hides and touch cannot.
+
+The pin: execute-with-argument, decomposed
+------------------------------------------
+Acme's 2-1 chord — "apply a command in one window to text in
+another" — has no touch analogue.
+
+  PIN a selection (a floating-bar verb). The pinned range persists
+  across navigation, window changes and breakpoints; it is shown in
+  the status line; the next execute consumes it as its argument.
+
+Two explicit acts where the chord was one gesture. Three properties
+recommend it: it works at EVERY breakpoint, including small, where
+both windows can never be visible; it is MORE capable than the chord,
+which required both windows on screen; and it gives acme's column
+Cut/Paste/Snarf their meaning back — those acted on "the last
+selection anywhere", which is the pin under another name.
+
+Cost, stated: two acts instead of one, and a piece of invisible state
+that must be made visible — hence the status line.
+
+The status line
+---------------
+Two zones. It must earn its place; a status bar is the easiest
+surface in any app to fill with noise.
+
+  left    THE GLOBAL TAG — free, editable, executable text at
+          workspace scope, commands running in the workspace's cwd.
+          Not an invention: acme's ROOT TAG finding a home.
+  right   ambient state, read-only: running commands with tap-to-
+          kill, the pin, the dirty count, line:col.
+
+At small it collapses into the overflow.
+
+Rejected, with the reason: the WINDOW's tag bar as the status bar.
+Her own instinct against it was right and the rule says why — the tag
+bar's operand is the window, so putting it at workspace position
+breaks operand-determines-surface, and the moment that rule breaks
+once it stops being learnable, which was its entire justification.
+
+Editing is the surface's — emca is not an editor
+------------------------------------------------
+Her direction (2026-08-31), which is the split taken to its
+conclusion: "emca doesn't really need to implement a WYSIWYG editor on
+the IPNX side. It can implement sam, a batch editor. The job of emca
+is to push a file into a window via /dev/canvas. The host side can
+display and scroll the file, and more importantly edit it using Monaco
+or TextEdit or similar." And then, extending it: "selecting, copying,
+pasting can all be host side operations, with sync to /dev/snarf" —
+"even command history and shell command line edit — host implemented"
+— "we can even bring xterm/js back".
+
+THE TEST ALREADY SETTLED IT AND THE FIRST DRAFT DID NOT FOLLOW IT
+THROUGH. Does editing behaviour differ between a Mac and an iPad?
+Profoundly — TextKit is not Monaco is not a hidden input proxy. So
+editing is the surface's, and the earlier draft's "the surface owns
+text input" was the same rule applied only as far as the caret.
+
+  IPNX KEEPS                     THE SURFACE TAKES
+  ----------------------------   ---------------------------------
+  the buffer (authoritative,     the caret, the selection, insertion
+    shadowed from events)        and deletion, keystroke undo
+  the file: Get, Put             syntax highlighting, folding,
+  commands, +Errors, | < >         multi-cursor, find-in-file
+  SAM'S STRUCTURAL LANGUAGE:     IME, autocorrect, spell-check,
+    x y g v, s//, addresses        dictation, accessibility
+  context (the directory)        the clipboard, synced to /dev/snarf
+  what the verbs MEAN            COMMAND HISTORY and line editing
+  the file interface             TERMINAL EMULATION (xterm.js)
+
+So emca is a file server with a workspace, not an editor. It pushes
+text into windows, runs commands, and applies transformations. The
+editing is somebody else's, natively, on every surface.
+
+WHY THIS IS "BEST OF BOTH WORLDS" AND NOT A CONCESSION: Monaco and sam
+are COMPLEMENTARY, not competing. Monaco is interactive, local and
+cursor-scoped; sam is batch, structural and file-scoped — x/re/ over
+every match, s//repl/ through an address, transformations no cursor
+can express. Every other system has one or the other, or bolts a macro
+language onto an editor that owns the buffer. Here the buffer is a
+FILE and the surface is a VIEW, so the two compose by construction.
+Nobody has shipped both halves well together because nobody else had
+this boundary.
+
+WHAT THIS RETIRES, none of it to be written: the presenter's
+hand-rolled caret; guest-side line editing and readline; escape-
+sequence handling for history; syntax highlighting, folding,
+multi-cursor and find-in-file. Inherited, not implemented.
+
+AND IT RECONCILES THE CONSOLE'S "AND, NOT XOR" (userland.md,
+2026-08-30 — the transcript console AND the xterm byte console,
+"because familiarity is a door, not a debt"). Under this architecture
+that stops being a compromise and becomes the consistent answer: the
+TRANSCRIPT is the line-oriented door, where history and line editing
+are the host's; XTERM.JS IS THE RAW-INPUT DOOR, for programs that want
+keystrokes rather than lines. Two doors, one principle, and the
+architecture explains why both are needed.
+
+Text input and the soft keyboard
+--------------------------------
+THE SURFACE OWNS TEXT INPUT NATIVELY. A native text view on SwiftUI;
+Monaco or a native text view on the web. The presenter's hand-rolled
+caret is DELETED.
+
+This is a prerequisite, not a refinement: the hand-rolled caret never
+summons the iOS on-screen keyboard, because nothing is focusable-for-
+input, so touch typing is impossible without it.
+
+  - the surface owns caret, selection, IME and autocorrect, and
+    generates insert/delete/select events from native input callbacks
+    rather than from synthesised keystrokes
+  - emca's shadow-buffer discipline is UNCHANGED — it already only
+    observes edits and never re-reads (con(1)'s discipline)
+  - the sel attr still steers, and still retargets focus only for a
+    node new in that render
+  - AUTOCORRECT AND SMART PUNCTUATION OFF in body and tag bar. Smart
+    quotes in source code are a defect, not a nicety.
+
+Single tap, and when two are needed
+-----------------------------------
+Acme's B2/B3 click is ONE action. Select-then-tap is two, which is
+fine for rare operations and bad for the most common one in the
+system: tapping a filename in a listing to open it.
+
+TYPE DRIVES INTERACTIVITY, and that is what buys the tap back:
+
+  dir, errors, transcript, proc,   every LINE is a look target;
+  pkg, project, usr, net, type     one tap (role=look on the line)
+  tag bar, toolbar                 words are buttons; one tap
+  file, scratch                    select-then-tap; two acts
+
+The split is honest: structured output is one tap, arbitrary prose is
+two. Acme charged one tap everywhere and paid for it with a mouse
+button nobody could find.
+
+The keyboard grammar
+--------------------
+Keyboard-complete is a stated law (WCAG 2.1.1, the input convention),
+and iPad-with-keyboard and Mac are primary surfaces.
+
+  THE RULE: every floating-bar verb and every toolbar button has a
+  shortcut, and Tab reaches everything. No verb is keyboard-
+  unreachable.
+
+  cut / copy / paste            ⌘X ⌘C ⌘V
+  undo / redo                   ⌘Z ⌘⇧Z
+  Put / Putall                  ⌘S ⌘⌥S
+  Del                           ⌘W
+  New / split                   ⌘N ⌘\
+  search                        ⌘F
+  EXECUTE selection or word     ⌘↵    (the input convention's acme
+                                       tempo, already decided)
+  LOOK selection or word        ⌘⇧↵   (symmetric — the two acme
+                                       verbs paired)
+  pin the selection             ⌘⌥↵
+  focus the tag bar             ⌘T
+  focus the global tag          ⌘⇧T
+  toggle rail / bottom / right  ⌘B ⌘J ⌘⌥B
+  nth window in leaf            ⌘1..9
+  next window / next leaf       ⌃⇥  ⌘⌥→ ←
+
+On iPad, hold-⌘ shows the HUD.
+
+Focus
+-----
+One focused window per workspace; its leaf is the focused leaf. Focus
+follows EXPLICIT interaction only — tap, click, keyboard. Never
+hover. Never the app, except through a show request, and even then
+the surface decides whether to take the keyboard. That is the
++Errors lesson generalised: an output tail scrolls into view and
+never steals the caret.
+
+
+PART SIX — BOOT AND THE SESSION
+===============================
+
+The system boots into emca. There is no login shell that later starts
+a UI; emca IS the session, and rc is a window inside it.
+
+The default workspace is a NAMESPACE FILE — declarative, which is the
+"boot is rc plus a namespace file" refusal of systemd paying out:
+
+  motd            an editor window, main area
+  a listing       the user's home, left pane
+  an rc           bottom pane, transcript type
+  the top toolbar the system's managers
+
+Consequences:
+
+  - the browser page, the macOS app and the iPadOS app stop being
+    hosts that run a demo and become SURFACES OF EMCA. The demo is
+    the system's face, not a demonstration of it.
+  - emca absorbs rio's job. #w still mints windows; a program that
+    opens its own canvas window appears as an emca window of a canvas
+    type. rio-today as a separate design retires.
+  - a window IS a namespace view, which makes per-window confinement
+    a headline feature rather than an architectural claim — the
+    sandbox story with a face on it.
+
+
+PART SEVEN — PACKAGES AND PROJECTS
+==================================
+
+Her split (2026-08-31): "A package is a toolchain, or command, or
+library that installs into ipnx. ... /project are effectively
+templates for projects."
+
+Two types, not one
+------------------
+                 /pkg                    /project
+  what           toolchain, command,     a namespace + workspace
+                 library
+  mutable        no — versioned          yes, you work in it
+  composes       no, it is a leaf        yes, combines packages
+  instantiated   no — BOUND              yes — BECOMES A PROCESS
+  shared         one copy, many users    yours
+
+A two-level graph, not an arbitrary DAG: packages are leaves,
+projects combine them. This is what pkg.c already is — "installing
+BINDS it; the union directory is the merge mechanism, the namespace
+is the installation record" — with no dependency field in its index,
+because packages do not need one.
+
+A project is a proto-process
+----------------------------
+A namespace plus a command plus env is everything about a process
+except that it is running. The three tenses:
+
+  the parts    /pkg/go            what it is made of
+  ANTE         /project/ipnx      the process that COULD BE
+  PRESENT      /proc/1741         the process that IS
+
+"Save as project" from a running process is therefore just reading
+/proc/N/ns. The registry and the process table are the same
+information at two times.
+
+Instantiate, open, promote
+--------------------------
+  TEMPLATES INSTANTIATE; WORKSPACES OPEN. /project/python makes a NEW
+  instance each time; /usr/kitty/project/my-app reopens THE one. An
+  entry says which it is, and that settles persistence: named
+  workspaces share state, template instantiations do not.
+
+  /project is a union of /lib/project (system) and
+  /usr/$user/project (personal), so PROMOTION IS MOVING A FILE
+  BETWEEN UNION ELEMENTS — exactly how /bin already works.
+
+  PROMOTION PROMOTES THE DECLARATION, NOT YOUR FILES. A stranger
+  instantiating /project/ipnx should get the packages, binds, env and
+  a SOURCE (the git URL) — not your working copy and its build
+  artifacts. Promotion extracts a template from a workspace.
+
+The workspace and its declaration
+---------------------------------
+  /usr/kitty/ipnx/            the WORKSPACE — the checkout, mutable
+  /usr/kitty/ipnx/project     its DECLARATION — small, travels with
+                              the repo (the devcontainer/flake move)
+  /usr/kitty/project/ipnx ->  ../ipnx/project     registers it
+
+Different lifecycles — two checkouts, one declaration — so they are
+different objects. Both readings stay singular and correct.
+
+Two package systems, and the boundary
+-------------------------------------
+  pkg install go       binds /pkg/go/1.x, recorded in the project's
+                       DECLARATION. Declarative, shareable, replayed
+                       on instantiation.
+  pip install requests bytes in the project's WRITABLE LAYER.
+                       Content, not declaration.
+
+  /PKG DEPENDENCIES ARE DECLARED; LANGUAGE DEPENDENCIES ARE CONTENT.
+
+And one property falls out free: /pkg/installed is PER-NAMESPACE.
+There is no global install, so reading it inside a project shows THAT
+project's packages — same path, different content, per process. The
+venv property, the container property, and "which python am I using?"
+all answered by the namespace rather than by tooling.
+
+Trust
+-----
+A project declaration arriving by git clone is A STRANGER'S
+DECLARATION. Docker and devcontainers both have this hole.
+
+  CLONE AND INSTANTIATE ARE SEPARATE ACTS. Clone fetches content and
+  opens a DIRECTORY window on it — safe, a listing. Instantiate is an
+  explicit second act which FIRST SHOWS WHAT THE DECLARATION ASKS
+  FOR: these binds, this env, these pre-exec commands. Registering
+  into /project is likewise deliberate, because one click from your
+  project list is one click from running.
+
+This is where IPNX wins rather than mitigates: the whole blast radius
+is readable in one small file before you run it, and the namespace
+bounds it whether you read it or not. That is P4's pitch made into a
+product feature.
+
+Credentials
+-----------
+/usr/kitty/credentials is a LISTING, not plaintext — factotum's own
+model, where reading the ctl file returns keys with secrets elided.
+Three layers, and the primary one is structural:
+
+  the namespace   a project that did not declare credentials cannot
+                  see them. THE PRIMARY PROTECTION.
+  the agent       in-namespace processes get the RESULT of using a
+                  key, never the key
+  encryption      the bytes leaving the machine — REQUIRED BECAUSE
+                  THE PROFILE IS PORTABLE (identity.md, M9: "the
+                  profile is the portable person"). Portability is
+                  exactly the condition where the namespace stops
+                  protecting you.
+
+Key custody is the SURFACE's half (Keychain, WebCrypto, a
+passphrase); the listing and its verbs are IPNX's. Credential windows
+are the OPAQUE view mode: metadata visible, bytes never.
+
+
+PART EIGHT — WHAT IS DECIDED
+============================
+
+  1.  emca is the IPNX user interface — what the system boots into,
+      on every surface. Not an editor; an editor is one window type.
+  2.  Two halves: IPNX owns state, meaning, policy; the surface owns
+      rendering and input. Differs by device -> surface; differs by
+      workspace -> IPNX.
+  3.  Four protocol additions and no more: structure roles, window
+      type, verb applicability, show request.
+  4.  Everything is managed as a file; there are no manager programs,
+      only filesystems, types and a surface.
+  5.  A window type is a triple: namespace, optional command, window
+      configuration. The command being optional dissolves the types-
+      vs-programs fork.
+  6.  Core verbs are emca's; extra verbs are the type's — on both the
+      toolbar and the floating bar.
+  7.  Text is the default; a type that renders non-text owes a
+      reason.
+  8.  /type is itself a type: the UI is configured by editing files
+      in the UI. One built-in type, dir, is the bootstrap floor.
+  9.  Root names are <= 4 characters; /project is the one exception,
+      with its reason recorded.
+  10. /pkg and /project are different types: ingredients and dishes.
+      Packages are leaves, projects combine them.
+  11. A project is a proto-process; /project and /proc are the same
+      information at two times.
+  12. Templates instantiate; workspaces open. Promotion promotes the
+      declaration, not your files.
+  13. Clone and instantiate are separate acts, and instantiate shows
+      the declaration first.
+  14. /pkg dependencies are declared; language dependencies are
+      content.
+  15. Breakpoints in characters, not pixels — 72 columns a leaf, 10
+      lines a body. Nothing disappears as the viewport grows.
+  16. One structure, two knobs: a concertina row, a rail entry and a
+      minimised window are the same object. No tabs at any size.
+  17. The window in four parts, backed by ONE tag string, so the 9P
+      interface and the suite are untouched.
+  18. The toolbar is closed and type-derived; the tag bar is open and
+      the user's. This fixes acme's conflation of methods with
+      subprocesses.
+  19. Operand determines surface, and each surface sits where its
+      operand is.
+  20. The top toolbar is the system's face, rendered responsively.
+  21. The floating bar carries a closed verb set with filtered
+      display; look's dispatch becomes visible.
+  22. The pin replaces the 2-1 chord.
+  23. The global tag lives in the status line; the window's tag bar
+      never leaves the window.
+  24. The surface owns text input natively; the hand-rolled caret is
+      deleted; autocorrect off.
+  25. Type buys back the single tap for structured output.
+  26. N windows may view one buffer; Zerox aliases.
+  27. Collapse and close only. No maximise. Dump saves the window
+      set, not the geometry.
+  28. The system boots into emca; the default workspace is a
+      namespace file; the hosts become surfaces; rio-today retires.
+  29. EDITING IS THE SURFACE'S. emca implements sam (batch,
+      structural), not a WYSIWYG editor; the host displays, scrolls
+      and EDITS with Monaco, TextKit or the platform's own. Selection,
+      clipboard, command history, line editing and terminal emulation
+      are all host-side; /dev/snarf is the sync point.
+  30. emca is a file server with a workspace, not an editor.
+  31. xterm.js returns as the RAW-INPUT door beside the transcript's
+      line door — the console's "AND, not XOR" given its architectural
+      reason.
+  32. FOUR SEMANTICS, ONE PROTOCOL. Content is 9P directly and the
+      host renders it natively — IPNX implements no renderers.
+      /dev/window/<type>/<n> is the bidirectional control interface,
+      with the TYPE IN THE PATH. /type is the registry both sides
+      read. /dev/canvas narrows to genuine drawing, the exception.
+  33. Controls name a side: ipnx:Put round-trips, host:toggle-wrap
+      never does. The two-halves split, enforced in the vocabulary.
+  34. Put is the host streaming the edited file back over 9P.
+  35. emca HOLDS THE AUTHORITATIVE BUFFER; the host mirrors it, with
+      optimistic local echo. Forced by four things, only one of which
+      is undo: the headless suite, sam, Put and the filters, and the
+      body file for client programs. Each edit carries a sequence
+      number, each sync a hash; mismatch triggers resync. con(1)'s
+      "apps never re-read" becomes "never re-read ROUTINELY".
+  36. ONE UNDO STACK, IN EMCA. The host's undo is disabled and Cmd-Z
+      round-trips — emca is not remote, so every argument for a local
+      optimistic stack is a latency argument that does not apply here.
+      Acme's infinite undo survives exactly.
+  37. /mnt/acme RETIRES, merged into /dev/window — one window
+      vocabulary, and /dev/window must therefore be usable by ordinary
+      programs, not only by emca and the host.
+  38. VERSIONING IS POLICY OVER #V: optional, off by default,
+      per-namespace, triggered on Put for authored files and on a
+      clock for things that change without human intention. Nothing
+      may be built on it, because it can be off — which is what
+      protects 36.
+
+
+PART NINE — WHAT IS OPEN
+========================
+
+  - SNAPSHOT VS REPLAY. When a workspace is saved, are the installed
+    language packages captured as bytes or as instructions to
+    re-fetch? Docker took the first, Nix the second. Recommendation:
+    snapshot by default with provenance recorded for audit, but not
+    decided.
+  - THE PLUMBER. The floating bar's Open and Jump entries ARE plumber
+    rules deciding what applies, but the rules format and message
+    shape are undesigned — canvas.md calls it "the next measurement's
+    work". This design DEPENDS on it.
+  - THE SURFACE'S OWN SUITE. emca's behaviour stays testable through
+    the virtual surface. The GRAMMAR is not: nothing in the tree
+    proves a button was reachable, or that Tab reached it. Given "no
+    half-working" and the keyboard-complete law, this is the largest
+    untested area in the design and it has no precedent in the
+    repository to borrow from.
+  - CROSS-WINDOW AT SMALL. The pin answers execute-with-argument. It
+    does not answer reading errors beside their source on one body.
+    Possibly unanswerable; then say so.
+  - UNNAMED INSTANCE STORAGE. Between instantiating a template and
+    saving it as a workspace, the writable layer must survive
+    somewhere durable enough to be saved.
+  - THE FLOATING BAR'S EXACT CONTENTS, measured against real use
+    rather than derived.
+  - HOW A TYPE DECLARES A VIEW MODE without becoming a widget
+    toolkit. The discipline is stated; the ceiling is not.
+  - WHO OWNS UNDO. With editing host-side there are TWO undo stacks:
+    the surface's, at keystroke granularity, and emca's, at command
+    granularity (sam transformations, Get, Put — acme.c's sequence
+    numbers). Acme had one. Which one answers Cmd-Z, and how they
+    interleave, is undecided and will be felt immediately.
+  - BUFFER FIDELITY UNDER A RICH EDITOR. The shadow discipline is
+    "apps never re-read" (con(1)'s, load-bearing). Monaco must report
+    every edit as insert/delete, and multi-cursor emits many ranges
+    per keystroke. If a surface and emca ever diverge, the only repair
+    is a re-read — which breaks the discipline. Whether a resync path
+    exists, and what it costs, is open.
+  - PROPERTY 1 UNDER MONACO. "Any text can be a verb's operand" is the
+    claim the whole design rests on. Monaco owns the body's text, so
+    execute and look must ride ITS action and context-menu API. It
+    looks possible (addAction, selection API) and it must be PROVEN
+    before the approach is adopted, not assumed.
+  - SURFACE DEPENDENCY DIVERGENCE. Monaco on the web (~5MB), TextKit
+    on Apple: the surfaces now differ in dependencies, not only in
+    grammar. Accepted by the input convention, but named here.

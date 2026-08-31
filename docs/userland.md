@@ -31,6 +31,15 @@ born here.
 
 ## The console: an editable transcript
 
+> **Given its architectural reason, 2026-08-31 (decision log).** The
+> "AND, not XOR" amendment below was recorded as a concession to
+> familiarity. Under *editing is the surface's* it becomes the
+> consistent answer: the **transcript is the line-oriented door** (history
+> and line editing are the host's), and **xterm.js is the raw-input door**
+> for programs that want keystrokes rather than lines. Two doors, one
+> principle.
+
+
 The terminal emulator dies. A console is an `edit` node with a **prompt
 discipline**: the transcript is one editable buffer; a mark separates
 history from the input region; Enter in the input region sends the line;
@@ -48,6 +57,16 @@ coroutines, one canvas writer, shadow-state mark arithmetic, suite-
 tested through the virtual surface.
 
 ## One editor: acme-today absorbs sam
+
+> **Superseded in scope, 2026-08-31 (decision log): ONE SURFACE, not one
+> editor.** What this section designs as an editor turned out to be the
+> system's user interface — `emca`, what IPNX *boots into* on every
+> surface, with an editor as one window type among `proc`, `pkg`,
+> `project`, `usr`, `net` and `type`. The curation and the essence
+> below stand; the *scope* was too small. The design is
+> [emca.txt](emca.txt), the parts list [acme.txt](acme.txt), the
+> milestone M14.
+
 
 Acme always contained sam — the `Edit` command speaks sam's language. So
 the redesign completes the merger the originals gestured at:
@@ -140,6 +159,15 @@ the redesign completes the merger the originals gestured at:
   columns, the plumber on look.
 
 ## rio-today: policy as a file server
+
+> **Retired as a separate design, 2026-08-31 (decision log): emca
+> absorbs it.** `#w` still mints windows and a window is still a
+> namespace; a program that opens its own canvas window now appears as
+> an emca window of a canvas type. The proof this section records
+> (`/rc/tile`, a window manager in a dozen lines of rc) stands as
+> evidence that policy belongs outside the kernel — which is exactly
+> what emca is.
+
 
 rio-today owns *policy*, presenters own *pixels*. It is a userspace file
 server: windows are namespaces (unchanged — the one rio idea that needed
