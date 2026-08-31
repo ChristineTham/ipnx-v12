@@ -1052,6 +1052,18 @@ PART EIGHT — WHAT IS DECIDED
       clock for things that change without human intention. Nothing
       may be built on it, because it can be off — which is what
       protects 36.
+  39. /dev/window BELONGS TO EVERY PROGRAM — emca has no privilege,
+      only a job. One binary serves both worlds: `pkg` lists to
+      stdout, `pkg --emca` mints a window and lists them there.
+  40. NO /dev/emca. The device already mints; the difficulty is that
+      9P has no change notification. So /dev/window grows a root
+      `clone` and a root `events` whose reads PARK — and BOTH the
+      host and emca read it. The device mints (mechanism), emca
+      watches and places (policy), the host watches and renders.
+      emca is a watcher, not a gatekeeper.
+  41. It degrades correctly: with emca not running the window still
+      exists and still renders, in its type's default pane, because
+      the type is in the path.
 
 
 PART NINE — WHAT IS OPEN

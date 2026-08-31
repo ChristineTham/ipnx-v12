@@ -741,6 +741,41 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   safety net underneath, never a mechanism anything requires — which is what
   protects (2).
 
+- **(2026-08-31) `/dev/window` belongs to every program, and both halves watch it.**
+  Christine: *"any program can write to /dev/window, and in fact it is how emca
+  operates"* — emca holds no privilege, only a job. The shape that gives every
+  tool: **one binary, and a flag is the only difference between a command-line
+  utility and a system manager** — `pkg` lists to stdout, `pkg --emca` mints a
+  window and lists them there. **The question this raised** — *"how does the host
+  know there is a new window? … either way, we need a `/dev/emca` channel"* — had
+  a false premise, and the answer is **no new channel**. The device already mints
+  (`#w/clone` does it today), so nothing needs to announce; the real difficulty is
+  narrower and was already named in the plan at M13: **9P has no change
+  notification**, *"poll, or a synthetic event file"*. The house answer is the
+  second, and canvas already uses it. So `/dev/window` grows a **root `clone` and
+  a root `events` whose reads park** — `/net/tcp/clone` and `/dev/draw/new`'s
+  shape — with two levels of event file: the root's for window lifecycle, each
+  window's for what the user did inside it. **Both the host and emca read the
+  root's**, which dissolves the choice that was put as either/or: the **device**
+  mints (mechanism), **emca watches and places** the window by writing its `ctl`
+  (policy), the **host watches and renders** where emca placed it. emca is a
+  **watcher, not a gatekeeper** — programs mint directly so emca has no privilege,
+  and emca is not bypassed so it keeps the workspace it owns. Policy in a
+  userspace program watching a device is the Plan 9 move, the same shape as
+  `/rc/tile` being a window manager in a dozen lines of rc. **Both offered
+  alternatives are recorded as rejected**: *programs write, only the host watches*
+  loses emca's workspace (a window it never learns of is outside the session it
+  owns); *programs ask emca, emca tells the host* makes emca a required
+  intermediary and contradicts the premise — it is what acme did through
+  `/mnt/acme/new`, and worked only because acme **was** the file server, where here
+  the device is. **The property that decided it**: with emca not running the window
+  still exists and still renders, in its type's default pane, because the type is
+  in the path — so `pkg --emca` works with no shell at all. Neither alternative had
+  that. **One race, named**: mint → host renders → emca places, so a window sits
+  briefly in its type's default pane rather than its considered one; benign by
+  construction, since type already determines default placement, so it never
+  appears somewhere *wrong* — only somewhere provisional, moving at most once.
+
 - **(2026-08-27) The native host is a Rust kernel core plus per-platform embedding
   shims — after the PoC completes.** The kernel never executes guest code, so the
   core (proc table, namespaces, devices, 9P, the draw engine) compiles once in Rust

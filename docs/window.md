@@ -41,13 +41,73 @@ bound. This is that device grown up — it keeps minting and owning windows and
 gains the interface it should have had.
 
 ```
-/dev/window/<type>/<n>/
-  ctl        panes, layout, tabs, lifecycle
-  content    the PATH the host opens over 9P and renders
-  toolbar    one control per line: <label> <action>
-  tag        the tag line — the host's way back into sam
-  events     the host speaks: clicks, tag commands, dirty, resize, close
+/dev/window/
+  clone            mint a window; reading it returns the new number
+  events           reads PARK — one line per window lifecycle change
+  <type>/<n>/
+    ctl            panes, layout, tabs, lifecycle
+    content        the PATH the host opens over 9P and renders
+    toolbar        one control per line: <label> <action>
+    tag            the tag line — the host's way back into sam
+    events         the host speaks: clicks, tag commands, dirty, resize, close
 ```
+
+`clone` and the root `events` are the house shape — `/net/tcp/clone`,
+`/dev/draw/new`, `#s`. Two levels of `events`: the **root's** carries window
+lifecycle (a window appeared, was destroyed, changed type); a **window's** carries
+what the user did inside it.
+
+## Any program may open a window
+
+`/dev/window` is not emca's. **Any program writes to it, and that is how emca
+itself operates** — emca has no privilege, only a job.
+
+The practical shape this gives every tool: one binary, and a flag is the only
+difference between a command-line utility and a system manager.
+
+```
+pkg              lists packages to stdout
+pkg --emca       mints a window and lists them there
+```
+
+## How anyone learns a window exists — and why there is no `/dev/emca`
+
+The device mints, so nothing needs to *announce*. The real difficulty is
+narrower and is already named in the plan (M13): **9P has no change
+notification** — *"poll, or a synthetic event file"*. The house answer is the
+second, and canvas already uses it: a file whose reads park.
+
+So the root `events` file is read by **both** the host and emca, and that
+dissolves the question of who tells whom:
+
+| | role |
+|---|---|
+| **the device** | mints the window — **mechanism** |
+| **emca** | watches; *places* the window (which leaf, tab or pane) by writing its `ctl` — **policy** |
+| **the host** | watches; renders it where emca placed it |
+
+emca is a **watcher, not a gatekeeper.** Programs mint directly, so emca holds no
+privilege; but emca is not bypassed either, and keeps the workspace it owns
+(layout, session, `Dump`/`Load`). Policy in a userspace program watching a device
+is the Plan 9 move — the same shape as `/rc/tile` being a window manager in a
+dozen lines of rc.
+
+**Two rejected alternatives**, recorded so they are not revisited: *programs write
+and only the host watches* loses emca's workspace, since a window it never learns
+of is outside the session it owns; *programs ask emca, and emca tells the host*
+makes emca a required intermediary and contradicts "any program may write to
+`/dev/window`" — it is what acme did through `/mnt/acme/new`, and it worked only
+because acme **was** the file server. Here the device is.
+
+**And it degrades correctly**: with emca not running, the window still exists and
+still renders — in its type's default pane, since the type is in the path. So
+`pkg --emca` works with no shell at all. Neither alternative had that property.
+
+**One race, named rather than discovered**: mint → the host renders → emca places,
+so for an instant a window sits in its type's *default* pane rather than its
+considered one. Benign by construction — type already determines default
+placement, so a window never appears somewhere *wrong*, only somewhere
+provisional, and at most it moves once.
 
 **The type is a path component, not an attribute.** `/dev/window/proc/1` tells
 the host it is drawing a proc window, exactly as `/net/tcp/0` differs from
@@ -156,10 +216,11 @@ every renderer emca would have needed, and most of its display machinery.
   `/mnt/acme` retires and merges into `/dev/window` — the two were the same files
   pointing opposite ways (a program driving emca; emca driving the host), and the
   only difference was that `/dev/window` declares toolbars and actions, which
-  acme's interface arguably should have had. **The obligation this carries:
-  `/dev/window` must be usable by ORDINARY PROGRAMS**, not only by emca and the
-  host — that client interface is the acme paper's §7 and the thing that made
-  acme extensible without plugins. Designed for from the start, not retrofitted.
+  acme's interface arguably should have had. The obligation it carried —
+  *`/dev/window` must be usable by ordinary programs*, that being the acme paper's
+  §7 and the thing that made acme extensible without plugins — is **discharged
+  above**: any program mints through `clone`, and emca is a watcher rather than a
+  gatekeeper.
 - **Event granularity on the way back** — a click is obvious; what a tag command,
   a selection, or a dirty transition looks like as a line is not yet specified.
 - **The transcript's shape** — a growing file the host tails plus a line
