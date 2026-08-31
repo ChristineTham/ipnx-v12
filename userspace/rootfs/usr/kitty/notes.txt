@@ -1,0 +1,10 @@
+emca — a text window.
+
+The surface opened this file over the namespace and is editing it with a real
+editor component. Everything you can do here — caret, selection, clipboard,
+wrapping, find — belongs to the host and none of it was written for IPNX.
+
+What crosses back is the buffer as insert/delete with a sequence number and a
+hash, the selection, and the verbs. Right-click for those.
+
+Cmd-S, or Put, streams this file back.

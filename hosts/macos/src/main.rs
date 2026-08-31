@@ -375,7 +375,7 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
             // being that the KERNEL never knows there is a screen.
             Effect::WinChrome { .. } => {}
             // a headless host opens nothing, so nothing asks and nothing answers
-            Effect::ReadDone { .. } => {}
+            Effect::ReadDone { .. } | Effect::WriteDone { .. } => {}
             Effect::ConsWrite(bytes) => {
                 let mut out = std::io::stdout();
                 out.write_all(&bytes).ok();

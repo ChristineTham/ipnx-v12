@@ -108,12 +108,12 @@ const host = {
   consWrite: (bytes) => {
     process.stdout.write(bytes);
     seen += Buffer.from(bytes).toString();
-    if (seen.includes("WINPROOF got exec Install")) {
+    if (seen.includes("WINPROOF file now: EDITED-BY-THE-SURFACE")) {
       setTimeout(() => {
         if (!gotContent) { console.error("WINPROOF FAIL: the surface never opened the content"); process.exit(1); }
-        console.log("\nWINPROOF PASS: IPNX declared chrome and a PATH; the surface opened the"
-          + " file itself and rendered it; the surface's click reached a plain guest."
-          + " /dev/window round trip, no emca involved, no renderer in IPNX.");
+        console.log("\nWINPROOF PASS: IPNX declared chrome and a PATH; the surface opened"
+          + " the file, edited it, and streamed it back; a plain guest read both the"
+          + " click and the changed file. Round trip both ways, no emca in the loop.");
         process.exit(0);
       }, 300);
     }
@@ -128,6 +128,11 @@ const host = {
         const s = new TextDecoder().decode(b);
         console.log(`WINPROOF host opened ${ch.content}: ${b.length} bytes, first line ${JSON.stringify(s.split("\n")[0].slice(0, 60))}`);
         gotContent = true;
+        // PUT: the surface streams an edited file back. No editor here — this
+        // is the same road Cmd-S takes in the browser, without the component.
+        writePath(ch.content, new TextEncoder().encode("EDITED-BY-THE-SURFACE\n"))
+          .then((wrote) => console.log(`WINPROOF host Put ${ch.content}: ${wrote} bytes written`))
+          .catch((e) => console.log(`WINPROOF host Put FAILED: ${e.message}`));
       }).catch((e) => console.log(`WINPROOF host open FAILED: ${e.message}`));
     }
     for (const line of ch.toolbar.split("\n")) {
@@ -147,7 +152,7 @@ const host = {
 
 const kernelWasm = fs.readFileSync(join(here, "..", "..", "target",
   "wasm32-unknown-unknown", "release", "browserhost.wasm"));
-const { cons, wsys, readPath } = await boot(host, {
+const { cons, wsys, readPath, writePath } = await boot(host, {
   rootSeed: loadSeed(rootdir), interactive: true, kernelWasm, hostServe,
 });
 

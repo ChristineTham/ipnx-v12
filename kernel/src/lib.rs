@@ -150,6 +150,8 @@ pub enum Effect {
     // marshalled 9P — "wire 9P at boundaries, a Dev table inside" (design.md).
     // A remote surface marshals; a surface sharing the address space calls.
     ReadDone { token: f64, ok: bool, data: Vec<u8> },
+    // Put: the surface streams the edited file back. An ordinary write.
+    WriteDone { token: f64, ok: bool, n: u32 },
     // '#H': the host performs the GET off-thread and answers with FetchDone
     Fetch { url: String },
     // /dev/snarf: the host clipboard hears writes; reads ask it first
@@ -1871,6 +1873,18 @@ impl Kernel {
         self.ex.run_until_stalled();
     }
 
+    /// Put: the surface streams the edited file back over the namespace
+    pub fn write_path(&mut self, token: f64, path: &str, data: Vec<u8>) {
+        let k = self.k.clone();
+        let path = path.to_string();
+        self.ex.spawn(async move {
+            let r = write_whole(&k, 1, &path, &data).await;
+            let (ok, n) = match r { Ok(n) => (true, n as u32), Err(_) => (false, 0) };
+            k.borrow_mut().effects.push(Effect::WriteDone { token, ok, n });
+        });
+        self.ex.run_until_stalled();
+    }
+
     /// the surface's voice: a line into /dev/window/<type>/<n>/events
     pub fn win_event(&self, wid: u32, line: &str) {
         let win = self.k.borrow().wins.get(&wid).cloned();
@@ -3476,6 +3490,26 @@ async fn read_whole(k: &K, pid: Pid, path: &str) -> Result<Vec<u8>, KErr> {
         if out.len() > 4_000_000 { break; }   // a surface is not a pipe
     }
     Ok(out)
+}
+
+// Put: the surface hands the edited file back. Truncating, because the buffer
+// IS the file now — not an append.
+async fn write_whole(k: &K, pid: Pid, path: &str, data: &[u8]) -> Result<usize, KErr> {
+    let dn = walk(k, pid, path, false).await?;
+    open_perm(k, &dn, 1 | OTRUNC, pid).await?;          // OWRITE | OTRUNC
+    let chan = Rc::new(RefCell::new(Chan {
+        dev: dn.dev, node: dn.node, path: Some(path.to_string()),
+        mode: 1, offset: 0, refs: 1,
+    }));
+    let mut off: u64 = 0;
+    let mut wrote: usize = 0;
+    while wrote < data.len() {
+        let n = dev_write_async(k, &chan, &data[wrote..], off, pid).await?;
+        if n == 0 { break; }
+        wrote += n;
+        off += n as u64;
+    }
+    Ok(wrote)
 }
 
 async fn dev_write_async(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Result<usize, KErr> {

@@ -32,9 +32,26 @@
 > address space calls; a **remote** surface (M12) marshals. The host decides what
 > to open and when, and renders it, which is the property that matters.
 >
-> What is NOT built: a real editor component for text. The surface renders text
-> as a `<pre>`; Monaco or TextKit is the remaining piece, and the one place still
-> wanting a spike.
+> **And the editor component landed, which answers the spike.** Text windows use
+> **CodeMirror 6** (374KB, vendored, offline). Caret, selection, clipboard, IME,
+> wrapping and find are the component's and none were written. What crosses to
+> IPNX is only what IPNX owns: the buffer as `insert`/`delete` with a **sequence
+> number and a hash per change**, the selection, and the verbs. `⌘Z` is
+> intercepted and sent to emca — **one undo stack**, as decided. `⌘S`/`Put`
+> streams the file back through `writePath`, truncating.
+>
+> **The spike's question — can the verbs ride a rich editor's grammar? — is
+> answered YES, and observed.** CodeMirror has no menu of its own; it uses the
+> platform's, which is exactly where the verbs belong. Selecting a word and
+> right-clicking gives the closed set (Execute · Look · Pin · Cut · Copy ·
+> Paste), and choosing one puts `look 29 36 surface` in the window's events,
+> where a plain guest read it. **Property 1 survives a rich editor**: any text is
+> still a verb's operand.
+>
+> One detail worth keeping: those byte offsets are correct **across a multi-byte
+> character** — the file opens with an em-dash, and "surface" genuinely begins at
+> byte 29. The protocol's coordinate and the editor's are reconciled, not
+> assumed.
 
 The contract for the 2026-08-31 redesign (design.md): the bidirectional
 device through which IPNX declares a window's chrome and the host reports what
@@ -320,6 +337,6 @@ every renderer emca would have needed, and most of its display machinery.
 - ~~The transcript's shape~~ — **specified above**: a growing file the host tails,
   typed lines back as `insert`, con(1)'s mark arithmetic deleted.
 
-Nothing is open in this contract, and **all three halves are built** — the
-device, the host's chrome, and the host's content. What remains is one thing:
-a real **editor component** for text windows, which is the remaining spike.
+**Nothing is open in this contract, and every half is built** — the device, the
+host's chrome, the host's content, and the editor. The design's last named risk
+(property 1 under a rich editor) is retired by observation, not argument.

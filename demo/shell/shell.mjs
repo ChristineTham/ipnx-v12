@@ -7,6 +7,7 @@
 // demo/webkit-repro/).
 import { boot, makeHandleHostServer } from "../supervisor/rustkern.mjs";
 import { createCanvasView } from "./presenter.mjs";
+import { createEditor } from "./editor.mjs";
 
 const desktop = document.getElementById("desktop");
 const statusEl = document.getElementById("status");
@@ -230,15 +231,43 @@ async function showContent(gw, path) {
     f.srcdoc = new TextDecoder().decode(bytes);
     put(f, "width:100%;height:100%;border:0;");
   } else {
-    const pre = document.createElement("pre");                // text, natively
-    pre.textContent = new TextDecoder().decode(bytes);
-    put(pre, "margin:0;padding:8px;white-space:pre-wrap;overflow-wrap:anywhere;" +
-      "font:500 13px/1.35 ui-monospace,'SF Mono',Menlo,monospace;");
+    // TEXT IS A REAL EDITOR. Everything that is input — caret, selection,
+    // clipboard, IME, wrapping, find — belongs to the component, and none of it
+    // is written here. What crosses to IPNX is the buffer as insert/delete with
+    // a sequence and a hash, the selection, and the verbs.
+    gw.editor?.destroy();
+    gw.putFn = null;
+    const ed = createEditor({
+      mount: host,
+      text: new TextDecoder().decode(bytes),
+      send: (line) => wsys?.winEvent?.(gw.id, line),
+      onPut: async (s) => {
+        try {
+          const wrote = await writePath(path, new TextEncoder().encode(s));
+          wsys?.winEvent?.(gw.id, "dirty 0");
+          wsys?.winEvent?.(gw.id, `exec Put`);
+          console.log(`Put ${path}: ${wrote} bytes`);
+        } catch (e) { console.error("Put failed:", e.message); }
+      },
+    });
+    gw.editor = ed;
+    gw.putFn = () => ed && ed.text && ed.view && edPut(ed, path, gw);
   }
 }
 
 let wsys = null;
 let readPath = null;   // the surface's own open (docs/window.md)
+let writePath = null;  // and Put, streaming the edited file back
+
+// Put from the toolbar takes the same road as Cmd-S
+async function edPut(ed, path, gw) {
+  try {
+    const wrote = await writePath(path, new TextEncoder().encode(ed.text()));
+    wsys?.winEvent?.(gw.id, "dirty 0");
+    wsys?.winEvent?.(gw.id, "exec Put");
+    console.log(`Put ${path}: ${wrote} bytes`);
+  } catch (e) { console.error("Put failed:", e.message); }
+}
 const gwins = new Map();
 
 function winCreate(id, x, y, w, h, title) {
@@ -515,6 +544,7 @@ const host = {
             gw.win.body.style.whiteSpace === "pre" ? "pre-wrap" : "pre";
           return;
         }
+        if (label === "Put" && gw.putFn) { gw.putFn(); return; }
         wsys?.winEvent?.(id, `exec ${label}`);
       });
       bar.appendChild(b);
@@ -646,6 +676,7 @@ const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: tr
 cons = booted.cons;
 wsys = booted.wsys;
 readPath = booted.readPath;
+writePath = booted.writePath;
 setStatus("running");
 (async () => {                                    // the toolchains stream in
   if (params.has("lite")) return;

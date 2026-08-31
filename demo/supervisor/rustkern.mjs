@@ -292,6 +292,10 @@ export async function boot(host, opts) {
         } else if (tag === 7) {
           const wid = u32();
           host.winText?.(wid, bytes32().slice());
+        } else if (tag === 15) { // WriteDone — Put answered
+          const tok = f64v(), ok = u8() !== 0, wrote = u32();
+          const w = reads.get(tok);
+          if (w) { reads.delete(tok); ok ? w.res(wrote) : w.rej(new Error("write failed")); }
         } else if (tag === 14) { // ReadDone — the surface's open answered
           const tok = f64v(), ok = u8() !== 0, data = bytes32().slice();
           const w = reads.get(tok);
@@ -414,6 +418,13 @@ export async function boot(host, opts) {
       const tok = nextRead++;
       reads.set(tok, { res, rej });
       withBytes(te.encode(path), (p, n) => call(X.bh_read, tok, p, n));
+    }),
+    // Put: the surface streams the edited file back
+    writePath: (path, data) => new Promise((res, rej) => {
+      const tok = nextRead++;
+      reads.set(tok, { res, rej });
+      withBytes(te.encode(path), (pp, pn) =>
+        withBytes(data, (dp, dn) => call(X.bh_write, tok, pp, pn, dp, dn)));
     }),
     cons: {
       feed: (bytes) => withBytes(bytes, (p, n) => call(X.bh_cons_feed, p, n)),

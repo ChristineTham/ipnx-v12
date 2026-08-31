@@ -1163,8 +1163,13 @@ PART TEN — WHAT ACTUALLY REMAINS
 
   - THE FLOATING BAR'S ORDER AND GROUPING — empirical, tuned against
     use once there is use. The set is settled.
-  - THE EDITOR COMPONENT'S SPIKE — verify the chosen component against
-    the selection criterion above. An afternoon, not a milestone.
+  - ~~THE EDITOR COMPONENT'S SPIKE~~ — ANSWERED 2026-08-31 by
+    observation. CodeMirror 6 is vendored (374KB, offline) and satisfies
+    the criterion: it has no menu of its own and uses the PLATFORM's,
+    which is where the verbs belong. A selection right-clicked gives the
+    closed set, and choosing Look put `look 29 36 surface` in the
+    window's events for a plain guest to read. Byte offsets are correct
+    across a multi-byte character. PROPERTY 1 SURVIVES A RICH EDITOR.
   - AND THE WHOLE OF IT IS UNBUILT. That is the real open item:
     every decision in PART EIGHT is design, M14 is unstarted, and the
     suite's 151 pass because the code is exactly where it was.

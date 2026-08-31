@@ -2,3 +2,7 @@ xterm.js 5.3.0 and xterm-addon-fit 0.8.0 — https://github.com/xtermjs/xterm.js
 MIT License, Copyright (c) 2017-2019 The xterm.js authors.
 Vendored unmodified for the demo shell (design.md names xterm.js as the
 browser's /dev/cons implementation for character windows).
+
+codemirror.bundle.mjs — CodeMirror 6.0.1, MIT licence, Marijn Haverbeke and
+others. A prebuilt self-contained ESM bundle (esm.sh), vendored so the demo
+stays offline. https://codemirror.net/  https://github.com/codemirror/dev

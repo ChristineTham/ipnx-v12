@@ -562,8 +562,12 @@ itself (`readPath` → `Effect::ReadDone`) and **the browser renders it with its
 own engines** — SVG as SVG, images as images, HTML sandboxed, else text. *IPNX
 implements no renderers* is now a fact about the code. In-process this is a
 function call, per *"wire 9P at boundaries, a Dev table inside"*; a remote
-surface (M12) marshals. **Still unbuilt**: a real editor component for text (the
-remaining spike), and canvas's narrowing.
+surface (M12) marshals. **And the editor component the same day**, which
+retires the spike: CodeMirror 6 vendored offline, the buffer mirrored as
+insert/delete with a sequence and a hash, `⌘Z` routed to emca's single stack,
+`⌘S` streaming the file back — and the verbs riding the *platform's* context
+menu, observed putting `look 29 36 surface` where a plain guest read it.
+**Still unbuilt**: canvas's narrowing.
 
 **b. `/type` and the manager types *(M)*.** The registry: a directory
 per type holding `ns`, optional `cmd`, and `window` — house style, small

@@ -227,6 +227,14 @@ pub extern "C" fn bh_read(token: f64, p: *const u8, n: usize) {
     with(|w| w.kern.read_path(token, &path));
 }
 
+/// Put: the surface streams the edited file back
+#[no_mangle]
+pub extern "C" fn bh_write(token: f64, pp: *const u8, pn: usize, dp: *const u8, dn: usize) {
+    let path = String::from_utf8_lossy(unsafe { bytes(pp, pn) }).into_owned();
+    let data = unsafe { bytes(dp, dn) }.to_vec();
+    with(|w| w.kern.write_path(token, &path, data));
+}
+
 /// the surface speaks back into /dev/window/<type>/<n>/events
 #[no_mangle]
 pub extern "C" fn bh_win_event(wid: u32, p: *const u8, n: usize) {
@@ -447,6 +455,12 @@ pub extern "C" fn bh_drain() -> *const u8 {
                     ev.extend_from_slice(&token.to_le_bytes());
                     ev.push(if ok { 1 } else { 0 });
                     wbytes32(&mut ev, &data);
+                }
+                Effect::WriteDone { token, ok, n } => {
+                    ev.push(15);
+                    ev.extend_from_slice(&token.to_le_bytes());
+                    ev.push(if ok { 1 } else { 0 });
+                    w32(&mut ev, n);
                 }
                 Effect::WinChrome { wid, wtype, content, toolbar, tag } => {
                     ev.push(13);
