@@ -1,0 +1,18 @@
+/type — the registry BOTH HALVES READ (docs/window.md, docs/emca.txt).
+
+A window type is a directory of small files, house shape:
+
+  ns        the namespace to construct — bind lines, one per line
+  cmd       the command that drives it — OPTIONAL. Absent means emca
+            renders the tree directly, which is most types.
+  window    the chrome: one control per line, `<label> <side>:<verb>`.
+            ipnx: round-trips to IPNX; host: never leaves the surface.
+  pane      the placement HINT — left | bottom | main. A hint, never a
+            constraint: any window may live in any pane, and every window
+            stays fully editable text wherever it lands.
+
+There is no manager program anywhere in this system. There is a
+filesystem, a type saying which verbs its files accept, and a surface
+rendering those verbs natively. ADDING A MANAGER IS ADDING A FILE —
+this directory is where you add it, and /type is itself a type, so you
+can do it from inside the interface.

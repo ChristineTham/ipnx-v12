@@ -575,9 +575,13 @@ line with the global tag, and `⌘B`/`⌘J` pane toggles that never round-trip.
 Placement is by TYPE, and with **no emca program running** the surface falls
 back to each type's default pane — the recorded "degrades correctly" property,
 in code. The default workspace is `/rc/emca`, two lines of rc, which is emca's
-policy exactly where policy belongs. **Still unbuilt**: `/type` as a real
-registry (the toolbars are `/rc/emcaopen`'s for now), emca as a watching
-program, the responsive breakpoints, and canvas's narrowing.
+policy exactly where policy belongs. **And `/type` landed as a real registry**: four small
+files per type (`ns`, optional `cmd`, `window`, `pane`), read by BOTH halves —
+`/rc/emcaopen` knows nothing about any type, and `dir` is the only placement
+compiled into the shell. Twelve types ship, `/type` is itself a type, and
+clicking Processes opens a live `/proc` with no process-manager program in
+existence. **Still unbuilt**: emca as a watching program, the responsive
+breakpoints, and canvas's narrowing.
 
 **b. `/type` and the manager types *(M)*.** The registry: a directory
 per type holding `ns`, optional `cmd`, and `window` — house style, small

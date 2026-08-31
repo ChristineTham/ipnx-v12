@@ -3181,6 +3181,23 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
         }
+        // a pid's own directory. It was walkable but not listable, so /proc/N
+        // read as empty — which a process manager notices immediately.
+        (DevId::Proc, Node::Proc { kind: 1, pid: q }) => {
+            if !k.borrow().procs.contains_key(&q) { return Ok(RRes::Data(Vec::new())); }
+            let mut skip = off as usize;
+            let mut out = Vec::new();
+            for (nm, qp) in [("ctl", 2u64), ("status", 3), ("note", 4), ("notepg", 5)] {
+                let rec = marshal_stat(&StatIn {
+                    name: nm, qpath: ((q as u64) << 8) | qp, mode: 0o600, ..Default::default()
+                });
+                if skip >= rec.len() { skip -= rec.len(); continue; }
+                if out.len() + rec.len() > n { break; }
+                out.extend_from_slice(&rec);
+            }
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
         (DevId::Proc, _) => Ok(RRes::Data(Vec::new())),
         (DevId::Union, Node::Union(list)) => {
             let mut skip = off as usize;

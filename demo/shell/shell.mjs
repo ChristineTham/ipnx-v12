@@ -93,14 +93,27 @@ const PANES = {
 };
 const tabsEl = document.getElementById("emcaTabs");
 
-// type -> pane. A HINT for placement, never a constraint on capability: any
-// window remains fully editable text wherever it lands (emca.txt's property 1).
-const PANE_OF = {
-  dir: "left", directory: "left", proc: "left", pkg: "left",
-  project: "left", usr: "left", net: "left", type: "left",
-  transcript: "bottom", errors: "bottom", cons: "bottom",
-};
+// type -> pane, READ FROM /type — the registry both halves read (window.md).
+// Nothing about a type is compiled in here; `dir` is the bootstrap floor, and
+// everything else arrives from files. A HINT for placement, never a constraint
+// on capability: any window stays fully editable text wherever it lands.
+const PANE_OF = { dir: "left", cons: "bottom" };   // the floor, and the console
 const paneFor = (type) => PANE_OF[type] ?? "main";
+
+// read the registry once the namespace is up. /type is itself a type, so this
+// is the interface learning its own vocabulary from files it could also edit.
+async function loadTypes() {
+  try {
+    const names = dirEntries(await readPath("/type")).filter((e) => e.dir);
+    await Promise.all(names.map(async (e) => {
+      try {
+        const pane = new TextDecoder().decode(await readPath(`/type/${e.name}/pane`)).trim();
+        if (pane) PANE_OF[e.name] = pane;
+      } catch {}
+    }));
+    setStatus(`emca — ${Object.keys(PANE_OF).length} types`);
+  } catch (err) { /* no registry on this host: the floor still stands */ }
+}
 
 const mainTabs = [];            // windows of the same type, switched
 let activeTab = null;
@@ -234,7 +247,9 @@ function dirEntries(bytes) {
                dir: (mode & 0x80000000) !== 0 });
     o += 2 + sz;
   }
-  return out;
+  // self-validating: a real directory read consumes the WHOLE buffer. The host
+  // renders by what the file IS, not by what a type claimed it would be.
+  return (out.length && o === bytes.length) ? out : null;
 }
 
 async function showContent(gw, path, type) {
@@ -253,8 +268,8 @@ async function showContent(gw, path, type) {
   const head = new TextDecoder().decode(bytes.slice(0, 512)).trimStart();
   const ext = (path.split(".").pop() || "").toLowerCase();
   const put = (el, css = "") => { el.style.cssText = css; host.appendChild(el); };
-  const ents = (type === "dir" || type === "directory") ? dirEntries(bytes) : null;
-  if (ents && ents.length) {
+  const ents = dirEntries(bytes);
+  if (ents) {
     // every LINE is a look target — type drives interactivity, which is what
     // buys back the single tap for structured output (docs/emca.txt)
     const ul = document.createElement("div");
@@ -738,7 +753,8 @@ cons = booted.cons;
 wsys = booted.wsys;
 readPath = booted.readPath;
 writePath = booted.writePath;
-window.__emca = { readPath, writePath, wsys };   // debug affordance, as __consT
+window.__emca = { readPath, writePath, wsys, PANE_OF };   // debug affordance, as __consT
+loadTypes();
 setStatus("running");
 (async () => {                                    // the toolchains stream in
   if (params.has("lite")) return;

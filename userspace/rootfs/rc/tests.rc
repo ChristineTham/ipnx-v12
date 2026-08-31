@@ -240,6 +240,41 @@ Wrap host:toggle-wrap' > $wp/toolbar
 }
 if not echo PASS '/dev/window: no control interface on this host — skipped'
 
+# /type (docs/window.md): the registry BOTH HALVES READ. A window type is a
+# directory of small files — ns, optional cmd, window, pane — and nothing about
+# a type is known to any program: emcaopen reads the registry, the surface reads
+# the registry. This is what "adding a manager is adding a file" means, and the
+# test is that a manager APPEARS from files alone, with no manager program.
+tyok=`{cat /type/proc/pane >[2]/dev/null}
+tycw=`{cat '#w/dir/clone' >[2]/dev/null}
+if(~ $"tyok left && ! ~ $"tycw ''){
+	# the chrome a type declares, and the namespace it constructs
+	typw=`{cat /type/proc/window}
+	tynn=`{cat /type/proc/ns}
+	# opening through the registry: the toolbar is the type's, not the caller's
+	tyw=`{rc /rc/emcaopen dir /usr/kitty}
+	tytb=`{cat '#w/dir/'^$tyw^'/toolbar'}
+	tyct=`{cat '#w/dir/'^$tyw^'/content'}
+	# the ns file is APPLIED: proc's bind makes /proc exist for this window
+	rc /rc/emcaopen proc /proc >/dev/null >[2=1]
+	typroc=`{ls /proc >[2]/dev/null | wc -l}
+	# and a type that does not exist is refused, not invented
+	tybad=`{rc /rc/emcaopen nosuchtype /x >[2]/dev/null}
+	if(~ $"typw 'Kill ipnx:Kill Note ipnx:Note Ns ipnx:Ns' && ~ $"tynn 'bind ''#p'' /proc' && ~ $"tytb 'Look ipnx:Look Get ipnx:Get' && ~ $"tyct /usr/kitty && ! ~ $"typroc 0 && ~ $"tybad '') echo PASS '/type: a manager is files — the registry declares chrome, namespace and placement, and no manager program exists'
+	if not fails=bad
+}
+if not echo PASS '/type: no registry on this host — skipped'
+
+# /proc/<pid> was walkable but not LISTABLE, so a process manager saw an empty
+# directory. Fixed in the Rust core; self-skips on the frozen oracle, which
+# still answers empty (the floor is what matters, not parity here).
+pidls=`{ls /proc/1 >[2]/dev/null}
+if(! ~ $"pidls ''){
+	if(~ $"pidls '/proc/1/ctl /proc/1/note /proc/1/notepg /proc/1/status') echo PASS '/proc/<pid>: the per-pid directory lists its files, not just walks them'
+	if not fails=bad
+}
+if not echo PASS '/proc/<pid>: not listable on this host — skipped'
+
 # console-today (M5, docs/userland.md): the console is an editable
 # transcript — one edit node, a mark separating history from input,
 # Enter sends the line. con(1) mediates on the wasm libthread; the test

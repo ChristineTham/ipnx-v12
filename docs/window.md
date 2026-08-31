@@ -315,6 +315,20 @@ The registry binds a type name to three things:
 This answers *"how does the host know what this is"* without content sniffing,
 and it is the same registry the emca design already required.
 
+**LANDED 2026-08-31.** `/type/<name>/` is four small files — `ns` (bind lines),
+`cmd` (optional), `window` (one control per line, `<label> <side>:<verb>`) and
+`pane` (the placement hint). `/rc/emcaopen` knows *nothing* about any type: it
+reads the registry, applies the `ns`, copies the `window` into the new window's
+toolbar. The surface reads the registry too — `dir` is the only type compiled
+into the shell, as the bootstrap floor, and every other placement arrives from
+`/type/*/pane`. Twelve types ship; **`/type` is itself a type**, so the interface
+is configured by editing files inside it.
+
+The demonstration that matters: clicking **Processes** opens `/proc` with `Kill
+Note Ns` and a live pid list, drilling into `ctl · status · note · notepg` — and
+**no process manager program exists anywhere.** There is a filesystem, four
+small files, and a surface. Suite: 154 PASS / 0 FAIL on both hosts.
+
 ## What this replaces
 
 From canvas: `stack` (layout → `ctl`), `text` and `edit` (content → a file over
