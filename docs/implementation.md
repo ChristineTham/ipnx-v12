@@ -648,23 +648,20 @@ is mechanism-complete without git; `/project/ipnx` waits on M10.
 
 ## Engineering questions (not design questions — those live in design.md)
 
-- **M14 (editing):** whether `execute`/`look` can ride Monaco's action API
-  (property 1 depends on it — spike this first); **who owns undo** now that the
-  surface holds keystroke-granularity history and emca holds command-granularity
-  (acme had one stack, and ⌘Z has to mean something); whether a **resync path**
-  is needed when a rich editor and emca's shadow buffer diverge, given the
-  discipline is "apps never re-read".
-- **M14:** how the SURFACE half is tested — emca's behaviour is testable through
-  the virtual surface, but nothing in the tree proves a button was reachable or
-  that Tab reached it, and "no half-working" plus the keyboard-complete law make
-  this the design's largest untested area with no precedent here to borrow from;
-  snapshot vs replay for a saved workspace's language packages (Docker took the
-  first, Nix the second); the plumber's rules format and message shape, which the
-  floating bar's Open/Jump entries depend on and canvas.md still calls "the next
-  measurement's work"; where an unnamed instance's writable layer lives between
-  instantiation and save; and how a type declares a view mode without becoming a
-  widget toolkit — the discipline is stated (text is the default, non-text owes a
-  reason), the ceiling is not.
+- **M14:** ~~the editing questions, the surface's testing, snapshot-vs-replay,
+  the plumber, instance storage, the type ceiling~~ — **all resolved 2026-08-31**
+  (decision log). Undo is one stack in emca; the resync path is a sequence number
+  per edit and a hash per sync; **property 1 is a selection criterion** for any
+  editor component (expose the selection, accept custom context-menu commands)
+  rather than a risk about Monaco. The surface half is tested through a per-window
+  **`ui` file derived from the platform accessibility tree**, so one assertion runs
+  headless and native alike; snapshot is free, the writable layer already being a
+  tree; the plumber **adopts plumb(6)** verbatim; an unnamed instance gets its
+  layer at birth, so saving is a rename; and the type ceiling **dissolved** — a
+  type declares nothing about rendering, so there is no vocabulary to grow into.
+  **What remains for this milestone**: the floating bar's order and grouping,
+  which is empirical, and a verification spike on whichever editor component is
+  chosen — an afternoon, not a gate.
 - **M1:** static musl wasmtime build flags; whether Cranelift's mmap'd code
   pages need a seccomp note in the image docs.
 - **M2:** the exact namespace(6) subset grammar — what of `unmount`, `.`-rooted
