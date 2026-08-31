@@ -552,8 +552,13 @@ build `/dev/window`* — and it **deletes** far more than it adds.
 `events`, a type-indexed path (`#w/<type>/<n>`, validated, with `#w/<n>` untouched
 so nothing broke), and per-window `content`/`toolbar`/`tag`/`ui`/`events`. Proven
 headlessly by one suite test in rc — *a UI you can cat, echo and grep* — at **152
-PASS / 0 FAIL** on the Rust host, self-skipping on the frozen oracle. **Still
-unbuilt**: the host half, and canvas's narrowing.
+PASS / 0 FAIL** on the Rust host, self-skipping on the frozen oracle. **And the host half's chrome
+landed the same day**: `WinChrome` crosses as an ordinary effect, the browser
+shell renders native furniture (content path, real buttons, tag field), a click
+returns through `bh_win_event`, and `host:` actions never leave the surface —
+proved headlessly by `node demo/supervisor/winproof.mjs userspace/rootfs`, **with
+no emca in the loop**. **Still unbuilt**: the host opening `content` over 9P and
+rendering it (where the editor component arrives), and canvas's narrowing.
 
 **b. `/type` and the manager types *(M)*.** The registry: a directory
 per type holding `ns`, optional `cmd`, and `window` — house style, small

@@ -220,6 +220,13 @@ pub extern "C" fn bh_win_ack(wid: u32) {
     with(|w| w.kern.win_ack(wid));
 }
 
+/// the surface speaks back into /dev/window/<type>/<n>/events
+#[no_mangle]
+pub extern "C" fn bh_win_event(wid: u32, p: *const u8, n: usize) {
+    let line = String::from_utf8_lossy(unsafe { bytes(p, n) }).into_owned();
+    with(|w| w.kern.win_event(wid, &line));
+}
+
 #[no_mangle]
 pub extern "C" fn bh_canvas_event(wid: u32, p: *const u8, n: usize) {
     let s = String::from_utf8_lossy(unsafe { bytes(p, n) }).into_owned();
@@ -427,6 +434,14 @@ pub extern "C" fn bh_drain() -> *const u8 {
                         }
                         wbytes32(&mut ev, &nd.data);
                     }
+                }
+                Effect::WinChrome { wid, wtype, content, toolbar, tag } => {
+                    ev.push(13);
+                    w32(&mut ev, wid);
+                    wstr16(&mut ev, &wtype);
+                    wstr16(&mut ev, &content);
+                    wstr16(&mut ev, &toolbar);
+                    wstr16(&mut ev, &tag);
                 }
                 Effect::Fetch { url } => {
                     ev.push(9);

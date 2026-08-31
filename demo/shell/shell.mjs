@@ -430,6 +430,66 @@ const host = {
   // platform permits; Safari's gesture-only reads degrade to the buffer
   snarfSet: (text) => { try { navigator.clipboard?.writeText(text); } catch {} },
   snarfGet: () => { try { return navigator.clipboard?.readText?.(); } catch { return null; } },
+  // /dev/window: IPNX declared this window's chrome and the host renders it
+  // NATIVELY. Nothing here parses content — that is a path the host opens over
+  // 9P. Actions name a side: ipnx: round-trips, host: never leaves the surface.
+  winChrome: (id, ch) => {
+    const gw = gwins.get(id);
+    if (!gw) return;
+    let bar = gw.chromeEl;
+    if (!bar) {
+      bar = document.createElement("div");
+      bar.style.cssText = "display:flex;align-items:center;gap:6px;flex-wrap:wrap;" +
+        "padding:4px 6px;background:#eaffff;border-bottom:1px solid #000;" +
+        "font:500 12px/1 'Lucida Grande',system-ui,sans-serif;color:#123;";
+      gw.win.body.prepend(bar);
+      gw.chromeEl = bar;
+    }
+    bar.replaceChildren();
+    if (ch.content) {
+      const t = document.createElement("span");
+      t.textContent = ch.content;
+      t.title = `${ch.type} window — content opened over 9P`;
+      t.style.cssText = "font-weight:600;margin-right:4px;white-space:nowrap;";
+      bar.appendChild(t);
+    }
+    for (const line of ch.toolbar.split("\n")) {
+      const s = line.trim();
+      if (!s) continue;
+      const sp = s.indexOf(" ");
+      const label = sp < 0 ? s : s.slice(0, sp);
+      const action = sp < 0 ? "" : s.slice(sp + 1).trim();
+      const b = document.createElement("button");
+      b.textContent = label;
+      b.title = action;
+      const hostSide = action.startsWith("host:");
+      b.style.cssText = "font:500 12px/1 inherit;padding:3px 8px;min-height:22px;" +
+        "border:1px solid #9aa;border-radius:4px;cursor:pointer;white-space:nowrap;" +
+        (hostSide ? "background:#f4f4ff;color:#334;" : "background:#f6ffff;color:#123;");
+      b.addEventListener("click", () => {
+        if (hostSide) {
+          // never round-trips — layout is the surface's half
+          if (action === "host:toggle-wrap") gw.win.body.style.whiteSpace =
+            gw.win.body.style.whiteSpace === "pre" ? "pre-wrap" : "pre";
+          return;
+        }
+        wsys?.winEvent?.(id, `exec ${label}`);
+      });
+      bar.appendChild(b);
+    }
+    if (ch.tag) {
+      const f = document.createElement("input");
+      f.value = ch.tag;
+      f.style.cssText = "flex:1 1 8ch;min-width:8ch;border:1px solid #9aa;border-radius:4px;" +
+        "padding:3px 5px;font:inherit;background:rgba(255,255,255,.6);color:#123;";
+      f.addEventListener("keydown", (e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        wsys?.winEvent?.(id, `tag ${f.value}`);   // the way back into sam
+      });
+      bar.appendChild(f);
+    }
+  },
   winCanvas: (id, snap) => {
     const gw = gwins.get(id);
     if (!gw) return;

@@ -194,3 +194,19 @@ Prose is British-inflected, em-dashed; numbers are load-bearing and carry
 provenance; guest C is Plan 9 style (tabs, `nil`, no const clutter). The
 full working conventions — including the document roles and the
 same-commit rules — are in `CLAUDE.md`.
+
+
+## Proving the `/dev/window` round trip
+
+The control interface's host half has its own headless check — it mints a typed
+window from rc, hands the declared chrome to a host, clicks the `ipnx:` control
+from the host side, and watches a plain guest read the click back out of the
+window's events. **No emca is involved**, which is the point:
+
+```bash
+node demo/supervisor/winproof.mjs userspace/rootfs
+```
+
+Exits 0 on the round trip, 1 on a 20-second timeout. Needs
+`cargo build --release --target wasm32-unknown-unknown -p browserhost` first
+(or a `bash demo/build.sh`, which does it).

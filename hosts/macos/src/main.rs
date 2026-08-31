@@ -370,6 +370,10 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
                 let r = host_serve(host_root, op);
                 kern.hostop_done(tag, r);
             }
+            // /dev/window's declared chrome. This host is headless (it runs the
+            // suite), and a headless surface renders no furniture — the point
+            // being that the KERNEL never knows there is a screen.
+            Effect::WinChrome { .. } => {}
             Effect::ConsWrite(bytes) => {
                 let mut out = std::io::stdout();
                 out.write_all(&bytes).ok();

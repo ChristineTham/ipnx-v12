@@ -287,6 +287,9 @@ export async function boot(host, opts) {
         } else if (tag === 7) {
           const wid = u32();
           host.winText?.(wid, bytes32().slice());
+        } else if (tag === 13) { // WinChrome — /dev/window's declared furniture
+          const wid = u32();
+          host.winChrome?.(wid, { type: str16(), content: str16(), toolbar: str16(), tag: str16() });
         } else if (tag === 8) { // WinCanvas
           const wid = u32();
           const label = str16();
@@ -405,6 +408,7 @@ export async function boot(host, opts) {
       key: (wid, byte) => withBytes(new Uint8Array([byte]), (p, n) => call(X.bh_win_key, wid, p, n)),
       close: (wid) => call(X.bh_win_close, wid),
       canvasEvent: (wid, line) => withBytes(te.encode(line), (p, n) => call(X.bh_canvas_event, wid, p, n)),
+      winEvent: (wid, line) => withBytes(te.encode(line), (p, n) => call(X.bh_win_event, wid, p, n)),
       snarfPut: (text) => withBytes(te.encode(text), (p, n) => call(X.bh_snarf_put, p, n)),
     },
     graft: (seed) => withBytes(seedBlob(seed), (p, n) => call(X.bh_graft, p, n)),

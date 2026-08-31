@@ -143,6 +143,9 @@ pub enum Effect {
     // coalescing changes the rate, only credit changes the bound, and a
     // snapshot built at flush time coalesces by construction.
     WinCanvas { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, snap: Vec<CvSnap> },
+    // /dev/window: the chrome IPNX declared, for the host to render natively.
+    // Small and rare (unlike WinCanvas), so it rides outside the credit system.
+    WinChrome { wid: u32, wtype: String, content: String, toolbar: String, tag: String },
     // '#H': the host performs the GET off-thread and answers with FetchDone
     Fetch { url: String },
     // /dev/snarf: the host clipboard hears writes; reads ask it first
@@ -946,6 +949,15 @@ fn win_announce(k: &K, line: String) {
     }
 }
 
+// the host learns a window's chrome the moment IPNX declares it
+fn win_chrome(k: &K, w: &WinR) {
+    let (wid, wtype, content, toolbar, tag) = {
+        let wb = w.borrow();
+        (wb.wid, wb.wtype.clone(), wb.content.clone(), wb.toolbar.clone(), wb.tag.clone())
+    };
+    k.borrow_mut().effects.push(Effect::WinChrome { wid, wtype, content, toolbar, tag });
+}
+
 // a window's own events: what the user did inside it
 fn serve_wev(k: &K, win: &WinR) {
     loop {
@@ -1201,6 +1213,7 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
                         w.borrow_mut().wtype = t.clone();
                         let wid = w.borrow().wid;
                         win_announce(k, format!("new {} {}\n", t, wid));
+                        win_chrome(k, &w);
                     }
                     let mut cb = chan.borrow_mut();
                     cb.node = Node::Wsys { kind: WKind::Clone, win: Some(w.clone()), conn: None, ty: ty.clone() };
@@ -1309,6 +1322,7 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                     _ => wb.uifile = s,
                 }
             }
+            win_chrome(k, w);
             return Ok(data.len());
         }
         // writing a window's events is the surface's voice — and the virtual
@@ -1835,6 +1849,16 @@ impl Kernel {
         if let Some(w) = win {
             mkcv(&w);
             cv_push(&self.k, &w, line);
+        }
+    }
+
+    /// the surface's voice: a line into /dev/window/<type>/<n>/events
+    pub fn win_event(&self, wid: u32, line: &str) {
+        let win = self.k.borrow().wins.get(&wid).cloned();
+        if let Some(w) = win {
+            w.borrow_mut().wevents.push_back(format!("{}\n", line.trim()));
+            serve_wev(&self.k, &w);
+            self.ex.run_until_stalled();
         }
     }
 

@@ -6,8 +6,22 @@
 > actions, content set to a path, the type in the path **validated** (`#w/text/<n>`
 > correctly misses), the plain `#w/<n>` still answering (nothing broke), and the
 > surface's voice round-tripping. **152 PASS / 0 FAIL** on the Rust host; the
-> frozen oracle self-skips. What is NOT built: the host half — no surface reads
-> any of this yet.
+> frozen oracle self-skips.
+>
+> **The host half landed the same day too.** Chrome crosses to the host as an
+> ordinary effect (`WinChrome`), the browser shell renders it as **native
+> furniture** — content path, real buttons, a tag field — and a click returns
+> through `bh_win_event`. Actions naming a side are honoured in the surface:
+> `host:toggle-wrap` never leaves it. Proved headlessly and repeatably by
+> `node demo/supervisor/winproof.mjs userspace/rootfs`, which mints a window
+> from rc, reads the toolbar the host was handed, clicks the `ipnx:` control,
+> and watches a plain guest read `exec Install` out of the window's events —
+> **with no emca anywhere in the loop**, which is the claim that most
+> distinguishes this design from acme's.
+>
+> What is NOT built: the host does not yet *open the content path over 9P and
+> render the file* — it displays the path. That is the next piece, and it is
+> where the editor component arrives.
 
 The contract for the 2026-08-31 redesign (design.md): the bidirectional
 device through which IPNX declares a window's chrome and the host reports what
@@ -293,6 +307,7 @@ every renderer emca would have needed, and most of its display machinery.
 - ~~The transcript's shape~~ — **specified above**: a growing file the host tails,
   typed lines back as `insert`, con(1)'s mark arithmetic deleted.
 
-Nothing is open in this contract. **The device half is built** (see the header);
-what remains is the **host half** — no surface reads `events`, opens `content`
-over 9P, or renders a declared toolbar yet.
+Nothing is open in this contract. **The device half and the chrome half of the
+host are built** (see the header). What remains: the host **opening `content`
+over 9P and rendering the file** — which is where the editor component arrives,
+and the one place the design still needs a verification spike.
