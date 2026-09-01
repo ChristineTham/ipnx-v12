@@ -614,6 +614,25 @@ operand-determines-surface made visible inside a single row.
             without loss: the verbs are fixed, the argument is
             anything you can type.
 
+            AN EMPTY TAG LINE MEANS "USE THE SELECTION". Type
+            nothing, select alice in the body, press Find — it finds
+            alice. Not an invention: this is macOS's Cmd-E and the
+            convention in most editors, and it generalises across all
+            six without a special case.
+
+              Find    the selection
+              Open    the selected text as a window
+              Run     the selection as a command — which is precisely
+                      acme's button-2-on-text
+              Pipe    the selection into a command
+              Edit    a sam command over it
+              Add     the selection as a toolbar button
+
+            So THE ALWAYS-VISIBLE BUTTONS ALREADY ACT ON POINTED-AT
+            TEXT, and they offer four more verbs than a selection menu
+            ever did. Which is what lets the selection menu be
+            optional (below) rather than the only road.
+
             When the window is narrow the row WRAPS, tag line and its
             buttons staying together ahead of the break wherever they
             can, because separating an operand from the verbs that
@@ -702,9 +721,12 @@ operand alone, and it is the shape the design settled into:
   operations   row                              Maximise, New column,
                                                 New row, Fit
   TEXT         the tag line's    always         Open, Find, Run, Pipe,
-  operations   buttons                          Edit, Add
-               the floating      when there     Cut, Copy, Paste,
-               bar               is a selection Open, Find
+  operations   buttons                          Edit, Add — acting on
+                                                the SELECTION when the
+                                                tag line is empty
+               a contextual      OPTIONAL, and  whatever the surface's
+               menu at the       the surface's  platform puts there
+               selection
   TYPE         the window        NEVER          the type's, plus
   operations   toolbar                          whatever Add put there
 
@@ -715,10 +737,9 @@ extensible row.
 
 OPERAND DETERMINES SURFACE still explains WHERE each sits: the title
 bar row acts on the window in its layout, the toolbar on its content,
-the tag line on text you COMPOSED, the floating bar on text you
-POINTED AT. The tag line and the floating bar are the same family
-differing only in where the text came from, which is why neither
-subsumes the other.
+the tag line on text you COMPOSED — or, when it is empty, on text you
+POINTED AT. A selection menu, where a surface offers one, is a
+shortcut to the same verbs and not a fifth thing.
 
 The body is a sequence of items
 -------------------------------
@@ -857,21 +878,56 @@ they are always there — which gives "look is a dispatcher, SHOW the
 choice" a better answer than computing it: both buttons are permanently
 visible, with no round trip and nothing to get wrong.
 
-The floating bar
-----------------
-Appears at the selection, because that is where its operand is. Cut,
-Copy, Paste — the platform's clipboard, so the surface's — and Open
-and Find against the SELECTED text rather than the typed text.
+The selection's verbs, and where they appear
+--------------------------------------------
+WHICH VERBS A SELECTION AFFORDS IS IPNX'S. WHERE THEY APPEAR IS THE
+SURFACE'S. That is the founding division applied to the one surface
+that had been over-specified as "a floating bar".
 
-That the same two words appear on two surfaces is not duplication. It
-is one verb offered against two operands, which is what the rule
-predicts.
+A selection affords Open and Find — and, through the empty tag line,
+the other four as well. Cut, Copy and Paste are THE PLATFORM'S: they
+carry the clipboard, the IME and the permissions, and reimplementing
+them would replace working behaviour with a worse copy.
 
-Timing, the known trap: THE BAR MUST SNAPSHOT THE RANGE WHEN IT
-APPEARS. The tap that presses its button collapses the native
+So the surface renders them wherever its platform puts verbs for
+selected text: the native callout on iPadOS, the context menu on the
+web, a small floating bar where a component's menu cannot be extended,
+or NOTHING AT ALL. Different surfaces should differ here, which is the
+whole reason the division exists.
+
+THIS SURFACE IS OPTIONAL, and that is the change. Three surfaces are
+required — the title bar row, the tag line and toolbar row, the status
+bar — and this is a shortcut, because the empty-tag-line rule already
+puts every verb on permanently visible buttons in a fixed place. An
+earlier draft made a bespoke floating bar mandatory, which collided
+with the platform's own selection callout: two popovers, or suppress
+the native one and lose what it does.
+
+But a surface that DOES offer one is bound by three requirements,
+because a bad answer here is a defect and not a matter of taste:
+
+  1. IT MUST NEVER REFLOW THE BODY. Overlay, or live in chrome that
+     already exists — never take space from the content. Text jumping
+     under the reader is the worst of the failures and the only one
+     that can lose your place.
+  2. IT MUST NEVER COVER THE SELECTION. Above by preference, below
+     when there is no room.
+  3. IT MUST DISMISS CHEAPLY — on scroll, on typing, on a click
+     elsewhere. Anything that lingers over content is occlusion under
+     another name.
+
+Timing, the known trap for any of them: THE RANGE IS SNAPSHOTTED WHEN
+THE MENU APPEARS. The tap that presses a button collapses the native
 selection first. Underneath is a conflation — dot is insertion point,
 operand and clipboard source at once, three lifetimes that a mouse
 hides and touch cannot.
+
+TESTABILITY SURVIVES, and improves. A bespoke bar was testable because
+it was our own DOM; a native callout is not drivable from a headless
+test. But the `ui` file already declares what the surface rendered, so
+the suite asserts THE VERB SET WAS DECLARED AND IS KEYBOARD-REACHABLE
+— the property that actually matters — and that holds identically
+whether the surface drew a popover, a menu, or nothing.
 
 The window toolbar, by type
 ---------------------------
@@ -936,13 +992,16 @@ acme.txt counts 38 operations. Where each one went:
 
   native (4)        select, insert, delete, scroll — the component's
   gesture (4)       expand (double-click), move, grow/shrink (drag),
-                    plumb (the floating bar's fallback)
+                    plumb (the fallback when rules decide)
   title bar (6)     Close, Minimise, Maximise, New column, New row,
                     Fit
   tag line (6)      Open, Find, Run, Pipe, Edit, Add — with |, < and >
                     as syntax within Pipe rather than as buttons, and
                     : and # as syntax within Find
-  floating bar (5)  Cut, Copy, Paste, Open, Find
+  the selection     Cut, Copy and Paste are the PLATFORM'S; the other
+                    six reach it through an empty tag line. Where any
+                    of them appear is the surface's, and offering a
+                    menu at all is optional
   toolbar           the per-type lists above
   status bar        id, and the running command with Interrupt
 
@@ -1316,8 +1375,10 @@ verbs with the tag line as their argument. Every window the same.
 Every mistake so far — the named panes, the rare-verb overflow, the
 pin, the single global status line, the rotated minimised strip — was
 an exception invented where a principle already applied. (And one, the
-floating bar, was RETIRED in error and restored: its operand is a
-selection in the body, which no other surface has.)
+floating bar, was RETIRED in error, restored, and then correctly
+DEMOTED: the verbs a selection affords are IPNX's, but where they
+appear is the surface's, and the empty-tag-line rule means no surface
+has to draw anything.)
 
 Defaults and overrides: the breakpoint sets the DEFAULT allocation; an
 explicit act overrides it; the override is remembered PER SIZE CLASS.
@@ -1693,8 +1754,11 @@ PART EIGHT — WHAT IS DECIDED
   22. THE TAG LINE IS AN OPERAND, not a command line: its text is the
       argument to its own buttons — Run, Add, Open, Find. That is
       the 2-1 chord decomposed, and it retires the pin. It does NOT
-      retire the floating bar: composing text and pointing at text are
-      different operands, and the bar is the second one. (2026-09-01)
+      retire the selection's verbs: composing text and pointing at
+      text are different operands. AN EMPTY TAG LINE MEANS "USE THE
+      SELECTION", which reaches all six from permanently visible
+      buttons, so a menu at the selection is an optional surface
+      shortcut and not a required fifth surface. (2026-09-01)
   22a. FOUR SURFACES, ONE OPERAND EACH: the window in its layout ->
       the title bar row; the window's content -> the toolbar; the tag
       line's text -> its own buttons; a selection in the body -> the

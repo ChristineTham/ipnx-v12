@@ -325,6 +325,7 @@ between `ipnx:` and `host:`.
 | Edit | IPNX | sam's structural language |
 | Jump, Search | surface | moving a caret inside a buffer the surface already holds |
 | Cut, Copy, Paste | surface | the platform's clipboard, IME and permissions |
+| where selection verbs appear | surface | a native callout, a context menu, a small bar, or nothing — an EMPTY TAG LINE already reaches all six from fixed, visible buttons, so this surface is optional |
 
 Sending Jump or Search down would be a round trip to accomplish nothing; taking
 Cut/Copy/Paste would replace working platform behaviour with a worse copy.

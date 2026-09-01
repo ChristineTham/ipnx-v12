@@ -1054,6 +1054,31 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   carries exactly one verb of its own. The single asymmetry is forced rather than
   chosen: a directory has no content and therefore no later Save at which to
   create it, so the slash form creates immediately.
+  **AN EMPTY TAG LINE MEANS "USE THE SELECTION", and it demoted a whole
+  surface.** The floating bar had been specified as a required fourth surface,
+  which collided with the platform's own selection callout on every touch
+  system — two popovers, or suppress the native one and lose what it does. Her
+  three residual worries about it were the right ones: *"visibility, occluding,
+  and layout shift"*. The rule answers the first and reframes the rest. Select
+  text, leave the tag line empty, press any of its six buttons and they act on
+  the selection — macOS's Cmd-E convention, not an invention, and it generalises
+  with no special case. So the always-visible buttons already act on pointed-at
+  text, and they offer FOUR MORE VERBS than the floating bar ever did (Run on a
+  selection is exactly acme's button-2-on-text; Pipe and Edit were never reachable
+  from the bar at all).
+  **Which makes the selection surface OPTIONAL.** Three surfaces are required —
+  the title bar row, the tag line and toolbar row, the status bar. Which verbs a
+  selection affords is IPNX's; WHERE THEY APPEAR is the surface's, so it is the
+  native callout on iPadOS, the context menu on the web, or nothing at all. That
+  is the founding division applied to the one surface that had been
+  over-specified. A surface that does offer one is bound by three requirements,
+  because a bad answer is a defect rather than a matter of taste: never reflow
+  the body (text jumping under the reader is the only failure that loses your
+  place), never cover the selection, dismiss cheaply. And testability improves:
+  a native callout is not drivable from a headless test, but the `ui` file
+  already declares what was rendered, so the suite asserts the verb set was
+  declared and is keyboard-reachable — the property that matters — identically
+  whether the surface drew a popover, a menu, or nothing.
   **The window's second row is reordered, and gains a separator.** Hers: the
   window is controls-and-title / tag line, tag line buttons, separator, toolbar
   buttons / content and scrollbars / status bar. So the row reads left to right
