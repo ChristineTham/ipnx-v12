@@ -100,8 +100,16 @@ gains the interface it should have had.
   pin              THE PINNED RANGE, at workspace scope — emca declares it,
                    the surface shows it in the status line
   <type>/<n>/
-    wctl           panes, layout, tabs, lifecycle — rio's file, grown
-                   a `pane <name>` verb; reads unchanged (rio parses it)
+    wctl           layout and lifecycle — rio's file, grown `newrow`,
+                   `newcol` and a `delete` that takes the subtree with
+                   it; reads unchanged (rio parses them)
+    axis           how this window arranges its children: row (side by
+                   side), col (stacked), or empty for one holding a body
+    kids/<id>/     THE CHILDREN, as a walkable directory — each entry
+                   walks to that child's own window directory, so the
+                   structure IS the filesystem rather than a description
+                   of one. The same window is reachable at #w/<type>/<id>;
+                   a filesystem naming one thing twice is ordinary
     content        the PATH the host opens over 9P and renders
     toolbar        one control per line: <label> <action>
     tag            the tag line — the host's way back into sam

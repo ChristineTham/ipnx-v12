@@ -270,7 +270,7 @@ export async function boot(host, opts) {
           const mod2 = await moduleById(id, ib.length ? ib.slice() : null);
           spawnGuest(pid, mod2, asy);
         } else if (tag === 2) {
-          host.consWrite?.(bytes32().slice());
+          { const b = bytes32().slice(); host.consWrite?.(b); }
         } else if (tag === 3) {
           const ms = u64();
           const token = u64();
@@ -291,7 +291,7 @@ export async function boot(host, opts) {
           host.winClose?.(wid);
         } else if (tag === 7) {
           const wid = u32();
-          host.winText?.(wid, bytes32().slice());
+          { const b = bytes32().slice(); host.winText?.(wid, b); }
         } else if (tag === 15) { // WriteDone — Put answered
           const tok = f64v(), ok = u8() !== 0, wrote = u32();
           const w = reads.get(tok);
@@ -302,8 +302,9 @@ export async function boot(host, opts) {
           if (w) { reads.delete(tok); ok ? w.res(data) : w.rej(new Error("read failed")); }
         } else if (tag === 13) { // WinChrome — /dev/window's declared furniture
           const wid = u32();
-          host.winChrome?.(wid, { type: str16(), content: str16(),
-                                  toolbar: str16(), tag: str16() });
+          { const ch = { type: str16(), content: str16(),
+                         toolbar: str16(), tag: str16() };
+            host.winChrome?.(wid, ch); }
         } else if (tag === 8) { // WinCanvas
           const wid = u32();
           const label = str16();
@@ -340,7 +341,7 @@ export async function boot(host, opts) {
             }
           })();
         } else if (tag === 10) {
-          host.snarfSet?.(td.decode(bytes32()));
+          { const s = td.decode(bytes32()); host.snarfSet?.(s); }
         } else if (tag === 11) { // SnarfGet
           (async () => {
             let got = null;

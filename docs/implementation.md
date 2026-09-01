@@ -793,6 +793,19 @@ parent. `New row` and `New column` resolve to *give children* or *add
 a sibling* from the parent's axis, and never ask.
 **Acceptance:** in rc, build a nested tree, read it back, assert its
 canonical form; assert that creating a same-axis container flattens.
+**LANDED 2026-09-01.** `axis` and a walkable `kids/` per window;
+`newrow`/`newcol` on `wctl` resolving from the parent's axis; and
+`delete` closing the subtree — acme's `colcloseall()`, one rule rather
+than two, because a column is a window. Alternation needed no
+flattening pass in the end: a same-axis container is never created,
+because that case adds a sibling instead. **157 PASS / 0 FAIL** on all
+three hosts.
+**And it surfaced a latent bug of my own from M14a**: `rustkern.mjs`
+decoded four effects as `host.x?.(read())`, and an optional call
+SHORT-CIRCUITS ITS ARGUMENTS — so on any host without that handler the
+reads never ran, the cursor never advanced, and every later effect was
+parsed as garbage. It had been silently corrupting the headless
+stream since WinChrome was added; the tree work made it fatal.
 
 **c. Allocation, and the sizing heuristic *(M)*.** A parent allocates
 rectangles to some children; the rest are tabs. `minimise(me)` moves

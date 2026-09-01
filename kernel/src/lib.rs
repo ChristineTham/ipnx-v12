@@ -278,6 +278,8 @@ enum WKind {
     TypeDir,
     RootEvents,
     WContent,
+    WKids,         // the children, as a walkable directory
+    WAxis,         // how this window arranges them: row, col, or nothing
     WToolbar,
     WTag,
     WUi,
@@ -536,6 +538,15 @@ struct Win {
     mouseparked: Vec<Waiter>,
     cv: Option<Canvas>,
     dead: bool,
+    // THE TREE (emca.txt PART FOUR): a window contains either a body or
+    // child windows. `axis` says how it arranges those children — row means
+    // side by side, col means stacked — and it is 0 for a window holding a
+    // body. Alternation is the invariant: a container's axis is always
+    // perpendicular to its parent's, which is what keeps one layout to one
+    // tree (see split() below).
+    parent: Option<u32>,
+    kids: Vec<u32>,
+    axis: u8,              // 0 none, 1 row (side by side), 2 col (stacked)
     // /dev/window: the control interface's per-window files
     wtype: String,
     content: String,
@@ -716,6 +727,17 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: 
             // anything else is a TYPE: #w/<type>/… (docs/window.md)
             Some(wnode_ty(WKind::TypeDir, None, Some(name.to_string())))
         }
+        // kids/<wid> walks to that child's own window directory — so the tree
+        // is walkable, and `ls` shows it. The id is the child's real window id,
+        // reachable equally at #w/<type>/<id>; a filesystem naming one thing
+        // two ways is ordinary (/proc does it).
+        WKind::WKids => {
+            let w = win.clone()?;
+            let cid: u32 = name.parse().ok()?;
+            if !w.borrow().kids.contains(&cid) { return None; }
+            let c = k.borrow().wins.get(&cid).cloned()?;
+            Some(wnode(WKind::WinDir, Some(c), None))
+        }
         WKind::TypeDir => {
             let t = ty.clone()?;
             if name == "clone" {
@@ -741,6 +763,8 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: 
                 "draw" => WKind::DrawDir,
                 "canvas" => { mkcv(&w); WKind::CvDir }
                 "content" => WKind::WContent,
+                "axis" => WKind::WAxis,
+                "kids" => WKind::WKids,
                 "toolbar" => WKind::WToolbar,
                 "tag" => WKind::WTag,
                 "ui" => WKind::WUi,
@@ -809,6 +833,9 @@ fn new_window(k: &K) -> WinR {
         mouseparked: Vec::new(),
         cv: None,
         dead: false,
+        parent: None,
+        kids: Vec::new(),
+        axis: 0,
         wtype: String::new(),
         content: String::new(),
         toolbar: String::new(),
@@ -821,6 +848,106 @@ fn new_window(k: &K) -> WinR {
     drop(kb);
     win_flush(k, &win);
     win
+}
+
+const AX_ROW: u8 = 1;   // children side by side
+const AX_COL: u8 = 2;   // children stacked
+
+/* Split W so that a new window appears alongside it along `axis`.
+ *
+ * ALTERNATION IS THE INVARIANT: a container's axis is always perpendicular to
+ * its parent's, which is what keeps one layout to one tree. It falls out of
+ * two cases and needs no flattening pass, because a same-axis container is
+ * never created in the first place:
+ *
+ *   the parent already arranges along this axis -> ADD A SIBLING. W is
+ *   already a row (or a column); it gains a neighbour, not an interior.
+ *
+ *   otherwise -> GIVE W CHILDREN. W stops holding a body and holds two
+ *   windows: one inheriting what W held, one new. Which is why "New column
+ *   duplicates this window" — the new sibling shows what W showed, and you
+ *   retitle it, because the title retargets.
+ */
+fn split(k: &K, w: &WinR, axis: u8) {
+    let (wid, parent) = { let b = w.borrow(); (b.wid, b.parent) };
+    let pax = parent.and_then(|p| k.borrow().wins.get(&p).map(|p| p.borrow().axis));
+
+    if pax == Some(axis) {
+        let p = k.borrow().wins.get(&parent.unwrap()).cloned();
+        if let Some(p) = p {
+            let sib = clone_window(k, w, Some(p.borrow().wid));
+            let mut pb = p.borrow_mut();
+            let at = pb.kids.iter().position(|&c| c == wid).map(|i| i + 1).unwrap_or(pb.kids.len());
+            pb.kids.insert(at, sib);
+        }
+        return;
+    }
+    // W becomes a container: its content moves into a first child, and the
+    // duplicate becomes the second.
+    let first = clone_window(k, w, Some(wid));
+    let second = clone_window(k, w, Some(wid));
+    {
+        let mut b = w.borrow_mut();
+        b.axis = axis;
+        b.kids = vec![first, second];
+        b.content = String::new();
+        b.toolbar = String::new();
+        b.tag = String::new();
+    }
+    win_chrome(k, w);
+}
+
+/* a new window carrying the same content, type and tag — the duplicate that
+ * New column and New row both make */
+fn clone_window(k: &K, src: &WinR, parent: Option<u32>) -> u32 {
+    let c = new_window(k);
+    {
+        let s = src.borrow();
+        let mut b = c.borrow_mut();
+        b.parent = parent;
+        b.wtype = s.wtype.clone();
+        b.content = s.content.clone();
+        b.toolbar = s.toolbar.clone();
+        b.tag = s.tag.clone();
+    }
+    let (cid, ty) = { let b = c.borrow(); (b.wid, b.wtype.clone()) };
+    if !ty.is_empty() {
+        win_announce(k, format!("new {} {}\n", ty, cid));
+    }
+    win_chrome(k, &c);
+    cid
+}
+
+/* close a window, and everything it holds. acme's colcloseall(): a container
+ * is a window, so closing it closes its contents — one rule, not two. Depth
+ * first, so a child is never left pointing at a parent that is already gone.
+ */
+fn win_close(k: &K, w: &WinR) {
+    let (wid, kids, parent) = {
+        let b = w.borrow();
+        (b.wid, b.kids.clone(), b.parent)
+    };
+    for cid in kids {
+        let c = k.borrow().wins.get(&cid).cloned();
+        if let Some(c) = c { win_close(k, &c); }
+    }
+    if let Some(p) = parent {
+        if let Some(p) = k.borrow().wins.get(&p).cloned() {
+            p.borrow_mut().kids.retain(|&c| c != wid);
+        }
+    }
+    cv_push(k, w, "close 0");
+    w.borrow_mut().dead = true;
+    serve_wcons(k, w);
+    serve_wmouse(k, w);
+    serve_cv(k, w);
+    serve_wev(k, w);
+    win_announce(k, format!("del {}\n", wid));
+    let mut kb = k.borrow_mut();
+    kb.wins.remove(&wid);
+    kb.win_dirty.remove(&wid);
+    kb.win_inflight.remove(&wid);
+    kb.effects.push(Effect::WinGone { wid });
 }
 
 fn win_dirty(k: &K, win: &WinR) {
@@ -1118,6 +1245,26 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
             }
             return Ok(RRes::Data(out));
         }
+        // the children, in order — so the tree is `ls`-able and the order,
+        // which is the layout's order, is visible rather than inferred
+        WKind::WKids => {
+            let w = win.as_ref().ok_or("no window")?;
+            let kids: Vec<u32> = w.borrow().kids.clone();
+            let mut skip = off as usize;
+            let mut out = Vec::new();
+            for (i, cid) in kids.iter().enumerate() {
+                let rec = marshal_stat(&StatIn {
+                    name: &cid.to_string(), uid: "wsys", gid: "wsys",
+                    qpath: 7600 + *cid as u64, qtype: QTDIR, mode: DMDIR | 0o555,
+                    ..Default::default()
+                });
+                if skip >= rec.len() { skip -= rec.len(); continue; }
+                if out.len() + rec.len() > n { break; }
+                out.extend_from_slice(&rec);
+                let _ = i;
+            }
+            return Ok(RRes::Data(out));
+        }
         WKind::CvCaps => {
             let caps = k.borrow().canvas_caps.clone();
             return Ok(one(format!("{}\n", caps)));
@@ -1160,6 +1307,11 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
             let w = win.as_ref().ok_or("no window")?;
             let s = w.borrow().content.clone();
             return Ok(one(s));
+        }
+        WKind::WAxis => {
+            let w = win.as_ref().ok_or("no window")?;
+            let s = match w.borrow().axis { 1 => "row\n", 2 => "col\n", _ => "" };
+            return Ok(one(s.to_string()));
         }
         WKind::WToolbar => {
             let w = win.as_ref().ok_or("no window")?;
@@ -1390,6 +1542,12 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
             }
             let t: Vec<&str> = raw.trim().split_whitespace().collect();
             match t.as_slice() {
+                // NEW ROW / NEW COLUMN. The user states a DIRECTION; whether
+                // that means "give this window children" or "give it a
+                // sibling" is worked out from the parent's axis and never
+                // asked about (emca.txt, Rows and columns).
+                ["newrow"] => { split(k, w, AX_COL); }
+                ["newcol"] => { split(k, w, AX_ROW); }
                 ["move", x, y] => {
                     let mut wb = w.borrow_mut();
                     wb.x = x.parse().unwrap_or(wb.x);
@@ -1417,24 +1575,11 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                         y.parse().map_err(|_| "bad mouse")?,
                         b.parse().map_err(|_| "bad mouse")?);
                 }
-                ["delete"] => {
-                    cv_push(k, w, "close 0");
-                    let wid = {
-                        let mut wb = w.borrow_mut();
-                        wb.dead = true;
-                        wb.wid
-                    };
-                    serve_wcons(k, w);
-                    serve_wmouse(k, w);
-                    serve_cv(k, w);
-                    serve_wev(k, w);
-                    win_announce(k, format!("del {}\n", wid));
-                    let mut kb = k.borrow_mut();
-                    kb.wins.remove(&wid);
-                    kb.win_dirty.remove(&wid);
-                    kb.win_inflight.remove(&wid);
-                    kb.effects.push(Effect::WinGone { wid });
-                }
+                // CLOSING A CONTAINER CLOSES WHAT IT HOLDS, which is acme's
+                // own colcloseall(): textclose() on the tag, then winclose()
+                // over every window inside. A column is a window, so this is
+                // one rule and not two.
+                ["delete"] => { win_close(k, w); }
                 _ => return Err(format!("wctl: bad message '{}'", raw.trim())),
             }
             Ok(data.len())
@@ -1466,7 +1611,7 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
 }
 
 fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: &Option<String>) -> Vec<u8> {
-    let dir = matches!(kind, WKind::Root | WKind::WinDir | WKind::DrawDir | WKind::ConnDir | WKind::CvDir | WKind::TypeDir);
+    let dir = matches!(kind, WKind::Root | WKind::WinDir | WKind::DrawDir | WKind::ConnDir | WKind::CvDir | WKind::TypeDir | WKind::WKids);
     let name = match kind {
         WKind::Root => "wsys".to_string(),
         WKind::WinDir => win.as_ref().map(|w| w.borrow().wid.to_string()).unwrap_or_default(),
@@ -1493,6 +1638,8 @@ fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: &Option
         WKind::TypeDir => ty.clone().unwrap_or_else(|| "type".to_string()),
         WKind::RootEvents | WKind::WEvents => "events".to_string(),
         WKind::WContent => "content".to_string(),
+        WKind::WAxis => "axis".to_string(),
+        WKind::WKids => "kids".to_string(),
         WKind::WToolbar => "toolbar".to_string(),
         WKind::WTag => "tag".to_string(),
         WKind::WUi => "ui".to_string(),
