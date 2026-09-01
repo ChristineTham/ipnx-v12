@@ -962,7 +962,20 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   window rather than creating an empty one (*"new col (in reality duplicate
   horizontally)"*), which subsumes Zerox entirely: you duplicate, then retitle,
   because the title retargets. One verb where acme had three.
-  **All 38 of acme.txt's operations are accounted for in the spec**, and three
+  **`Run` and `Open` are acme's two mouse buttons**, and the distinction is who
+  decides what the text is: `mk` is both a command and a file in `/bin`, so acme
+  spent a button on the choice and emca spends a button on it. Christine's
+  statement of Open is the one the spec now carries, because it is expressed in
+  machinery already present: *"open is open a new window with tagline as title"*
+  — the title retargets, so the window shows what the title names and its type
+  follows. Open and New-column-then-retitle become the same act arriving two
+  ways, which leaves exactly one way a window comes to show something.
+  **`Sort` is declined**, the one operation of the 38 not placed. acme's
+  `colsort()` reorders a column alphabetically — a one-shot tidy answering a
+  problem emca solves with tabs, and the only operation in the set that destroys
+  a deliberate arrangement with no way back. `Fit` earns its destructiveness
+  because sizes drift accidentally; order does not drift, it is set on purpose.
+  **The other 37 are accounted for in the spec**, and three
   acme builtins disappear as buttons because something else already does the
   work: Zerox (New column duplicates), Edit (sam's language is a command, so you
   type it and press Run), and ID (it is state, so it lives in the status bar).

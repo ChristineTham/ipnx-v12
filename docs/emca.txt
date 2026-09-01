@@ -792,7 +792,23 @@ that Run acts on what they just typed and Save does not.
   are on the floating bar — because `look` dispatched over four things
   and the tag line deserves all of them, not just one:
 
-  Open     when the text names a file or directory
+  Open     A NEW WINDOW WHOSE TITLE IS THIS TEXT (hers, and it is the
+           better statement of it). Nothing else needs saying: the
+           title RETARGETS, so the window shows whatever the title
+           names and its type follows — a directory becomes an ls
+           window, a file an edit window. Shown when the text names
+           something that exists.
+
+           Which means Open and New-column-then-retitle are the SAME
+           ACT arriving two ways, so there is exactly one way a window
+           comes to show something — its title — and no second path to
+           keep consistent.
+
+           Where it lands is the sizing heuristic's business, so Open
+           takes no placement argument. And it REUSES an existing
+           window on the same title rather than opening a duplicate,
+           as acme's look does; emca knows every window's title, so
+           this is a lookup.
   Go to    when it names an address — :42, :/re/, #c
   Search   always: find the text in this window's body, wrapping
 
