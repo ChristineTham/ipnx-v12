@@ -926,6 +926,26 @@ does what it says; each type's declared verbs work; each status bar
 shows what its type says it shows; and no button exists that does
 nothing.
 
+**PART LANDED 2026-09-01 — the types and the toolbar.** `dir` is now
+`ls` and `text` is `edit`; `output` and `root` join them, and the
+window files carry the era's names. **Nothing is universal on the
+toolbar any more** — not Save, not Revert, not even Undo, which
+belongs to `edit` alone because Undo is available exactly where a
+window's operations stay in a buffer emca holds. emca's `core[]` is
+empty; what it emits is the TYPE's list plus `Save` while the buffer is
+dirty, which is acme.c:383's rule with acme's `Put` translated.
+Verified in the surface: an `ls` window shows no toolbar at all, an
+`edit` window shows `Revert Undo Redo`, and `Save` appears only when it
+should. **161 PASS / 0 FAIL** on all three hosts.
+
+**Still owed in this stage**: the tag line's six buttons (Open, Find,
+Run, Pipe, Edit, Add) and the window operations on the title bar row.
+Three of the six need infrastructure that does not exist yet — `Find`
+needs a channel for emca to hand a set of ranges back to the surface,
+and `Run`/`Pipe` need `/output` served, which is emca's deferred file
+interface. **They must not appear until they work**, which is the
+acceptance criterion above.
+
 **g. The surface renders the tree *(M)*.** The browser surface stops
 owning layout and becomes a renderer: it draws the tree emca computed
 and reports geometry back. Every window gets the four components,

@@ -1,0 +1,9 @@
+output — where Run and Pipe put their results.
+
+An item is a line. Its content lives at /output/<dir>/<command>, a path in a
+filesystem that MIRRORS the filesystem, so the path says where the command
+ran and the output cats and greps like anything else.
+
+The mirror also means the context is derived rather than stored: strip the
+/output prefix from the title's directory and you have the directory the
+command ran in.

@@ -228,7 +228,7 @@ Wrap host:toggle-wrap' > $wp/toolbar
 	wct=`{cat $wp/content}
 	wtg=`{cat $wp/tag}
 	# the type in the path is validated, not decoration: a wrong type misses
-	wbad=`{cat '#w/text/'^$wtid^'/content' >[2]/dev/null}
+	wbad=`{cat '#w/edit/'^$wtid^'/content' >[2]/dev/null}
 	# and the same window still answers on its plain number — nothing broke
 	wnum=`{cat '#w/'^$wtid^'/content'}
 	# CONTENT IS AN EVENT, not a sample: a window is minted before its file is
@@ -252,14 +252,14 @@ if not echo PASS '/dev/window: no control interface on this host — skipped'
 # the registry. This is what "adding a manager is adding a file" means, and the
 # test is that a manager APPEARS from files alone, with no manager program.
 tyok=`{cat /type/proc/ns >[2]/dev/null}
-tycw=`{cat '#w/dir/clone' >[2]/dev/null}
+tycw=`{cat '#w/ls/clone' >[2]/dev/null}
 if(! ~ $"tyok '' && ! ~ $"tycw ''){
 	# the chrome a type declares, and the namespace it constructs
 	typw=`{cat /type/proc/window}
 	tynn=`{cat /type/proc/ns}
 	# opening through the registry: the caller knows nothing about the type
-	tyw=`{rc /rc/emcaopen dir /usr/kitty}
-	tyct=`{cat '#w/dir/'^$tyw^'/content'}
+	tyw=`{rc /rc/emcaopen ls /usr/kitty}
+	tyct=`{cat '#w/ls/'^$tyw^'/content'}
 	# a type declares only what is EXTRA. The core verbs are emca's, so no
 	# type may name one — a type that redeclared Put would make the dirty
 	# indicator lie, since Put's presence IS the indicator.
@@ -287,38 +287,40 @@ fn emwait {	# emwait <file> <pattern> — bounded; emca is another process
 		sleep 1
 	}
 }
-emok=`{cat '#w/text/clone' >[2]/dev/null}
+emok=`{cat '#w/edit/clone' >[2]/dev/null}
 if(! ~ $"emok ''){
 	echo -n hello > /tmp/emca.txt
 	emca &
-	emw=`{rc /rc/emcaopen text /tmp/emca.txt}
-	emd=/dev/window/text/$emw
-	emwait $emd/toolbar '*Snarf*'
-	# THE VERB SET: emca's core, merged with what the type declares. The type
-	# contributes Wrap, which names the HOST — it never round-trips.
+	emw=`{rc /rc/emcaopen edit /tmp/emca.txt}
+	emd=/dev/window/edit/$emw
+	emwait $emd/toolbar '*Revert*'
+	# THE TOOLBAR IS THE TYPE'S, and nothing on it is universal — not Save,
+	# not Revert, not even Undo, which belongs to `edit` alone because Undo is
+	# available exactly where a window's operations stay in a buffer emca
+	# holds. The window OPERATIONS are not here at all: their operand is the
+	# window as a thing in a layout, so they sit with the controls.
 	emtb=`{cat $emd/toolbar}
-	# the dynamic block (acme.c:383): Put is absent while the file is clean,
-	# and its APPEARANCE is the dirty indicator
-	emp1=`{grep '^Put' $emd/toolbar | wc -l}
+	# the dynamic block (acme.c:383): Save is absent while the file is clean,
+	# and its APPEARANCE is the dirty indicator. acme's Put, era-named.
+	emp1=`{grep '^Save' $emd/toolbar | wc -l}
 	# the surface reports what it did to its mirror; the buffer is EMCA's
 	echo 'insert 0 xy%20' > $emd/events
-	emwait $emd/toolbar '*Put*'
-	emp2=`{grep '^Put' $emd/toolbar | wc -l}
-	# ...and Put writes EMCA'S buffer, not the bytes emca read
-	echo 'exec Put' > $emd/events
+	emwait $emd/toolbar '*Save*'
+	emp2=`{grep '^Save' $emd/toolbar | wc -l}
+	# ...and Save writes EMCA'S buffer, not the bytes emca read
+	echo 'exec Save' > $emd/events
 	emwait /tmp/emca.txt 'xy hello'
 	emfile=`{cat /tmp/emca.txt}
-	emp3=`{grep '^Put' $emd/toolbar | wc -l}
-	# Zerox ALIASES: a second window on the same buffer, which is what retires
-	# acme's recorded copy-not-alias divergence
-	echo 'exec Zerox' > $emd/events
-	emz=`{rc /rc/emcaopen text /tmp/emca.txt}
-	emzc=`{cat /dev/window/text/$emz/content}
-	# and Del is emca's, through the same door
+	emp3=`{grep '^Save' $emd/toolbar | wc -l}
+	# an `ls` window declares NO verbs of its own — Open covers new files and
+	# a trailing slash covers new folders, so it needs none
+	eml=`{rc /rc/emcaopen ls /usr/kitty}
+	emlt=`{cat /dev/window/ls/$eml/toolbar >[2]/dev/null}
+	# and Del closes, through the same door the surface uses
 	echo 'exec Del' > $emd/events
 	emwait $emd/toolbar ''
 	emgone=`{cat $emd/toolbar >[2]/dev/null}
-	if(~ $"emtb 'Del ipnx:Del Snarf ipnx:Snarf Get ipnx:Get Look ipnx:Look Edit ipnx:Edit Zerox ipnx:Zerox Wrap host:toggle-wrap' && ~ $"emp1 0 && ~ $"emp2 1 && ~ $"emfile 'xy hello' && ~ $"emp3 0 && ~ $"emzc /tmp/emca.txt && ~ $"emgone '') echo PASS 'emca: the workspace is a program — core verbs merged with the type'^''''^'s, Put appears only while dirty and writes emca'^''''^'s buffer, Zerox aliases, Del closes'
+	if(~ $"emtb 'Revert ipnx:Revert Undo ipnx:Undo Redo ipnx:Redo' && ~ $"emp1 0 && ~ $"emp2 1 && ~ $"emfile 'xy hello' && ~ $"emp3 0 && ~ $"emlt '' && ~ $"emgone '') echo PASS 'emca: the toolbar is the TYPE''s and nothing on it is universal — Save appears only while dirty and writes emca''s buffer, an ls window declares none at all, and Del closes'
 	if not fails=bad
 }
 if not echo PASS 'emca: no window control interface on this host — skipped'
@@ -527,7 +529,7 @@ if(! ~ $"remca ''){
 	rw2=`{cat $rd/kids/0/wctl}
 	# a window living in the last column must SURVIVE the column going away
 	echo 'reparent '^$rtok^' 0' > /dev/window/$rtok/wctl
-	rv=`{cat /dev/window/text/clone >[2]/dev/null}
+	rv=`{cat /dev/window/edit/clone >[2]/dev/null}
 	echo 'reparent '^`{cat $rd/kids/2/winid} > /dev/window/$rv/wctl
 	echo -n /etc/motd > /dev/window/$rv/content
 	sleep 1

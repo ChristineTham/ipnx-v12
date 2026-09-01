@@ -1,0 +1,10 @@
+edit — a file, in a real editor component.
+
+The type declares its STATIC verbs only. `Save` is not among them: it is
+emca's DYNAMIC verb, emitted while the buffer is dirty and withdrawn when it
+is clean, because its appearance IS the dirty indicator (acme.c:383, with
+acme's Put translated to the era's word).
+
+Undo and Redo are here and nowhere else. Undo is available exactly where
+every operation a window offers stays in a buffer emca holds — a killed
+process does not come back, and a deleted file does not.

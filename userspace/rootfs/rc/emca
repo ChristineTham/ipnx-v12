@@ -8,9 +8,9 @@
 # their types' default panes — emca has no privilege.
 emca &
 # the home directory, in the left pane — every line a look target
-rc /rc/emcaopen dir /usr/kitty >/dev/null
+rc /rc/emcaopen ls /usr/kitty >/dev/null
 # and three editor windows, which share the main area as TABS: windows of the
 # same type, switched. Alternating between two of them is a blink comparator.
-rc /rc/emcaopen text /etc/motd >/dev/null
-rc /rc/emcaopen text /rc/tour >/dev/null
-rc /rc/emcaopen text /usr/kitty/README >/dev/null
+rc /rc/emcaopen edit /etc/motd >/dev/null
+rc /rc/emcaopen edit /rc/tour >/dev/null
+rc /rc/emcaopen edit /usr/kitty/README >/dev/null

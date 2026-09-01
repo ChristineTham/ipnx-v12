@@ -81,10 +81,22 @@ static Win wins[MAXWIN];
 static Buf bufs[MAXBUF];
 static int rootfd;
 
-/* the core verbs — emca's, on every window whatever its type */
-static char *core[] = { "Del", "Snarf", "Get", "Look", "Edit", nil };
+/* NOTHING IS UNIVERSAL ON THE TOOLBAR (emca.txt, "The window toolbar, by
+ * type"). Not Save — a shell has nothing to save. Not Revert — a shell does
+ * not. Not even Undo, which belongs to `edit` alone, because Undo is available
+ * exactly where every operation a window offers stays in a buffer emca holds,
+ * and a killed process does not come back.
+ *
+ * The window OPERATIONS (Close, Minimise, Maximise, New column/row/tab, Fit)
+ * are not here either: their operand is the window as a thing in a layout, so
+ * they sit with the controls. What is left for this file is the TYPE's list,
+ * plus Save while the buffer is dirty — acme's rule with acme's name
+ * translated (acme.c:383).
+ */
+static char *core[] = { nil };
 
 static void dolook(Win*, char*);	/* the toolbar's Look and the bar's are one verb */
+static void doreset(int);		/* the root type's verb, reached from its toolbar */
 static void doput(Win*);
 static void dodel(Win*);
 
@@ -223,11 +235,9 @@ pushtoolbar(Win *w)
 	long o = 0;
 	int i;
 
-	for(i = 0; core[i] != nil; i++)
-		o += snprint(out + o, sizeof out - o, "%s ipnx:%s\n", core[i], core[i]);
+	o = 0;
 	if(w->buf != nil && w->buf->dirty)
-		o += snprint(out + o, sizeof out - o, "Put ipnx:Put\n");
-	o += snprint(out + o, sizeof out - o, "Zerox ipnx:Zerox\n");
+		o += snprint(out + o, sizeof out - o, "Save ipnx:Save\n");
 	snprint(p, sizeof p, "/type/%s/window", w->type);
 	if(rfile(p, tw, sizeof tw) > 0){
 		char *s = tw, *e, *sp;
@@ -509,8 +519,11 @@ run(Win *w, char *cmd)
 static void
 verb(Win *w, char *label)
 {
-	if(strcmp(label, "Put") == 0) doput(w);
-	else if(strcmp(label, "Get") == 0) doget(w);
+	/* emca uses the era's names; acme's port keeps Snarf, Put and Get,
+	 * because renaming acme's buttons would be changing acme (emca.txt) */
+	if(strcmp(label, "Save") == 0) doput(w);
+	else if(strcmp(label, "Revert") == 0) doget(w);
+	else if(strcmp(label, "Reset") == 0) doreset(w->wid);
 	else if(strcmp(label, "Del") == 0) dodel(w);
 	else if(strcmp(label, "Zerox") == 0) dozerox(w);
 	else if(strcmp(label, "Snarf") == 0){ /* the host clipboard IS snarf */ }

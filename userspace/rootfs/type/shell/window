@@ -1,2 +1,2 @@
-Kill ipnx:Kill
-Wrap host:toggle-wrap
+Interrupt ipnx:Interrupt
+Clear ipnx:Clear

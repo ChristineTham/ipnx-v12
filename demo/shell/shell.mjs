@@ -266,7 +266,7 @@ const tabsEl = document.getElementById("emcaTabs");
 // Nothing about a type is compiled in here; `dir` is the bootstrap floor, and
 // everything else arrives from files. A HINT for placement, never a constraint
 // on capability: any window stays fully editable text wherever it lands.
-const PANE_OF = { dir: "left", shell: "bottom" };   // the floor, and the console
+const PANE_OF = { ls: "left", shell: "bottom" };   // the floor, and the console
 const paneFor = (type) => PANE_OF[type] ?? "main";
 
 // read the registry once the namespace is up. /type is itself a type, so this
@@ -303,7 +303,7 @@ function renderTabs() {
   grow.className = "tgrow";
   tabsEl.appendChild(grow);
   for (const [label, title, fn] of [
-    ["New", "a new window in this leaf", () => feedCons("rc /rc/emcaopen text")],
+    ["New", "a new window in this leaf", () => feedCons("rc /rc/emcaopen edit")],
     ["Sort", "sort this leaf by name", () => {
       mainTabs.sort((a, b2) => a.title.localeCompare(b2.title)); renderTabs();
     }],
@@ -500,7 +500,7 @@ async function showContent(gw, path, type) {
       a.addEventListener("click", (ev) => {
         ev.preventDefault();
         const full = (path.endsWith("/") ? path : path + "/") + e.name;
-        feedCons(`rc /rc/emcaopen ${e.dir ? "dir" : "text"} ${full}`);
+        feedCons(`rc /rc/emcaopen ${e.dir ? "ls" : "edit"} ${full}`);
       });
       ul.appendChild(a);
     }
@@ -1134,7 +1134,7 @@ addEventListener("keydown", (e) => {
       else gw?.putFn?.();
       return;
     case "w": stop(); if (gw) wsys?.winEvent?.(gw.id, "exec Del"); return;   // Del
-    case "n": stop(); feedCons("rc /rc/emcaopen text"); return;              // New
+    case "n": stop(); feedCons("rc /rc/emcaopen edit"); return;              // New
     case "t": stop();                                                        // the tags
       (e.shiftKey ? document.getElementById("globalTag")
                   : gw?.chromeEl?.querySelector(".wtag"))?.focus();

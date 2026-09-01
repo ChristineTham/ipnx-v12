@@ -96,7 +96,7 @@ async function hostServe(op) {
 // assertion is M15g, where the surface renders the TREE emca published.
 //
 // The sibling proof, winproof.mjs, deliberately runs with NO emca at all.
-const want = new Map([["dir", "toolbar"], ["text", "toolbar"]]);
+const want = new Map([["ls", "toolbar"], ["edit", "toolbar"]]);
 const got = new Map();
 let done = false;
 
@@ -123,7 +123,8 @@ const host = {
     // placed, then named, then given its verbs — and each step is one write. So
     // wait for a COMPLETE one rather than latching the first: partial chrome is
     // not a defect, it is the surface seeing the window get built.
-    if (!ch.toolbar.trim() || !ch.content.trim()) return;
+    if (!ch.content.trim()) return;   // `ls` declares no verbs of its own, so
+                                      // an empty toolbar is the right answer
     if (!got.has(ch.type)) {
       const verbs = ch.toolbar.split("\n").map((l) => l.trim().split(" ")[0]).filter(Boolean);
       got.set(ch.type, { verbs, content: ch.content });
@@ -132,27 +133,27 @@ const host = {
     if (got.size < want.size) return;
     done = true;
 
-    const CORE = ["Del", "Snarf", "Get", "Look", "Edit"];
+    // NOTHING IS UNIVERSAL ON THE TOOLBAR any more (emca.txt): the window
+    // operations moved to the title bar row, and Undo belongs to `edit` alone,
+    // because Undo is available exactly where a window's operations stay in a
+    // buffer emca holds. So what reaches the surface is exactly the TYPE's list.
     const bad = [];
-    for (const [type] of want) {
-      const g = got.get(type);
-      for (const c of CORE)
-        if (!g.verbs.includes(c)) bad.push(`${type}: core verb ${c} missing from the toolbar`);
-    }
-    // the type's own extra: `text` declares Wrap, which names the HOST
-    if (!got.get("text").verbs.includes("Wrap"))
-      bad.push("text: the type's own Wrap verb did not survive the merge");
-    // and Put is NOT there — the file is clean, and Put's presence is the
-    // dirty indicator (acme.c:383's rule, kept)
-    if (got.get("text").verbs.includes("Put"))
-      bad.push("text: Put is in a clean window's toolbar — the dirty indicator lies");
+    for (const v of ["Revert", "Undo", "Redo"])
+      if (!got.get("edit").verbs.includes(v)) bad.push(`edit: ${v} missing from the toolbar`);
+    if (got.get("ls").verbs.length !== 0)
+      bad.push(`ls: expected no verbs of its own, got ${got.get("ls").verbs.join(",")}`);
+    // Save is NOT there — the file is clean, and Save's presence IS the dirty
+    // indicator (acme.c:383's rule, kept, with acme's Put translated)
+    if (got.get("edit").verbs.includes("Save"))
+      bad.push("edit: Save is in a clean window's toolbar — the dirty indicator lies");
 
     if (bad.length) {
       console.error("\nEMCAPROOF FAIL:\n  " + bad.join("\n  "));
       process.exit(1);
     }
-    console.log("\nEMCAPROOF PASS: the toolbar that reached the surface is emca's core"
-      + " set merged with the type's extras, and Put is absent because nothing is dirty.");
+    console.log("\nEMCAPROOF PASS: the toolbar that reached the surface is exactly the"
+      + " TYPE's — nothing is universal there any more — and Save is absent because"
+      + " nothing is dirty.");
     process.exit(0);
   },
   error: (text) => console.error(text),
