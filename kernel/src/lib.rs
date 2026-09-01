@@ -921,6 +921,34 @@ fn maximise(k: &K, w: &WinR) {
     }
 }
 
+/* move `w` into `np` at `at` (or last). Detaches from its old parent first, so
+ * a window is never in two kid lists — the tree is a tree.
+ */
+fn reparent(k: &K, w: &WinR, np: u32, at: Option<usize>) {
+    let (wid, old) = { let b = w.borrow(); (b.wid, b.parent) };
+    if np == wid { return; }
+    let newp = match k.borrow().wins.get(&np).cloned() { Some(p) => p, None => return };
+    // refuse a cycle: a window may not become a child of its own descendant
+    {
+        let mut up = newp.borrow().parent;
+        while let Some(p) = up {
+            if p == wid { return; }
+            up = k.borrow().wins.get(&p).and_then(|x| x.borrow().parent);
+        }
+    }
+    if let Some(o) = old {
+        let o = k.borrow().wins.get(&o).cloned();
+        if let Some(o) = o { o.borrow_mut().kids.retain(|&c| c != wid); }
+    }
+    w.borrow_mut().parent = Some(np);
+    {
+        let mut pb = newp.borrow_mut();
+        let i = at.unwrap_or(pb.kids.len()).min(pb.kids.len());
+        pb.kids.insert(i, wid);
+    }
+    win_chrome(k, w);
+}
+
 fn split(k: &K, w: &WinR, axis: u8, allocated: bool) {
     let (wid, parent) = { let b = w.borrow(); (b.wid, b.parent) };
     let pax = parent.and_then(|p| k.borrow().wins.get(&p).map(|p| p.borrow().axis));
@@ -1621,6 +1649,41 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                 // that means "give this window children" or "give it a
                 // sibling" is worked out from the parent's axis and never
                 // asked about (emca.txt, Rows and columns).
+                // THE PRIMITIVES emca builds a tree with. newcol/newrow/newtab
+                // are the USER's verbs and resolve alternation for them; these
+                // two say what the tree IS, because emca owns the tree and the
+                // kernel stores it.
+                ["axis", a] => {
+                    let v = match *a { "row" => AX_ROW, "col" => AX_COL, _ => 0 };
+                    w.borrow_mut().axis = v;
+                    win_chrome(k, w);
+                }
+                ["newkid"] | ["newkid", _] => {
+                    let tab = t.len() > 2 && t[2] == "tab";
+                    let wid = w.borrow().wid;
+                    let c = new_window(k);
+                    {
+                        let mut b = c.borrow_mut();
+                        b.parent = Some(wid);
+                        b.wtype = w.borrow().wtype.clone();
+                        b.allocated = !tab;
+                    }
+                    let cid = c.borrow().wid;
+                    w.borrow_mut().kids.push(cid);
+                    let ty = c.borrow().wtype.clone();
+                    if !ty.is_empty() { win_announce(k, format!("new {} {}\n", ty, cid)); }
+                    win_chrome(k, &c);
+                }
+                // REPARENT: move this window into another, at a position.
+                // acme files `move` under layout as a gesture, and this is the
+                // verb underneath it — the surface's drag lands here, and so
+                // does a workspace file placing a window it just minted.
+                // Named `reparent` because rio's `move x y` already means
+                // geometry on this same file.
+                ["reparent", np] | ["reparent", np, _] => {
+                    let at: Option<usize> = if t.len() > 2 { t[2].parse().ok() } else { None };
+                    reparent(k, w, np.parse().unwrap_or(0), at);
+                }
                 ["newrow"] => { split(k, w, AX_COL, true); }
                 ["newcol"] => { split(k, w, AX_ROW, true); }
                 // a tab is the same operation with the allocation bit

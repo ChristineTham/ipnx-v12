@@ -504,6 +504,51 @@ if(! ~ $"gemca ''){
 }
 if not echo PASS 'geometry: no emca on this host — skipped'
 
+# M15e — THE ROOT WINDOW AND ITS CONVENTION. The root is THE SCREEN: the window
+# with no parent, and it divides ITSELF. What it divides into is a CONVENTION it
+# follows, not a structure the system knows about — nothing downstream can tell
+# these columns from any others, because there is no pane type and no reserved
+# name. `leaves = cols / 72` decides how many, from the REPORTED cell.
+rtok=`{cat /dev/window/root/clone >[2]/dev/null}
+if(! ~ $"rtok ''){
+	rd=/dev/window/$rtok
+	echo -n /etc/motd > $rd/content
+	emwait $rd/toolbar '*Save All*'
+	remca=`{cat $rd/toolbar}
+}
+if(! ~ $"remca ''){
+	echo 'resize 400 800 8 18' > $rd/events
+	sleep 1
+	rk1=`{ls $rd/kids | sed 's:.*/::'}
+	ra1=`{cat $rd/axis}
+	echo 'resize 1800 800 8 18' > $rd/events
+	sleep 1
+	rk2=`{ls $rd/kids | sed 's:.*/::'}
+	rw2=`{cat $rd/kids/0/wctl}
+	# a window living in the last column must SURVIVE the column going away
+	echo 'reparent '^$rtok^' 0' > /dev/window/$rtok/wctl
+	rv=`{cat /dev/window/text/clone >[2]/dev/null}
+	echo 'reparent '^`{cat $rd/kids/2/winid} > /dev/window/$rv/wctl
+	echo -n /etc/motd > /dev/window/$rv/content
+	sleep 1
+	echo 'resize 1200 800 8 18' > $rd/events
+	sleep 1
+	rk3=`{ls $rd/kids | sed 's:.*/::'}
+	rsurv=`{cat /dev/window/$rv/parent}
+	# closing a column leaves a valid tree; Reset brings it back
+	echo delete > $rd/kids/1/wctl
+	sleep 1
+	rk4=`{ls $rd/kids | sed 's:.*/::'}
+	echo reset > $rd/events
+	emwait $rd/axis row
+	sleep 1
+	rk5=`{ls $rd/kids | sed 's:.*/::'}
+	echo delete > $rd/wctl
+	if(~ $"ra1 col && ~ $#rk1 0 && ~ $#rk2 3 && ~ $"rw2 '0 0 600 800 current visible' && ~ $#rk3 2 && ! ~ $"rsurv '' && ~ $#rk4 1 && ~ $#rk5 2) echo PASS 'the root window: it divides ITSELF by convention — one column at small, three at large — a shrink hoists windows out of the columns it removes rather than losing them, closing a column leaves a valid tree, and Reset rebuilds'
+	if not fails=bad
+}
+if not echo PASS 'the root window: no emca on this host — skipped'
+
 
 # proc(3)'s args file: the data was always in the proc record and nothing could
 # read it, so nothing could NAME a running command — which the status line's

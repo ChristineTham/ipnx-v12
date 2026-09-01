@@ -1,0 +1,10 @@
+root — THE SCREEN.
+
+The window with no parent. It composites itself by a convention (three
+columns at large, the middle one splitting into two rows) and then forgets
+they were ever special: nothing downstream can tell those columns from any
+others, because there is no pane type and no reserved name.
+
+Its type-specific verb is Reset, because it is the only window with a
+default to return to. An arbitrary column has no canonical arrangement, so
+Reset there would either mean nothing or mean Fit.

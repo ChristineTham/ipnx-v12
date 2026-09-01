@@ -1,0 +1,4 @@
+Save All ipnx:Putall
+Reset ipnx:Reset
+Save Layout ipnx:Dump
+Restore Layout ipnx:Load

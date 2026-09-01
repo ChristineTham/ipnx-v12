@@ -1055,6 +1055,118 @@ clearoverrides(int wid)
 		clearoverrides(kids[i]);
 }
 
+static void
+wctlf(int wid, char *fmt, ...)
+{
+	char p[NMAX], line[256];
+	va_list a;
+	int fd;
+
+	snprint(p, sizeof p, "/dev/window/%d/wctl", wid);
+	fd = open(p, OWRITE);
+	if(fd < 0) return;
+	va_start(a, fmt);
+	vsnprint(line, sizeof line - 2, fmt, a);
+	va_end(a);
+	strcat(line, "\n");
+	write(fd, line, strlen(line));
+	close(fd);
+}
+
+/* THE ROOT WINDOW'S CONVENTION (emca.txt PART FIVE). The root is the screen —
+ * the window with no parent — and it divides ITSELF. What it divides into is a
+ * CONVENTION it follows, not a structure the system knows about: nothing
+ * downstream can tell these columns from any others, because there is no pane
+ * type and no reserved name.
+ *
+ *   leaves = cols / 72, the classic measure, computed from the REPORTED cell
+ *
+ *   1 leaf    small    one column — the root itself, holding windows stacked
+ *   2         medium   two columns
+ *   3         large    three columns
+ *   4+        xlarge   four columns, each dividing further
+ */
+/* move everything `from` holds into `to` — used when a column is about to go,
+ * so its windows survive it */
+static void
+hoist(int from, int to)
+{
+	int kids[MAXKIDS], nk, i;
+
+	nk = nkids(from, kids);
+	for(i = 0; i < nk; i++)
+		wctlf(kids[i], "reparent %d", to);
+}
+
+static void
+convention(int wid)
+{
+	char b[128];
+	char *f[6];
+	long w, cols;
+	int leaves, want, i, nk;
+	int kids[MAXKIDS];
+
+	if(wread(wid, "wctl", b, sizeof b) <= 0) return;
+	if(tokenize(b, f, 6) < 4) return;
+	w = atoi(f[2]);
+	if(w <= 0 || cellw <= 0) return;
+	cols = w / cellw;
+	leaves = cols / LEAFCOLS;
+	want = leaves >= 4 ? 4 : leaves >= 3 ? 3 : leaves >= 2 ? 2 : 1;
+
+	if(want == 1){
+		/* one column IS the root: windows stack in it directly, and no
+		 * degenerate single-child container is created. Anything already
+		 * in a column moves up rather than going with it — NOTHING
+		 * DISAPPEARS, in either direction.
+		 */
+		nk = nkids(wid, kids);
+		for(i = 0; i < nk; i++)
+			hoist(kids[i], wid);
+		nk = nkids(wid, kids);
+		for(i = 0; i < nk; i++)
+			wctlf(kids[i], "delete");
+		wctlf(wid, "axis col");
+	} else {
+		if(naxis(wid) != 1) wctlf(wid, "axis row");
+		nk = nkids(wid, kids);
+		/* CROSSING A BREAKPOINT RESTRUCTURES, IT DOES NOT DESTROY. Grow
+		 * by adding columns; shrink by emptying the surplus into the last
+		 * survivor first, so no window is lost to a window being resized.
+		 */
+		for(i = nk; i < want; i++)
+			wctlf(wid, "newkid");
+		if(nk > want){
+			for(i = want; i < nk; i++)
+				hoist(kids[i], kids[want - 1]);
+			for(i = want; i < nk; i++)
+				wctlf(kids[i], "delete");
+		}
+	}
+	relayout(wid);
+}
+
+/* Reset: rebuild the root from its convention. DESTRUCTIVE of structure, which
+ * is what separates it from Fit — and it is the root type's verb rather than a
+ * core one, because only the root has a default to return to.
+ */
+static void
+doreset(int wid)
+{
+	int kids[MAXKIDS], nk, i;
+
+	/* Reset IS destructive — that is the difference from Fit. It discards
+	 * the arrangement entirely and rebuilds from the convention, which is
+	 * what brings back columns someone closed.
+	 */
+	nk = nkids(wid, kids);
+	for(i = 0; i < nk; i++)
+		wctlf(kids[i], "delete");
+	wctlf(wid, "axis none");
+	convention(wid);
+}
+
 /* Fit: re-derive this subtree's allocation from the rule, discarding whatever
  * sizes were dragged into place. Non-destructive of STRUCTURE, which is what
  * separates it from Reset — and idempotent, which is what makes it testable.
@@ -1124,6 +1236,7 @@ onwinline(Win *w, char *line)
 		return;
 	}
 	if(strcmp(line, "fit") == 0){ dofit(w->wid); return; }
+	if(strcmp(line, "reset") == 0){ doreset(w->wid); return; }
 	/* the surface decoded something emca could not parse — video,
 	 * PostScript, a format it does not know — and says how big it is */
 	if(strncmp(line, "size ", 5) == 0){
@@ -1168,10 +1281,20 @@ onwinline(Win *w, char *line)
 			w->osize = naxis(p) == 1 ? nw : nh;
 			relayout(p);
 		} else {
-			/* no parent: this IS the viewport, so set it and
-			 * re-derive everything beneath it */
+			/* no parent: this IS the viewport. Set it, and if the
+			 * root has not divided itself yet, apply the convention
+			 * now that there is a geometry to divide.
+			 */
 			setrect(w->wid, 0, 0, nw, nh);
-			relayout(w->wid);
+			/* THE CONVENTION IS THE ROOT TYPE'S, not every
+			 * parentless window's. An ordinary window with no
+			 * parent is just a window; only `root` is the screen,
+			 * and only it divides itself by convention.
+			 */
+			if(strcmp(w->type, "root") == 0)
+				convention(w->wid);
+			else
+				relayout(w->wid);
 		}
 		return;
 	}

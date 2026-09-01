@@ -878,6 +878,22 @@ three at large with the middle one splitting into two rows, and
 **Acceptance:** boot at four geometries and assert the tree; assert
 that closing a convention-created column leaves a valid tree, and
 that `Reset` restores it.
+**LANDED 2026-09-01.** `leaves = cols / 72` from the reported cell
+decides how many columns: one at small (the root IS the column, so no
+degenerate single-child container), two at medium, three at large,
+four at xlarge. Measured across 400/1200/1800/2400 at an 8x18 cell.
+The kernel gained the two PRIMITIVES emca needs to express a tree —
+`axis row|col` and `newkid` — distinct from `newcol`/`newrow`/`newtab`,
+which are the USER's verbs and resolve alternation for them; and
+`reparent <wid> [<index>]`, which is what acme files under layout as a
+gesture and what M15g2's drag will land on.
+**Two things the build corrected.** Crossing a breakpoint RESTRUCTURES
+rather than destroying: a shrink hoists windows out of the columns it
+removes before deleting them, so nothing is lost to a window being
+resized. And the convention belongs to THE ROOT TYPE, not to every
+parentless window — the first cut applied it to any window without a
+parent, which silently rebuilt an unrelated test's tree.
+**161 PASS / 0 FAIL** on all three hosts.
 
 **f. The verbs, and the four window types *(M)*.** Four surfaces,
 one operand each ([emca.txt](emca.txt)): the window in its layout ->
