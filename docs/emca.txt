@@ -600,8 +600,8 @@ holds — a file, a listing, a shell, an image, or other windows.
 
   TAG LINE  free, editable text, on the toolbar's line when there is
             room and wrapped below it when there is not — AND IT IS AN
-            OPERAND, NOT A COMMAND LINE. Its own buttons (Run, Add,
-            and Open/Find as they apply) sit with it, not on the
+            OPERAND, NOT A COMMAND LINE. Its own buttons (Run, Edit,
+            Add, and Open/Find as they apply) sit with it, not on the
             toolbar, so that it
             is visible which verbs act on what you just typed. Its text is the ARGUMENT to
             whichever toolbar verb is pressed. Hers: "'alice' in the
@@ -654,9 +654,11 @@ Labs' program and renaming its buttons would be changing it.
                                   shows them — with jump and search
                                   merged into Find, since : and #
                                   already tell the two apart
-  Edit            —               retired as a button: sam's language
-                                  is a command, so you type it in the
-                                  tag line and press Run
+  Edit            Edit            kept: there is no era-common word
+                                  for "apply a structural editing
+                                  command", because no mainstream
+                                  editor has one. Replace would name
+                                  it after the least of what it does
   Sort            Sort
   Undo / Redo     Undo / Redo     already the era's words
   Cut / Paste     Cut / Paste     likewise
@@ -677,7 +679,7 @@ surface now has ONE operand and no overlap:
                                                    New row, Fit
   the window's CONTENT        the WINDOW TOOLBAR   Save, Revert, Undo,
                                                    Redo + the type's
-  the TAG LINE's text         buttons beside the   Run, Add, and
+  the TAG LINE's text         buttons beside the   Run, Edit, Add, and
                               tag line             Open/Find as they
                                                    apply
   a SELECTION in the body     the FLOATING BAR     Cut, Copy, Paste,
@@ -784,9 +786,7 @@ that Run acts on what they just typed and Save does not.
            The filters keep acme's syntax rather than growing three
            more buttons: a leading | pipes the body selection through
            the command, < replaces the selection with the command's
-           output, > sends the selection to it. And sam's structural
-           language is just a command, which is why Edit is not a
-           button.
+           output, > sends the selection to it.
   Add      put the text on this window's toolbar as a button. This is
            how acme's "type Indent in the tag and it works" becomes
            durable, and it is the whole of emca's extensibility story
@@ -813,12 +813,16 @@ that Run acts on what they just typed and Save does not.
            window on the same title rather than opening a duplicate,
            as acme's look does; emca knows every window's title, so
            this is a lookup.
-  Find     go where the text says. THE NOTATION CARRIES THE
-           DISTINCTION, so this is one verb and not two: a leading :
-           or # means an ADDRESS — :42 a line, :/re/ a regexp, #c a
-           rune offset — and its absence means LITERAL TEXT, found
-           next, wrapping. `42` finds the text "42"; `:42` goes to
-           line 42; the person chose, unambiguously.
+  Find     SELECT EVERYTHING THE TEXT NAMES. It is `,x/foo/` — the
+           loop over the whole file — so dot becomes THE SET OF ALL
+           MATCHES, not the next one.
+
+           THE NOTATION CARRIES THE ADDRESS/LITERAL DISTINCTION, so
+           this is one verb and not two: a leading : or # means an
+           ADDRESS — :42 a line, #c a rune offset — and its absence
+           means literal text. `42` finds the text "42"; `:42` selects
+           line 42. An address naming one place gives a set of one:
+           the degenerate case of the same rule.
 
            An earlier draft had Go to and Search as separate buttons.
            They are one operation: sam's address language already
@@ -834,6 +838,46 @@ that Run acts on what they just typed and Save does not.
            still needs its own button precisely because no notation
            separates a filename from a word in the text: `mk` is both,
            which is what acme spent a mouse button on.
+
+           REPEATED FIND IS IDEMPOTENT. With every match already
+           selected, moving between them is NAVIGATION — scrolling —
+           which is the surface's half. So there is no "find next"
+           verb; the component's own match navigation does it.
+
+  Edit     execute a sam command. ITS DEFAULT ADDRESS IS DOT, which is
+           sam's own default — so with dot a set, the command applies
+           to EACH element. That is not a new mechanism: it is `x`'s
+           execution model promoted from an explicit operator to the
+           default.
+
+           Together with Find above, this is what makes the commonest
+           edit anyone makes need no sam at all:
+
+             foo + Find      -> every occurrence selected
+             type "bar"      -> every occurrence replaced
+
+           because typing over a multi-range dot is multi-cursor, and
+           the surface has it natively. THE SURFACE'S MULTI-CURSOR AND
+           EMCA'S MULTI-RANGE DOT ARE THE SAME THING — not two
+           parallel notions to keep in step, which is the whole reason
+           to define dot this way.
+
+           And the sam route stays available and is stronger: `,s//bar/g`
+           reuses the last pattern (sam's own rule — an empty regexp
+           is the previous one, cmd.c:514), while `x/foo/ g/bar/ c/baz/`
+           replaces only the matches whose line also contains bar. A
+           guarded loop is strictly more expressive than a
+           Replace/Skip button, which is what select-all-then-type
+           gives up.
+
+           DOT AS A SET EXTENDS SAM RATHER THAN PORTING IT. In sam,
+           curfile->dot is a single range and `x` iterates over
+           matches one at a time. Making dot itself a set is ours, and
+           it has one consequence that must not be left implicit: THE
+           ACME PORT SEES THE PRIMARY RANGE. /mnt/acme's addr and data
+           assume a single dot, so acme is given the first element of
+           the set — written down here so acme does not break quietly
+           (acme.txt).
 
   Conditional rather than permanent so the tag line stays narrow, and
   because WHICH VERBS APPLY is emca's judgement in both places. One
@@ -870,17 +914,28 @@ acme.txt counts 38 operations. Where each one went:
   title bar (6)     Close, Minimise, Maximise, New column, New row,
                     Fit
   toolbar (2+type)  Undo, Redo, and the per-type lists above
-  tag line (4)      Run and Add always; Open and Find as they apply —
-                    with |, < and > as syntax within Run rather than
-                    as buttons, and : and # as syntax within Find
+  tag line (5)      Run, Edit and Add always; Open and Find as they
+                    apply — with |, < and > as syntax within Run
+                    rather than as buttons, and : and # as syntax
+                    within Find
   floating bar (5)  Cut, Copy, Paste, Open, Find
   status bar        id, and the running command with Interrupt
 
-Three acme builtins disappear as BUTTONS because something else
-already does the work: Zerox (New column duplicates), Edit (type sam's
-language and press Run), and ID (it is state, so it belongs in the
-status bar). And `jump` and `search` become ONE button, Find, because
-the notation distinguishes them and no button needs to.
+Two acme builtins disappear as BUTTONS because something else already
+does the work: Zerox (New column duplicates) and ID (it is state, so
+it belongs in the status bar). And `jump` and `search` become ONE
+button, Find, because the notation distinguishes them and no button
+needs to.
+
+EDIT WAS DROPPED AND RESTORED, and the reasoning is worth keeping: it
+went on the grounds that sam's language "is just a command, so type it
+and press Run". It is not — Run execs a program and `s/a/b/` is not
+one, and no notation separates them, since `x`, `y`, `g` and `v` are
+sam commands and plausible program names both. Which is the rule this
+section keeps arriving at: A BUTTON IS WARRANTED EXACTLY WHERE THE
+TEXT CANNOT SAY WHICH OPERATION IS MEANT. And its stronger form: A
+VERB THAT MODIFIES IS NEVER INFERRED — Find is safe by construction,
+Edit announces that it might change things.
 
 ONE IS DROPPED OUTRIGHT: Sort, for the reason given above. That leaves
 37 placed and one deliberately declined — recorded here so it reads as

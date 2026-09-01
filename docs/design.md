@@ -980,6 +980,35 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   notation separates a filename from a word in the text: `mk` is both, which is
   what acme spent a mouse button on. Named Find, not Go to, because that is the
   era's word for the common case.
+  **DOT IS A SET, and that dissolves multi-cursor as a separate problem.** Her
+  proposal, and it is better than the answer it replaced: *"Find by default sets
+  multi-cursor and selects all matches. So a replace is just the user typing in
+  next text… Edit by default operates on selected text. s/a/b/ means for all
+  selected instances, replace a with b."* So **Find is `,x/foo/`** — the loop
+  over the whole file — and **Edit's default address is dot**, which is already
+  sam's own default. The commonest edit anyone makes then needs no sam at all:
+  Find, then type. THE SURFACE'S MULTI-CURSOR AND EMCA'S MULTI-RANGE DOT BECOME
+  ONE OBJECT rather than two notions to keep in step — the no-exceptions rule
+  again, arriving where I had been about to write a division of labour instead.
+  The recommendation it overturned was mine: single-range dot with multi-cursor
+  left to the surface and range verbs acting on the primary selection. That
+  would have bought a weaker version of something sam already had.
+  **Four consequences, none of them hidden.** `select` carries a LIST of ranges
+  (window.md). Repeated Find is idempotent, so next/previous match is navigation
+  and therefore the surface's — there is no "find next" verb. This EXTENDS sam,
+  where `curfile->dot` is one range and `x` iterates, so **the acme port sees the
+  primary range**, since `/mnt/acme`'s addr and data assume a single dot — written
+  down or acme breaks quietly. And selective replace is what is given up, covered
+  better than it was lost: `x/foo/ g/bar/ c/baz/` is strictly more expressive
+  than a Replace/Skip button.
+  **`Edit` came back**, having been dropped too fast on the reasoning that sam's
+  language "is just a command, so type it and press Run". It is not: Run execs a
+  program and `s/a/b/` is not one, and no notation separates them — `x`, `y`, `g`
+  and `v` are sam commands and plausible program names both. Which is the rule
+  the previous entry produced, applied: a button is warranted exactly where the
+  text cannot say which operation is meant. A stronger form of it also emerged —
+  **a verb that modifies is never inferred**. Find is safe by construction; Edit
+  announces that it might change things.
   **`Sort` is declined**, the one operation of the 38 not placed. acme's
   `colsort()` reorders a column alphabetically — a one-shot tidy answering a
   problem emca solves with tabs, and the only operation in the set that destroys

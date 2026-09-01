@@ -282,7 +282,12 @@ pin <q0> <q1> <text>      pin the range as the next execute's argument
 snarf <text>              the surface copied — /dev/snarf is the sync point
 insert <q0> <text>        the user typed or pasted
 delete <q0> <q1>          the user removed a range
-select <q0> <q1>          the selection (or collapsed caret) changed
+select <q0> <q1>[ <q0> <q1>]...
+                          the selection changed. A LIST OF RANGES, not
+                          one: Find selects every match, so dot is a
+                          SET and the surface's multi-cursor is the
+                          same object (emca.txt). One pair is the
+                          ordinary case; no pairs is a collapsed caret
 dirty <0|1>               the buffer's dirty state changed
 put                       THE SURFACE PUT — it already wrote the file
 seq <n> <hash>            the mirror's sequence and buffer hash
