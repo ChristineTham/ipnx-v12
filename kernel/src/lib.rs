@@ -279,6 +279,7 @@ enum WKind {
     RootEvents,
     WContent,
     WKids,         // the children, as a walkable directory
+    WAlloc,        // allocated, or a tab
     WAxis,         // how this window arranges them: row, col, or nothing
     WToolbar,
     WTag,
@@ -547,6 +548,13 @@ struct Win {
     parent: Option<u32>,
     kids: Vec<u32>,
     axis: u8,              // 0 none, 1 row (side by side), 2 col (stacked)
+    // ALLOCATION: a parent gives rectangles to some of its children; the rest
+    // appear as tabs. So a tab is not a reduced window — it is a whole window
+    // the parent has not allocated to. minimise(me) moves me out of the
+    // allocation, maximise(me) moves everyone else out, and `premax` is what
+    // makes the second reversible.
+    allocated: bool,
+    premax: Option<Vec<u32>>,
     // /dev/window: the control interface's per-window files
     wtype: String,
     content: String,
@@ -727,14 +735,15 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: 
             // anything else is a TYPE: #w/<type>/… (docs/window.md)
             Some(wnode_ty(WKind::TypeDir, None, Some(name.to_string())))
         }
-        // kids/<wid> walks to that child's own window directory — so the tree
-        // is walkable, and `ls` shows it. The id is the child's real window id,
-        // reachable equally at #w/<type>/<id>; a filesystem naming one thing
-        // two ways is ordinary (/proc does it).
+        // kids/<index> walks to the child at that POSITION — so the tree is
+        // walkable AND its order is visible, which matters because ORDER IS THE
+        // LAYOUT. Naming entries by window id would have lost it, since ls
+        // sorts and sorted ids are not the arrangement. The child's own id is
+        // in its winid file, and it is reachable equally at #w/<type>/<id>.
         WKind::WKids => {
             let w = win.clone()?;
-            let cid: u32 = name.parse().ok()?;
-            if !w.borrow().kids.contains(&cid) { return None; }
+            let i: usize = name.parse().ok()?;
+            let cid = *w.borrow().kids.get(i)?;
             let c = k.borrow().wins.get(&cid).cloned()?;
             Some(wnode(WKind::WinDir, Some(c), None))
         }
@@ -764,6 +773,7 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: 
                 "canvas" => { mkcv(&w); WKind::CvDir }
                 "content" => WKind::WContent,
                 "axis" => WKind::WAxis,
+                "alloc" => WKind::WAlloc,
                 "kids" => WKind::WKids,
                 "toolbar" => WKind::WToolbar,
                 "tag" => WKind::WTag,
@@ -836,6 +846,8 @@ fn new_window(k: &K) -> WinR {
         parent: None,
         kids: Vec::new(),
         axis: 0,
+        allocated: true,
+        premax: None,
         wtype: String::new(),
         content: String::new(),
         toolbar: String::new(),
@@ -868,14 +880,57 @@ const AX_COL: u8 = 2;   // children stacked
  *   duplicates this window" — the new sibling shows what W showed, and you
  *   retitle it, because the title retargets.
  */
-fn split(k: &K, w: &WinR, axis: u8) {
+/* maximise(me): move every sibling out of the parent's allocation, and
+ * remember which were in it so pressing again restores them. Reversible in
+ * the way minimise is, and for the same reason — this is one operation.
+ */
+fn maximise(k: &K, w: &WinR) {
+    let (wid, parent) = { let b = w.borrow(); (b.wid, b.parent) };
+    let p = match parent.and_then(|p| k.borrow().wins.get(&p).cloned()) {
+        Some(p) => p,
+        None => return,          // nothing to maximise within
+    };
+    let (kids, prev) = { let b = p.borrow(); (b.kids.clone(), b.premax.clone()) };
+    match prev {
+        Some(was) => {           // restore the arrangement we put away
+            for cid in &kids {
+                let c = k.borrow().wins.get(cid).cloned();
+                if let Some(c) = c {
+                    c.borrow_mut().allocated = was.contains(cid);
+                }
+            }
+            p.borrow_mut().premax = None;
+        }
+        None => {
+            let mut was = Vec::new();
+            for cid in &kids {
+                let c = k.borrow().wins.get(cid).cloned();
+                if let Some(c) = c {
+                    if c.borrow().allocated { was.push(*cid); }
+                    c.borrow_mut().allocated = *cid == wid;
+                }
+            }
+            p.borrow_mut().premax = Some(was);
+        }
+    }
+    for cid in kids {
+        let c = k.borrow().wins.get(&cid).cloned();
+        if let Some(c) = c { win_chrome(k, &c); }
+    }
+}
+
+fn split(k: &K, w: &WinR, axis: u8, allocated: bool) {
     let (wid, parent) = { let b = w.borrow(); (b.wid, b.parent) };
     let pax = parent.and_then(|p| k.borrow().wins.get(&p).map(|p| p.borrow().axis));
 
-    if pax == Some(axis) {
+    // a tab has no axis of its own, so it is always a sibling where there is
+    // a parent to be a sibling in
+    if pax == Some(axis) || (!allocated && parent.is_some()) {
         let p = k.borrow().wins.get(&parent.unwrap()).cloned();
         if let Some(p) = p {
             let sib = clone_window(k, w, Some(p.borrow().wid));
+            let s = k.borrow().wins.get(&sib).cloned();
+            if let Some(s) = s { s.borrow_mut().allocated = allocated; }
             let mut pb = p.borrow_mut();
             let at = pb.kids.iter().position(|&c| c == wid).map(|i| i + 1).unwrap_or(pb.kids.len());
             pb.kids.insert(at, sib);
@@ -886,6 +941,10 @@ fn split(k: &K, w: &WinR, axis: u8) {
     // duplicate becomes the second.
     let first = clone_window(k, w, Some(wid));
     let second = clone_window(k, w, Some(wid));
+    if !allocated {
+        let s = k.borrow().wins.get(&second).cloned();
+        if let Some(s) = s { s.borrow_mut().allocated = false; }
+    }
     {
         let mut b = w.borrow_mut();
         b.axis = axis;
@@ -1254,14 +1313,13 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
             let mut out = Vec::new();
             for (i, cid) in kids.iter().enumerate() {
                 let rec = marshal_stat(&StatIn {
-                    name: &cid.to_string(), uid: "wsys", gid: "wsys",
+                    name: &i.to_string(), uid: "wsys", gid: "wsys",
                     qpath: 7600 + *cid as u64, qtype: QTDIR, mode: DMDIR | 0o555,
                     ..Default::default()
                 });
                 if skip >= rec.len() { skip -= rec.len(); continue; }
                 if out.len() + rec.len() > n { break; }
                 out.extend_from_slice(&rec);
-                let _ = i;
             }
             return Ok(RRes::Data(out));
         }
@@ -1311,6 +1369,13 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
         WKind::WAxis => {
             let w = win.as_ref().ok_or("no window")?;
             let s = match w.borrow().axis { 1 => "row\n", 2 => "col\n", _ => "" };
+            return Ok(one(s.to_string()));
+        }
+        // allocated, or a tab — the one bit that decides whether this window
+        // has a rectangle at all, and therefore whether it shows its furniture
+        WKind::WAlloc => {
+            let w = win.as_ref().ok_or("no window")?;
+            let s = if w.borrow().allocated { "allocated\n" } else { "tab\n" };
             return Ok(one(s.to_string()));
         }
         WKind::WToolbar => {
@@ -1546,8 +1611,20 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                 // that means "give this window children" or "give it a
                 // sibling" is worked out from the parent's axis and never
                 // asked about (emca.txt, Rows and columns).
-                ["newrow"] => { split(k, w, AX_COL); }
-                ["newcol"] => { split(k, w, AX_ROW); }
+                ["newrow"] => { split(k, w, AX_COL, true); }
+                ["newcol"] => { split(k, w, AX_ROW, true); }
+                // a tab is the same operation with the allocation bit
+                // flipped, which is why it is not a fourth concept
+                ["newtab"] => { split(k, w, AX_ROW, false); }
+                // MINIMISE AND MAXIMISE ARE ONE OPERATION with different
+                // arguments: minimise(me) moves me out of the allocation,
+                // maximise(me) moves everyone else out. Both toggle.
+                ["minimise"] | ["minimize"] => {
+                    let now = { let mut b = w.borrow_mut(); b.allocated = !b.allocated; b.allocated };
+                    let _ = now;
+                    win_chrome(k, w);
+                }
+                ["maximise"] | ["maximize"] => { maximise(k, w); }
                 ["move", x, y] => {
                     let mut wb = w.borrow_mut();
                     wb.x = x.parse().unwrap_or(wb.x);
@@ -1639,6 +1716,7 @@ fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: &Option
         WKind::RootEvents | WKind::WEvents => "events".to_string(),
         WKind::WContent => "content".to_string(),
         WKind::WAxis => "axis".to_string(),
+        WKind::WAlloc => "alloc".to_string(),
         WKind::WKids => "kids".to_string(),
         WKind::WToolbar => "toolbar".to_string(),
         WKind::WTag => "tag".to_string(),

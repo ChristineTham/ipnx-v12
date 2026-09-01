@@ -361,6 +361,40 @@ if(! ~ $"trok ''){
 }
 if not echo PASS 'the tree: no window control interface on this host — skipped'
 
+# M15c — ALLOCATION. A parent gives rectangles to some of its children; the
+# rest appear as TABS. So minimise and maximise are ONE OPERATION with
+# different arguments — minimise(me) moves me out of the allocation,
+# maximise(me) moves everyone else out — and a tab is a whole window the
+# parent has not allocated to, never a reduced one. New tab is the same
+# operation again with the allocation bit flipped, which is why it is not a
+# fourth concept beside row and column.
+alok=`{cat /dev/window/edit/clone >[2]/dev/null}
+if(! ~ $"alok ''){
+	ald=/dev/window/edit/$alok
+	echo newcol > $ald/wctl
+	echo newcol > $ald/kids/0/wctl
+	# kids are named by POSITION, because order IS the layout and ls sorts —
+	# naming them by window id would have hidden the arrangement
+	alix=`{ls $ald/kids | sed 's:.*/::'}
+	alid=()
+	for(i in 0 1 2){ x=`{cat $ald/kids/$i/winid}; alid=($alid $x) }
+	al0=`{cat $ald/kids/0/alloc}^' '^`{cat $ald/kids/1/alloc}^' '^`{cat $ald/kids/2/alloc}
+	echo maximise > $ald/kids/0/wctl
+	al1=`{cat $ald/kids/0/alloc}^' '^`{cat $ald/kids/1/alloc}^' '^`{cat $ald/kids/2/alloc}
+	echo maximise > $ald/kids/0/wctl
+	al2=`{cat $ald/kids/0/alloc}^' '^`{cat $ald/kids/1/alloc}^' '^`{cat $ald/kids/2/alloc}
+	echo minimise > $ald/kids/1/wctl
+	al3=`{cat $ald/kids/1/alloc}
+	echo minimise > $ald/kids/1/wctl
+	al4=`{cat $ald/kids/1/alloc}
+	echo newtab > $ald/kids/0/wctl
+	al5=`{cat $ald/kids/1/alloc}
+	echo delete > $ald/wctl
+	if(~ $"alix '0 1 2' && ~ $"al0 'allocated allocated allocated' && ~ $"al1 'allocated tab tab' && ~ $"al2 'allocated allocated allocated' && ~ $"al3 tab && ~ $"al4 allocated && ~ $"al5 tab) echo PASS 'allocation: minimise and maximise are ONE operation — one moves me out, the other moves everyone else out, both reversible — and New tab is the same again with the allocation bit flipped'
+	if not fails=bad
+}
+if not echo PASS 'allocation: no window control interface on this host — skipped'
+
 
 # proc(3)'s args file: the data was always in the proc record and nothing could
 # read it, so nothing could NAME a running command — which the status line's

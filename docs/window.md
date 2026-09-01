@@ -101,15 +101,20 @@ gains the interface it should have had.
                    the surface shows it in the status line
   <type>/<n>/
     wctl           layout and lifecycle — rio's file, grown `newrow`,
-                   `newcol` and a `delete` that takes the subtree with
-                   it; reads unchanged (rio parses them)
+                   `newcol`, `newtab`, `minimise`, `maximise`, and a
+                   `delete` that takes the subtree with it; reads
+                   unchanged (rio parses them)
     axis           how this window arranges its children: row (side by
                    side), col (stacked), or empty for one holding a body
-    kids/<id>/     THE CHILDREN, as a walkable directory — each entry
-                   walks to that child's own window directory, so the
-                   structure IS the filesystem rather than a description
-                   of one. The same window is reachable at #w/<type>/<id>;
-                   a filesystem naming one thing twice is ordinary
+    alloc          `allocated` or `tab` — whether the parent has given
+                   this window a rectangle. A tab is a WHOLE window with
+                   no rectangle, never a reduced one
+    kids/<i>/      THE CHILDREN, as a walkable directory, named BY
+                   POSITION — because order IS the layout and `ls` sorts,
+                   so naming entries by window id would have hidden the
+                   arrangement. Each walks to that child's own window
+                   directory; its id is in `winid`, and it is reachable
+                   equally at #w/<type>/<id>
     content        the PATH the host opens over 9P and renders
     toolbar        one control per line: <label> <action>
     tag            the tag line — the host's way back into sam
