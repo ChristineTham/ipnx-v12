@@ -304,7 +304,13 @@ select <q0> <q1>[ <q0> <q1>]...
 dirty <0|1>               the buffer's dirty state changed
 put                       THE SURFACE PUT — it already wrote the file
 seq <n> <hash>            the mirror's sequence and buffer hash
-resize <w> <h>
+resize <w> <h> [<cellw> <cellh>]
+                          two fields is a user drag; four is a surface
+                          reporting its VIEWPORT and its TEXT CELL, both
+                          device-independent. Only the surface knows the
+                          cell, so only it can report one
+size <w> <h>              the surface decoded a picture emca could not
+                          parse and says how big it is
 close
 ```
 

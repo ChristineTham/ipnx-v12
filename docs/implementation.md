@@ -850,7 +850,26 @@ breakpoints. Intrinsic size for pictures comes from file headers (PNG
 IHDR, JPEG SOF, GIF, SVG viewBox), with a `size <w> <h>` event from
 the host correcting anything emca cannot parse.
 **Acceptance:** headless — write a geometry from rc, read back the
-tree; the same geometry with a doubled cell yields fewer columns.
+tree; the same geometry with a doubled cell changes the allocation by
+exactly the factor the cell changed (fewer *columns* is M15e's, since
+that is the root's convention dividing itself).
+**LANDED 2026-09-01.** `resize <w> <h> [<cellw> <cellh>]` is ONE verb:
+two fields from a user dragging a divider, four from a surface
+reporting its viewport, because only the surface knows the cell — it
+depends on the rendered font and the reader's text-size setting, both
+of which are the surface's half. The extra fields carry extra
+information rather than changing what the verb means. **Measured**: the
+same 1200x800 viewport gives a one-line window 72px at an 8x18 cell and
+**144px at 16x36** — every measure doubling with the cell, which is
+WCAG 1.4.4 holding by construction rather than by testing.
+**Pictures are sized from their headers** — PNG IHDR, GIF, JPEG SOF,
+SVG viewBox — bounded work, a header and never a decode. A picture's
+natural size is its INTRINSIC size, deliberately not "the width it was
+given divided by the aspect", which would make the natural depend on
+the allocation and stop `Fit` being idempotent. Anything emca cannot
+parse is corrected by a `size <w> <h>` event from the surface, which
+has actually decoded it — so layout never blocks on a decode.
+**160 PASS / 0 FAIL** on all three hosts.
 
 **e. The root window and its convention *(S)*.** Type `root`, the
 window with no parent. It picks columns by convention, divides into

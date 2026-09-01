@@ -1372,9 +1372,10 @@ Allocation is then three steps:
   1. every allocated child gets its MINIMUM
   2. the remainder is shared in proportion to (NATURAL - MINIMUM),
      capped at NATURAL
-  3. anything still left is shared proportionally — given to nobody in
-     particular, because privileging one window is the kind of help
-     that reads as the layout fighting you
+  3. anything still left over — every window already at its natural —
+     is shared EQUALLY, which is what "given to nobody in particular"
+     has to mean if it is to be implementable. Privileging one window
+     is the kind of help that reads as the layout fighting you.
 
   and if the MINIMUMS do not fit, the excess become TABS. Short
   columns need no separate rule; the allocation model already covers

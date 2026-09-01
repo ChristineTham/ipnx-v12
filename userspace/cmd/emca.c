@@ -62,6 +62,9 @@ struct Win {
 	char dir[NMAX];		/* the context every command here resolves against */
 	long osize;		/* a USER RESIZE: an override along the parent's axis,
 				 * remembered until Fit drops it. 0 means none. */
+	long iw, ih;		/* a picture's intrinsic size, from its header —
+				 * or from the surface's `size` event, for the
+				 * formats emca cannot parse */
 	Buf *buf;
 	int evfd;
 };
@@ -690,12 +693,24 @@ dolook(Win *w, char *sel)
  * (emca.txt); until the surface reports one (M15d) these are the defaults.
  */
 enum {
-	CELLW = 8, CELLH = 18,
 	FURN = 3,			/* title, tag line, status: three lines */
 	MINCOLS = 20, MINLINES = 1,
 	NATCOLS = 80, NATLINES = 10,
+	LEAFCOLS = 72,			/* the classic measure: what a leaf needs */
 	MAXKIDS = 32,
 };
+
+/* THE UNIT IS DEVICE-INDEPENDENT PIXELS, and the host reports THE TEXT CELL in
+ * the same unit (emca.txt, "The unit, and why it is not characters"). The
+ * character rule survives as arithmetic — a leaf is LEAFCOLS * cellw — so
+ * raising the reader's text size enlarges the reported cell and the
+ * breakpoints move for free, which is WCAG 1.4.4 holding by construction.
+ * Characters cannot be the UNIT, because not every window is text: an image
+ * has an aspect ratio and no columns at all.
+ *
+ * These are the defaults until a surface says otherwise.
+ */
+static long cellw = 8, cellh = 18;
 
 static long
 wread(int wid, char *file, char *out, long max)
@@ -742,6 +757,93 @@ nkids(int wid, int *out)
 	return i;
 }
 
+/* INTRINSIC SIZE FOR A PICTURE. emca does not render an image, but it must
+ * know how much room to ask for, so it reads the DIMENSIONS OUT OF THE HEADER
+ * — bounded work, a header and never a decode. This is what "it knows what an
+ * image is (or video, or postscript etc) and what aspect ratio is" means in
+ * practice, and it is why the unit cannot be characters: a picture has an
+ * aspect ratio and no columns at all.
+ *
+ * Anything not recognised returns 0 and the window is sized as text; a surface
+ * that has actually decoded the thing corrects emca with a `size <w> <h>`
+ * event, so layout never blocks on a decode and emca is never wrong for long.
+ */
+static int
+imagesize(char *path, long *iw, long *ih)
+{
+	uchar b[1024];
+	int fd;
+	long n, i;
+
+	fd = open(path, OREAD);
+	if(fd < 0) return 0;
+	n = read(fd, b, sizeof b);
+	close(fd);
+	if(n < 16) return 0;
+
+	/* PNG: the IHDR chunk is always first, at a fixed offset */
+	if(b[0]==0x89 && b[1]=='P' && b[2]=='N' && b[3]=='G'){
+		*iw = (b[16]<<24)|(b[17]<<16)|(b[18]<<8)|b[19];
+		*ih = (b[20]<<24)|(b[21]<<16)|(b[22]<<8)|b[23];
+		return *iw > 0 && *ih > 0;
+	}
+	/* GIF: little-endian, in the logical screen descriptor */
+	if(b[0]=='G' && b[1]=='I' && b[2]=='F'){
+		*iw = b[6] | (b[7]<<8);
+		*ih = b[8] | (b[9]<<8);
+		return *iw > 0 && *ih > 0;
+	}
+	/* JPEG: walk the segments to the first start-of-frame */
+	if(b[0]==0xFF && b[1]==0xD8){
+		for(i = 2; i + 9 < n; ){
+			if(b[i] != 0xFF){ i++; continue; }
+			while(i < n && b[i] == 0xFF) i++;
+			if(i >= n) break;
+			{
+				int m = b[i];
+				long seg = (b[i+1]<<8)|b[i+2];
+				if((m >= 0xC0 && m <= 0xC3) || (m >= 0xC5 && m <= 0xC7)
+				|| (m >= 0xC9 && m <= 0xCB) || (m >= 0xCD && m <= 0xCF)){
+					*ih = (b[i+4]<<8)|b[i+5];
+					*iw = (b[i+6]<<8)|b[i+7];
+					return *iw > 0 && *ih > 0;
+				}
+				if(seg <= 0) break;
+				i += 1 + seg;
+			}
+		}
+		return 0;
+	}
+	/* SVG: text, so viewBox or width/height in the root element */
+	b[n < (long)sizeof b ? n : (long)sizeof b - 1] = 0;
+	if(strstr((char*)b, "<svg") != nil){
+		char *v = strstr((char*)b, "viewBox");
+		if(v != nil){
+			char *f[8];
+			char tmp[128];
+			v = strchr(v, '"');
+			if(v != nil){
+				strncpy(tmp, v + 1, sizeof tmp - 1);
+				tmp[sizeof tmp - 1] = 0;
+				if(strchr(tmp, '"') != nil) *strchr(tmp, '"') = 0;
+				if(tokenize(tmp, f, 8) == 4){
+					*iw = atoi(f[2]);
+					*ih = atoi(f[3]);
+					return *iw > 0 && *ih > 0;
+				}
+			}
+		}
+	}
+	return 0;
+}
+
+/* the content this window shows, as a path */
+static int
+contentpath(int wid, char *out, long max)
+{
+	return wread(wid, "content", out, max) > 0 && out[0] != 0;
+}
+
 /* how many lines this window's content wants — emca has the buffer, which is
  * exactly why the geometry is emca's and not the surface's */
 static long
@@ -772,7 +874,7 @@ minalong(int wid, int axis)
 	ax = naxis(wid);
 	nk = ax ? nkids(wid, kids) : 0;
 	if(nk == 0)
-		return axis == 1 ? MINCOLS * CELLW : (FURN + MINLINES) * CELLH;
+		return axis == 1 ? MINCOLS * cellw : (FURN + MINLINES) * cellh;
 	total = 0;
 	for(i = 0; i < nk; i++){
 		if(!nallocated(kids[i])) continue;
@@ -780,7 +882,7 @@ minalong(int wid, int axis)
 		if(ax == axis) total += m;		/* stacked along this axis */
 		else if(m > total) total = m;		/* side by side across it */
 	}
-	if(total == 0) total = axis == 1 ? MINCOLS * CELLW : (FURN + MINLINES) * CELLH;
+	if(total == 0) total = axis == 1 ? MINCOLS * cellw : (FURN + MINLINES) * cellh;
 	return total;
 }
 
@@ -792,9 +894,28 @@ natalong(int wid, int axis)
 
 	ax = naxis(wid);
 	nk = ax ? nkids(wid, kids) : 0;
-	if(nk == 0)
-		return axis == 1 ? NATCOLS * CELLW
-				 : (contentlines(wid) + FURN) * CELLH;
+	if(nk == 0){
+		char path[NMAX];
+		long piw, pih;
+		Win *pw;
+
+		/* A PICTURE'S NATURAL SIZE IS ITS INTRINSIC SIZE, in the same
+		 * device-independent unit. Deliberately not "the width it was
+		 * given, divided by the aspect" — that would make the natural
+		 * depend on the allocation, and Fit would stop being idempotent.
+		 * The surface scales to fit at render time; emca only has to ask
+		 * for room in the right proportion.
+		 */
+		pw = winof(wid);
+		if(pw != nil && pw->iw > 0 && pw->ih > 0)
+			return axis == 1 ? pw->iw : pw->ih + FURN * cellh;
+		if(contentpath(wid, path, sizeof path) && imagesize(path, &piw, &pih)){
+			if(pw != nil){ pw->iw = piw; pw->ih = pih; }
+			return axis == 1 ? piw : pih + FURN * cellh;
+		}
+		return axis == 1 ? NATCOLS * cellw
+				 : (contentlines(wid) + FURN) * cellh;
+	}
 	total = 0;
 	for(i = 0; i < nk; i++){
 		if(!nallocated(kids[i])) continue;
@@ -1003,16 +1124,55 @@ onwinline(Win *w, char *line)
 		return;
 	}
 	if(strcmp(line, "fit") == 0){ dofit(w->wid); return; }
-	if(strncmp(line, "resize ", 7) == 0){	/* resize <w> <h> — a user drag */
+	/* the surface decoded something emca could not parse — video,
+	 * PostScript, a format it does not know — and says how big it is */
+	if(strncmp(line, "size ", 5) == 0){
 		char *q;
-		int p;
-		q = strchr(line + 7, ' ');
+		q = strchr(line + 5, ' ');
 		if(q == nil) return;
-		/* the override is along the PARENT's axis, which is the only
-		 * direction this window's size is its own to choose */
+		w->iw = atoi(line + 5);
+		w->ih = atoi(q + 1);
+		relayout(parentof(w->wid));
+		return;
+	}
+	/* resize <w> <h> [<cellw> <cellh>] — ONE VERB, and the extra fields
+	 * carry extra information rather than changing what it means. From a
+	 * user dragging a divider it is two fields; from a surface reporting
+	 * its viewport it is four, because only the surface knows the text
+	 * cell — that depends on the rendered font and the reader's text-size
+	 * setting, both of which are the surface's half.
+	 *
+	 * Hers: "Host tells emca - we have a 800x1024 window. emca says 'Ok,
+	 * we need to apply this responsive layout' create these windows."
+	 */
+	if(strncmp(line, "resize ", 7) == 0){
+		char *f[6];
+		char buf[128];
+		int nf, p;
+		long nw, nh;
+
+		strncpy(buf, line + 7, sizeof buf - 1);
+		buf[sizeof buf - 1] = 0;
+		nf = tokenize(buf, f, 6);
+		if(nf < 2) return;
+		nw = atoi(f[0]);
+		nh = atoi(f[1]);
+		if(nf >= 4){			/* the surface reported its cell */
+			if(atoi(f[2]) > 0) cellw = atoi(f[2]);
+			if(atoi(f[3]) > 0) cellh = atoi(f[3]);
+		}
 		p = parentof(w->wid);
-		w->osize = naxis(p) == 1 ? atoi(line + 7) : atoi(q + 1);
-		if(p > 0) relayout(p);
+		if(p > 0){
+			/* a child's size is its own to choose only along its
+			 * parent's axis; the other direction is the parent's */
+			w->osize = naxis(p) == 1 ? nw : nh;
+			relayout(p);
+		} else {
+			/* no parent: this IS the viewport, so set it and
+			 * re-derive everything beneath it */
+			setrect(w->wid, 0, 0, nw, nh);
+			relayout(w->wid);
+		}
 		return;
 	}
 	if(strcmp(line, "put") == 0){

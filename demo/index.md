@@ -14,9 +14,23 @@ It is a refuge from the complexities of the current computing landscape:
 - observability stacks (Prometheus, Grafana, ELK, Jaeger), monitoring overhead
 - multiple runtimes per machine, dependency hell, the Java heapocalypse
 
+**Saranos** will enable you to do the equivalent of most of the above, but in a simpler integrated way, on the devices and the interfaces you are already used to. It can run completely in the browser, on top of any operating system, but it also installs as an app on the Mac, iPad or iPhone. It will also install as a container, and there are plans to make it available as a micro-VM to run inside a hypervisor, or natively on an IoT device. In short, it can run on Everything, Everywhere, All at Once.
 
-**Saranos** is a reimagining of Unix — the counterfactual next Research edition, running in this tab*
+**Saranos** is a reimagining of UNIX if it was implemented today, combined with a post-modern windowing system and user interface. It embraces the UNIX philosophy:
 
+> Write programs that do one thing and do it well. Write programs to work together. Write programs to handle text streams, because that is a universal interface”
+>
+> (McIlroy et al., UNIX time-sharing system: Foreword, 1978)
+
+It also adheres to the principles set by the designers of *Plan 9 from Bell Labs*, the successor to UNIX from it's original creators:
+
+> First, resources are named and accessed like files in a hierarchical file system. Second, there is a standard protocol, called 9P, for accessing these resources. Third, the disjoint hierarchies provided by different services are joined together into a single private hierarchical file name space.
+>
+> (Pike et al., Plan 9 from Bell Labs)
+
+**Saranos** is built from another project called [IPNX](https://github.com/ChristineTham/ipnx) - a MacOS/iPadOS/iOS revitalisation of Research Unix 8th and 10th editions, running on a simulator on macOS/iOS.
+
+The underlying kernel and userspace of Saranos is IPNX v12 
 **Saranos is a new operating system** — not a distribution of an old one, not an emulator. Three layers, and the parallel is exact: **Saranos** is the system, **IPNX** is the kernel and the userspace, **emca** is the windowing and UI — where Apple has macOS, Darwin and Aqua. The name is Sanskrit *śaraṇa*, refuge: a refuge from the complexities of the modern computing environment.
 
 Its kernel is original, written in Rust — and **the very same kernel runs native on macOS and, compiled to WebAssembly, inside this tab**: one core, one conformance suite green on both, plus a JavaScript twin held as the frozen conformance oracle. The architecture takes what Plan 9 proved and Unix never shipped — **per-process namespaces**, 9P as the only IPC, everything a file — with none of Plan 9's kernel code, and **WebAssembly** as the executable format.

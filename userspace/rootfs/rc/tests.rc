@@ -447,6 +447,63 @@ if(! ~ $"femca ''){
 }
 if not echo PASS 'sizing: no emca on this host — skipped'
 
+# M15d — THE GEOMETRY CONVERSATION. "Host tells emca - we have a 800x1024
+# window. emca says 'Ok, we need to apply this responsive layout' create these
+# windows. Host says 'Ok'. emca owns the tree, and the host renders the tree."
+#
+# The unit is DEVICE-INDEPENDENT PIXELS, with the text cell reported alongside,
+# because not every window is text — an image has an aspect ratio and no
+# columns at all. The character rule survives as ARITHMETIC, so doubling the
+# reader's text size doubles every measure and the breakpoints move for free:
+# WCAG 1.4.4 holding by construction rather than by testing.
+gtok=`{cat /dev/window/edit/clone >[2]/dev/null}
+if(! ~ $"gtok ''){
+	gw=/dev/window/$gtok
+	echo -n one-line > /tmp/geo.small
+	cat /rc/tests.rc > /tmp/geo.big
+	echo -n /tmp/geo.small > $gw/content
+	emwait $gw/toolbar '*Snarf*'
+	gemca=`{cat $gw/toolbar}
+}
+if(! ~ $"gemca ''){
+	echo newrow > $gw/wctl
+	emwait $gw/kids/1/toolbar '*Snarf*'
+	echo -n /tmp/geo.small > $gw/kids/0/content
+	echo -n /tmp/geo.big > $gw/kids/1/content
+	emwait $gw/kids/1/content /tmp/geo.big
+	sleep 1
+	# the surface reports its viewport AND its text cell — only the surface
+	# knows the cell, since it depends on the rendered font and the reader's
+	# text-size setting, both of which are the surface's half
+	echo 'resize 1200 800 8 18' > $gw/events
+	emwait $gw/kids/0/wctl '0 0 1200 72 *'
+	g1=`{cat $gw/kids/0/wctl}
+	# the SAME viewport with a DOUBLED cell: every measure doubles with it
+	echo 'resize 1200 800 16 36' > $gw/events
+	emwait $gw/kids/0/wctl '0 0 1200 144 *'
+	g2=`{cat $gw/kids/0/wctl}
+	g3=`{cat $gw/kids/1/wctl}
+	# and a PICTURE is sized from its header, never from a decode: emca.svg
+	# declares viewBox="0 0 240 120", so 120 plus three lines of furniture
+	echo 'resize 1200 900 8 18' > $gw/events
+	sleep 1
+	echo -n /usr/kitty/emca.svg > $gw/kids/1/content
+	emwait $gw/kids/1/content /usr/kitty/emca.svg
+	sleep 1
+	echo fit > $gw/events
+	sleep 1
+	g4=`{cat $gw/kids/0/wctl}
+	# a format emca cannot parse is corrected by the surface, which HAS
+	# decoded it — so layout never blocks and emca is never wrong for long
+	echo 'size 400 600' > $gw/kids/1/events
+	emwait $gw/kids/0/wctl '0 0 1200 159 *'
+	g5=`{cat $gw/kids/0/wctl}
+	echo delete > $gw/wctl
+	if(~ $"g1 '0 0 1200 72 current visible' && ~ $"g2 '0 0 1200 144 current visible' && ~ $"g3 '0 144 1200 656 current visible' && ~ $"g4 '0 0 1200 399 current visible' && ~ $"g5 '0 0 1200 159 current visible') echo PASS 'geometry: the host reports viewport AND text cell — doubling the cell doubles every measure (72 -> 144), and a picture is sized from its header, corrected by the surface for what emca cannot parse'
+	if not fails=bad
+}
+if not echo PASS 'geometry: no emca on this host — skipped'
+
 
 # proc(3)'s args file: the data was always in the proc record and nothing could
 # read it, so nothing could NAME a running command — which the status line's
