@@ -39,13 +39,26 @@ here it cannot, **because the managers are already text filesystems**. The desig
 [docs/emca.txt](docs/emca.txt); the acme anatomy in [docs/acme.txt](docs/acme.txt)
 was input to it, not parentage.
 
-**The layers have names** (decision log, 2026-08-31; sharpened 2026-09-01):
-**Saranos is the operating system** — the whole thing, what you would say you
-are running. **IPNX is the kernel and the userspace** — the whole file world,
-Darwin's slot rather than XNU's. **emca is the windowing and UI system** — the
-compositor, the window types, the surfaces' furniture. The parallel is exact
-and worth keeping in mind: **macOS / Darwin / Aqua** is **Saranos / IPNX /
-emca**. wasm and the surfaces are the machine it runs on. **The interface between them is 9P and nothing else**
+**The layers have names** (decision log, 2026-08-31; sharpened twice on
+2026-09-01): **Saranos is the operating system** — the whole thing, what you
+would say you are running. **IPNX is the kernel and the userspace** — the wasm
+side, Darwin's slot rather than XNU's. **emca is the windowing and UI system** —
+the compositor, the window types, the surfaces' furniture, and it spans both
+sides by construction. The parallel holds: **macOS / Darwin / Aqua** is
+**Saranos / IPNX / emca**.
+
+**AND SARANOS ENCOMPASSES THE HOST SIDE AS WELL AS THE WASM SIDE** — Christine,
+spelling out what an earlier draft of this paragraph got wrong: *"Saranos as an
+OPERATING SYSTEM encompasses host side and WASM side as well… that's why it's
+different from IPNX, which only describes the kernel and userspace, and that's
+why Saranos is a different name. It is a symbiosis between host and WASM,
+neither can exist without the other."* So the host — the Rust host on macOS,
+the browser runtime, the surface — is **inside** Saranos, not underneath it as
+substrate. The kernel is wasm and cannot run without a host to give it workers,
+memory and a screen; the host has nothing to do without the kernel. The earlier
+wording, "wasm and the surfaces are the machine it runs on", had the host below
+the system rather than part of it, and that is the distinction the name exists
+to carry. **The interface between them is 9P and nothing else**
 (redesigned 2026-08-31): content is a file the host mounts and renders natively
 (so **IPNX implements no renderers**), `/dev/window/<type>/<n>` is the
 bidirectional control interface with the type in the path, `/type` is the

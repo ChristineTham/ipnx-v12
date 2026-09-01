@@ -1130,6 +1130,29 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   field. A parallel tree indexed by path is the house shape already: `#V/<snap>/…`
   for versions, `/n/` for mounted worlds.
 
+- **(2026-09-01, later) SARANOS IS A SYMBIOSIS OF HOST AND WASM, and that is why
+  it needs its own name.** The entry below got the naming right and the SCOPE
+  wrong, and the wrong version was propagated into CLAUDE.md, architecture.md
+  and the landing page before it was caught. Hers, spelling it out: *"Saranos as
+  an OPERATING SYSTEM encompasses host side and WASM side as well… that's why
+  it's different from IPNX, which only describes the kernel and userspace, and
+  that's why Saranos is a different name. It is a symbiosis between host and
+  WASM, neither can exist without the other."*
+  **What was wrong**: CLAUDE.md said *"wasm and the surfaces are the machine it
+  runs on"*, which puts the host UNDERNEATH the system as substrate. It is not
+  underneath, it is INSIDE. The kernel is wasm and cannot run without a host to
+  give it workers, memory and a screen; the host has nothing to do without the
+  kernel. Calling the host "the machine" makes Saranos a synonym for IPNX plus a
+  UI, and then the second name is decoration — which is exactly the reading the
+  name exists to prevent.
+  **What it explains, immediately**: Rust is already in the system, because the
+  kernel IS Rust compiled to wasm. Hers again: *"We already have a kernel in
+  Rust that compiles to WASM, clearly Rust is in the system. Creating a Rust
+  package is a to do."* So the earlier framing — "there is no Rust toolchain" —
+  described the absence correctly and the system wrongly. And `emca` stops being
+  a layer that sits on one side: the program is a guest, the surface is the
+  host's, and it is one system precisely because those two halves are one thing.
+
 - **(2026-09-01) The layering, sharpened: Saranos is the OPERATING SYSTEM.** The
   2026-08-31 entry made Saranos "the user experience on top of" IPNX — which was
   right that it needed a name and wrong about which name. Hers, settling it:

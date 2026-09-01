@@ -13,15 +13,23 @@ commit as the change.
 ## The three layers, and what each is called
 
 **Saranos is the operating system** — the whole thing, and what someone would
-say they are running. **IPNX is the kernel and the userspace** — the file world.
-**emca is the windowing and UI system** — the compositor, the window types, the
-surfaces' furniture. The parallel is exact and worth holding in mind:
+say they are running. **IPNX is the kernel and the userspace** — the wasm side.
+**emca is the windowing and UI system**, and it spans both sides by
+construction: `emca` the program is a guest, the surface that renders its tree
+is the host's.
 
-| Apple | here |
-|---|---|
-| macOS | **Saranos** — the operating system |
-| Darwin | **IPNX** — the kernel and the userspace |
-| Aqua | **emca** — the windowing and UI system |
+| Apple | here | |
+|---|---|---|
+| macOS | **Saranos** | the operating system: **host and wasm together** |
+| Darwin | **IPNX** | the kernel and the userspace — the wasm side |
+| Aqua | **emca** | the windowing and UI system — a half on each side |
+
+**SARANOS IS A SYMBIOSIS, AND THAT IS WHY IT NEEDS ITS OWN NAME.** It
+encompasses the host side — the Rust host under wasmtime, the browser runtime,
+the surface — *and* the wasm side. Neither exists without the other: the kernel
+is wasm and cannot run without a host to give it workers, memory and a screen;
+the host has nothing to do without the kernel. IPNX names only the wasm half,
+which is exactly why a second name was needed rather than a qualifier.
 
 Saranos is Sanskrit *śaraṇa*, refuge. Note the symmetry that forced the
 layering: XNU is "X is Not Unix" and IPNX is "IP is Not UNIX" — the same joke,
