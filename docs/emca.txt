@@ -519,17 +519,29 @@ What every window has
 Four components, stacked, and EVERY window has all four whatever it
 holds — a file, a listing, a shell, an image, or other windows.
 
-  +--------------------------------------------------+
-  | (o)(-)(+)  .../kitty/README                      |  controls + title
-  +--------------------------------------------------+
-  | [Del][Snarf][Get][Look][Edit] [+Tab][Newcol] | mk |  toolbar + tag line
-  +--------------------------------------------------+
-  |                                                | |
-  |  the body, or child windows                    |^|  body + scrollbars
-  |                                                | |
-  +--------------------------------------------------+
-  | 12:4    2.1 KB    modified                       |  status bar
-  +--------------------------------------------------+
+  +---------------------------------------------------+
+  | (o)(-)(+)  .../kitty/README                       |  controls, title
+  +---------------------------------------------------+
+  | mk test  [Open][Find][Run][Pipe][Edit][Add] | [Sav |  tag line, ITS
+  |          e][Revert][Undo][Redo]                   |  buttons | toolbar
+  +---------------------------------------------------+
+  |                                                 | |
+  |  the body, or child windows                     |^|  content,
+  |                                                 | |  scrollbars
+  +---------------------------------------------------+
+  | 12:4    2.1 KB    modified                        |  status bar
+  +---------------------------------------------------+
+
+THE SECOND ROW READS LEFT TO RIGHT AS OPERAND, THEN VERBS THAT CONSUME
+IT, THEN A SEPARATOR, THEN VERBS THAT DO NOT. The tag line comes first
+because its text is the operand; its six buttons follow because they
+act on that text; the rule of ink marks the boundary; the toolbar's
+type verbs sit beyond it because the tag line is nothing to them.
+
+That separator is the only place in the design where a line of ink
+carries meaning, and it earns it: without it a person cannot see which
+buttons will consume what they just typed. It is
+operand-determines-surface made visible inside a single row.
 
   ID        unique, and it is a PATH: /dev/window/shell/1. The type is
             in the path, so the id names the kind and the instance.
@@ -585,8 +597,30 @@ holds — a file, a listing, a shell, an image, or other windows.
             did not do what its name promises. Moving them out of the
             allocation costs one strip however many there are.
 
-  TOOLBAR   verbs whose operand is THIS WINDOW'S CONTENT, and NOTHING
-            HERE IS UNIVERSAL — not Save, not Revert, not even Undo.
+  TAG LINE  free, editable text, and IT COMES FIRST IN THE ROW because
+            it is the OPERAND — NOT A COMMAND LINE. Its own six
+            buttons follow it (Open, Find, Run, Pipe, Edit, Add), then
+            the separator, then the toolbar's, which have nothing to
+            do with it.
+
+            Hers: "'alice' in the tag line and then pressing 'Look'
+            searches for alice in window file, 'mk' in tag line and
+            then pressing 'Execute' runs mk in the folder where the
+            file is."
+
+            This is acme's 2-1 chord — apply a verb to text — with the
+            gesture decomposed into two acts a keyboard and a finger
+            can both perform. It is why the six can be a fixed set
+            without loss: the verbs are fixed, the argument is
+            anything you can type.
+
+            When the window is narrow the row WRAPS, tag line and its
+            buttons staying together ahead of the break wherever they
+            can, because separating an operand from the verbs that
+            consume it is the one break that costs meaning.
+
+  TOOLBAR   BEYOND THE SEPARATOR: verbs whose operand is THIS WINDOW'S
+            CONTENT, and NOTHING HERE IS UNIVERSAL — not Save, not Revert, not even Undo.
             All of it is the type's, listed by type below. The window
             OPERATIONS are not here; they are with the controls,
             because their operand is different.
@@ -604,23 +638,6 @@ holds — a file, a listing, a shell, an image, or other windows.
             have. When a window is narrow the toolbar WRAPS, and only
             when it is truly narrow does a disclosure control appear —
             a response to geometry, never a judgement about frequency.
-
-  TAG LINE  free, editable text, on the toolbar's line when there is
-            room and wrapped below it when there is not — AND IT IS AN
-            OPERAND, NOT A COMMAND LINE. Its own six buttons — Open,
-            Find, Run, Pipe, Edit, Add — sit with it, not on the
-            toolbar, so that it
-            is visible which verbs act on what you just typed. Its text is the ARGUMENT to
-            whichever toolbar verb is pressed. Hers: "'alice' in the
-            tag line and then pressing 'Look' searches for alice in
-            window file, 'mk' in tag line and then pressing 'Execute'
-            runs mk in the folder where the file is."
-
-            This is acme's 2-1 chord — apply a verb to text — with the
-            gesture decomposed into two acts a keyboard and a finger
-            can both perform. It is why the toolbar can be a closed
-            set without loss: the verbs are fixed, the argument is
-            anything you can type.
 
   BODY      natively rendered and natively edited, WITH SCROLLBARS —
             or child windows, when this window has composited itself.

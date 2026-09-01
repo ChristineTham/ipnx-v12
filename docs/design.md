@@ -1054,6 +1054,14 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   carries exactly one verb of its own. The single asymmetry is forced rather than
   chosen: a directory has no content and therefore no later Save at which to
   create it, so the slash form creates immediately.
+  **The window's second row is reordered, and gains a separator.** Hers: the
+  window is controls-and-title / tag line, tag line buttons, separator, toolbar
+  buttons / content and scrollbars / status bar. So the row reads left to right
+  as OPERAND, then the verbs that consume it, then a rule of ink, then the verbs
+  that do not — the toolbar's type verbs, to which the tag line is nothing. That
+  separator is the only place in this design where a line of ink carries meaning,
+  and it earns it: without it a person cannot see which buttons will consume what
+  they just typed. Operand-determines-surface, made visible inside a single row.
   **UNDO IS NOT UNIVERSAL**, on her question *"how do we undo a process kill?"* —
   you cannot. The rule: Undo is available exactly where every operation the
   window offers is confined to a buffer emca holds, which is `edit` alone of the
