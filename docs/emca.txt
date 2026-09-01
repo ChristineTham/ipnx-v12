@@ -600,8 +600,9 @@ holds — a file, a listing, a shell, an image, or other windows.
 
   TAG LINE  free, editable text, on the toolbar's line when there is
             room and wrapped below it when there is not — AND IT IS AN
-            OPERAND, NOT A COMMAND LINE. Its own buttons (Run, Search,
-            Open, Add) sit with it and not on the toolbar, so that it
+            OPERAND, NOT A COMMAND LINE. Its own buttons (Run, Add,
+            and Open/Find as they apply) sit with it, not on the
+            toolbar, so that it
             is visible which verbs act on what you just typed. Its text is the ARGUMENT to
             whichever toolbar verb is pressed. Hers: "'alice' in the
             tag line and then pressing 'Look' searches for alice in
@@ -648,9 +649,11 @@ Labs' program and renaming its buttons would be changing it.
   Newcol / New    New column /    and they duplicate this window in
                   New row         that direction (see below)
   Zerox           New column      subsumed: duplicating IS what it did
-  Look            Open / Go to /  look was never one operation. It is
-                  Search / Plumb  a DISPATCHER over four, and emca
-                                  shows the four (acme.txt layer 3)
+  Look            Open / Find /   look was never one operation. It is
+                  Plumb           a DISPATCHER over four, and emca
+                                  shows them — with jump and search
+                                  merged into Find, since : and #
+                                  already tell the two apart
   Edit            —               retired as a button: sam's language
                                   is a command, so you type it in the
                                   tag line and press Run
@@ -674,21 +677,22 @@ surface now has ONE operand and no overlap:
                                                    New row, Fit
   the window's CONTENT        the WINDOW TOOLBAR   Save, Revert, Undo,
                                                    Redo + the type's
-  the TAG LINE's text         buttons beside the   Run, Search, Open,
-                              tag line             Add
+  the TAG LINE's text         buttons beside the   Run, Add, and
+                              tag line             Open/Find as they
+                                                   apply
   a SELECTION in the body     the FLOATING BAR     Cut, Copy, Paste,
-                                                   Open, Go to, Search
+                                                   Open, Find
 
 THE FLOATING BAR STAYS, and an earlier draft was wrong to retire it on
 the grounds that the tag line had subsumed it. They are different
 operands: the tag line holds text you COMPOSE, the floating bar acts
-on text you POINT AT. Typing "alice" and pressing Search is not the
-same act as selecting alice in the body and pressing Search, and acme's
-chord was the second one. Hers: "The floating toolbar is still the
+on text you POINT AT. Typing "alice" and pressing Find is not the same
+act as selecting alice in the body and pressing Find, and acme's chord
+was the second one. Hers: "The floating toolbar is still the
 floating toolbar, so it is context sensitive to the window body."
 
-That the same three words — Open, Go to, Search — appear on two
-surfaces is not duplication. It is the same verb offered against two
+That the same two words — Open and Find — appear on two surfaces is
+not duplication. It is the same verb offered against two
 different operands, which is exactly what the rule predicts.
 
 Window operations: universal, and grouped with the controls
@@ -809,21 +813,40 @@ that Run acts on what they just typed and Save does not.
            window on the same title rather than opening a duplicate,
            as acme's look does; emca knows every window's title, so
            this is a lookup.
-  Go to    when it names an address — :42, :/re/, #c
-  Search   always: find the text in this window's body, wrapping
+  Find     go where the text says. THE NOTATION CARRIES THE
+           DISTINCTION, so this is one verb and not two: a leading :
+           or # means an ADDRESS — :42 a line, :/re/ a regexp, #c a
+           rune offset — and its absence means LITERAL TEXT, found
+           next, wrapping. `42` finds the text "42"; `:42` goes to
+           line 42; the person chose, unambiguously.
 
-  Conditional rather than permanent so the tag line does not grow five
-  fixed buttons, and because WHICH VERBS APPLY is emca's judgement in
-  both places. One applicability mechanism, two operands: the tag
-  line's text, and the body's selection.
+           An earlier draft had Go to and Search as separate buttons.
+           They are one operation: sam's address language already
+           includes regexp search as an address form, so "Go to
+           :/alice/" and "Search alice" land in the same place by two
+           notations for one act. Named Find rather than Go to because
+           that is the era's word for the common case, and the address
+           forms are a notation layered on it.
+
+           This does NOT weaken "look is a dispatcher, show the
+           choice". That principle is about the SYSTEM guessing, and
+           nothing is guessed here — `:` is explicit user syntax. Open
+           still needs its own button precisely because no notation
+           separates a filename from a word in the text: `mk` is both,
+           which is what acme spent a mouse button on.
+
+  Conditional rather than permanent so the tag line stays narrow, and
+  because WHICH VERBS APPLY is emca's judgement in both places. One
+  applicability mechanism, two operands: the tag line's text, and the
+  body's selection.
 
 The floating bar
 ----------------
 Appears at the selection, because that is where its operand is.
-Carries Cut, Copy and Paste always, and then the three that acme's
-`look` conflated — Open when the selection names a file, Go to when it
-names an address, Search otherwise, with Plumb as the fallback when
-rules decide.
+Carries Cut, Copy and Paste always, then Open when the selection names
+something that exists, and Find — which is where acme's `jump` and
+`search` meet, since the notation tells them apart. Plumb is the
+fallback when rules decide.
 
 THIS IS WHERE EMCA BEATS ACME rather than porting it. Acme's look
 parses your text and silently picks one of the four, which is exactly
@@ -847,16 +870,17 @@ acme.txt counts 38 operations. Where each one went:
   title bar (6)     Close, Minimise, Maximise, New column, New row,
                     Fit
   toolbar (2+type)  Undo, Redo, and the per-type lists above
-  tag line (5)      Run and Add always; Open, Go to and Search as they
-                    apply — with |, < and > as syntax within Run
-                    rather than as buttons
-  floating bar (6)  Cut, Copy, Paste, Open, Go to, Search
+  tag line (4)      Run and Add always; Open and Find as they apply —
+                    with |, < and > as syntax within Run rather than
+                    as buttons, and : and # as syntax within Find
+  floating bar (5)  Cut, Copy, Paste, Open, Find
   status bar        id, and the running command with Interrupt
 
 Three acme builtins disappear as BUTTONS because something else
 already does the work: Zerox (New column duplicates), Edit (type sam's
 language and press Run), and ID (it is state, so it belongs in the
-status bar).
+status bar). And `jump` and `search` become ONE button, Find, because
+the notation distinguishes them and no button needs to.
 
 ONE IS DROPPED OUTRIGHT: Sort, for the reason given above. That leaves
 37 placed and one deliberately declined — recorded here so it reads as
@@ -1589,7 +1613,7 @@ PART EIGHT — WHAT IS DECIDED
       window IS the screen. Named regions — pane, rail, leaf — do not
       exist. (2026-09-01)
   22. THE TAG LINE IS AN OPERAND, not a command line: its text is the
-      argument to its own buttons — Run, Search, Open, Add. That is
+      argument to its own buttons — Run, Add, Open, Find. That is
       the 2-1 chord decomposed, and it retires the pin. It does NOT
       retire the floating bar: composing text and pointing at text are
       different operands, and the bar is the second one. (2026-09-01)

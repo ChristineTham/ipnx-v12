@@ -970,6 +970,16 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   — the title retargets, so the window shows what the title names and its type
   follows. Open and New-column-then-retitle become the same act arriving two
   ways, which leaves exactly one way a window comes to show something.
+  **`jump` and `search` merge into `Find`**, on her question *"why can't goto
+  and search be the same operation?"* — they can, because sam's address language
+  already includes regexp search as an address form, so `:/alice/` and `alice`
+  land in the same place by two notations for one act. The distinction is
+  explicit USER syntax (`:` and `#`), not a system guess, so it does not weaken
+  "look is a dispatcher, show the choice" — that principle is about the system
+  choosing silently. `Open` still needs its own button precisely because no
+  notation separates a filename from a word in the text: `mk` is both, which is
+  what acme spent a mouse button on. Named Find, not Go to, because that is the
+  era's word for the common case.
   **`Sort` is declined**, the one operation of the 38 not placed. acme's
   `colsort()` reorders a column alphabetically — a one-shot tidy answering a
   problem emca solves with tabs, and the only operation in the set that destroys

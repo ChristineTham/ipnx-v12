@@ -835,8 +835,10 @@ one operand each ([emca.txt](emca.txt)): the window in its layout ->
 the title bar row (Close, Minimise, Maximise, New column, New row,
 Fit); the window's content -> the toolbar (Undo, Redo, plus the
 type's); the tag line's text -> its own buttons (Run and Add always,
-Open/Go to/Search as they apply); a selection in the body -> the
-floating bar (Cut, Copy, Paste, Open, Go to, Search). **Verb
+Open/Find as they apply); a selection in the body -> the floating bar
+(Cut, Copy, Paste, Open, Find). **`Find` is acme's jump and search in
+one**, because `:` and `#` already tell an address from literal text —
+the button does not have to. **Verb
 applicability is one mechanism serving two operands** — the tag line's
 text and the body's selection — which is what the stripped `verbs`
 file comes back for. **emca uses the era's names** — Copy, Save,
