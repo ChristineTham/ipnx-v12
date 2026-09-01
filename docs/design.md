@@ -1019,6 +1019,52 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   work: Zerox (New column duplicates), Edit (sam's language is a command, so you
   type it and press Run), and ID (it is state, so it lives in the status bar).
 
+- **(2026-09-01) THE VERBS SETTLE INTO THREE GROUPS, and two of them are
+  universal.** Sorting by what VARIES rather than by operand alone: WINDOW
+  operations (the title bar row) are always universal; TEXT operations (the tag
+  line's six, and the floating bar's five) are universal too; and the TOOLBAR is
+  never universal — it is entirely the type's, and the only surface a person can
+  change, since `Add` writes to it. Fixed rows, one extensible row.
+  **What makes the text operations universal is not fiat**: every window's body
+  is A SEQUENCE OF ITEMS. Find selects a subset, Edit and Pipe operate on it, and
+  only what an ITEM is varies — a text range in `edit`, a file in `ls`, an output
+  line in `shell`, a child window in `root`. That is sam's structural model
+  lifted from characters to items of any kind, and it is the same reason dot is a
+  set: `x`'s loop is the general case and single-range dot was the special one.
+  **Three command verbs, which are acme's own three** (execute, the filters,
+  Edit), named for what they do. **Run ignores dot; Pipe iterates over it; Edit
+  changes an item's text.** Pipe writes the selected items to a command's stdin,
+  one per line, and opens the results in a new window — one semantic with no
+  per-type behaviour, because where a command wants arguments you pipe through
+  `xargs`, which is exactly what `xargs` is for. We did not have to invent a `{}`
+  substitution: Unix already solved it, and the converter is a program you can
+  see. And Edit is universal because it has ONE semantic with the type supplying
+  only what an item's text is — in `ls` that renames, and in `root` it RETARGETS,
+  since titles retarget. The root case fell out rather than being designed.
+  **Nothing computes applicability, and that deleted a mechanism.** An earlier
+  draft had Open and Find appear only when they applied, which needed emca to
+  judge the text and a `verbs` file to carry the answer. Christine: *"open and
+  find should always apply… Both should always be true."* They do, so they are
+  always there — which gives "look is a dispatcher, SHOW the choice" a better
+  answer than computing it: both buttons are permanently visible, no round trip,
+  nothing to get wrong. The `verbs` file stripped in M15a stays stripped.
+  **Creation stops being a verb at all.** `Open` on a name that does not exist
+  gives a window Save will create; `Open tmp/` — a trailing slash — makes a
+  directory. So neither "New File" nor "New Folder" exists anywhere, and `ls`
+  carries exactly one verb of its own. The single asymmetry is forced rather than
+  chosen: a directory has no content and therefore no later Save at which to
+  create it, so the slash form creates immediately.
+  **UNDO IS NOT UNIVERSAL**, on her question *"how do we undo a process kill?"* —
+  you cannot. The rule: Undo is available exactly where every operation the
+  window offers is confined to a buffer emca holds, which is `edit` alone of the
+  four. Same root cause as the unit decision: acme could make Undo a universal
+  builtin because every acme window was a text buffer, just as it could measure
+  layout in characters. Both universals were artefacts of one content kind, and
+  neither survives four types. For the irreversible verbs, acme's `Del` rule
+  generalises — destructive verbs REFUSE when there is unrecoverable state and
+  otherwise simply happen. No confirmation dialogs: they train people to click
+  through and protect nothing.
+
 - **(2026-09-01) acme and emca are two documents about two things.** Hers:
   *"acme is Bell Labs program. We are going to update it to fit emca, but not
   change functionality. emca is effectively our new windowing system and UI.

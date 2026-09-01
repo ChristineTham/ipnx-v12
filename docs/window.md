@@ -104,9 +104,6 @@ gains the interface it should have had.
                    a `pane <name>` verb; reads unchanged (rio parses it)
     content        the PATH the host opens over 9P and renders
     toolbar        one control per line: <label> <action>
-    verbs          VERB APPLICABILITY: which of the closed RANGE set applies
-                   to the live selection, one per line — emca's answer to a
-                   `select` event, and the surface renders what it is told
     tag            the tag line — the host's way back into sam
     events         the host speaks: clicks, tag commands, dirty, resize, close
 ```
@@ -274,11 +271,14 @@ surface reopens an existing window on a different file.
 
 ```
 exec <label>              a toolbar control was activated
-tag <text>                a command typed in the tag line — sam's language
-execute <q0> <q1> <text>  the execute verb landed on this range
-open <q0> <q1> <text>     open the range as a path, in a window of its type
-look <q0> <q1> <text>     open's older name; the same verb
-pin <q0> <q1> <text>      pin the range as the next execute's argument
+open <text>               a new window whose title is <text>
+find <text>               select every item <text> names; dot becomes a set
+run <text>                execute <text>, ignoring dot
+pipe <text>               selected items to <text>'s stdin, one per line;
+                          the results open in a new window
+edit <text>               apply <text> as a sam command to each selected
+                          item's text
+add <text>                put <text> on this window's toolbar as a button
 snarf <text>              the surface copied — /dev/snarf is the sync point
 insert <q0> <text>        the user typed or pasted
 delete <q0> <q1>          the user removed a range

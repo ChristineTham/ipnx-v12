@@ -434,15 +434,21 @@ two of them opened windows on paths that did not exist.
   root     inherited    —      Save All, Reset, Save Layout, Restore
                                Layout, Home… THE SCREEN: composites
                                itself by the convention, and
-                               everything else is its descendant.
-  ls       inherited    —      Revert, New File, New Folder. Every
-                               LINE is an Open target, which is how
-                               you navigate a tree by tapping.
-  edit     inherited    —      Save (only while dirty), Revert. The
-                               body is a real editor component.
-  shell    inherited    rc     Interrupt, Clear. rc runs; the line
-                               editor and history are the HOST's, and
-                               rc knows nothing about either.
+                               everything else is its descendant. An
+                               item is a child window; its text is
+                               that window's title.
+  ls       inherited    —      Revert. An item is a FILE
+                               and its text is the name, so Edit
+                               renames and Pipe feeds names to a
+                               command. Every line is an Open target.
+  edit     inherited    —      Save (only while dirty), Revert, Undo,
+                               Redo — the one type where Undo means
+                               anything. The body is a real editor
+                               component.
+  shell    inherited    rc     Interrupt, Clear. An item is a line of
+                               output. rc runs; the line editor and
+                               history are the HOST's, and rc knows
+                               nothing about either.
 
 Each is a directory of small files. That is the whole story, and it
 is why the list can grow without any code: a fifth type is a fifth
@@ -579,10 +585,11 @@ holds — a file, a listing, a shell, an image, or other windows.
             did not do what its name promises. Moving them out of the
             allocation costs one strip however many there are.
 
-  TOOLBAR   verbs whose operand is THIS WINDOW'S CONTENT: Undo and
-            Redo on every window, then the type's. Listed by type
-            below. The window OPERATIONS are not here — they are with
-            the controls, because their operand is different.
+  TOOLBAR   verbs whose operand is THIS WINDOW'S CONTENT, and NOTHING
+            HERE IS UNIVERSAL — not Save, not Revert, not even Undo.
+            All of it is the type's, listed by type below. The window
+            OPERATIONS are not here; they are with the controls,
+            because their operand is different.
 
             THE CORE IS CLOSED; THE TOOLBAR IS NOT. A type may add
             verbs and so may a person, through the tag line's `Add`.
@@ -600,8 +607,8 @@ holds — a file, a listing, a shell, an image, or other windows.
 
   TAG LINE  free, editable text, on the toolbar's line when there is
             room and wrapped below it when there is not — AND IT IS AN
-            OPERAND, NOT A COMMAND LINE. Its own buttons (Run, Edit,
-            Add, and Open/Find as they apply) sit with it, not on the
+            OPERAND, NOT A COMMAND LINE. Its own six buttons — Open,
+            Find, Run, Pipe, Edit, Add — sit with it, not on the
             toolbar, so that it
             is visible which verbs act on what you just typed. Its text is the ARGUMENT to
             whichever toolbar verb is pressed. Hers: "'alice' in the
@@ -667,242 +674,244 @@ Labs' program and renaming its buttons would be changing it.
   Kill            Interrupt       shell windows, and the status bar
   ID              —               not a verb; it is in the status bar
 
-The four surfaces, by operand
------------------------------
-OPERAND DETERMINES SURFACE, and with the window's anatomy settled each
-surface now has ONE operand and no overlap:
+The three groups: window, text, type
+------------------------------------
+Sorting every verb by WHAT VARIES gives a tighter cut than sorting by
+operand alone, and it is the shape the design settled into:
 
-  operand                     surface              verbs
-  -------------------------   ------------------   -------------------
-  the window as a thing in    the TITLE BAR row,   Close, Minimise,
-  a layout                    beside the title     Maximise, New column,
-                                                   New row, Fit
-  the window's CONTENT        the WINDOW TOOLBAR   Save, Revert, Undo,
-                                                   Redo + the type's
-  the TAG LINE's text         buttons beside the   Run, Edit, Add, and
-                              tag line             Open/Find as they
-                                                   apply
-  a SELECTION in the body     the FLOATING BAR     Cut, Copy, Paste,
-                                                   Open, Find
+  group        surface           universal?     verbs
+  ----------   ---------------   ------------   ---------------------
+  WINDOW       the title bar     always         Close, Minimise,
+  operations   row                              Maximise, New column,
+                                                New row, Fit
+  TEXT         the tag line's    always         Open, Find, Run, Pipe,
+  operations   buttons                          Edit, Add
+               the floating      when there     Cut, Copy, Paste,
+               bar               is a selection Open, Find
+  TYPE         the window        NEVER          the type's, plus
+  operations   toolbar                          whatever Add put there
 
-THE FLOATING BAR STAYS, and an earlier draft was wrong to retire it on
-the grounds that the tag line had subsumed it. They are different
-operands: the tag line holds text you COMPOSE, the floating bar acts
-on text you POINT AT. Typing "alice" and pressing Find is not the same
-act as selecting alice in the body and pressing Find, and acme's chord
-was the second one. Hers: "The floating toolbar is still the
-floating toolbar, so it is context sensitive to the window body."
+So the universals are what a window can do to ITSELF and to TEXT; the
+toolbar is the only surface that varies by window, and — because Add
+writes to it — the only one a person can change. Fixed rows, one
+extensible row.
 
-That the same two words — Open and Find — appear on two surfaces is
-not duplication. It is the same verb offered against two
-different operands, which is exactly what the rule predicts.
+OPERAND DETERMINES SURFACE still explains WHERE each sits: the title
+bar row acts on the window in its layout, the toolbar on its content,
+the tag line on text you COMPOSED, the floating bar on text you
+POINTED AT. The tag line and the floating bar are the same family
+differing only in where the text came from, which is why neither
+subsumes the other.
 
-Window operations: universal, and grouped with the controls
------------------------------------------------------------
-These act on the window AS A THING IN A LAYOUT, not on what it holds,
-so they belong with the controls and the title rather than on the
-toolbar. Every window has all of them.
+The body is a sequence of items
+-------------------------------
+What makes the text operations universal, rather than universal by
+fiat: EVERY WINDOW'S BODY IS A SEQUENCE OF ITEMS. Find selects a
+subset. Edit and Pipe operate on the subset. What an ITEM is, is the
+type's — and that is the only thing that varies.
 
-  Close        closes the window cleanly and the underlying command
-               with it. On the ROOT window this is Exit.
-  Minimise     move out of the parent's allocation. Reversible.
-  Maximise     move every sibling out. Reversible.
-  New column   duplicate this window into a new column beside it
-  New row      duplicate this window into a new row below it
-  Fit          drop the size overrides in this subtree, re-derive
+  type     an item is        an item's text is
+  ------   ---------------   ---------------------
+  edit     a text range      the range itself
+  ls       a file            its name
+  shell    a line of output  the line
+  root     a child window    its title
 
-SORT IS DROPPED, and deliberately. acme's colsort() reorders a
-column's windows alphabetically by filename — a one-shot tidy, since
-the next window opened lands wherever the heuristic puts it. It
-answered a real problem in acme (a column of a dozen windows with no
-other way to find one), but emca answers that with TABS, which are
-already a list of names. And it is the only operation here that
-DESTROYS A DELIBERATE ARRANGEMENT WITH NO WAY BACK: minimise, maximise
-and Fit are all reversible or re-derivable, where the previous order is
-simply not remembered. Fit earns its destructiveness because sizes
-drift accidentally; order does not drift, it is set on purpose.
+This is sam's structural model — an address selects, a command
+transforms — lifted from characters to items of any kind. Which is
+also why dot is a SET (see Find): x's loop is the general case, and
+single-range dot was the special one.
 
-DUPLICATE, NOT CREATE-EMPTY, and this is hers: "new col (in reality
-duplicate horizontally)". The new window shows what this one shows.
-Since THE TITLE RETARGETS, you then retitle it to whatever you
-actually wanted — which is why emca needs no separate "new empty
-window" verb, and why Zerox disappears as a distinct operation. One
-verb where acme had three (New, Newcol, Zerox).
+The tag line's six verbs
+------------------------
+Universal, always present, and always meaningful. Their operand is the
+TAG LINE'S TEXT, so they sit with it rather than on the toolbar — a
+person needs to see that Run acts on what they just typed and Save
+does not.
 
-Move and resize are NOT buttons. They are direct manipulation — drag
-a divider, drag a title onto another window — and acme filed them the
-same way (layer 1, not layer 3). Making them buttons would be
-inventing an exception for something the surface already does.
+  Open   A NEW WINDOW WHOSE TITLE IS THIS TEXT (hers). Nothing else
+         needs saying: the title RETARGETS, so the window shows
+         whatever the title names and its type follows — a directory
+         becomes an ls window, a file an edit window.
 
-The window toolbar, by type
----------------------------
-Universal on every window, because every window has content:
+         A NAME THAT DOES NOT EXIST YET is not an error: you get a
+         window on a file that is not there, and Save creates it.
+         That is acme's behaviour, and it is why no type needs a "New
+         File" verb.
 
-  Undo   Redo
+         AND A TRAILING SLASH NAMES A DIRECTORY — `tmp/` (hers). So
+         "new folder" is not a verb either: it is Open with a slash,
+         which is the same rule and not a special case. That empties
+         the last creation verb out of a type's toolbar.
 
-And then the type's. The list is short by construction: a verb earns a
-place here only if its operand is THIS WINDOW'S CONTENT.
+         The one asymmetry, and it is forced rather than chosen: a
+         file is created by Save, but A DIRECTORY HAS NO CONTENT AND
+         THEREFORE NO LATER SAVE at which to create it, so Open with a
+         trailing slash creates it immediately.
 
-  root     Save All      write every descendant with unsaved changes
-           Reset         rebuild the default arrangement
-           Save Layout   the window set, to a file
-           Restore Layout
-           Home…         where files live: the shipped examples,
-                         browser storage, or a granted local folder
-                         (a granted directory IS a bind)
+         Where it lands is the sizing heuristic's business, so Open
+         takes no placement argument. And it REUSES an existing window
+         on the same title rather than opening a duplicate, as acme's
+         look does; emca knows every title, so this is a lookup.
 
-  ls       Revert        re-read the directory
-           New File
-           New Folder
+  Find   SELECT EVERY ITEM THE TEXT NAMES, in this window. It is
+         `,x/foo/` — the loop over the whole body — so dot becomes THE
+         SET OF ALL MATCHES, not the next one.
 
-  edit     Save          appears ONLY while there are unsaved changes,
-                         and its appearance IS the dirty indicator
-                         (acme's rule, kept — acme.c:383)
-           Revert
+         The notation carries the address/literal distinction: a
+         leading : or # means an ADDRESS (:42 a line, #c a rune
+         offset), its absence means literal text. `42` finds the text
+         "42"; `:42` selects line 42. An address naming one place
+         gives a set of one — the degenerate case of the same rule.
 
-  shell    Interrupt     stop the running command
-           Clear
+         REPEATED FIND IS IDEMPOTENT. With every match already
+         selected, moving between them is NAVIGATION — scrolling —
+         which is the surface's half. There is no "find next" verb.
 
-THE TOOLBAR IS NOT CLOSED, and an earlier draft said it was. `Add`
-(below) puts the tag line's text on the toolbar as a button, so a
-person extends it. What is closed is the CORE — the verbs above cannot
-be removed or redefined by a type or a user, because the window's
-behaviour must be predictable. Additions sit beside them.
+  Run    execute the text as a command, in the window's directory, AND
+         IGNORE DOT. Output goes to a new window.
 
-The tag line's buttons
-----------------------
-The tag line's TEXT is their operand, so they sit with it — to its
-right, or as small buttons inside the field where space is tight.
-Separated from the window toolbar deliberately: a person needs to see
-that Run acts on what they just typed and Save does not.
+  Pipe   write THE SELECTED ITEMS to a command's stdin, one per line,
+         and OPEN A NEW WINDOW WITH THE RESULTS.
 
-  RUN AND OPEN ARE ACME'S TWO BUTTONS, and the distinction is who
-  decides what the text IS. `mk` is both a command and a file in /bin;
-  Run treats it as the first, Open as the second. acme spent a mouse
-  button on that choice and emca spends a button on it, because the
-  person knows and the system does not.
+         One semantic, no per-type behaviour: items are lines on
+         stdin, always. Where a command wants arguments instead you
+         pipe through xargs, which is exactly what xargs is for —
+         `xargs rm` on an ls window, `xargs kill` on a proc window,
+         `sort` or `sed` or `awk` on an editor window. WE DO NOT HAVE
+         TO INVENT AN ARGUMENT SUBSTITUTION, because Unix solved it
+         and the thing that does the conversion is a program you can
+         see and change.
 
-  Run      execute the text as a command, in the window's directory.
-           The filters keep acme's syntax rather than growing three
-           more buttons: a leading | pipes the body selection through
-           the command, < replaces the selection with the command's
-           output, > sends the selection to it.
-  Add      put the text on this window's toolbar as a button. This is
-           how acme's "type Indent in the tag and it works" becomes
-           durable, and it is the whole of emca's extensibility story
-           for verbs.
+         Non-destructive at the source: the selection is not replaced.
+         The command may of course have effects of its own.
 
-  and then THE ACQUISITION VERBS, shown conditionally exactly as they
-  are on the floating bar — because `look` dispatched over four things
-  and the tag line deserves all of them, not just one:
+  Edit   apply the text as a SAM COMMAND to each selected item's TEXT.
 
-  Open     A NEW WINDOW WHOSE TITLE IS THIS TEXT (hers, and it is the
-           better statement of it). Nothing else needs saying: the
-           title RETARGETS, so the window shows whatever the title
-           names and its type follows — a directory becomes an ls
-           window, a file an edit window. Shown when the text names
-           something that exists.
+         And this is what makes Edit universal without hand-waving —
+         one semantic, with the type supplying only what an item's
+         text IS:
 
-           Which means Open and New-column-then-retitle are the SAME
-           ACT arriving two ways, so there is exactly one way a window
-           comes to show something — its title — and no second path to
-           keep consistent.
+           edit    the range      -> changes the buffer
+           ls      the filename   -> RENAMES
+           root    the title      -> RETARGETS, because titles do
+           shell   an output line -> changes the scrollback
 
-           Where it lands is the sizing heuristic's business, so Open
-           takes no placement argument. And it REUSES an existing
-           window on the same title rather than opening a duplicate,
-           as acme's look does; emca knows every window's title, so
-           this is a lookup.
-  Find     SELECT EVERYTHING THE TEXT NAMES. It is `,x/foo/` — the
-           loop over the whole file — so dot becomes THE SET OF ALL
-           MATCHES, not the next one.
+         The root row falls out rather than being designed: select
+         every window under /old/branch/, apply s|/old/|/new/|, and
+         they all retarget. A type with no meaningful notion of
+         changing an item's text simply does not offer Edit.
 
-           THE NOTATION CARRIES THE ADDRESS/LITERAL DISTINCTION, so
-           this is one verb and not two: a leading : or # means an
-           ADDRESS — :42 a line, #c a rune offset — and its absence
-           means literal text. `42` finds the text "42"; `:42` selects
-           line 42. An address naming one place gives a set of one:
-           the degenerate case of the same rule.
+  Add    put the text on this window's toolbar as a button. This is
+         how acme's "type Indent in the tag and it works" becomes
+         durable, and it is the whole of emca's extensibility story
+         for verbs.
 
-           An earlier draft had Go to and Search as separate buttons.
-           They are one operation: sam's address language already
-           includes regexp search as an address form, so "Go to
-           :/alice/" and "Search alice" land in the same place by two
-           notations for one act. Named Find rather than Go to because
-           that is the era's word for the common case, and the address
-           forms are a notation layered on it.
+RUN, PIPE AND EDIT ARE ACME'S OWN THREE — execute, the filters, and
+Edit — named for what they do. They must stay three, and the dangerous
+merge is Run with Pipe: with three files selected, pressing Run meaning
+"build the project" must not run rm three times. RUN IGNORES DOT; PIPE
+ITERATES OVER IT, and that has to be a button rather than a heuristic,
+by the rule below.
 
-           This does NOT weaken "look is a dispatcher, show the
-           choice". That principle is about the SYSTEM guessing, and
-           nothing is guessed here — `:` is explicit user syntax. Open
-           still needs its own button precisely because no notation
-           separates a filename from a word in the text: `mk` is both,
-           which is what acme spent a mouse button on.
+The rules that decided all of this
+----------------------------------
+Two, arrived at repeatedly from different directions:
 
-           REPEATED FIND IS IDEMPOTENT. With every match already
-           selected, moving between them is NAVIGATION — scrolling —
-           which is the surface's half. So there is no "find next"
-           verb; the component's own match navigation does it.
+  A BUTTON IS WARRANTED EXACTLY WHERE THE TEXT CANNOT SAY WHICH
+  OPERATION IS MEANT.
 
-  Edit     execute a sam command. ITS DEFAULT ADDRESS IS DOT, which is
-           sam's own default — so with dot a set, the command applies
-           to EACH element. That is not a new mechanism: it is `x`'s
-           execution model promoted from an explicit operator to the
-           default.
+    `mk` is both a filename and a word in the body, so Open and Find
+    are separate buttons. `x` and `g` are both sam commands and
+    plausible program names, so Edit and Run are separate. But `:42`
+    and `42` are told apart by the colon, so jump and search are ONE
+    button — the notation does the work and a button need not.
 
-           Together with Find above, this is what makes the commonest
-           edit anyone makes need no sam at all:
+  A VERB THAT MODIFIES IS NEVER INFERRED.
 
-             foo + Find      -> every occurrence selected
-             type "bar"      -> every occurrence replaced
+    Find is safe by construction; Edit announces that it might change
+    things. This is also why Run and Pipe do not collapse into one
+    verb that behaves differently when something is selected.
 
-           because typing over a multi-range dot is multi-cursor, and
-           the surface has it natively. THE SURFACE'S MULTI-CURSOR AND
-           EMCA'S MULTI-RANGE DOT ARE THE SAME THING — not two
-           parallel notions to keep in step, which is the whole reason
-           to define dot this way.
-
-           And the sam route stays available and is stronger: `,s//bar/g`
-           reuses the last pattern (sam's own rule — an empty regexp
-           is the previous one, cmd.c:514), while `x/foo/ g/bar/ c/baz/`
-           replaces only the matches whose line also contains bar. A
-           guarded loop is strictly more expressive than a
-           Replace/Skip button, which is what select-all-then-type
-           gives up.
-
-           DOT AS A SET EXTENDS SAM RATHER THAN PORTING IT. In sam,
-           curfile->dot is a single range and `x` iterates over
-           matches one at a time. Making dot itself a set is ours, and
-           it has one consequence that must not be left implicit: THE
-           ACME PORT SEES THE PRIMARY RANGE. /mnt/acme's addr and data
-           assume a single dot, so acme is given the first element of
-           the set — written down here so acme does not break quietly
-           (acme.txt).
-
-  Conditional rather than permanent so the tag line stays narrow, and
-  because WHICH VERBS APPLY is emca's judgement in both places. One
-  applicability mechanism, two operands: the tag line's text, and the
-  body's selection.
+AND NOTHING COMPUTES APPLICABILITY. An earlier draft had Open and Find
+appear only when they applied, which needed emca to judge the text and
+answer, and a `verbs` file to carry the answer. They always apply, so
+they are always there — which gives "look is a dispatcher, SHOW the
+choice" a better answer than computing it: both buttons are permanently
+visible, with no round trip and nothing to get wrong.
 
 The floating bar
 ----------------
-Appears at the selection, because that is where its operand is.
-Carries Cut, Copy and Paste always, then Open when the selection names
-something that exists, and Find — which is where acme's `jump` and
-`search` meet, since the notation tells them apart. Plumb is the
-fallback when rules decide.
+Appears at the selection, because that is where its operand is. Cut,
+Copy, Paste — the platform's clipboard, so the surface's — and Open
+and Find against the SELECTED text rather than the typed text.
 
-THIS IS WHERE EMCA BEATS ACME rather than porting it. Acme's look
-parses your text and silently picks one of the four, which is exactly
-why nobody can predict it. The bar SHOWS the choice. The parsing is
-unchanged; it populates a bar instead of deciding for you, and the
-plumber acquires a face.
+That the same two words appear on two surfaces is not duplication. It
+is one verb offered against two operands, which is what the rule
+predicts.
 
 Timing, the known trap: THE BAR MUST SNAPSHOT THE RANGE WHEN IT
 APPEARS. The tap that presses its button collapses the native
 selection first. Underneath is a conflation — dot is insertion point,
 operand and clipboard source at once, three lifetimes that a mouse
 hides and touch cannot.
+
+The window toolbar, by type
+---------------------------
+NOTHING IS UNIVERSAL HERE. Not Save (a shell has nothing to save), not
+Revert (a shell does not), and not Undo.
+
+UNDO IS NOT UNIVERSAL, and the rule is:
+
+  UNDO IS AVAILABLE EXACTLY WHERE EVERY OPERATION THE WINDOW OFFERS IS
+  CONFINED TO A BUFFER EMCA HOLDS.
+
+A killed process does not come back, a deleted file does not, a sent
+request does not. An Undo button that silently does nothing on three
+types of four is worse than no Undo. This is the same root cause as
+the unit question in PART FIVE: acme could make Undo a universal
+builtin because EVERY ACME WINDOW WAS A TEXT BUFFER, just as it could
+measure layout in characters. Both universals were artefacts of a
+system with one content kind, and neither survives four types.
+
+For the irreversible verbs the design already has acme's answer, and
+it generalises: acme's Del REFUSES on a dirty window — you must Put or
+Delete explicitly. So DESTRUCTIVE VERBS REFUSE WHEN THERE IS
+UNRECOVERABLE STATE, and otherwise simply happen. No confirmation
+dialogs: they train people to click through, and protect nothing.
+
+A type ships DELIBERATELY LITTLE, because Add exists. Anything wanted
+occasionally is added by the person who wants it; the type carries
+only what it needs to function.
+
+  root     Save All        write every descendant with unsaved changes
+           Reset           rebuild the default arrangement
+           Save Layout     the window set, to a file
+           Restore Layout
+           Home…           where files live: the shipped examples,
+                           browser storage, or a granted local folder
+                           (a granted directory IS a bind)
+
+  ls       Revert          re-read the directory
+
+           And nothing else. Open covers both creations — a name for a
+           file, a name with a trailing slash for a directory — so ls
+           carries exactly one verb of its own.
+
+  edit     Save            only while there are unsaved changes, and
+                           its appearance IS the dirty indicator
+                           (acme's rule, kept — acme.c:383)
+           Revert
+           Undo  Redo      here and nowhere else
+
+  shell    Interrupt       stop the running command
+           Clear
+
+Two that were considered and REFUSED, because the design already
+covers them: `Up` on ls — the title is editable and its directory
+segment is tappable, and that IS navigation — and `Wrap` on edit,
+which is a view mode and therefore the surface's, not a verb that
+crosses.
 
 Every operation accounted for
 -----------------------------
@@ -913,33 +922,30 @@ acme.txt counts 38 operations. Where each one went:
                     plumb (the floating bar's fallback)
   title bar (6)     Close, Minimise, Maximise, New column, New row,
                     Fit
-  toolbar (2+type)  Undo, Redo, and the per-type lists above
-  tag line (5)      Run, Edit and Add always; Open and Find as they
-                    apply — with |, < and > as syntax within Run
-                    rather than as buttons, and : and # as syntax
-                    within Find
+  tag line (6)      Open, Find, Run, Pipe, Edit, Add — with |, < and >
+                    as syntax within Pipe rather than as buttons, and
+                    : and # as syntax within Find
   floating bar (5)  Cut, Copy, Paste, Open, Find
+  toolbar           the per-type lists above
   status bar        id, and the running command with Interrupt
 
 Two acme builtins disappear as BUTTONS because something else already
 does the work: Zerox (New column duplicates) and ID (it is state, so
-it belongs in the status bar). And `jump` and `search` become ONE
-button, Find, because the notation distinguishes them and no button
-needs to.
+it belongs in the status bar). New disappears too — Open a name that
+does not exist, and Open a name ending in `/` for a directory, so
+neither "New File" nor "New Folder" is a verb anywhere. And `jump` and
+`search` become ONE button, Find, because the notation distinguishes
+them.
 
-EDIT WAS DROPPED AND RESTORED, and the reasoning is worth keeping: it
-went on the grounds that sam's language "is just a command, so type it
-and press Run". It is not — Run execs a program and `s/a/b/` is not
-one, and no notation separates them, since `x`, `y`, `g` and `v` are
-sam commands and plausible program names both. Which is the rule this
-section keeps arriving at: A BUTTON IS WARRANTED EXACTLY WHERE THE
-TEXT CANNOT SAY WHICH OPERATION IS MEANT. And its stronger form: A
-VERB THAT MODIFIES IS NEVER INFERRED — Find is safe by construction,
-Edit announces that it might change things.
-
-ONE IS DROPPED OUTRIGHT: Sort, for the reason given above. That leaves
-37 placed and one deliberately declined — recorded here so it reads as
-a decision rather than an oversight.
+ONE IS DROPPED OUTRIGHT: Sort. acme's colsort() reorders a column
+alphabetically by filename — a one-shot tidy, undone by the next
+window opened. It answered a real problem in acme (a column of a dozen
+windows with no other way to find one) which emca answers with TABS, a
+list of names already. And it is the only operation in the set that
+DESTROYS A DELIBERATE ARRANGEMENT WITH NO WAY BACK: minimise, maximise
+and Fit are reversible or re-derivable, where the previous order is
+simply not remembered. Fit earns its destructiveness because sizes
+drift accidentally; order does not drift, it is set on purpose.
 
 Allocation, and what a tab is
 -----------------------------
