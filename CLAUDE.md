@@ -39,11 +39,13 @@ here it cannot, **because the managers are already text filesystems**. The desig
 [docs/emca.txt](docs/emca.txt); the acme anatomy in [docs/acme.txt](docs/acme.txt)
 was input to it, not parentage.
 
-**The layers have names** (decision log, 2026-08-31): **IPNX** is the kernel
-**and the userspace** — the whole file world, Darwin's slot rather than XNU's;
-**Saranos** is the user experience on top of it — `emca` the shell, the window
-types, the presenters, the surfaces' furniture; wasm and the surfaces are the
-machine it runs on. **The interface between them is 9P and nothing else**
+**The layers have names** (decision log, 2026-08-31; sharpened 2026-09-01):
+**Saranos is the operating system** — the whole thing, what you would say you
+are running. **IPNX is the kernel and the userspace** — the whole file world,
+Darwin's slot rather than XNU's. **emca is the windowing and UI system** — the
+compositor, the window types, the surfaces' furniture. The parallel is exact
+and worth keeping in mind: **macOS / Darwin / Aqua** is **Saranos / IPNX /
+emca**. wasm and the surfaces are the machine it runs on. **The interface between them is 9P and nothing else**
 (redesigned 2026-08-31): content is a file the host mounts and renders natively
 (so **IPNX implements no renderers**), `/dev/window/<type>/<n>` is the
 bidirectional control interface with the type in the path, `/type` is the
@@ -51,7 +53,8 @@ registry both sides read, and `/dev/canvas` narrows to genuine drawing — the
 exception, not the rule.
 Saranos is Sanskrit *śaraṇa* (शरण), *refuge* — Christine's reading: *a refuge
 from the complexities of the modern computing environment*, a refuge for the
-person, which is why it names the experience and not the kernel. A process
+person, which is why it names the system someone uses and not the kernel
+underneath. A process
 also runs in a refuge bounded by what it was given; one word, both layers. Note the symmetry that produced the layering: **XNU is
 "X is Not Unix" and IPNX is "IP is Not UNIX"** — the same joke, so the layer
 above wanted a human name rather than a second acronym, exactly as Darwin did.

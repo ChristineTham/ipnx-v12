@@ -419,7 +419,7 @@ main(int argc, char *argv[])
 	n = read(fd, buf, sizeof buf - 1);
 	buf[n > 0 ? n : 0] = 0;
 	close(fd);
-	ok(strstr(buf, "hello") != nil,
+	ok(strstr(buf, "Saranos") != nil,
 	   "parent namespace untouched by child's bind over /etc");
 
 	/* The shell: run the rc test script in a namespace copy; its binds
@@ -431,7 +431,7 @@ main(int argc, char *argv[])
 	n = read(fd, buf, sizeof buf - 1);
 	buf[n > 0 ? n : 0] = 0;
 	close(fd);
-	ok(strstr(buf, "hello") != nil, "init's namespace survived rc's binds");
+	ok(strstr(buf, "Saranos") != nil, "init's namespace survived rc's binds");
 
 	/* Wire 9P at the mount boundary: a guest process serves 9P2000 on a
 	 * pipe; mount(2) speaks Tversion/Tattach to it; every file operation
@@ -584,7 +584,7 @@ main(int argc, char *argv[])
 	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
 	buf[n > 0 ? n : 0] = 0;
 	close(fd);
-	ok(strstr(buf, "hello") != nil, "symlink: open follows to the target");
+	ok(strstr(buf, "Saranos") != nil, "symlink: open follows to the target");
 	n = readlink9("/tmp/lnk", buf, sizeof buf);
 	ok(n > 0 && strcmp(buf, "/etc/motd") == 0, "readlink: the target comes back");
 	n = lstat("/tmp/lnk", edir, sizeof edir);
@@ -601,7 +601,7 @@ main(int argc, char *argv[])
 	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
 	buf[n > 0 ? n : 0] = 0;
 	close(fd);
-	ok(strstr(buf, "hello") != nil,
+	ok(strstr(buf, "Saranos") != nil,
 	   "a symlink read through a mount resolves in the CLIENT's namespace");
 	ok(link9("/n/hello/motd", "/n/hello/motd2") < 0,
 	   "a server without the extension answers Rerror, not a wedge");
@@ -720,7 +720,7 @@ main(int argc, char *argv[])
 		   strstr(out, "hello from wasi-libc") != nil &&
 		   strstr(out, "argv1=frominit") != nil &&
 		   strstr(out, "clock=ticking") != nil &&
-		   strstr(out, "motd: hello") != nil,
+		   strstr(out, "motd: Welcome to Saranos") != nil,
 		   "WASI ABI: a wasi-libc citizen ran — stdio, argv, clock, the motd through the preopen");
 		ok(strstr(out, "readback: written by wasi") != nil &&
 		   strstr(out, "/etc has") != nil && strstr(out, "has 0 entries") == nil,
@@ -736,7 +736,7 @@ main(int argc, char *argv[])
 		n = await(buf, sizeof buf);
 		ok(n > 0 && strstr(buf, "''") != nil &&
 		   strstr(out, "hello from wasip1") != nil &&
-		   strstr(out, "motd: hello") != nil,
+		   strstr(out, "motd: Welcome to Saranos") != nil,
 		   "WASI ABI: a REAL Go binary (wasip1) ran against the kernel");
 		ok(strstr(out, "slept=true") != nil &&
 		   strstr(out, "/etc has") != nil && strstr(out, "has 0 entries") == nil &&

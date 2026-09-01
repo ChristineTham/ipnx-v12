@@ -34,6 +34,8 @@ It is based on:
 
 So IPNX v12 will run everywhere - in a browser on any machine, or using a WASM runtime engine (eg. [wasmtime](https://wasmtime.dev)), or directly inside a container.
 
+The system has three layers, and each has its own name. **Saranos** is the operating system — the whole thing, and what you would say you are running. It is Sanskrit *śaraṇa*, refuge: a refuge from the complexities of the modern computing environment. **IPNX** is the kernel and the userspace. **emca** is the windowing and user interface system. Where Apple has macOS, Darwin and Aqua, this has Saranos, IPNX and emca.
+
 IPNX v12 consists of:
 
 - a reimplementation of the Plan 9 kernel in Rust, as an ordinary userspace process on the host system — with a JavaScript twin that runs the same kernel in any browser; the two implementations pass an identical conformance suite — and
@@ -318,7 +320,7 @@ booted for one request and gone.
 
 **The whole system runs in your browser at
 [christham.net/ipnx-v12](https://christham.net/ipnx-v12/).** One button boots
-it: the desktop appears in a few seconds, and the toolchains — about 260 MB of
+it: emca appears in a few seconds, and the toolchains — about 260 MB of
 them — stream in while you look around. Nothing installs and nothing persists:
 the entire machine lives in a tab's memory, and a reload forgets it ever
 existed.

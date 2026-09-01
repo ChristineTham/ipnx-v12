@@ -1130,6 +1130,24 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   field. A parallel tree indexed by path is the house shape already: `#V/<snap>/…`
   for versions, `/n/` for mounted worlds.
 
+- **(2026-09-01) The layering, sharpened: Saranos is the OPERATING SYSTEM.** The
+  2026-08-31 entry made Saranos "the user experience on top of" IPNX — which was
+  right that it needed a name and wrong about which name. Hers, settling it:
+  *"saranos is the name of the operating system, emca is the windowing and UI
+  system, IPNX is the kernel and userspace."* So the three-way maps exactly onto
+  **macOS / Darwin / Aqua**, and emca — not Saranos — is the layer whose job is
+  the interface. Propagated: `docs/architecture.md` states it up front, the
+  landing page and the browser tab say Saranos rather than IPNX v12, and
+  `/etc/motd` is hers: *"Welcome to Saranos, a modern operating system based on
+  IPNX - a reimagining of UNIX."*
+  **And it caught a fragility worth recording.** Six C-level assertions proved a
+  namespace was intact by looking for the word "hello" IN THE MOTD — so changing
+  the greeting broke seven tests. They now look for "Saranos", which is a better
+  assertion as well as a stabler one: it says the REAL motd is in view, where the
+  alt view used by those tests says "the child's private view of /etc/motd" and
+  never names the system. A test that depends on a greeting's wording is a test
+  that will drift.
+
 - **(2026-09-01) acme and emca are two documents about two things.** Hers:
   *"acme is Bell Labs program. We are going to update it to fit emca, but not
   change functionality. emca is effectively our new windowing system and UI.

@@ -10,6 +10,25 @@ chronology — if a sentence would start with "because," it belongs elsewhere an
 appears here as a link. It changes only when a contract changes, in the same
 commit as the change.
 
+## The three layers, and what each is called
+
+**Saranos is the operating system** — the whole thing, and what someone would
+say they are running. **IPNX is the kernel and the userspace** — the file world.
+**emca is the windowing and UI system** — the compositor, the window types, the
+surfaces' furniture. The parallel is exact and worth holding in mind:
+
+| Apple | here |
+|---|---|
+| macOS | **Saranos** — the operating system |
+| Darwin | **IPNX** — the kernel and the userspace |
+| Aqua | **emca** — the windowing and UI system |
+
+Saranos is Sanskrit *śaraṇa*, refuge. Note the symmetry that forced the
+layering: XNU is "X is Not Unix" and IPNX is "IP is Not UNIX" — the same joke,
+so the layer above wanted a human name rather than a second acronym, exactly as
+Darwin did. **Dated entries in the records keep the words they were written
+with**; only present-tense statements of what the system *is* carry these names.
+
 ## The system, in one paragraph
 
 The IPNX kernel — an original implementation of Plan 9's architecture, sharing

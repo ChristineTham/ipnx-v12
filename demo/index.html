@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>IPNX v12 — a reimagining of Unix, in your browser</title>
+<title>Saranos — a reimagining of Unix, in your browser</title>
 <style>
   :root { color-scheme: dark; }
   body { margin: 0; background: #0d1117; color: #d6dde4;
@@ -28,12 +28,18 @@
 </head>
 <body>
 <main>
-<h1>IPNX v12</h1>
+<h1>Saranos</h1>
 <p class="sub">a reimagining of Unix — the counterfactual next Research edition,
 running in this tab</p>
 
-<p><b>IPNX is a new operating system</b> — not a distribution of an old one,
-not an emulator. Its kernel is original, written in Rust — and <b>the very
+<p><b>Saranos is a new operating system</b> — not a distribution of an old
+one, not an emulator. Three layers, and the parallel is exact:
+<b>Saranos</b> is the system, <b>IPNX</b> is the kernel and the userspace,
+<b>emca</b> is the windowing and UI — where Apple has macOS, Darwin and Aqua.
+The name is Sanskrit <i>śaraṇa</i>, refuge: a refuge from the complexities of
+the modern computing environment.</p>
+
+<p> Its kernel is original, written in Rust — and <b>the very
 same kernel runs native on macOS and, compiled to WebAssembly, inside this
 tab</b>: one core, one conformance suite green on both, plus a JavaScript
 twin held as the frozen conformance oracle. The architecture takes what
@@ -41,12 +47,13 @@ Plan&nbsp;9 proved and Unix never shipped — <b>per-process namespaces</b>, 9P
 as the only IPC, everything a file — with none of Plan&nbsp;9's kernel code,
 and <b>WebAssembly</b> as the executable format.</p>
 
-<p>What boots below is the complete system, entirely in this tab: the
-reimagined userland on <b>/dev/canvas</b> — a display that is a semantic file
-tree you can <code>cat</code>, <code>echo</code> and <code>grep</code> —
-with <code>con</code>, <code>acme</code> and <code>sam</code> (each name
-inherited by passing its ancestor's tests; the raster originals still run as
-<code>sam9</code> and <code>acme9</code>), the real 4th-edition
+<p>What boots below is the complete system, entirely in this tab: it boots
+into <b>emca</b>, which is not an application but the system's face — one
+object, a window, composited recursively into rows, columns and tabs, where
+every window is itself a compositor. With <code>con</code>, <code>acme</code>
+and <code>sam</code> (each name inherited by passing its ancestor's tests;
+the raster originals still run as <code>sam9</code> and <code>acme9</code>),
+the real 4th-edition
 <code>rc</code>, twenty-four real commands, V10 binaries from the TUHS tapes
 in <code>/v10/bin</code>, real Go and CPython&nbsp;3.14, a C compiler, a
 package manager, whole-system snapshots and a process orchestrator. Nothing
@@ -57,13 +64,11 @@ tab, in an internet café if need be; and the same system runs native on macOS
 with full JIT.</p>
 
 <p>
-<a class="go" href="shell/"><b>Boot IPNX v12</b> — the whole world: the canvas
-console and editor, shells, sam, acme,
-cc, the real Go compiler, Python with pip. The desktop appears in seconds; the
-toolchains (~260&nbsp;MB) stream in while you look around. Nothing persists
-by default; pick <b>home: browser storage</b> or grant a real <b>local
-folder</b> from the menu and your files outlive the tab — a granted
-directory is a bind.</a>
+<a class="go" href="shell/"><b>Boot Saranos</b> — the whole world: emca with
+your home listed, files in editor tabs and <code>rc</code> below; shells,
+sam, acme, cc, the real Go compiler, Python with pip. It appears in seconds;
+the toolchains (~260&nbsp;MB) stream in while you look around. Nothing
+persists by default.</a>
 <a class="go" href="browser/">Run the conformance suite</a>
 </p>
 
@@ -109,26 +114,35 @@ PyPI. And the display itself is files: every window's UI can be
 <code>cat</code>-ed, <code>echo</code>-ed into, and <code>grep</code>-ed —
 which is why the test suite drives real editors without a screen.</p>
 
-<h2 style="font:700 1.25rem Georgia,serif;color:#fff;margin:2rem 0 .3rem">The browser surface</h2>
-<p>Press <b>Boot</b>, then:</p>
-<p><b>Choose a home</b> from the menu selector: <i>play</i> (the shipped
-examples; nothing persists), <i>browser storage</i> (your files survive
-reload, private to this site), or <i>local folder…</i> (grant a real
-directory on your disk — <code>Put</code> writes to it; a granted directory
-is a bind). <b>Console</b> opens <code>con</code>: type at the caret, Enter
-runs the line, and the whole transcript is an ordinary editable, searchable
-buffer. <b>acme</b> opens the workspace: two columns with your home listed —
-<b>right-click a name to open it</b> (directories open as more listings),
-<b>alt-click (or middle-click) any word in any tag to execute it</b> —
-<code>Put</code>, <code>Get</code>, <code>Del</code>, <code>New</code>,
-<code>Newcol</code> — and sweep a selection first to execute it with
-arguments, e.g. select <code>Edit&nbsp;,x/harses/c/horses/</code> in a tag
-and alt-click it. Rename the tag's first word and <code>Put</code> writes to
-the new name. Your ⌘C/⌘X/⌘V are snarf: <code>cat /dev/snarf</code> reads
-what you last copied. The display really is files — from the console, try
-<code>cat '#w/2/canvas/12/data'</code> to read an editor's buffer as text,
-or <code>rc /rc/tile</code> to run a window manager written in a dozen lines
-of shell.</p>
+<h2 style="font:700 1.25rem Georgia,serif;color:#fff;margin:2rem 0 .3rem">emca, the interface</h2>
+<p>Press <b>Boot</b> and the whole page is emca. There is <b>one object</b>:
+a window is a rectangle with a tag, holding either a body or child windows —
+so a column is a window too, and closing one closes what it holds. Every
+window composites itself, without limit, which is why <i>panes</i> are not a
+kind of thing here: the root window makes three columns by convention and
+then forgets they were special.</p>
+<p>A parent gives rectangles to some of its children; the rest are <b>tabs</b>.
+That single idea is <b>minimise</b> (move me out of the allocation),
+<b>maximise</b> (move everyone else out) and <b>new tab</b> (the same again
+with the allocation bit flipped) — one mechanism, three buttons, and a tab is
+a whole window that simply has no rectangle.</p>
+<p>Every window carries the same four parts: coloured controls and an
+<b>editable title</b> — retitle a window and it retargets, which is how you
+navigate — then the <b>tag line</b> with its own verbs, then the body with
+scrollbars, then a status line. The tag line is an <i>operand</i>, not a
+command line: type <code>mk</code> and press <b>Run</b>; type
+<code>alice</code> and press <b>Find</b>, which selects <i>every</i> match, so
+replacing is just typing. Leave it empty and the verbs act on the selection
+instead. Output goes to <code>/output/&lt;dir&gt;/&lt;command&gt;</code> — a
+real path in a filesystem that mirrors the filesystem, so it
+<code>cat</code>s and <code>grep</code>s like anything else.</p>
+<p>The display really is files. From the shell below, try
+<code>ls /dev/window</code>, <code>cat /dev/window/edit/1/toolbar</code>, or
+<code>rc /rc/tile</code> to run a window manager written in a dozen lines of
+shell. Your ⌘C/⌘X/⌘V are snarf: <code>cat /dev/snarf</code> reads what you
+last copied. And the raster heritage is one command away —
+<code>win acme9 &amp;</code> opens the 1993 acme, verbatim source, beside its
+successor.</p>
 
 <h2 style="font:700 1.25rem Georgia,serif;color:#fff;margin:2rem 0 .3rem">The macOS surface</h2>
 <p>The same system runs native — full JIT under wasmtime, real windows,
