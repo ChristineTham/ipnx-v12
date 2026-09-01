@@ -548,7 +548,7 @@ holds — a file, a listing, a shell, an image, or other windows.
   CONTROLS  and the WINDOW OPERATIONS, which belong here rather than
             on the toolbar because their operand is the window as a
             thing in a layout — not what it holds. Close, Minimise,
-            Maximise, New column, New row, Fit, Sort; listed in full
+            Maximise, New column, New row, Fit; listed in full
             below. ALL OF THEM INFORM THE PARENT.
             A child never resizes or removes itself; it asks. That is
             what makes the recursion work, because a parent owns the
@@ -671,7 +671,7 @@ surface now has ONE operand and no overlap:
   -------------------------   ------------------   -------------------
   the window as a thing in    the TITLE BAR row,   Close, Minimise,
   a layout                    beside the title     Maximise, New column,
-                                                   New row, Fit, Sort
+                                                   New row, Fit
   the window's CONTENT        the WINDOW TOOLBAR   Save, Revert, Undo,
                                                    Redo + the type's
   the TAG LINE's text         buttons beside the   Run, Search, Open,
@@ -704,7 +704,17 @@ toolbar. Every window has all of them.
   New column   duplicate this window into a new column beside it
   New row      duplicate this window into a new row below it
   Fit          drop the size overrides in this subtree, re-derive
-  Sort         order this window's children by name (containers only)
+
+SORT IS DROPPED, and deliberately. acme's colsort() reorders a
+column's windows alphabetically by filename — a one-shot tidy, since
+the next window opened lands wherever the heuristic puts it. It
+answered a real problem in acme (a column of a dozen windows with no
+other way to find one), but emca answers that with TABS, which are
+already a list of names. And it is the only operation here that
+DESTROYS A DELIBERATE ARRANGEMENT WITH NO WAY BACK: minimise, maximise
+and Fit are all reversible or re-derivable, where the previous order is
+simply not remembered. Fit earns its destructiveness because sizes
+drift accidentally; order does not drift, it is set on purpose.
 
 DUPLICATE, NOT CREATE-EMPTY, and this is hers: "new col (in reality
 duplicate horizontally)". The new window shows what this one shows.
@@ -760,6 +770,12 @@ right, or as small buttons inside the field where space is tight.
 Separated from the window toolbar deliberately: a person needs to see
 that Run acts on what they just typed and Save does not.
 
+  RUN AND OPEN ARE ACME'S TWO BUTTONS, and the distinction is who
+  decides what the text IS. `mk` is both a command and a file in /bin;
+  Run treats it as the first, Open as the second. acme spent a mouse
+  button on that choice and emca spends a button on it, because the
+  person knows and the system does not.
+
   Run      execute the text as a command, in the window's directory.
            The filters keep acme's syntax rather than growing three
            more buttons: a leading | pipes the body selection through
@@ -767,12 +783,23 @@ that Run acts on what they just typed and Save does not.
            output, > sends the selection to it. And sam's structural
            language is just a command, which is why Edit is not a
            button.
-  Search   find the text in this window's body, wrapping
-  Open     open the text as a path, in a new window
   Add      put the text on this window's toolbar as a button. This is
            how acme's "type Indent in the tag and it works" becomes
            durable, and it is the whole of emca's extensibility story
            for verbs.
+
+  and then THE ACQUISITION VERBS, shown conditionally exactly as they
+  are on the floating bar — because `look` dispatched over four things
+  and the tag line deserves all of them, not just one:
+
+  Open     when the text names a file or directory
+  Go to    when it names an address — :42, :/re/, #c
+  Search   always: find the text in this window's body, wrapping
+
+  Conditional rather than permanent so the tag line does not grow five
+  fixed buttons, and because WHICH VERBS APPLY is emca's judgement in
+  both places. One applicability mechanism, two operands: the tag
+  line's text, and the body's selection.
 
 The floating bar
 ----------------
@@ -801,18 +828,23 @@ acme.txt counts 38 operations. Where each one went:
   native (4)        select, insert, delete, scroll — the component's
   gesture (4)       expand (double-click), move, grow/shrink (drag),
                     plumb (the floating bar's fallback)
-  title bar (7)     Close, Minimise, Maximise, New column, New row,
-                    Fit, Sort
+  title bar (6)     Close, Minimise, Maximise, New column, New row,
+                    Fit
   toolbar (2+type)  Undo, Redo, and the per-type lists above
-  tag line (4)      Run, Search, Open, Add — with |, < and > as
-                    syntax within Run rather than as buttons
+  tag line (5)      Run and Add always; Open, Go to and Search as they
+                    apply — with |, < and > as syntax within Run
+                    rather than as buttons
   floating bar (6)  Cut, Copy, Paste, Open, Go to, Search
   status bar        id, and the running command with Interrupt
 
-Nothing is dropped. Three acme builtins disappear as BUTTONS because
-something else already does the work: Zerox (New column duplicates),
-Edit (type sam's language and press Run), and ID (it is state, so it
-belongs in the status bar).
+Three acme builtins disappear as BUTTONS because something else
+already does the work: Zerox (New column duplicates), Edit (type sam's
+language and press Run), and ID (it is state, so it belongs in the
+status bar).
+
+ONE IS DROPPED OUTRIGHT: Sort, for the reason given above. That leaves
+37 placed and one deliberately declined — recorded here so it reads as
+a decision rather than an oversight.
 
 Allocation, and what a tab is
 -----------------------------
