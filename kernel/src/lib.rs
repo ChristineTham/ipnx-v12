@@ -1625,6 +1625,18 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                     win_chrome(k, w);
                 }
                 ["maximise"] | ["maximize"] => { maximise(k, w); }
+                // THE ALLOCATION emca computed. Distinct from `resize`,
+                // which reallocates a raster — a tree window has no raster,
+                // and allocating one per layout pass would be pure waste.
+                // Reads come back through wctl unchanged, so `cat wctl` is
+                // how rc asserts a layout.
+                ["rect", x, y, ww, hh] => {
+                    let mut wb = w.borrow_mut();
+                    wb.x = x.parse().unwrap_or(wb.x);
+                    wb.y = y.parse().unwrap_or(wb.y);
+                    wb.w = ww.parse().unwrap_or(wb.w);
+                    wb.h = hh.parse().unwrap_or(wb.h);
+                }
                 ["move", x, y] => {
                     let mut wb = w.borrow_mut();
                     wb.x = x.parse().unwrap_or(wb.x);

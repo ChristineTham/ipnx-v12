@@ -21,7 +21,11 @@ cp ../userspace/build/rootfs.json dist/build/rootfs.json
 # kernel half; rustkern.mjs drives it)
 ( cd .. && cargo build --release --target wasm32-unknown-unknown -p browserhost )
 cp ../target/wasm32-unknown-unknown/release/browserhost.wasm dist/build/kernel.wasm
-cp index.html NOTICES.html _headers coi-sw.js coi-register.js dist/
+# the landing page is MARKDOWN (demo/index.md) — nobody writes HTML by hand,
+# and it is prose that gets edited. mkpage.mjs renders it; index.html is
+# generated and exists only in dist.
+node mkpage.mjs dist/index.html
+cp NOTICES.html _headers coi-sw.js coi-register.js dist/
 cp -R shell dist/shell
 cp -R vendor dist/vendor
 # stamp the SW cache name per build: a stale CacheStorage must never serve a

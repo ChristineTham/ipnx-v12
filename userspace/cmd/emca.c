@@ -673,6 +673,226 @@ dolook(Win *w, char *sel)
 	close(fd);
 }
 
+/* ---- THE SIZING HEURISTIC (emca.txt, "Sizing: automatic, content-aware") ----
+ *
+ * acme's coladd() shrinks the victim to min(half its height, THE SPACE ITS
+ * CONTENT OCCUPIES) — content-aware, not fractional, which is where
+ * "automatic and reasonable" comes from. emca generalises it: every window
+ * declares a MINIMUM and a NATURAL along its parent's axis; minimums are met
+ * first, the remainder is shared in proportion to the SLACK (natural minus
+ * minimum) and capped at natural, and anything still left is shared equally.
+ * acme's rule then falls out rather than being ported — a sibling with little
+ * content has a lot of slack, a full one has none.
+ *
+ * The unit is device-independent pixels with a text cell reported alongside
+ * (emca.txt); until the surface reports one (M15d) these are the defaults.
+ */
+enum {
+	CELLW = 8, CELLH = 18,
+	FURN = 3,			/* title, tag line, status: three lines */
+	MINCOLS = 20, MINLINES = 1,
+	NATCOLS = 80, NATLINES = 10,
+	MAXKIDS = 32,
+};
+
+static long
+wread(int wid, char *file, char *out, long max)
+{
+	char p[NMAX];
+
+	snprint(p, sizeof p, "/dev/window/%d/%s", wid, file);
+	return rfile(p, out, max);
+}
+
+static int
+naxis(int wid)
+{
+	char b[32];
+
+	if(wread(wid, "axis", b, sizeof b) <= 0) return 0;
+	if(strncmp(b, "row", 3) == 0) return 1;
+	if(strncmp(b, "col", 3) == 0) return 2;
+	return 0;
+}
+
+static int
+nallocated(int wid)
+{
+	char b[32];
+
+	if(wread(wid, "alloc", b, sizeof b) <= 0) return 1;
+	return strncmp(b, "tab", 3) != 0;
+}
+
+/* kids are named by POSITION and the indexes are contiguous, so probing beats
+ * parsing stat records — and it is the same fact that makes order visible */
+static int
+nkids(int wid, int *out)
+{
+	char p[NMAX], b[32];
+	int i;
+
+	for(i = 0; i < MAXKIDS; i++){
+		snprint(p, sizeof p, "kids/%d/winid", i);
+		if(wread(wid, p, b, sizeof b) <= 0) break;
+		out[i] = atoi(b);
+	}
+	return i;
+}
+
+/* how many lines this window's content wants — emca has the buffer, which is
+ * exactly why the geometry is emca's and not the surface's */
+static long
+contentlines(int wid)
+{
+	Win *w;
+	long i, lines;
+
+	w = winof(wid);
+	if(w == nil || w->buf == nil) return NATLINES;
+	lines = 1;
+	for(i = 0; i < w->buf->len; i++)
+		if(w->buf->text[i] == '\n') lines++;
+	if(lines < 1) lines = 1;
+	return lines;
+}
+
+static long minalong(int wid, int axis);
+static long natalong(int wid, int axis);
+
+/* along a ROW the measure is width; along a COL it is height */
+static long
+minalong(int wid, int axis)
+{
+	int kids[MAXKIDS], nk, i, ax;
+	long total, m;
+
+	ax = naxis(wid);
+	nk = ax ? nkids(wid, kids) : 0;
+	if(nk == 0)
+		return axis == 1 ? MINCOLS * CELLW : (FURN + MINLINES) * CELLH;
+	total = 0;
+	for(i = 0; i < nk; i++){
+		if(!nallocated(kids[i])) continue;
+		m = minalong(kids[i], axis);
+		if(ax == axis) total += m;		/* stacked along this axis */
+		else if(m > total) total = m;		/* side by side across it */
+	}
+	if(total == 0) total = axis == 1 ? MINCOLS * CELLW : (FURN + MINLINES) * CELLH;
+	return total;
+}
+
+static long
+natalong(int wid, int axis)
+{
+	int kids[MAXKIDS], nk, i, ax;
+	long total, v;
+
+	ax = naxis(wid);
+	nk = ax ? nkids(wid, kids) : 0;
+	if(nk == 0)
+		return axis == 1 ? NATCOLS * CELLW
+				 : (contentlines(wid) + FURN) * CELLH;
+	total = 0;
+	for(i = 0; i < nk; i++){
+		if(!nallocated(kids[i])) continue;
+		v = natalong(kids[i], axis);
+		if(ax == axis) total += v;
+		else if(v > total) total = v;
+	}
+	return total;
+}
+
+static void
+setrect(int wid, long x, long y, long w, long h)
+{
+	char p[NMAX], line[128];
+	int fd;
+
+	snprint(p, sizeof p, "/dev/window/%d/wctl", wid);
+	fd = open(p, OWRITE);
+	if(fd < 0) return;
+	snprint(line, sizeof line, "rect %ld %ld %ld %ld\n", x, y, w, h);
+	write(fd, line, strlen(line));
+	close(fd);
+}
+
+/* divide this window's rectangle among the children it has allocated to, then
+ * let each do the same. Depth first, because a child's share is decided before
+ * it divides it.
+ */
+static void
+allocate(int wid, long x, long y, long w, long h)
+{
+	int kids[MAXKIDS], nk, i, ax, na;
+	int al[MAXKIDS];
+	long mins[MAXKIDS], nats[MAXKIDS], give[MAXKIDS];
+	long along, summin, slack, want, left, extra, at;
+
+	setrect(wid, x, y, w, h);
+	ax = naxis(wid);
+	if(ax == 0) return;
+	nk = nkids(wid, kids);
+	na = 0;
+	for(i = 0; i < nk; i++)
+		if(nallocated(kids[i])) al[na++] = kids[i];
+	if(na == 0) return;
+
+	along = ax == 1 ? w : h;
+	summin = 0;
+	want = 0;
+	for(i = 0; i < na; i++){
+		mins[i] = minalong(al[i], ax);
+		nats[i] = natalong(al[i], ax);
+		if(nats[i] < mins[i]) nats[i] = mins[i];
+		summin += mins[i];
+		want += nats[i] - mins[i];
+	}
+	/* 1. everyone gets their minimum; 2. the remainder is shared by SLACK,
+	 * capped at natural; 3. anything still over is shared equally, given to
+	 * nobody in particular — privileging one window is the kind of help
+	 * that reads as the layout fighting you.
+	 */
+	slack = along - summin;
+	if(slack < 0) slack = 0;
+	left = slack;
+	for(i = 0; i < na; i++){
+		extra = want > 0 ? slack * (nats[i] - mins[i]) / want : 0;
+		if(mins[i] + extra > nats[i]) extra = nats[i] - mins[i];
+		give[i] = mins[i] + extra;
+		left -= extra;
+	}
+	if(left > 0)
+		for(i = 0; i < na; i++)
+			give[i] += left / na + (i < left % na ? 1 : 0);
+
+	at = ax == 1 ? x : y;
+	for(i = 0; i < na; i++){
+		if(ax == 1) allocate(al[i], at, y, give[i], h);
+		else        allocate(al[i], x, at, w, give[i]);
+		at += give[i];
+	}
+}
+
+/* Fit: re-derive this subtree's allocation from the rule, discarding whatever
+ * sizes were dragged into place. Non-destructive of STRUCTURE, which is what
+ * separates it from Reset.
+ */
+static void
+dofit(int wid)
+{
+	char b[128];
+	long x, y, w, h;
+	char *f[6];
+	int nf;
+
+	if(wread(wid, "wctl", b, sizeof b) <= 0) return;
+	nf = tokenize(b, f, 6);
+	if(nf < 4) return;
+	x = atoi(f[0]); y = atoi(f[1]); w = atoi(f[2]); h = atoi(f[3]);
+	allocate(wid, x, y, w, h);
+}
+
 static void
 onwinline(Win *w, char *line)
 {
@@ -721,6 +941,7 @@ onwinline(Win *w, char *line)
 		if(r != nil){ r++; unquote(r); dolook(w, r); }
 		return;
 	}
+	if(strcmp(line, "fit") == 0){ dofit(w->wid); return; }
 	if(strcmp(line, "put") == 0){
 		/* THE SURFACE PUT, and it wrote the file itself — it holds the real
 		 * editor's byte-exact text, where this buffer is reconstructed from
