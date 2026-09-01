@@ -60,6 +60,8 @@ struct Win {
 	long taglen;
 	long autopos, autolen;	/* the dynamic block: Put/Undo, tracked by offset */
 	char dir[NMAX];		/* the context every command here resolves against */
+	long osize;		/* a USER RESIZE: an override along the parent's axis,
+				 * remembered until Fit drops it. 0 means none. */
 	Buf *buf;
 	int evfd;
 };
@@ -826,8 +828,10 @@ allocate(int wid, long x, long y, long w, long h)
 {
 	int kids[MAXKIDS], nk, i, ax, na;
 	int al[MAXKIDS];
-	long mins[MAXKIDS], nats[MAXKIDS], give[MAXKIDS];
+	long mins[MAXKIDS], nats[MAXKIDS], give[MAXKIDS], ovr[MAXKIDS];
 	long along, summin, slack, want, left, extra, at;
+	Win *cw;
+	int nshare;
 
 	setrect(wid, x, y, w, h);
 	ax = naxis(wid);
@@ -841,13 +845,27 @@ allocate(int wid, long x, long y, long w, long h)
 	along = ax == 1 ? w : h;
 	summin = 0;
 	want = 0;
+	nshare = 0;
+	/* A USER RESIZE IS AN OVERRIDE, and it is honoured until Fit drops it —
+	 * which is what keeps "resizing is optional and by taste" true: the
+	 * automatic rule goes on running for every window nobody has touched.
+	 */
 	for(i = 0; i < na; i++){
+		cw = winof(al[i]);
+		ovr[i] = cw != nil ? cw->osize : 0;
 		mins[i] = minalong(al[i], ax);
 		nats[i] = natalong(al[i], ax);
 		if(nats[i] < mins[i]) nats[i] = mins[i];
+		if(ovr[i] > 0){
+			if(ovr[i] < mins[i]) ovr[i] = mins[i];
+			along -= ovr[i];
+			continue;
+		}
+		nshare++;
 		summin += mins[i];
 		want += nats[i] - mins[i];
 	}
+	if(along < 0) along = 0;
 	/* 1. everyone gets their minimum; 2. the remainder is shared by SLACK,
 	 * capped at natural; 3. anything still over is shared equally, given to
 	 * nobody in particular — privileging one window is the kind of help
@@ -857,14 +875,20 @@ allocate(int wid, long x, long y, long w, long h)
 	if(slack < 0) slack = 0;
 	left = slack;
 	for(i = 0; i < na; i++){
+		if(ovr[i] > 0){ give[i] = ovr[i]; continue; }
 		extra = want > 0 ? slack * (nats[i] - mins[i]) / want : 0;
 		if(mins[i] + extra > nats[i]) extra = nats[i] - mins[i];
 		give[i] = mins[i] + extra;
 		left -= extra;
 	}
-	if(left > 0)
-		for(i = 0; i < na; i++)
-			give[i] += left / na + (i < left % na ? 1 : 0);
+	if(left > 0 && nshare > 0){
+		int j = 0;
+		for(i = 0; i < na; i++){
+			if(ovr[i] > 0) continue;
+			give[i] += left / nshare + (j < left % nshare ? 1 : 0);
+			j++;
+		}
+	}
 
 	at = ax == 1 ? x : y;
 	for(i = 0; i < na; i++){
@@ -874,9 +898,45 @@ allocate(int wid, long x, long y, long w, long h)
 	}
 }
 
+/* lay this subtree out from its own rectangle, honouring overrides */
+static void
+relayout(int wid)
+{
+	char b[128];
+	char *f[6];
+
+	if(wread(wid, "wctl", b, sizeof b) <= 0) return;
+	if(tokenize(b, f, 6) < 4) return;
+	allocate(wid, atoi(f[0]), atoi(f[1]), atoi(f[2]), atoi(f[3]));
+}
+
+/* the window that ALLOCATES this one — a resize must re-lay-out the siblings,
+ * not just the window that was dragged */
+static int
+parentof(int wid)
+{
+	char b[32];
+
+	if(wread(wid, "parent", b, sizeof b) <= 0) return 0;
+	return atoi(b);
+}
+
+static void
+clearoverrides(int wid)
+{
+	int kids[MAXKIDS], nk, i;
+	Win *w;
+
+	w = winof(wid);
+	if(w != nil) w->osize = 0;
+	nk = nkids(wid, kids);
+	for(i = 0; i < nk; i++)
+		clearoverrides(kids[i]);
+}
+
 /* Fit: re-derive this subtree's allocation from the rule, discarding whatever
  * sizes were dragged into place. Non-destructive of STRUCTURE, which is what
- * separates it from Reset.
+ * separates it from Reset — and idempotent, which is what makes it testable.
  */
 static void
 dofit(int wid)
@@ -886,6 +946,7 @@ dofit(int wid)
 	char *f[6];
 	int nf;
 
+	clearoverrides(wid);
 	if(wread(wid, "wctl", b, sizeof b) <= 0) return;
 	nf = tokenize(b, f, 6);
 	if(nf < 4) return;
@@ -942,6 +1003,18 @@ onwinline(Win *w, char *line)
 		return;
 	}
 	if(strcmp(line, "fit") == 0){ dofit(w->wid); return; }
+	if(strncmp(line, "resize ", 7) == 0){	/* resize <w> <h> — a user drag */
+		char *q;
+		int p;
+		q = strchr(line + 7, ' ');
+		if(q == nil) return;
+		/* the override is along the PARENT's axis, which is the only
+		 * direction this window's size is its own to choose */
+		p = parentof(w->wid);
+		w->osize = naxis(p) == 1 ? atoi(line + 7) : atoi(q + 1);
+		if(p > 0) relayout(p);
+		return;
+	}
 	if(strcmp(line, "put") == 0){
 		/* THE SURFACE PUT, and it wrote the file itself — it holds the real
 		 * editor's byte-exact text, where this buffer is reconstructed from

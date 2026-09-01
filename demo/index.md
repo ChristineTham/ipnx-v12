@@ -1,6 +1,21 @@
 # Saranos
 
-*a reimagining of Unix — the counterfactual next Research edition, running in this tab*
+*a modern operating system for a simpler life*
+
+**Saranos** is an operating system small enough to run in a browser, but powerful enough to span from the cloud to your personal device.
+
+It is a refuge from the complexities of the current computing landscape:
+
+- pods, containers, hypervisors, virtual machines, jails, services
+- Kubernetes, Linux, systemd, Docker, Compose
+- package managers (npm, pip, cargo, apt), version managers (nvm, pyenv, rbenv)
+- CI/CD pipelines, microservices architecture, API gateways
+- configuration management (Ansible, Terraform, CloudFormation), orchestration layers
+- observability stacks (Prometheus, Grafana, ELK, Jaeger), monitoring overhead
+- multiple runtimes per machine, dependency hell, the Java heapocalypse
+
+
+**Saranos** is a reimagining of Unix — the counterfactual next Research edition, running in this tab*
 
 **Saranos is a new operating system** — not a distribution of an old one, not an emulator. Three layers, and the parallel is exact: **Saranos** is the system, **IPNX** is the kernel and the userspace, **emca** is the windowing and UI — where Apple has macOS, Darwin and Aqua. The name is Sanskrit *śaraṇa*, refuge: a refuge from the complexities of the modern computing environment.
 

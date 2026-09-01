@@ -280,6 +280,7 @@ enum WKind {
     WContent,
     WKids,         // the children, as a walkable directory
     WAlloc,        // allocated, or a tab
+    WParent,       // the containing window's id — the tree reads both ways
     WAxis,         // how this window arranges them: row, col, or nothing
     WToolbar,
     WTag,
@@ -774,6 +775,7 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: 
                 "content" => WKind::WContent,
                 "axis" => WKind::WAxis,
                 "alloc" => WKind::WAlloc,
+                "parent" => WKind::WParent,
                 "kids" => WKind::WKids,
                 "toolbar" => WKind::WToolbar,
                 "tag" => WKind::WTag,
@@ -1378,6 +1380,14 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
             let s = if w.borrow().allocated { "allocated\n" } else { "tab\n" };
             return Ok(one(s.to_string()));
         }
+        // the tree reads both ways: kids/ walks down, parent names up. A
+        // resize has to re-lay-out the SIBLINGS, so the window that receives
+        // it needs to find the window that allocates.
+        WKind::WParent => {
+            let w = win.as_ref().ok_or("no window")?;
+            let s = match w.borrow().parent { Some(p) => format!("{}\n", p), None => String::new() };
+            return Ok(one(s));
+        }
         WKind::WToolbar => {
             let w = win.as_ref().ok_or("no window")?;
             let s = w.borrow().toolbar.clone();
@@ -1729,6 +1739,7 @@ fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: &Option
         WKind::WContent => "content".to_string(),
         WKind::WAxis => "axis".to_string(),
         WKind::WAlloc => "alloc".to_string(),
+        WKind::WParent => "parent".to_string(),
         WKind::WKids => "kids".to_string(),
         WKind::WToolbar => "toolbar".to_string(),
         WKind::WTag => "tag".to_string(),

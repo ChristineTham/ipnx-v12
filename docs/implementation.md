@@ -821,8 +821,25 @@ from its convention.
 **Acceptance:** the strongest test in this milestone, and one that
 only exists because emca owns the geometry — resize a tree
 arbitrarily from rc, press `Fit`, and assert the exact allocation.
-`Fit` is idempotent. A column of one full and one nearly-empty
-window splits unevenly, in the empty one's favour.
+`Fit` is idempotent. A column of one full and one nearly-empty window
+splits unevenly, **in the FULL one's favour** (the plan first said the
+empty one's, which is backwards: acme shrinks the victim to the space
+its content occupies, so the sparse window keeps only what it needs
+and the full one takes the rest).
+**LANDED 2026-09-01.** Allocation in the kernel — `alloc` per window,
+`minimise`/`maximise`/`newtab` on `wctl`, `premax` making maximise
+reversible, and `kids/` named BY POSITION because order is the layout
+and `ls` sorts. The heuristic in emca, because it needs content sizes:
+minimum and natural along the parent's axis, minimums first, the
+remainder shared by slack and capped at natural, the rest shared
+equally. A user `resize` is a remembered override; `Fit` clears the
+subtree's and re-derives. The kernel gained `rect` (distinct from
+`resize`, which reallocates a raster a tree window does not have) and
+a `parent` file, since a resize must re-lay-out the SIBLINGS.
+**Measured**: a 1200x800 column holding a one-line file and a 720-line
+file splits **72 / 728**; `Fit` twice changes nothing; a resize to 300
+gives 300/500 and survives until `Fit` drops it. **159 PASS / 0 FAIL**
+on all three hosts.
 
 **d. The geometry conversation *(S)*.** The host reports
 `resize <w> <h> <cellw> <cellh>` to the root window's `events` — the

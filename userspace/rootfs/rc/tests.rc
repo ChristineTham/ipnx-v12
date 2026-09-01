@@ -395,6 +395,58 @@ if(! ~ $"alok ''){
 }
 if not echo PASS 'allocation: no window control interface on this host — skipped'
 
+# M15c — THE SIZING HEURISTIC. acme's coladd() shrinks the victim to
+# min(half its height, THE SPACE ITS CONTENT OCCUPIES) — content-aware, not
+# fractional, which is where "automatic and reasonable" comes from. emca
+# generalises it: every window declares a MINIMUM and a NATURAL along its
+# parent's axis, minimums are met first, the remainder is shared in proportion
+# to the SLACK and capped at natural. acme's rule then FALLS OUT rather than
+# being ported — a sibling with little content has a lot of slack, a full one
+# has none.
+#
+# This is the strongest assertion in the milestone, and it exists only because
+# EMCA OWNS THE GEOMETRY: a test can resize a tree from rc and read the exact
+# allocation back.
+ftok=`{cat /dev/window/edit/clone >[2]/dev/null}
+if(! ~ $"ftok ''){
+	fw=/dev/window/$ftok
+	echo -n one-line > /tmp/fit.small
+	cat /rc/tests.rc > /tmp/fit.big
+	echo -n /tmp/fit.small > $fw/content
+	emwait $fw/toolbar '*Snarf*'
+	femca=`{cat $fw/toolbar}
+}
+if(! ~ $"femca ''){
+	echo 'rect 0 0 1200 800' > $fw/wctl
+	echo newrow > $fw/wctl
+	emwait $fw/kids/1/toolbar '*Snarf*'
+	echo -n /tmp/fit.small > $fw/kids/0/content
+	echo -n /tmp/fit.big > $fw/kids/1/content
+	emwait $fw/kids/1/content /tmp/fit.big
+	sleep 1
+	echo fit > $fw/events
+	emwait $fw/kids/0/wctl '0 0 1200 72 *'
+	f1=`{cat $fw/kids/0/wctl}
+	f2=`{cat $fw/kids/1/wctl}
+	# FIT IS IDEMPOTENT — press it twice and nothing moves
+	echo fit > $fw/events
+	sleep 1
+	f3=`{cat $fw/kids/0/wctl}
+	# a USER RESIZE is an override, honoured until Fit drops it, which is
+	# what keeps "resizing is optional and by taste" true
+	echo 'resize 1200 300' > $fw/kids/0/events
+	emwait $fw/kids/0/wctl '0 0 1200 300 *'
+	f4=`{cat $fw/kids/0/wctl}
+	f5=`{cat $fw/kids/1/wctl}
+	echo fit > $fw/events
+	emwait $fw/kids/0/wctl '0 0 1200 72 *'
+	f6=`{cat $fw/kids/0/wctl}
+	echo delete > $fw/wctl
+	if(~ $"f1 '0 0 1200 72 current visible' && ~ $"f2 '0 72 1200 728 current visible' && ~ $"f3 $"f1 && ~ $"f4 '0 0 1200 300 current visible' && ~ $"f5 '0 300 1200 500 current visible' && ~ $"f6 $"f1) echo PASS 'sizing: content-aware after acme'^''''^'s coladd — a 1200x800 column splits 72/728 between a one-line file and a 720-line one; Fit is idempotent; a resize overrides until Fit drops it'
+	if not fails=bad
+}
+if not echo PASS 'sizing: no emca on this host — skipped'
+
 
 # proc(3)'s args file: the data was always in the proc record and nothing could
 # read it, so nothing could NAME a running command — which the status line's
