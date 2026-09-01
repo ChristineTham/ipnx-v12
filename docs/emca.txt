@@ -431,6 +431,11 @@ two of them opened windows on paths that did not exist.
 
   type     namespace    cmd    toolbar (beyond Undo/Redo)
   ------   ----------   ----   -------------------------------------
+  output   /output      —      Rerun. Where Run and Pipe put their
+                               results, at /output/<dir>/<command>, so
+                               the path says where it ran. An item is a
+                               line, and the context is the title's
+                               directory with /output stripped.
   root     inherited    —      Save All, Reset, Save Layout, Restore
                                Layout, Home… THE SCREEN: composites
                                itself by the convention, and
@@ -566,8 +571,8 @@ operand-determines-surface made visible inside a single row.
   CONTROLS  and the WINDOW OPERATIONS, which belong here rather than
             on the toolbar because their operand is the window as a
             thing in a layout — not what it holds. Close, Minimise,
-            Maximise, New column, New row, Fit; listed in full
-            below. ALL OF THEM INFORM THE PARENT.
+            Maximise, New column, New row, New tab, Fit; listed in
+            full below. ALL OF THEM INFORM THE PARENT.
             A child never resizes or removes itself; it asks. That is
             what makes the recursion work, because a parent owns the
             layout of its children and nothing else does.
@@ -719,7 +724,7 @@ operand alone, and it is the shape the design settled into:
   ----------   ---------------   ------------   ---------------------
   WINDOW       the title bar     always         Close, Minimise,
   operations   row                              Maximise, New column,
-                                                New row, Fit
+                                                New row, New tab, Fit
   TEXT         the tag line's    always         Open, Find, Run, Pipe,
   operations   buttons                          Edit, Add — acting on
                                                 the SELECTION when the
@@ -740,6 +745,60 @@ bar row acts on the window in its layout, the toolbar on its content,
 the tag line on text you COMPOSED — or, when it is empty, on text you
 POINTED AT. A selection menu, where a surface offers one, is a
 shortcut to the same verbs and not a fifth thing.
+
+The window operations
+---------------------
+Their operand is the window AS A THING IN A LAYOUT, not what it holds,
+which is why they sit with the controls and the title rather than on
+the toolbar. Every window has all seven.
+
+  Close        closes the window cleanly and the underlying command
+               with it. On the ROOT window this is Exit. Closing a
+               container closes what it holds — acme's colcloseall().
+  Minimise     move out of the parent's allocation. Reversible.
+  Maximise     move every sibling out. Reversible.
+  New column   duplicate this window into a new column beside it
+  New row      duplicate this window into a new row below it
+  New tab      duplicate this window as a TAB — the same operation with
+               the allocation bit flipped, since a tab is a child the
+               parent has given no rectangle to. Not a fourth concept.
+  Fit          drop the size overrides in this subtree, re-derive
+
+ROWS AND COLUMNS ARE ONLY EVER CREATED BY A USER. Hers, and it corrects
+a rule this document briefly held — that a new window should be
+"allocated if it fits, and a tab if it does not". That made THE SAME
+GESTURE DO DIFFERENT THINGS AT DIFFERENT WINDOW SIZES, which is
+inference of the kind the rest of this design removes, and it let the
+machine restructure a workspace nobody asked it to touch.
+
+So OPEN, RUN AND PIPE ALWAYS MAKE A TAB. Predictable, identical
+everywhere, and non-destructive of structure — the safest thing a verb
+can do to a layout it did not build. The user has two ways to create a
+split and the machine has none: the New column and New row buttons,
+and dragging a window onto an edge.
+
+And a consequence that is not an extra rule but the model showing
+through: AN UNALLOCATED WINDOW HAS NO RECTANGLE, so there is nothing to
+render but its title in the strip. The tag line, toolbar and status bar
+belong to the allocated window BY CONSTRUCTION — nothing had to say
+that inactive tabs do not show them.
+
+MOVE IS DRAG AND DROP, already in acme's census as one of the eight
+gesture-only operations, filed under layout as direct manipulation.
+Two drop targets, and they differ:
+
+  onto a window   become a tab of that window's parent — re-parenting,
+                  and no structural change
+  onto an edge    become a new row or column there
+
+The second is the other way a user creates a split, which keeps "only a
+user creates rows and columns" true while leaving two roads to it.
+Kernel-side it is one wctl verb — re-parent to a given window at a
+given index; the gesture is the surface's.
+
+Move and resize are otherwise NOT buttons. They are direct
+manipulation — drag a divider, drag a title — and acme filed them the
+same way (layer 1, not layer 3).
 
 The body is a sequence of items
 -------------------------------
@@ -807,10 +866,10 @@ does not.
          which is the surface's half. There is no "find next" verb.
 
   Run    execute the text as a command, in the window's directory, AND
-         IGNORE DOT. Output goes to a new window.
+         IGNORE DOT. Output goes to an OUTPUT WINDOW — see below.
 
   Pipe   write THE SELECTED ITEMS to a command's stdin, one per line,
-         and OPEN A NEW WINDOW WITH THE RESULTS.
+         and put the results in an OUTPUT WINDOW — see below.
 
          One semantic, no per-type behaviour: items are lines on
          stdin, always. Where a command wants arguments instead you
@@ -877,6 +936,47 @@ answer, and a `verbs` file to carry the answer. They always apply, so
 they are always there — which gives "look is a dispatcher, SHOW the
 choice" a better answer than computing it: both buttons are permanently
 visible, with no round trip and nothing to get wrong.
+
+Where command output goes: /output is a filesystem
+--------------------------------------------------
+Hers: "/output/mk all" is pretty clear. And it is the Plan 9 answer to
+a question that had two bad answers.
+
+  A WINDOW'S TITLE IS A PATH, because the title retargets. So an output
+  window needs a path that is REAL.
+
+Two candidates were considered and both fail, in opposite directions.
+acme's `<dir>/+Errors` gets the CONTEXT right — it names the directory
+the command ran in — but the path is a lie: nothing serves a file of
+that name there. A real file in /tmp is truthful but gets the CONTEXT
+wrong, since the title determines the directory, so pressing Run in
+that window would run the command in /tmp. It also dangles.
+
+  /output IS A FILESYSTEM, served by emca, AND IT MIRRORS THE
+  FILESYSTEM. /output/<dir>/<command> holds the output of <command> run
+  in /<dir>. Hers: "/output/usr/kitty/ipnx/mk all" — so we know which
+  directory mk was run in.
+
+A real path: it cats, greps, pipes and retargets like anything else.
+Nothing is written to disk, so nothing dangles and nothing persists
+behind your back. The basename is the command, so the title bar reads
+"mk all" with "/output/usr/kitty/ipnx/" dimmed before it — the same
+two-element rendering every other window gets, and the dimmed half
+happens to say where it ran.
+
+MIRRORING EARNS ITS KEEP TWICE. It resolves the collision — `mk all`
+in two projects is two paths, so two windows, and reuse still gives one
+window per command per directory. And IT REMOVES AN EXCEPTION rather
+than accommodating one: an earlier draft had the output type STORE the
+command's directory, because context normally comes from the title and
+/output would have been the wrong context. With the mirror, the context
+is DERIVED from the title after all — strip the /output prefix — so it
+is deterministic, visible in the path, and no type has to keep a
+private field.
+
+A parallel tree indexed by path is the house shape: #V/<snapshot>/…
+does it for versions, /n/ for mounted worlds. /output does it for what
+commands said.
 
 The selection's verbs, and where they appear
 --------------------------------------------
@@ -993,8 +1093,8 @@ acme.txt counts 38 operations. Where each one went:
   native (4)        select, insert, delete, scroll — the component's
   gesture (4)       expand (double-click), move, grow/shrink (drag),
                     plumb (the fallback when rules decide)
-  title bar (6)     Close, Minimise, Maximise, New column, New row,
-                    Fit
+  title bar (7)     Close, Minimise, Maximise, New column, New row,
+                    New tab, Fit
   tag line (6)      Open, Find, Run, Pipe, Edit, Add — with |, < and >
                     as syntax within Pipe rather than as buttons, and
                     : and # as syntax within Find

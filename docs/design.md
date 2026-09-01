@@ -1098,6 +1098,38 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   otherwise simply happen. No confirmation dialogs: they train people to click
   through and protect nothing.
 
+- **(2026-09-01) TABS ARE THE DEFAULT, AND /output MIRRORS THE FILESYSTEM.**
+  Two late corrections, both hers, and both removing something rather than
+  adding it.
+  **Rows and columns are only ever created by a user.** The draft rule was mine
+  — a new window "allocated if it fits, a tab if it does not" — and it was
+  wrong twice over: it made THE SAME GESTURE DO DIFFERENT THINGS AT DIFFERENT
+  WINDOW SIZES, which is inference of the kind this design keeps deleting, and it
+  let the machine restructure a workspace nobody asked it to touch. Hers: *"new
+  rows and new columns should only ever be created by a user, so an open window
+  opens a new tab by default… It is also the safest option, that does not destroy
+  current layout."* So Open, Run and Pipe always tab. `New tab` joins the title
+  bar row as the third creation verb — the same operation with the allocation bit
+  flipped, since a tab is a child with no rectangle. And her consequence turned
+  out to need no rule: *"only the active tab shows the tagline, toolbar and status
+  bar"* is what an unallocated window already IS.
+  **Drag and drop is acme's `move`**, already in the census as gesture-only. Two
+  drop targets: onto a window re-parents it as a tab, onto an edge makes a row or
+  column — which is the OTHER way a user creates a split, keeping "only a user
+  creates rows and columns" true with two roads to it.
+  **`/output` is a filesystem, and it mirrors the filesystem.** A window's title
+  is a path, because titles retarget, so an output window needs a path that is
+  REAL. Two candidates failed in opposite directions: acme's `<dir>/+Errors` gets
+  the context right but lies about what is there, and a file in `/tmp` is truthful
+  but gives the wrong context (the title determines the directory, so Run would
+  re-run in /tmp) and dangles. Hers, resolving it: *"/output/usr/kitty/ipnx/mk
+  all" so we know which directory mk was run in.* The mirror pays twice — it
+  resolves the collision of one command run in two projects, and it REMOVES an
+  exception rather than accommodating one: with the directory in the path, context
+  is derived from the title by stripping `/output`, so the type keeps no private
+  field. A parallel tree indexed by path is the house shape already: `#V/<snap>/…`
+  for versions, `/n/` for mounted worlds.
+
 - **(2026-09-01) acme and emca are two documents about two things.** Hers:
   *"acme is Bell Labs program. We are going to update it to fit emca, but not
   change functionality. emca is effectively our new windowing system and UI.

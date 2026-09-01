@@ -858,8 +858,15 @@ file comes back for. **emca uses the era's names** — Copy, Save,
 Revert — while acme's port keeps Snarf, Put and Get, because renaming
 acme's buttons would be changing acme.
 
-Types: `root`, `ls`, `edit`, `shell`, and no others, because a type in
-the table becomes a button on a toolbar. This renames `dir` to `ls`
+Types: `root`, `ls`, `edit`, `shell`, `output`, and no others, because
+a type in the table becomes a button on a toolbar. **`/output` is a
+filesystem served by emca, MIRRORING the filesystem** —
+`/output/usr/kitty/ipnx/mk all` is a real path, so command output cats,
+greps and retargets like anything else, where acme's `<dir>/+Errors`
+lies about the directory and a file in `/tmp` gets the context wrong
+and dangles. Mirroring resolves the collision (two projects, two paths)
+and removes an exception: context is the title's directory with
+`/output` stripped, so no type keeps a private field. This renames `dir` to `ls`
 and `text` to `edit`. `Add` makes the toolbar user-extensible, so the
 CORE is closed but the toolbar is not.
 **Acceptance:** 37 of acme.txt's 38 operations are reachable (Sort is declined, with its reason in the spec) and
@@ -874,6 +881,15 @@ three controls, scrollbars and its own status bar. Controls send
 messages to the parent; none acts locally.
 **Acceptance:** `emcaproof.mjs` asserts the rendered tree matches the
 one emca published, at three geometries.
+
+**g2. Move: drag and drop *(S)*.** acme's `move`, one of the eight
+gesture-only operations. One `wctl` verb — re-parent to a given window
+at a given index — and two drop targets in the surface: onto a window
+becomes a tab of its parent, onto an edge becomes a new row or column.
+That second one is the other way a USER creates a split, which is what
+keeps "only a user creates rows and columns" true.
+**Acceptance:** in rc, re-parent a window and assert both trees; in
+the surface, a drag lands where the drop target says.
 
 **h. The demo *(S)*.** Wired from what a–g built and nothing else: a
 listing in a column, edit windows as tabs, rc in a row. No button
