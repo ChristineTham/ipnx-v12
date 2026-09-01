@@ -145,8 +145,7 @@ pub enum Effect {
     WinCanvas { wid: u32, label: String, x: i32, y: i32, w: i32, h: i32, snap: Vec<CvSnap> },
     // /dev/window: the chrome IPNX declared, for the host to render natively.
     // Small and rare (unlike WinCanvas), so it rides outside the credit system.
-    WinChrome { wid: u32, wtype: String, pane: String, content: String, toolbar: String, tag: String, verbs: String },
-    Pin { text: String },
+    WinChrome { wid: u32, wtype: String, content: String, toolbar: String, tag: String },
     // the SURFACE opened a file. In-process this is a function call, not
     // marshalled 9P — "wire 9P at boundaries, a Dev table inside" (design.md).
     // A remote surface marshals; a surface sharing the address space calls.
@@ -279,8 +278,6 @@ enum WKind {
     TypeDir,
     RootEvents,
     WContent,
-    WVerbs,        // per window: which RANGE verbs apply (emca.txt's third addition)
-    RootPin,       // workspace scope: the pinned range, made visible
     WToolbar,
     WTag,
     WUi,
@@ -541,8 +538,6 @@ struct Win {
     dead: bool,
     // /dev/window: the control interface's per-window files
     wtype: String,
-    pane: String,          /* where emca placed it — its ctl said so */
-    verbs: String,         /* which RANGE verbs apply to the live selection */
     content: String,
     toolbar: String,
     tag: String,
@@ -681,7 +676,6 @@ struct KState {
     nextwid: u32,
     // /dev/window's ROOT events: window lifecycle, read by both halves
     winev: VecDeque<String>,
-    pin: String,           // the workspace's pinned range (emca.txt: the 2-1 chord, decomposed)
     winev_parked: Vec<Waiter>,
 }
 
@@ -715,13 +709,6 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: 
             if name == "events" {
                 return Some(wnode(WKind::RootEvents, None, None));
             }
-            // THE PIN is workspace state, so it lives at workspace scope — one
-            // level above any window, which is where the status line's operand
-            // is. emca declares it; the surface renders it (emca.txt: "a piece
-            // of invisible state that must be made visible").
-            if name == "pin" {
-                return Some(wnode(WKind::RootPin, None, None));
-            }
             if let Ok(wid) = name.parse::<u32>() {
                 let w = k.borrow().wins.get(&wid).cloned()?;
                 return Some(wnode(WKind::WinDir, Some(w), None));
@@ -754,7 +741,6 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: 
                 "draw" => WKind::DrawDir,
                 "canvas" => { mkcv(&w); WKind::CvDir }
                 "content" => WKind::WContent,
-                "verbs" => WKind::WVerbs,
                 "toolbar" => WKind::WToolbar,
                 "tag" => WKind::WTag,
                 "ui" => WKind::WUi,
@@ -824,8 +810,6 @@ fn new_window(k: &K) -> WinR {
         cv: None,
         dead: false,
         wtype: String::new(),
-        pane: String::new(),
-        verbs: String::new(),
         content: String::new(),
         toolbar: String::new(),
         tag: String::new(),
@@ -973,12 +957,11 @@ fn win_announce(k: &K, line: String) {
 
 // the host learns a window's chrome the moment IPNX declares it
 fn win_chrome(k: &K, w: &WinR) {
-    let (wid, wtype, pane, content, toolbar, tag, verbs) = {
+    let (wid, wtype, content, toolbar, tag) = {
         let wb = w.borrow();
-        (wb.wid, wb.wtype.clone(), wb.pane.clone(), wb.content.clone(),
-         wb.toolbar.clone(), wb.tag.clone(), wb.verbs.clone())
+        (wb.wid, wb.wtype.clone(), wb.content.clone(), wb.toolbar.clone(), wb.tag.clone())
     };
-    k.borrow_mut().effects.push(Effect::WinChrome { wid, wtype, pane, content, toolbar, tag, verbs });
+    k.borrow_mut().effects.push(Effect::WinChrome { wid, wtype, content, toolbar, tag });
 }
 
 // a window's own events: what the user did inside it
@@ -1178,15 +1161,6 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
             let s = w.borrow().content.clone();
             return Ok(one(s));
         }
-        WKind::WVerbs => {
-            let w = win.as_ref().ok_or("no window")?;
-            let s = w.borrow().verbs.clone();
-            return Ok(one(s));
-        }
-        WKind::RootPin => {
-            let s = k.borrow().pin.clone();
-            return Ok(one(s));
-        }
         WKind::WToolbar => {
             let w = win.as_ref().ok_or("no window")?;
             let s = w.borrow().toolbar.clone();
@@ -1342,32 +1316,13 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
               data: &[u8]) -> Result<usize, KErr> {
     match kind {
         // /dev/window: IPNX declares the chrome; the surface speaks back
-        // The root events file is a QUEUE that emca drains, so writing to it is
-        // how anything addresses THE WORKSPACE — the exact parallel of writing a
-        // window's events to address that window. Which is what gives the
-        // workspace verbs (Putall, Dump, Load, Exit) a road that needs no new
-        // concept: their operand is the workspace, so they go to the workspace.
-        WKind::RootEvents => {
-            for line in String::from_utf8_lossy(data).lines() {
-                if line.trim().is_empty() { continue; }
-                win_announce(k, format!("{}\n", line.trim()));
-            }
-            return Ok(data.len());
-        }
-        WKind::RootPin => {
-            let s = String::from_utf8_lossy(data).trim().to_string();
-            k.borrow_mut().pin = s.clone();
-            k.borrow_mut().effects.push(Effect::Pin { text: s });
-            return Ok(data.len());
-        }
-        WKind::WContent | WKind::WToolbar | WKind::WTag | WKind::WUi | WKind::WVerbs => {
+        WKind::WContent | WKind::WToolbar | WKind::WTag | WKind::WUi => {
             let w = win.as_ref().ok_or("no window")?;
             let s = String::from_utf8_lossy(data).to_string();
             {
                 let mut wb = w.borrow_mut();
                 match kind {
                     WKind::WContent => wb.content = s,
-                    WKind::WVerbs => wb.verbs = s,
                     WKind::WToolbar => wb.toolbar = s,
                     WKind::WTag => wb.tag = s,
                     _ => wb.uifile = s,
@@ -1435,13 +1390,6 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
             }
             let t: Vec<&str> = raw.trim().split_whitespace().collect();
             match t.as_slice() {
-                // emca places the window; the host renders where it was placed.
-                // With no emca running the surface falls back to the type's
-                // default pane, which is the degrades-correctly property.
-                ["pane", p] => {
-                    w.borrow_mut().pane = (*p).to_string();
-                    win_chrome(k, w);
-                }
                 ["move", x, y] => {
                     let mut wb = w.borrow_mut();
                     wb.x = x.parse().unwrap_or(wb.x);
@@ -1545,8 +1493,6 @@ fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: &Option
         WKind::TypeDir => ty.clone().unwrap_or_else(|| "type".to_string()),
         WKind::RootEvents | WKind::WEvents => "events".to_string(),
         WKind::WContent => "content".to_string(),
-        WKind::WVerbs => "verbs".to_string(),
-        WKind::RootPin => "pin".to_string(),
         WKind::WToolbar => "toolbar".to_string(),
         WKind::WTag => "tag".to_string(),
         WKind::WUi => "ui".to_string(),
@@ -2020,7 +1966,6 @@ impl Kernel {
         Kernel {
             k: Rc::new(RefCell::new(KState {
                 winev: VecDeque::new(),
-                pin: String::new(),
                 winev_parked: Vec::new(),
                 procs: HashMap::new(),
                 nextpid: 1,

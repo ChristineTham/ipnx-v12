@@ -269,27 +269,6 @@ pushtag(Win *w)
 	pushtoolbar(w);
 }
 
-/* emca PLACES the window, by writing its ctl. The type's pane is a hint it
- * reads from the registry; with emca not running the surface falls back to
- * the same hint, which is why nothing breaks without a workspace manager.
- */
-static void
-place(Win *w)
-{
-	char p[NMAX], pane[64], line[128];
-	int fd;
-
-	snprint(p, sizeof p, "/type/%s/pane", w->type);
-	if(rfile(p, pane, sizeof pane) <= 0)
-		return;
-	snprint(p, sizeof p, "/dev/window/%s/%d/wctl", w->type, w->wid);
-	fd = open(p, OWRITE);
-	if(fd < 0) return;
-	snprint(line, sizeof line, "pane %s\n", pane);
-	write(fd, line, strlen(line));
-	close(fd);
-}
-
 /* one message, allocated by the reader and freed by the consumer. libthread
  * caps a channel element at ELEMMAX (64 bytes), so a line does not travel by
  * value — and passing the pointer is the ownership rule that keeps the single
@@ -388,7 +367,6 @@ adopt(char *type, int wid)
 	if(w->evfd >= 0)
 		threadcreate(evreader, w, STACK);
 
-	place(w);
 	pushtag(w);
 }
 
@@ -611,8 +589,6 @@ bufdelete(Buf *b, long from, long to)
 	b->text[b->len] = 0;
 }
 
-static char pin[NMAX];		/* THE PIN: workspace state, so emca's, not a window's */
-
 /* resolve a range against the window's directory — the context, which is
  * acme's own invention and the thing native furniture has no concept of
  */
@@ -665,48 +641,6 @@ ispath(Win *w, char *s, char *out, int max)
 	return 1;
 }
 
-/* VERB APPLICABILITY — emca.txt's third protocol addition. The verb set is
- * CLOSED, so this is not an open menu: emca says which of the fixed set apply
- * to THIS range, and the surface renders what it is told. Always-applicable
- * verbs are the surface's own and never wait on this answer.
- */
-static void
-pushverbs(Win *w, char *sel)
-{
-	char out[NMAX * 2], p[NMAX];
-	long o = 0;
-
-	o += snprint(out + o, sizeof out - o, "Execute\nSearch\nPin\nEdit\n");
-	if(*sel != 0)
-		o += snprint(out + o, sizeof out - o, "Cut\nCopy\n");
-	o += snprint(out + o, sizeof out - o, "Paste\n");
-	/* A PATH THAT EXISTS TAKES PRECEDENCE, which is acme's own order: look
-	 * tries the file first. So `/usr/kitty/` is a directory, not the regexp
-	 * `usr/kitty` — the ambiguity is real and the resolution is not a guess.
-	 */
-	if(ispath(w, sel, p, sizeof p))
-		o += snprint(out + o, sizeof out - o, "Open\n");
-	else if(isaddr(sel))
-		o += snprint(out + o, sizeof out - o, "Jump\n");
-	wfile(w, "verbs", out, o);
-}
-
-/* the pinned range is invisible state, and the design's own cost clause says
- * it must be made visible — so emca publishes it at workspace scope
- */
-static void
-setpin(char *s)
-{
-	int fd;
-
-	strncpy(pin, s, sizeof pin - 1);
-	pin[sizeof pin - 1] = 0;
-	fd = open("/dev/window/pin", OWRITE|OTRUNC);
-	if(fd < 0) return;
-	write(fd, pin, strlen(pin));
-	close(fd);
-}
-
 /* LOOK is the plumber's judgement. Until the plumber lands, emca does what
  * acme's look does in the overwhelming case: a path opens in a window of the
  * type the file's own shape implies.
@@ -755,32 +689,12 @@ onwinline(Win *w, char *line)
 		run(w, line + 4);
 		return;
 	}
-	if(strncmp(line, "select ", 7) == 0){	/* select <q0> <q1> [text] */
-		char *q, *r;
-		q = strchr(line + 7, ' ');
-		r = q != nil ? strchr(q + 1, ' ') : nil;
-		if(r == nil) pushverbs(w, "");
-		else {
-			r++;
-			unquote(r);
-			pushverbs(w, r);
-		}
-		return;
-	}
 	if(strncmp(line, "snarf ", 6) == 0){	/* the surface copied — /dev/snarf is the sync point */
 		char *s = line + 6;
 		int fd;
 		unquote(s);
 		fd = open("/dev/snarf", OWRITE|OTRUNC);
 		if(fd >= 0){ write(fd, s, strlen(s)); close(fd); }
-		return;
-	}
-	if(strncmp(line, "pin ", 4) == 0){	/* pin <q0> <q1> <text> */
-		char *q, *r;
-		q = strchr(line + 4, ' ');
-		r = q != nil ? strchr(q + 1, ' ') : nil;
-		if(r == nil) setpin("");
-		else { r++; unquote(r); setpin(r); }
 		return;
 	}
 	if(strncmp(line, "execute ", 8) == 0){	/* execute <q0> <q1> <text> */
@@ -791,17 +705,8 @@ onwinline(Win *w, char *line)
 		if(r == nil) return;
 		r++;
 		unquote(r);
-		/* THE PIN IS EXECUTE-WITH-ARGUMENT, DECOMPOSED (emca.txt): acme's
-		 * 2-1 chord had no touch analogue, so it becomes two explicit acts.
-		 * Consumed here, and cleared — one pin, one use, which is what the
-		 * chord did.
-		 */
-		if(pin[0] != 0){
-			snprint(cmd, sizeof cmd, "%s %s", r, pin);
-			setpin("");
-			run(w, cmd);
-		} else
-			run(w, r);
+		USED(cmd);
+		run(w, r);
 		return;
 	}
 	/* `look` was ONE verb; the bar shows three, and Open is the one that is

@@ -85,16 +85,18 @@ async function hostServe(op) {
   throw new Error(`hostfs: unknown op ${kind}`);
 }
 
-// What this proves is the half rc cannot see. `emca` places a window by writing
-// its wctl; the placement rides the chrome to the surface, which is where a pane
-// actually exists. The rc suite tests emca's verbs and its buffer; this tests
-// that its POLICY arrives — and that the toolbar the surface receives is emca's
-// core set merged with the type's extras, not either one alone.
+// What this proves is the half rc cannot see: that the chrome emca furnishes
+// ARRIVES at a surface. The rc suite tests emca's verbs and its buffer; this
+// tests that the toolbar reaching the host is emca's core set merged with the
+// type's extras, not either one alone.
 //
-// The sibling proof, winproof.mjs, deliberately runs with NO emca at all. Both
-// must hold: with emca the window lands where emca says, without it the surface
-// falls back to the type's default. That pair is the degrades-correctly rule.
-const want = new Map([["dir", "left"], ["text", "main"]]);
+// PLACEMENT IS NO LONGER PART OF IT (2026-09-01). emca used to place a window by
+// writing `pane <name>` to its wctl, and this proof asserted the name arrived.
+// Named regions are gone with the compositor redesign; what replaces the
+// assertion is M15g, where the surface renders the TREE emca published.
+//
+// The sibling proof, winproof.mjs, deliberately runs with NO emca at all.
+const want = new Map([["dir", "toolbar"], ["text", "toolbar"]]);
 const got = new Map();
 let done = false;
 
@@ -121,20 +123,19 @@ const host = {
     // placed, then named, then given its verbs — and each step is one write. So
     // wait for a COMPLETE one rather than latching the first: partial chrome is
     // not a defect, it is the surface seeing the window get built.
-    if (!ch.pane || !ch.toolbar.trim() || !ch.content.trim()) return;
+    if (!ch.toolbar.trim() || !ch.content.trim()) return;
     if (!got.has(ch.type)) {
       const verbs = ch.toolbar.split("\n").map((l) => l.trim().split(" ")[0]).filter(Boolean);
-      got.set(ch.type, { pane: ch.pane, verbs, content: ch.content });
-      console.log(`EMCAPROOF host sees: type=${ch.type} pane=${ch.pane} content=${ch.content} verbs=${verbs.join(",")}`);
+      got.set(ch.type, { verbs, content: ch.content });
+      console.log(`EMCAPROOF host sees: type=${ch.type} content=${ch.content} verbs=${verbs.join(",")}`);
     }
     if (got.size < want.size) return;
     done = true;
 
     const CORE = ["Del", "Snarf", "Get", "Look", "Edit"];
     const bad = [];
-    for (const [type, place] of want) {
+    for (const [type] of want) {
       const g = got.get(type);
-      if (g.pane !== place) bad.push(`${type}: placed in ${g.pane}, not ${place}`);
       for (const c of CORE)
         if (!g.verbs.includes(c)) bad.push(`${type}: core verb ${c} missing from the toolbar`);
     }
@@ -150,9 +151,8 @@ const host = {
       console.error("\nEMCAPROOF FAIL:\n  " + bad.join("\n  "));
       process.exit(1);
     }
-    console.log("\nEMCAPROOF PASS: emca placed each window by writing its wctl and the"
-      + " placement reached the surface; the toolbar that arrived is emca's core set"
-      + " merged with the type's extras, and Put is absent because nothing is dirty.");
+    console.log("\nEMCAPROOF PASS: the toolbar that reached the surface is emca's core"
+      + " set merged with the type's extras, and Put is absent because nothing is dirty.");
     process.exit(0);
   },
   error: (text) => console.error(text),
@@ -169,6 +169,6 @@ const { cons } = await boot(host, {
 // windows. Nothing in this harness knows a type name that /type does not.
 cons.feed(new TextEncoder().encode("rc /rc/emca\n"));
 setTimeout(() => {
-  console.error(`EMCAPROOF FAIL: only ${got.size} of ${want.size} windows were placed in 20s`);
+  console.error(`EMCAPROOF FAIL: only ${got.size} of ${want.size} windows were furnished in 20s`);
   process.exit(1);
 }, 20000);

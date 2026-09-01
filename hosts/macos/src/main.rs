@@ -373,7 +373,7 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
             // /dev/window's declared chrome. This host is headless (it runs the
             // suite), and a headless surface renders no furniture — the point
             // being that the KERNEL never knows there is a screen.
-            Effect::WinChrome { .. } | Effect::Pin { .. } => {}
+            Effect::WinChrome { .. } => {}
             // a headless host opens nothing, so nothing asks and nothing answers
             Effect::ReadDone { .. } | Effect::WriteDone { .. } => {}
             Effect::ConsWrite(bytes) => {

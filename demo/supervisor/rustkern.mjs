@@ -300,12 +300,10 @@ export async function boot(host, opts) {
           const tok = f64v(), ok = u8() !== 0, data = bytes32().slice();
           const w = reads.get(tok);
           if (w) { reads.delete(tok); ok ? w.res(data) : w.rej(new Error("read failed")); }
-        } else if (tag === 16) { // Pin — workspace scope, so not any window's
-          host.pinChanged?.(str16());
         } else if (tag === 13) { // WinChrome — /dev/window's declared furniture
           const wid = u32();
-          host.winChrome?.(wid, { type: str16(), pane: str16(), content: str16(),
-                                  toolbar: str16(), tag: str16(), verbs: str16() });
+          host.winChrome?.(wid, { type: str16(), content: str16(),
+                                  toolbar: str16(), tag: str16() });
         } else if (tag === 8) { // WinCanvas
           const wid = u32();
           const label = str16();

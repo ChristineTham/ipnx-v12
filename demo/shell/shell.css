@@ -245,26 +245,13 @@ body[data-size="small"] #emcaBottom .ewin:not(.collapsed) .wbody { height: 34vh;
   { display: flex; flex-direction: column; }
 #emcaLeft .ewin.collapsed, #emcaBottom .ewin.collapsed { position: relative; inset: auto; }
 
-/* ---- the floating bar: operand is a RANGE, so it sits AT THE TEXT ----
-   Position encodes what the verbs act on. That is the discoverability acme
-   never had, delivered by geometry instead of by documentation.          */
-.fbar { position: fixed; z-index: 9999; display: flex; gap: 1px;
-        background: #0e1720; border: 1px solid #3a5064; border-radius: 7px;
-        padding: 2px; box-shadow: 0 6px 22px rgba(0,0,0,.45); }
-.fbar button { font: 500 12px/1 inherit; padding: 6px 10px; min-height: 30px;
-               border: 0; border-radius: 5px; background: none; color: #cfe3f2;
-               cursor: pointer; white-space: nowrap; }
-.fbar button:hover, .fbar button:focus-visible { background: #23384a; outline: none; }
-.fbar button:focus-visible { box-shadow: inset 0 0 0 2px #6cf; }
-
 /* ---- the status line's right zone: ambient, read-only ---------------- */
 #ambient { display: flex; align-items: center; gap: 8px; margin-left: auto;
            font-size: 11px; color: #7b8b9b; }
-#pinChip, .runchip { font: 500 11px/1 inherit; border: 1px solid #3a5064;
+.runchip { font: 500 11px/1 inherit; border: 1px solid #3a5064;
                      border-radius: 999px; padding: 2px 8px; cursor: pointer;
                      background: #17212c; color: #9fc4dd; white-space: nowrap; }
-#pinChip { border-color: #7a6a3a; color: #e8d59a; background: #241f10; }
-#pinChip:hover, .runchip:hover { background: #23384a; }
+.runchip:hover { background: #23384a; }
 #running { display: flex; gap: 4px; }
 #dirty { color: #d9a441; }
 #linecol { font: 500 11px/1 ui-monospace, Menlo, monospace; color: #6a7d8e; min-width: 40px; }

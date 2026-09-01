@@ -140,21 +140,9 @@ function enforceBodies(n) {
 // "It must earn its place; a status bar is the easiest surface in any app to
 // fill with noise." So exactly four things, each named by the design: running
 // commands with tap-to-kill, the pin, the dirty count, line:col.
-const pinChip = document.getElementById("pinChip");
 const runEl = document.getElementById("running");
 const dirtyEl = document.getElementById("dirty");
 const lcEl = document.getElementById("linecol");
-
-let pinned = "";
-function setPin(text) {
-  pinned = text || "";
-  pinChip.hidden = !pinned;
-  if (!pinned) return;
-  const one = pinned.replace(/\s+/g, " ").trim();
-  pinChip.textContent = `📌 ${one.length > 28 ? one.slice(0, 27) + "…" : one}`;
-  pinChip.title = `pinned: ${one}\nthe next Execute consumes it — click to drop`;
-}
-pinChip.addEventListener("click", () => writePath("/dev/window/pin", new Uint8Array()));
 
 function setLineCol(view) {
   if (!view) { lcEl.textContent = ""; return; }
@@ -283,16 +271,15 @@ const paneFor = (type) => PANE_OF[type] ?? "main";
 
 // read the registry once the namespace is up. /type is itself a type, so this
 // is the interface learning its own vocabulary from files it could also edit.
+//
+// It no longer reads a `pane` file: named regions are gone (emca.txt PART FIVE),
+// and placement is a position in the tree emca publishes. The two-region layout
+// below is SCAFFOLDING that M15g replaces with a renderer for that tree — it is
+// left standing only so the surface has something to draw in the meantime.
 async function loadTypes() {
   try {
     const names = dirEntries(await readPath("/type")).filter((e) => e.dir);
-    await Promise.all(names.map(async (e) => {
-      try {
-        const pane = new TextDecoder().decode(await readPath(`/type/${e.name}/pane`)).trim();
-        if (pane) PANE_OF[e.name] = pane;
-      } catch {}
-    }));
-    setStatus(`emca — ${Object.keys(PANE_OF).length} types`);
+    setStatus(`emca — ${names.length} types`);
   } catch (err) { /* no registry on this host: the floor still stands */ }
 }
 
@@ -818,7 +805,7 @@ const host = {
       gw = gwins.get(id);
       if (!gw) return;
     }
-    gw.win.setPane?.(PANES[ch.pane] ? ch.pane : paneFor(ch.type));
+    gw.win.setPane?.(paneFor(ch.type));
     // the layout is derived from what is THERE, and windows arrive long after
     // boot — so re-derive on placement, or the first pane keeps a stale default
     applyLayout();
@@ -900,21 +887,12 @@ const host = {
     const tag = ch3.querySelector(".wtag");
     if (document.activeElement !== tag) tag.value = ch.tag || "";
 
-    // VERB APPLICABILITY — emca answered the select event, so the floating bar
-    // grows from the always-applicable set to the set that actually applies
-    if (ch.verbs) gw.editor?.setVerbs?.(ch.verbs);
 
     if (ch.content && ch.content !== gw.shownContent) {
       gw.shownContent = ch.content;
       showContent(gw, ch.content, ch.type);
     }
   },
-
-  // THE PIN is workspace state, so it arrives on its own effect rather than any
-  // window's chrome, and it lands in the status line — which is where ambient
-  // read-only state belongs, and the reason the design accepts the pin's cost:
-  // two acts instead of a chord, and one piece of invisible state MADE VISIBLE.
-  pinChanged: (text) => setPin(text),
 
   winCanvas: (id, snap) => {
     const gw = gwins.get(id);
@@ -1001,10 +979,13 @@ const booted = await boot(host, { rootSeed: seedFromJson(files), interactive: tr
 // ---- the home chooser: play (ramfs) · browser storage (OPFS) · a real
 // local folder (File System Access). A granted directory IS a bind.
 {
-  for (const b of document.querySelectorAll("#emcaOverflow button[data-home]"))
-    b.addEventListener("click", () => setHome(b.dataset.home));
+  // WIRED FROM NOWHERE UNTIL M15e. The overflow this hung off is gone with the
+  // superseded model, and its proper home is the ROOT WINDOW's toolbar — the
+  // system is its operand. Kept, not deleted, because it is working
+  // functionality (a granted directory IS a bind); exposed again when the root
+  // window exists. Reachable meanwhile as window.__emca.setHome for testing.
+  window.__setHome = setHome;
   async function setHome(want) {
-    document.getElementById("emcaOverflow").hidden = true;
     try {
       if (want === "play") {
         feedCons("unmount /n/host >[2]/dev/null; cd /usr/kitty");
@@ -1094,23 +1075,6 @@ const BIGFONT = "/lib/font/bit/go/regular.13.font";
 // why "adding a manager is adding a file" (docs/emca.txt).
 for (const b of document.querySelectorAll("#managers button"))
   b.addEventListener("click", () => feedCons(`rc /rc/emcaopen ${b.dataset.open}`));
-// the workspace's rarer verbs, one click away
-const ovf = document.getElementById("emcaOverflow");
-document.getElementById("tOverflow").addEventListener("click", (e) => {
-  e.stopPropagation();
-  ovf.hidden = !ovf.hidden;
-});
-document.addEventListener("click", () => { ovf.hidden = true; });
-// THE WORKSPACE VERBS. Their operand is the workspace, so they go to the
-// workspace's own events file — where emca reads them. They were previously
-// typed at rc, which has no such commands and answered "does not exist".
-for (const b of ovf.querySelectorAll("button[data-cmd]"))
-  b.addEventListener("click", () => {
-    ovf.hidden = true;
-    writePath("/dev/window/events", enc.encode(b.dataset.cmd + "\n"))
-      .catch((e) => toast(`${b.dataset.cmd}: ${e.message}`));
-  });
-
 // the pane toggles: how the responsive layout is driven by hand. host: side —
 // these never round-trip, because layout is the surface's half. An explicit act
 // OVERRIDES the breakpoint's default, and the override is remembered per size

@@ -25,24 +25,10 @@
     <button data-open="type /type" title="/type — the registry BOTH halves read; adding a manager is adding a file here">Types</button>
   </span>
   <span class="tgroup" id="right">
-    <button id="tOverflow" title="the workspace's rarer verbs">⋯</button>
     <button id="tLeft"   title="show/hide the left pane (⌘B)">▤</button>
     <button id="tBottom" title="show/hide the bottom pane (⌘J)">▁</button>
   </span>
 </div>
-<!-- rare things do not earn permanent space (emca.txt): the workspace verbs
-     that are used once a session live one click away, not on the bar. -->
-<div id="emcaOverflow" hidden>
-  <button data-cmd="Putall" title="write every window with unsaved changes">Putall</button>
-  <button data-cmd="Dump"   title="save the window set to $home/emca.dump">Dump</button>
-  <button data-cmd="Load"   title="reopen the window set from $home/emca.dump">Load</button>
-  <button data-cmd="Exit"   title="close the workspace — refuses while anything is unwritten">Exit</button>
-  <hr>
-  <button data-home="play"    title="the shipped examples; nothing persists">home: examples</button>
-  <button data-home="browser" title="private storage that survives reload">home: browser storage</button>
-  <button data-home="folder"  title="your real disk — a granted directory IS a bind">home: local folder…</button>
-</div>
-
 <div id="emcaBody">
   <aside id="emcaLeft"><div class="paneBody"></div></aside>
   <div class="divider vert" id="dLeft" title="drag to resize"></div>
@@ -65,7 +51,6 @@
 <div id="emcaStatus">
   <input id="globalTag" spellcheck="false" placeholder="⌘⇧T — commands run in the workspace">
   <span id="ambient">
-    <button id="pinChip" hidden title="the pinned range — the next Execute consumes it. Click to drop."></button>
     <span id="running" title="running commands — click one to kill it"></span>
     <span id="dirty" hidden title="windows with unwritten changes"></span>
     <span id="linecol" title="line:column"></span>
