@@ -932,6 +932,41 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   it does now, and must. A gain falls out: the responsive rules become testable
   headlessly, since rc can write a geometry and read back the tree.
 
+- **(2026-09-01) THE VERBS: the era's names, four surfaces with one operand
+  each, and the floating bar restored.** Christine: *"acme names for the
+  builtins are idiosyncratic (snarf, zerox, put, get, etc.). They have not stood
+  the test of time, and are against Apple HIG… This only applies to emca, not
+  acme. Acme of course retains it's naming."* So emca says Copy, Save, Revert,
+  Open; acme's port keeps Snarf, Put, Get and Zerox, because renaming acme's
+  buttons would be changing acme rather than porting it.
+  **The grouping is by operand, and it resolves an overlap the first draft had.**
+  Hers: some operations are window operations (newcol, newrow), some operate on
+  the body (cut, copy, paste), some on the tag line itself (run, search, add).
+  Four surfaces, each with exactly one operand: the window as a thing in a layout
+  → the **title bar row**, beside the controls, since these are not about what
+  the window holds; the window's **content** → the toolbar; the **tag line's
+  text** → its own buttons, kept separate so it is visible that Run acts on what
+  you just typed and Save does not; a **selection in the body** → the floating
+  bar.
+  **THE FLOATING BAR WAS RETIRED IN ERROR AND IS RESTORED.** The reasoning for
+  dropping it — that the tag line plus the toolbar already did the job — missed
+  that they take different operands: the tag line holds text you COMPOSE, the bar
+  acts on text you POINT AT, and acme's chord was the second. Hers, restoring it:
+  *"The floating toolbar is still the floating toolbar, so it is context
+  sensitive to the window body."* That the same three words appear on two
+  surfaces is not duplication but the rule working.
+  **Two corrections fell out of the audit.** The toolbar is NOT a closed set: her
+  `Add` verb puts the tag line's text on it as a button, which is how acme's
+  "type Indent in the tag and it works" becomes durable — so the CORE is closed
+  and the toolbar is extensible. And **New column / New row DUPLICATE** this
+  window rather than creating an empty one (*"new col (in reality duplicate
+  horizontally)"*), which subsumes Zerox entirely: you duplicate, then retitle,
+  because the title retargets. One verb where acme had three.
+  **All 38 of acme.txt's operations are accounted for in the spec**, and three
+  acme builtins disappear as buttons because something else already does the
+  work: Zerox (New column duplicates), Edit (sam's language is a command, so you
+  type it and press Run), and ID (it is state, so it lives in the status bar).
+
 - **(2026-09-01) acme and emca are two documents about two things.** Hers:
   *"acme is Bell Labs program. We are going to update it to fit emca, but not
   change functionality. emca is effectively our new windowing system and UI.

@@ -429,20 +429,20 @@ credential — was a manager nobody had written, and putting them in a
 table led directly to putting buttons for them on a toolbar, where
 two of them opened windows on paths that did not exist.
 
-  type     namespace    cmd    furniture
+  type     namespace    cmd    toolbar (beyond Undo/Redo)
   ------   ----------   ----   -------------------------------------
-  root     inherited    —      Fit, Reset, New column. THE SCREEN.
-                               Composites itself by the convention;
+  root     inherited    —      Save All, Reset, Save Layout, Restore
+                               Layout, Home… THE SCREEN: composites
+                               itself by the convention, and
                                everything else is its descendant.
-  ls       inherited    —      Look, Get. Every LINE is a look
-                               target, which is how you navigate a
-                               tree by tapping.
-  edit     inherited    —      Del Snarf Get Look Edit, and Put when
-                               dirty. The body is a real editor
-                               component (PART SIX).
-  shell    inherited    rc     Kill. rc runs; the line editor and
-                               history are the HOST's, and rc knows
-                               nothing about either.
+  ls       inherited    —      Revert, New File, New Folder. Every
+                               LINE is an Open target, which is how
+                               you navigate a tree by tapping.
+  edit     inherited    —      Save (only while dirty), Revert. The
+                               body is a real editor component.
+  shell    inherited    rc     Interrupt, Clear. rc runs; the line
+                               editor and history are the HOST's, and
+                               rc knows nothing about either.
 
 Each is a directory of small files. That is the whole story, and it
 is why the list can grow without any code: a fifth type is a fifth
@@ -545,7 +545,11 @@ holds — a file, a listing, a shell, an image, or other windows.
               editor: the platform's field, so selection, IME, undo
               and keyboard navigation come free.
 
-  CONTROLS  close, minimise, maximise — ALL THREE INFORM THE PARENT.
+  CONTROLS  and the WINDOW OPERATIONS, which belong here rather than
+            on the toolbar because their operand is the window as a
+            thing in a layout — not what it holds. Close, Minimise,
+            Maximise, New column, New row, Fit, Sort; listed in full
+            below. ALL OF THEM INFORM THE PARENT.
             A child never resizes or removes itself; it asks. That is
             what makes the recursion work, because a parent owns the
             layout of its children and nothing else does.
@@ -575,22 +579,30 @@ holds — a file, a listing, a shell, an image, or other windows.
             did not do what its name promises. Moving them out of the
             allocation costs one strip however many there are.
 
-  TOOLBAR   the window's verbs as real buttons: emca's core set, the
-            type's additions, and THE WINDOW-MANAGEMENT VERBS — new
-            tab, Newcol, and the rest.
+  TOOLBAR   verbs whose operand is THIS WINDOW'S CONTENT: Undo and
+            Redo on every window, then the type's. Listed by type
+            below. The window OPERATIONS are not here — they are with
+            the controls, because their operand is different.
+
+            THE CORE IS CLOSED; THE TOOLBAR IS NOT. A type may add
+            verbs and so may a person, through the tag line's `Add`.
+            What cannot be removed or redefined is the core, because
+            a window's behaviour has to be predictable. (An earlier
+            draft said the toolbar was closed outright, which `Add`
+            contradicts.)
 
             ALL OF THEM ARE ALWAYS VISIBLE. An earlier draft judged
-            Newcol and friends "rare" and hid them behind an overflow.
-            That invented a hierarchy of importance the design does
-            not have: these verbs ARE the user interface, not
-            occasional settings. When a window is narrow the toolbar
-            WRAPS to more lines, and only when it is truly narrow does
-            a disclosure control appear — a response to geometry,
-            never a judgement about frequency.
+            some verbs "rare" and hid them behind an overflow. That
+            invented a hierarchy of importance the design does not
+            have. When a window is narrow the toolbar WRAPS, and only
+            when it is truly narrow does a disclosure control appear —
+            a response to geometry, never a judgement about frequency.
 
   TAG LINE  free, editable text, on the toolbar's line when there is
             room and wrapped below it when there is not — AND IT IS AN
-            OPERAND, NOT A COMMAND LINE. Its text is the ARGUMENT to
+            OPERAND, NOT A COMMAND LINE. Its own buttons (Run, Search,
+            Open, Add) sit with it and not on the toolbar, so that it
+            is visible which verbs act on what you just typed. Its text is the ARGUMENT to
             whichever toolbar verb is pressed. Hers: "'alice' in the
             tag line and then pressing 'Look' searches for alice in
             window file, 'mk' in tag line and then pressing 'Execute'
@@ -609,6 +621,198 @@ holds — a file, a listing, a shell, an image, or other windows.
             An edit window shows line:col, size, dirty; a shell window
             shows the running command; an ls window shows the count.
             Read-only, and about THIS window — the operand rule again.
+
+The names: emca uses the era's words, acme keeps its own
+--------------------------------------------------------
+Christine, 2026-09-01: "acme names for the builtins are idiosyncratic
+(snarf, zerox, put, get, etc.). They have not stood the test of time,
+and are against Apple HIG. So I think we need common names like Open,
+Cut, Copy, Paste, Save, Run, Search etc. This only applies to emca,
+not acme. Acme of course retains it's naming."
+
+So emca's verbs are named for the people using them, and acme's port
+(acme.txt) keeps Snarf, Zerox, Put and Get unchanged — it is Bell
+Labs' program and renaming its buttons would be changing it.
+
+  acme            emca            why
+  -------------   -------------   -----------------------------
+  Snarf           Copy            the word everyone else uses
+  Put             Save
+  Putall          Save All
+  Get             Revert          it discards changes and re-reads,
+                                  which is what Revert means
+  Del             Close
+  Delcol          Close           the same verb; the operand differs,
+                                  which is the whole point
+  Exit            Close           the ROOT window's close
+  Newcol / New    New column /    and they duplicate this window in
+                  New row         that direction (see below)
+  Zerox           New column      subsumed: duplicating IS what it did
+  Look            Open / Go to /  look was never one operation. It is
+                  Search / Plumb  a DISPATCHER over four, and emca
+                                  shows the four (acme.txt layer 3)
+  Edit            —               retired as a button: sam's language
+                                  is a command, so you type it in the
+                                  tag line and press Run
+  Sort            Sort
+  Undo / Redo     Undo / Redo     already the era's words
+  Cut / Paste     Cut / Paste     likewise
+  Dump / Load     Save Layout /   root window only
+                  Restore Layout
+  Kill            Interrupt       shell windows, and the status bar
+  ID              —               not a verb; it is in the status bar
+
+The four surfaces, by operand
+-----------------------------
+OPERAND DETERMINES SURFACE, and with the window's anatomy settled each
+surface now has ONE operand and no overlap:
+
+  operand                     surface              verbs
+  -------------------------   ------------------   -------------------
+  the window as a thing in    the TITLE BAR row,   Close, Minimise,
+  a layout                    beside the title     Maximise, New column,
+                                                   New row, Fit, Sort
+  the window's CONTENT        the WINDOW TOOLBAR   Save, Revert, Undo,
+                                                   Redo + the type's
+  the TAG LINE's text         buttons beside the   Run, Search, Open,
+                              tag line             Add
+  a SELECTION in the body     the FLOATING BAR     Cut, Copy, Paste,
+                                                   Open, Go to, Search
+
+THE FLOATING BAR STAYS, and an earlier draft was wrong to retire it on
+the grounds that the tag line had subsumed it. They are different
+operands: the tag line holds text you COMPOSE, the floating bar acts
+on text you POINT AT. Typing "alice" and pressing Search is not the
+same act as selecting alice in the body and pressing Search, and acme's
+chord was the second one. Hers: "The floating toolbar is still the
+floating toolbar, so it is context sensitive to the window body."
+
+That the same three words — Open, Go to, Search — appear on two
+surfaces is not duplication. It is the same verb offered against two
+different operands, which is exactly what the rule predicts.
+
+Window operations: universal, and grouped with the controls
+-----------------------------------------------------------
+These act on the window AS A THING IN A LAYOUT, not on what it holds,
+so they belong with the controls and the title rather than on the
+toolbar. Every window has all of them.
+
+  Close        closes the window cleanly and the underlying command
+               with it. On the ROOT window this is Exit.
+  Minimise     move out of the parent's allocation. Reversible.
+  Maximise     move every sibling out. Reversible.
+  New column   duplicate this window into a new column beside it
+  New row      duplicate this window into a new row below it
+  Fit          drop the size overrides in this subtree, re-derive
+  Sort         order this window's children by name (containers only)
+
+DUPLICATE, NOT CREATE-EMPTY, and this is hers: "new col (in reality
+duplicate horizontally)". The new window shows what this one shows.
+Since THE TITLE RETARGETS, you then retitle it to whatever you
+actually wanted — which is why emca needs no separate "new empty
+window" verb, and why Zerox disappears as a distinct operation. One
+verb where acme had three (New, Newcol, Zerox).
+
+Move and resize are NOT buttons. They are direct manipulation — drag
+a divider, drag a title onto another window — and acme filed them the
+same way (layer 1, not layer 3). Making them buttons would be
+inventing an exception for something the surface already does.
+
+The window toolbar, by type
+---------------------------
+Universal on every window, because every window has content:
+
+  Undo   Redo
+
+And then the type's. The list is short by construction: a verb earns a
+place here only if its operand is THIS WINDOW'S CONTENT.
+
+  root     Save All      write every descendant with unsaved changes
+           Reset         rebuild the default arrangement
+           Save Layout   the window set, to a file
+           Restore Layout
+           Home…         where files live: the shipped examples,
+                         browser storage, or a granted local folder
+                         (a granted directory IS a bind)
+
+  ls       Revert        re-read the directory
+           New File
+           New Folder
+
+  edit     Save          appears ONLY while there are unsaved changes,
+                         and its appearance IS the dirty indicator
+                         (acme's rule, kept — acme.c:383)
+           Revert
+
+  shell    Interrupt     stop the running command
+           Clear
+
+THE TOOLBAR IS NOT CLOSED, and an earlier draft said it was. `Add`
+(below) puts the tag line's text on the toolbar as a button, so a
+person extends it. What is closed is the CORE — the verbs above cannot
+be removed or redefined by a type or a user, because the window's
+behaviour must be predictable. Additions sit beside them.
+
+The tag line's buttons
+----------------------
+The tag line's TEXT is their operand, so they sit with it — to its
+right, or as small buttons inside the field where space is tight.
+Separated from the window toolbar deliberately: a person needs to see
+that Run acts on what they just typed and Save does not.
+
+  Run      execute the text as a command, in the window's directory.
+           The filters keep acme's syntax rather than growing three
+           more buttons: a leading | pipes the body selection through
+           the command, < replaces the selection with the command's
+           output, > sends the selection to it. And sam's structural
+           language is just a command, which is why Edit is not a
+           button.
+  Search   find the text in this window's body, wrapping
+  Open     open the text as a path, in a new window
+  Add      put the text on this window's toolbar as a button. This is
+           how acme's "type Indent in the tag and it works" becomes
+           durable, and it is the whole of emca's extensibility story
+           for verbs.
+
+The floating bar
+----------------
+Appears at the selection, because that is where its operand is.
+Carries Cut, Copy and Paste always, and then the three that acme's
+`look` conflated — Open when the selection names a file, Go to when it
+names an address, Search otherwise, with Plumb as the fallback when
+rules decide.
+
+THIS IS WHERE EMCA BEATS ACME rather than porting it. Acme's look
+parses your text and silently picks one of the four, which is exactly
+why nobody can predict it. The bar SHOWS the choice. The parsing is
+unchanged; it populates a bar instead of deciding for you, and the
+plumber acquires a face.
+
+Timing, the known trap: THE BAR MUST SNAPSHOT THE RANGE WHEN IT
+APPEARS. The tap that presses its button collapses the native
+selection first. Underneath is a conflation — dot is insertion point,
+operand and clipboard source at once, three lifetimes that a mouse
+hides and touch cannot.
+
+Every operation accounted for
+-----------------------------
+acme.txt counts 38 operations. Where each one went:
+
+  native (4)        select, insert, delete, scroll — the component's
+  gesture (4)       expand (double-click), move, grow/shrink (drag),
+                    plumb (the floating bar's fallback)
+  title bar (7)     Close, Minimise, Maximise, New column, New row,
+                    Fit, Sort
+  toolbar (2+type)  Undo, Redo, and the per-type lists above
+  tag line (4)      Run, Search, Open, Add — with |, < and > as
+                    syntax within Run rather than as buttons
+  floating bar (6)  Cut, Copy, Paste, Open, Go to, Search
+  status bar        id, and the running command with Interrupt
+
+Nothing is dropped. Three acme builtins disappear as BUTTONS because
+something else already does the work: Zerox (New column duplicates),
+Edit (type sam's language and press Run), and ID (it is state, so it
+belongs in the status bar).
 
 Allocation, and what a tab is
 -----------------------------
@@ -960,9 +1164,10 @@ consistently. One object, composited recursively. Controls that inform
 the parent. Allocation, with the unallocated as tabs. A toolbar of
 verbs with the tag line as their argument. Every window the same.
 Every mistake so far — the named panes, the rare-verb overflow, the
-floating bar, the pin, the single global status line, the rotated
-minimised strip — was an exception invented where a principle already
-applied.
+pin, the single global status line, the rotated minimised strip — was
+an exception invented where a principle already applied. (And one, the
+floating bar, was RETIRED in error and restored: its operand is a
+selection in the body, which no other surface has.)
 
 Defaults and overrides: the breakpoint sets the DEFAULT allocation; an
 explicit act overrides it; the override is remembered PER SIZE CLASS.
@@ -975,9 +1180,7 @@ What this deletes
   - `pane <name>` in wctl, and /type/<t>/pane
   - "rail", "leaf", "bottom pane" and "concertina" as distinct things
   - "stack" as a third composition beside row and column
-  - the floating bar: the tag line IS the operand and the toolbar IS
-    the verb set, so a second mechanism for the same job is waste
-  - the pin: "alice in the tag line, then press Look" is
+  - the pin: "alice in the tag line, then press Run" is
     execute-with-argument, so the pin solved a problem the tag line
     already solves
   - the single global status line as the only status: every window has
@@ -1338,9 +1541,17 @@ PART EIGHT — WHAT IS DECIDED
       window IS the screen. Named regions — pane, rail, leaf — do not
       exist. (2026-09-01)
   22. THE TAG LINE IS AN OPERAND, not a command line: its text is the
-      argument to whichever toolbar verb is pressed. That is the 2-1
-      chord decomposed, and it retires both the floating bar and the
-      pin, which solved the same problem twice. (2026-09-01)
+      argument to its own buttons — Run, Search, Open, Add. That is
+      the 2-1 chord decomposed, and it retires the pin. It does NOT
+      retire the floating bar: composing text and pointing at text are
+      different operands, and the bar is the second one. (2026-09-01)
+  22a. FOUR SURFACES, ONE OPERAND EACH: the window in its layout ->
+      the title bar row; the window's content -> the toolbar; the tag
+      line's text -> its own buttons; a selection in the body -> the
+      floating bar. And EMCA USES THE ERA'S NAMES — Copy, Save,
+      Revert, Open — while acme's port keeps Snarf, Put, Get and
+      Zerox, because renaming acme's buttons would be changing acme.
+      (2026-09-01)
   23. Every window has its own status bar, carrying that window's
       state. The root window's is the workspace's.
   24. The surface owns text input natively; the hand-rolled caret is
@@ -1437,11 +1648,9 @@ THE PLUMBER — RESOLVED BY ADOPTION, not design.
   notation, own the model" that took SVG path data for canvas — and it
   answers the standing instruction to maximise reuse of existing
   protocols. Look's dispatch IS a plumb rule evaluating; nothing new
-  is invented. AMENDED 2026-09-01: with the floating bar retired, the
-  plumber's face is the toolbar — pressing Look with a path in the tag
-  line opens it, with an address jumps, with a word searches, and
-  which of those applies is still emca's judgement rather than a
-  silent guess.
+  is invented, and the plumber finally has a face: the FLOATING BAR
+  shows which of open/go-to/search/plumb the rules chose, instead of
+  look deciding silently.
 
 THE SURFACE'S OWN SUITE — RESOLVED: the surface publishes what it
   rendered, and the suite asserts over that.

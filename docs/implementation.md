@@ -830,14 +830,24 @@ three at large with the middle one splitting into two rows, and
 that closing a convention-created column leaves a valid tree, and
 that `Reset` restores it.
 
-**f. The four window types *(M)*.** `root`, `ls`, `edit`, `shell` —
-and no others, because a type in the table becomes a button on a
-toolbar. `ls` makes every line a look target; `edit` carries the
-editor component and Put-when-dirty; `shell` runs rc with the line
-editor and history host-side. This renames `dir` to `ls` and `text`
-to `edit`.
-**Acceptance:** each type opens, its declared verbs work, and its
-status bar shows what its type says it shows.
+**f. The verbs, and the four window types *(M)*.** Four surfaces,
+one operand each ([emca.txt](emca.txt)): the window in its layout ->
+the title bar row (Close, Minimise, Maximise, New column, New row,
+Fit, Sort); the window's content -> the toolbar (Undo, Redo, plus the
+type's); the tag line's text -> its own buttons (Run, Search, Open,
+Add); a selection in the body -> the floating bar (Cut, Copy, Paste,
+Open, Go to, Search). **emca uses the era's names** — Copy, Save,
+Revert — while acme's port keeps Snarf, Put and Get, because renaming
+acme's buttons would be changing acme.
+
+Types: `root`, `ls`, `edit`, `shell`, and no others, because a type in
+the table becomes a button on a toolbar. This renames `dir` to `ls`
+and `text` to `edit`. `Add` makes the toolbar user-extensible, so the
+CORE is closed but the toolbar is not.
+**Acceptance:** every one of acme.txt's 38 operations is reachable and
+does what it says; each type's declared verbs work; each status bar
+shows what its type says it shows; and no button exists that does
+nothing.
 
 **g. The surface renders the tree *(M)*.** The browser surface stops
 owning layout and becomes a renderer: it draws the tree emca computed
