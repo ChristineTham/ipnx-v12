@@ -525,7 +525,7 @@ web-worker constraints get measured before that form is promised.
 save, `run` a spec from a task, rc in the integrated terminal; the suite
 drives the same kernel the editor mounts.
 
-### M14 — emca, the user interface *(L, staged)* — **sequenced immediately after M5; M6 and M13 become its surfaces** — consumes: the emca decision (design.md 2026-08-31), M5 (`/dev/canvas`), `/pkg`
+### M14 — emca, the user interface *(L, staged)* — **PARTLY SUPERSEDED 2026-09-01 by M15, the compositor: a–d built emca's surface on three hardcoded named regions, and the layout half of that work is replaced. What survives is the control interface (`/dev/window`), `/type` as a registry, the editor component, content over 9P, and emca as a watching file server. What does not is every part that assumed named panes.** — sequenced immediately after M5; M6 and M13 become its surfaces — consumes: the emca decision (design.md 2026-08-31), M5 (`/dev/canvas`), `/pkg`
 The system's face (design: [emca.txt](emca.txt); parts list:
 [acme.txt](acme.txt)). Not an editor — what IPNX *boots into* on every
 surface, with an editor as one window type. Split in two throughout:
@@ -754,6 +754,105 @@ every floating-bar verb and toolbar button is reachable from the
 keyboard with Tab; a project instantiates, is saved, and is promoted,
 with its declaration shown before it runs; the system boots to emca with
 the default workspace and no shell in front of it.
+
+### M15 — the compositor *(L, staged)* — **supersedes much of M14a–d; the piece that should have been designed first** — consumes: the compositor decision (design.md 2026-09-01), [emca.txt](emca.txt) PARTS FOUR and FIVE
+
+M14 built emca's surface as three hardcoded named regions — a `PANES`
+map holding `left`, `main` and `bottom`, a `pane <name>` verb in
+`wctl`, and a `pane` file per type naming one of those strings. Once
+placement is a NAME the composition is frozen at three slots, nothing
+nests, and rows and columns are decoration. Every symptom traced to
+it. **This milestone replaces that model with the one in emca.txt:
+one object, composited recursively.**
+
+It is sequenced FIRST among what remains, because the types and the
+demo both sit on top of it. Christine's own diagnosis: *"The first
+thing we should have designed was the compositor and the root window.
+If we get this right then we have correct behaviour, window controls,
+resizing, tabs, panes, etc."*
+
+**a. Strip the superseded model *(S)*.** Delete before building: the
+`PANES` map and named regions, `pane <name>` in `wctl` and
+`Win.pane`, `/type/<t>/pane`, the floating bar and its CSS, the pin
+(kernel file, `Effect::Pin`, emca state, the status chip), the
+overflow menu, the single global status line, and the tab strip's
+separate leaf machinery. The suite must stay green across the
+deletion — anything that fails is telling us the thing was load-
+bearing after all.
+**Acceptance:** the tree builds and the suite is green with none of
+the above present.
+
+**b. The tree, in the kernel and in emca *(M)*.** A window gains
+children, an axis, an allocation and a tab flag. Nesting is walkable
+as files — `/dev/window/<type>/<n>/<child>` — so the structure is
+`ls`-able and `grep`-able, which is the claim the whole design rests
+on. **Alternation is enforced**: a container's axis is perpendicular
+to its parent's, stored not derived (derivation does not survive
+restructuring), and a same-axis container is flattened into its
+parent. `New row` and `New column` resolve to *give children* or *add
+a sibling* from the parent's axis, and never ask.
+**Acceptance:** in rc, build a nested tree, read it back, assert its
+canonical form; assert that creating a same-axis container flattens.
+
+**c. Allocation, and the sizing heuristic *(M)*.** A parent allocates
+rectangles to some children; the rest are tabs. `minimise(me)` moves
+me out of the allocation, `maximise(me)` moves everyone else out,
+both reversible. Sizing is content-aware after acme's `coladd()`:
+every window declares a MINIMUM and a NATURAL along its parent's
+axis; minimums first, the remainder shared in proportion to
+`natural - minimum` capped at natural, the rest shared
+proportionally; when minimums do not fit, the excess become tabs. A
+user resize is a remembered override. **`Fit`** drops the size
+overrides in a subtree and re-derives; **`Reset`** rebuilds the root
+from its convention.
+**Acceptance:** the strongest test in this milestone, and one that
+only exists because emca owns the geometry — resize a tree
+arbitrarily from rc, press `Fit`, and assert the exact allocation.
+`Fit` is idempotent. A column of one full and one nearly-empty
+window splits unevenly, in the empty one's favour.
+
+**d. The geometry conversation *(S)*.** The host reports
+`resize <w> <h> <cellw> <cellh>` to the root window's `events` — the
+viewport and the text cell, both device-independent. emca computes,
+the host renders. Characters remain the leaf measure as
+`72 x cellWidth`, so accessibility text sizing still moves the
+breakpoints. Intrinsic size for pictures comes from file headers (PNG
+IHDR, JPEG SOF, GIF, SVG viewBox), with a `size <w> <h>` event from
+the host correcting anything emca cannot parse.
+**Acceptance:** headless — write a geometry from rc, read back the
+tree; the same geometry with a doubled cell yields fewer columns.
+
+**e. The root window and its convention *(S)*.** Type `root`, the
+window with no parent. It picks columns by convention, divides into
+three at large with the middle one splitting into two rows, and
+**nothing downstream can tell those columns from any others**.
+**Acceptance:** boot at four geometries and assert the tree; assert
+that closing a convention-created column leaves a valid tree, and
+that `Reset` restores it.
+
+**f. The four window types *(M)*.** `root`, `ls`, `edit`, `shell` —
+and no others, because a type in the table becomes a button on a
+toolbar. `ls` makes every line a look target; `edit` carries the
+editor component and Put-when-dirty; `shell` runs rc with the line
+editor and history host-side. This renames `dir` to `ls` and `text`
+to `edit`.
+**Acceptance:** each type opens, its declared verbs work, and its
+status bar shows what its type says it shows.
+
+**g. The surface renders the tree *(M)*.** The browser surface stops
+owning layout and becomes a renderer: it draws the tree emca computed
+and reports geometry back. Every window gets the four components,
+three controls, scrollbars and its own status bar. Controls send
+messages to the parent; none acts locally.
+**Acceptance:** `emcaproof.mjs` asserts the rendered tree matches the
+one emca published, at three geometries.
+
+**h. The demo *(S)*.** Wired from what a–g built and nothing else: a
+listing in a column, edit windows as tabs, rc in a row. No button
+that is not functional, no type that is not built, no name that is
+not in the spec.
+**Acceptance:** every control on screen does what it says, verified
+by driving the real page.
 
 ### Continuous — curation sweeps *(S each, standing)*
 The Plan 9 userland, command by command, PR-sized tranches as ever: `mk`, the

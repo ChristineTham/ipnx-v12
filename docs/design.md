@@ -851,6 +851,105 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   running command needed **`/proc/<pid>/args`**, proc(3)'s own file, whose data
   sat in the proc record all along with nothing able to read it.
 
+- **(2026-09-01) THE COMPOSITOR: one object, composited recursively — and
+  the redesign that should have come first.** Christine, stopping a build that
+  was going wrong: *"We need a compositor - something that arranges windows into
+  columns and rows, and it is recursive. each window itself is a compositor that
+  can further decompose into windows... The entire browser surface (or macos/ios
+  screen) starts off as one giant window, of type root."* And the diagnosis:
+  *"The first thing we should have designed was the compositor and the root
+  window. If we get this right then we have correct behaviour, window controls,
+  resizing, tabs, panes, etc."*
+  **The evidence, from acme's own source.** An earlier reading here called acme
+  "three fixed levels, not recursive" and treated Row and Column as containers of
+  a different kind from Window. `dat.h` refutes it — all three are a rectangle, a
+  tag, and either children or a body — and `cols.c`'s `colcloseall()` closes a
+  column exactly as a window closes, `textclose()` on its tag then `winclose()`
+  on everything inside. **A column IS a window**, one whose content is windows.
+  Acme stops at depth three, but nothing in the object requires the stop.
+  **What this makes wrong, and it is most of a day's work.** The implementation
+  had a `PANES` map holding `left`, `main`, `bottom`, a `pane <name>` verb in
+  `wctl`, and a `pane` file per type naming one of those strings. Once placement
+  is a NAME, composition is frozen at three slots, nothing nests, and rows and
+  columns are decoration. Every symptom traced to it: windows that could not
+  split, a "rail" that was really region #1, a bottom pane that existed because a
+  string was declared. Her own diagnosis of the naming — *"Where you have been
+  confused (judging by you naming panes as Rail, Transcript etc) is that panes
+  are not special, they are just normal windows"* — is the same fault seen from
+  the vocabulary end.
+  **ALLOCATION, which arrived last and simplified the rest.** The first pass at
+  the controls had maximise MINIMISE every sibling — and Christine caught that it
+  does not work: *"a window with minimised rows still take up space (one line per
+  row). so maximising a window may not actually give much extra room."* True, and
+  the fix she pointed at — *"if we are adopting a stack metaphor, then minimise
+  should be minimising into a stack"* — collapses the whole layout model into one
+  sentence: **a parent allocates rectangles to some of its children along an
+  axis, and those it does not allocate to appear as tabs.** minimise(me) moves me
+  out of the allocation; maximise(me) moves everyone else out; each is undone by
+  moving back. One mechanism, two arguments, O(1) space either way. What falls
+  out of it, none of which had to be written: a tabbed window IS a maximised one;
+  "tabs display only when there is more than one" is not a rule but an empty
+  strip having nothing to draw; stack stops being a third composition beside row
+  and column; a minimised container takes its contents with it because they are
+  inside it; and the small breakpoint stops being a "concertina" — it is the
+  ordinary allocation rule with room for one rectangle, driven by the same
+  mechanism a person drives with the minimise button, which is why the compositor
+  can no longer delete a window by accident. It also retired, unbuilt, an
+  elaborate design for a rotated minimised strip: a tab is a WHOLE window the
+  parent has not given a rectangle to, so the questions that design agonised over
+  — a title too cramped to edit, one button standing for three, a close control
+  made unreachable — simply do not arise.
+  **The principles, and the sentence that governs them**: *"The design is not a
+  set of exceptions, it's a few principles applied consistently."* One object.
+  Every window composites itself into a row, a column or a stack of tabs.
+  Controls INFORM THE PARENT — which is what makes recursion work, and which
+  retires the earlier refusal of maximise (that objection reasoned about a child
+  in isolation; maximise is an instruction to the parent, and the parent already
+  remembers an arrangement). The tag line is an OPERAND, not a command line: its
+  text is the argument to whichever toolbar verb is pressed, which is the 2-1
+  chord decomposed for keyboard and finger — **and which retires both the
+  floating bar and the pin**, two mechanisms built for one job. Every window has
+  the same four components and its own status bar. Panes are windows the root
+  created by convention, and nothing downstream can tell them from any other.
+  **All window verbs are always visible.** The implementation hid Newcol and
+  friends behind an overflow on the judgement that they were rare. Hers: *"They
+  are not, all the window controls need to be available at all times, they are
+  part of the UI."* A narrow toolbar WRAPS — geometry answering geometry, never a
+  ranking of importance.
+  **The unit is device-independent pixels, plus a reported text cell.** Characters
+  remain the leaf measure (72 x cellWidth) so accessibility sizing still moves the
+  breakpoints, but they cannot be the unit: *"not all windows display text. emca
+  needs to be able to know how to fit an image into a window... it knows what an
+  image is (or video, or postscript etc) and what aspect ratio is."* Acme could
+  measure in characters because everything was text. Her precedent: *"this is why
+  macos uses postscript underlying"* — Display PostScript and Quartz are
+  device-independent imaging models for exactly this reason.
+  **And emca owns the tree.** *"Host tells emca - we have a 800x1024 window. emca
+  says 'Ok, we need to apply this responsive layout' create these windows... emca
+  owns the tree, and the host renders the tree."* With the reason: *"emca needs to
+  understand the geometry as well, so it does not ask the host impossible
+  things."* This amends PART ONE's *"emca never learns the viewport's width"* —
+  it does now, and must. A gain falls out: the responsive rules become testable
+  headlessly, since rc can write a geometry and read back the tree.
+
+- **(2026-09-01) acme and emca are two documents about two things.** Hers:
+  *"acme is Bell Labs program. We are going to update it to fit emca, but not
+  change functionality. emca is effectively our new windowing system and UI.
+  Don't confuse between the two."* So `docs/acme.txt` stops being "the anatomy
+  emca derives from" and becomes **the port spec**: how acme is modified to fit
+  into emca, functionality preserved. `docs/emca.txt` is the windowing system —
+  what a window is, how the compositor works, window types. The anatomy was
+  input, not parentage, and describing emca as "derived from acme" invited
+  exactly the confusion that had me editing acme's own record to justify emca's
+  design.
+  **The port decision, taken**: acme's Row/Column/Window **become emca windows**.
+  Acme today is its own compositor — it tiles internally and paints through
+  libdraw on `/dev/draw`. Under emca it stops window-managing and delegates
+  composition, keeping its verbs, its executable text and its `/mnt/acme` file
+  server intact. The alternative — acme as one opaque window that draws itself —
+  is less work but makes it a guest rather than a citizen, and none of emca's
+  furniture would reach its columns.
+
 - **(2026-08-31) The open questions, resolved in one pass — and what it revealed
   about them.** Eleven items stood open across [emca.txt](emca.txt) and
   [window.md](window.md); worked through together on Christine's instruction,

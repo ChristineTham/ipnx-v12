@@ -36,8 +36,8 @@ its files accept, and a surface rendering those verbs natively. Adding a manager
 the system is adding a file. A rich system UI normally destroys acme's central
 property (any text can be a verb's operand) because a process table becomes a widget;
 here it cannot, **because the managers are already text filesystems**. The design is
-[docs/emca.txt](docs/emca.txt), derived from the acme anatomy in
-[docs/acme.txt](docs/acme.txt); nothing of it has shipped.
+[docs/emca.txt](docs/emca.txt); the acme anatomy in [docs/acme.txt](docs/acme.txt)
+was input to it, not parentage.
 
 **The layers have names** (decision log, 2026-08-31): **IPNX** is the kernel
 **and the userspace** — the whole file world, Darwin's slot rather than XNU's;
@@ -174,8 +174,8 @@ is indistinguishable from a shipped one.
 | `docs/design-thinking.md` | **the iteration record** — method (cited), POVs, the ideation table with rejected ideas, the rederived will/won't and its reconciliation, the doc review, the validation plan and cadence |
 | `docs/six-hats.md` | **the completeness check** — dated parallel-thinking sessions (facts/feelings/risks/value/alternatives/process), each catch dispositioned; runs on the consolidated review cadence |
 | `docs/virtue-ethics.md` | **the character record** — the telos, the virtues as means with receipts, habituation (the rituals are the character), the practitioners' temptations named, dispositions per session |
-| `docs/emca.txt` | **the user interface** — emca: the system's face, the two halves (IPNX/surface), window types, `/pkg` and `/project`, the responsive rules |
-| `docs/acme.txt` | **the anatomy** — acme decomposed into four layers and 38 operations; the parts list emca derives from |
+| `docs/emca.txt` | **the windowing system** — what a window is, how the compositor works (one object, composited recursively), window types, the two halves (IPNX owns the tree, the surface renders it) |
+| `docs/acme.txt` | **the acme port** — acme is Bell Labs' program; this is how it is modified to fit into emca with its functionality preserved. Its four-layer anatomy was *input* to emca, not parentage — do not conflate the two |
 | `docs/window.md` | **the control interface** — `/dev/window/<type>/<n>`: chrome, actions that name a side, the type in the path |
 | `docs/canvas.md` | `/dev/canvas`, **narrowed 2026-08-31 to genuine drawing** — the v0 text is kept as the record of what runs today |
 | `docs/userland.md` | the userland reimagined on the new paradigms; the heritage exhibit's scope |

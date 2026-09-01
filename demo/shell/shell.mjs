@@ -807,8 +807,17 @@ const host = {
   // window's identity and its controls, the closed method set as buttons, the
   // user's own free executable text, and the body.
   winChrome: (id, ch) => {
-    const gw = gwins.get(id);
-    if (!gw) return;
+    // THE CHROME EFFECT IS THE ANNOUNCEMENT. A window record was previously
+    // created only by winSync, which fires on a DRAW — right when every window
+    // was a raster, wrong under this design, where a text window never draws at
+    // all. Windows minted by a guest appeared only by luck of timing; three in
+    // quick succession lost two of them.
+    let gw = gwins.get(id);
+    if (!gw) {
+      winCreate(id, 0, 0, 400, 300, ch.content || `window ${id}`);
+      gw = gwins.get(id);
+      if (!gw) return;
+    }
     gw.win.setPane?.(PANES[ch.pane] ? ch.pane : paneFor(ch.type));
     // the layout is derived from what is THERE, and windows arrive long after
     // boot — so re-derive on placement, or the first pane keeps a stale default
@@ -1092,8 +1101,15 @@ document.getElementById("tOverflow").addEventListener("click", (e) => {
   ovf.hidden = !ovf.hidden;
 });
 document.addEventListener("click", () => { ovf.hidden = true; });
+// THE WORKSPACE VERBS. Their operand is the workspace, so they go to the
+// workspace's own events file — where emca reads them. They were previously
+// typed at rc, which has no such commands and answered "does not exist".
 for (const b of ovf.querySelectorAll("button[data-cmd]"))
-  b.addEventListener("click", () => { ovf.hidden = true; feedCons(b.dataset.cmd); });
+  b.addEventListener("click", () => {
+    ovf.hidden = true;
+    writePath("/dev/window/events", enc.encode(b.dataset.cmd + "\n"))
+      .catch((e) => toast(`${b.dataset.cmd}: ${e.message}`));
+  });
 
 // the pane toggles: how the responsive layout is driven by hand. host: side —
 // these never round-trip, because layout is the surface's half. An explicit act

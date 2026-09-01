@@ -8,6 +8,14 @@ rm -rf dist
 mkdir -p dist/build
 cp -R ../poc/browser dist/browser
 cp -R supervisor dist/supervisor            # the demo's own kernel lineage
+# rootfs.json is packed by userspace/mk.sh, NOT here — so editing a file under
+# userspace/rootfs and running only this script serves a stale guest world, and
+# the symptom is a change that plainly landed and plainly is not running (it
+# cost three wrong diagnoses before it was caught). Refuse rather than mislead.
+if [ -n "$(find ../userspace/rootfs -newer ../userspace/build/rootfs.json -print -quit 2>/dev/null)" ]; then
+  echo "demo/build.sh: userspace/rootfs is newer than build/rootfs.json — run 'bash userspace/mk.sh' first" >&2
+  exit 1
+fi
 cp ../userspace/build/rootfs.json dist/build/rootfs.json
 # the kernel itself: the Rust core compiled to wasm (the browser surface's
 # kernel half; rustkern.mjs drives it)

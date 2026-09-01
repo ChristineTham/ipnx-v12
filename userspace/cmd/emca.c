@@ -80,6 +80,21 @@ static int rootfd;
 static char *core[] = { "Del", "Snarf", "Get", "Look", "Edit", nil };
 
 static void dolook(Win*, char*);	/* the toolbar's Look and the bar's are one verb */
+static void doput(Win*);
+static void dodel(Win*);
+
+/* is a window of this type already on this path? Load must not double up */
+static Win*
+winbypath(char *type, char *path)
+{
+	int i;
+
+	for(i = 0; i < MAXWIN; i++)
+		if(wins[i].used && strcmp(wins[i].type, type) == 0
+		&& wins[i].buf != nil && strcmp(wins[i].buf->path, path) == 0)
+			return &wins[i];
+	return nil;
+}
 
 static Win*
 winof(int wid)
@@ -857,6 +872,122 @@ onwinline(Win *w, char *line)
 	USED(sp);
 }
 
+/* THE WORKSPACE VERBS (emca.txt's toolbar table: Putall Dump Load Exit). Their
+ * operand is the workspace, so they arrive on the workspace's own events file —
+ * the exact parallel of a window verb arriving on that window's.
+ */
+static char*
+dumppath(void)
+{
+	static char p[NMAX];
+	char *h;
+
+	h = getenv("home");
+	if(h == nil || *h == 0) h = "/tmp";
+	snprint(p, sizeof p, "%s/emca.dump", h);
+	return p;
+}
+
+static void
+doputall(void)
+{
+	int i;
+
+	for(i = 0; i < MAXWIN; i++)
+		if(wins[i].used && wins[i].buf != nil && wins[i].buf->dirty)
+			doput(&wins[i]);
+}
+
+/* The dump is a FILE, and deliberately one a person can read and edit — the
+ * house style. One line per window: <type> <path>, in the order they were
+ * adopted, which is the order Load re-opens them.
+ */
+static void
+dodump(void)
+{
+	char line[NMAX];
+	int i, fd;
+
+	fd = create(dumppath(), OWRITE, 0644);
+	if(fd < 0){
+		fprint(2, "emca: Dump: %r\n");
+		return;
+	}
+	for(i = 0; i < MAXWIN; i++){
+		if(!wins[i].used) continue;
+		snprint(line, sizeof line, "%s %s\n", wins[i].type,
+			wins[i].buf != nil ? wins[i].buf->path : wins[i].dir);
+		write(fd, line, strlen(line));
+	}
+	close(fd);
+}
+
+/* mint a window of <type> on <path> — what emcaopen does, from inside emca */
+static void
+openwin(char *type, char *path)
+{
+	char p[NMAX], num[32];
+	int fd;
+	long n;
+
+	snprint(p, sizeof p, "/dev/window/%s/clone", type);
+	fd = open(p, OREAD);
+	if(fd < 0) return;
+	n = read(fd, num, sizeof num - 1);
+	close(fd);
+	if(n <= 0) return;
+	num[n] = 0;
+	snprint(p, sizeof p, "/dev/window/%s/%d/content", type, atoi(num));
+	fd = open(p, OWRITE|OTRUNC);
+	if(fd < 0) return;
+	write(fd, path, strlen(path));
+	close(fd);
+}
+
+static void
+doload(void)
+{
+	char buf[BMAX], *s, *e, *sp;
+
+	if(rfile(dumppath(), buf, sizeof buf) <= 0){
+		fprint(2, "emca: Load: no %s\n", dumppath());
+		return;
+	}
+	for(s = buf; *s; s = e + 1){
+		e = strchr(s, '\n');
+		if(e != nil) *e = 0;
+		sp = strchr(s, ' ');
+		if(sp != nil && sp[1] != 0){
+			*sp = 0;
+			if(winbypath(s, sp + 1) == nil)	/* already open: leave it */
+				openwin(s, sp + 1);
+		}
+		if(e == nil) break;
+	}
+}
+
+/* acme's Exit, kept: it REFUSES while anything is unwritten. The refusal is the
+ * feature — losing work to a menu item is the failure this verb exists to avoid.
+ */
+static void
+doexit(void)
+{
+	int i, dirty = 0;
+
+	for(i = 0; i < MAXWIN; i++)
+		if(wins[i].used && wins[i].buf != nil && wins[i].buf->dirty)
+			dirty++;
+	if(dirty > 0){
+		fprint(2, "emca: Exit: %d window%s unwritten — Put or Putall first\n",
+			dirty, dirty == 1 ? "" : "s");
+		return;
+	}
+	for(i = 0; i < MAXWIN; i++)
+		if(wins[i].used)
+			dodel(&wins[i]);
+	threadexitsall(nil);
+}
+
 static void
 onrootline(char *line)
 {
@@ -866,6 +997,13 @@ onrootline(char *line)
 	char *p;
 
 	while(*line == ' ') line++;
+	/* the workspace's own verbs — operand is the workspace, so they arrive
+	 * here rather than on any window (emca.txt: operand determines surface)
+	 */
+	if(strcmp(line, "Putall") == 0){ doputall(); return; }
+	if(strcmp(line, "Dump") == 0){ dodump(); return; }
+	if(strcmp(line, "Load") == 0){ doload(); return; }
+	if(strcmp(line, "Exit") == 0){ doexit(); return; }
 	if(strncmp(line, "content ", 8) == 0){		/* content <type> <n> <path> */
 		char *q, *r;
 		Win *cw;

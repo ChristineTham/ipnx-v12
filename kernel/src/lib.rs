@@ -1342,6 +1342,18 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
               data: &[u8]) -> Result<usize, KErr> {
     match kind {
         // /dev/window: IPNX declares the chrome; the surface speaks back
+        // The root events file is a QUEUE that emca drains, so writing to it is
+        // how anything addresses THE WORKSPACE — the exact parallel of writing a
+        // window's events to address that window. Which is what gives the
+        // workspace verbs (Putall, Dump, Load, Exit) a road that needs no new
+        // concept: their operand is the workspace, so they go to the workspace.
+        WKind::RootEvents => {
+            for line in String::from_utf8_lossy(data).lines() {
+                if line.trim().is_empty() { continue; }
+                win_announce(k, format!("{}\n", line.trim()));
+            }
+            return Ok(data.len());
+        }
         WKind::RootPin => {
             let s = String::from_utf8_lossy(data).trim().to_string();
             k.borrow_mut().pin = s.clone();

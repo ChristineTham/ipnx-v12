@@ -20,8 +20,6 @@
 <div id="emcaTop">
   <span class="tgroup" id="managers">
     <button data-open="proc /proc" title="/proc — the process manager IS a filesystem; there is no ps here">Processes</button>
-    <button data-open="srv /srv"   title="/srv — posted services, as files">Services</button>
-    <button data-open="env /env"   title="/env — the environment, as files">Env</button>
     <button data-open="pkg /pkg"   title="/pkg — packages are subtrees; installing binds">Packages</button>
     <button data-open="usr /usr"   title="/usr — who a user is, as files">Users</button>
     <button data-open="type /type" title="/type — the registry BOTH halves read; adding a manager is adding a file here">Types</button>
@@ -35,12 +33,10 @@
 <!-- rare things do not earn permanent space (emca.txt): the workspace verbs
      that are used once a session live one click away, not on the bar. -->
 <div id="emcaOverflow" hidden>
-  <button data-cmd="Newcol" title="a new leaf">Newcol</button>
-  <button data-cmd="Putall" title="write every dirty window">Putall</button>
-  <button data-cmd="Dump"   title="save the window set">Dump</button>
-  <button data-cmd="Load"   title="restore a saved window set">Load</button>
-  <button data-cmd="Kill"   title="terminate a running command">Kill</button>
-  <button data-cmd="Exit"   title="halt the system">Exit</button>
+  <button data-cmd="Putall" title="write every window with unsaved changes">Putall</button>
+  <button data-cmd="Dump"   title="save the window set to $home/emca.dump">Dump</button>
+  <button data-cmd="Load"   title="reopen the window set from $home/emca.dump">Load</button>
+  <button data-cmd="Exit"   title="close the workspace — refuses while anything is unwritten">Exit</button>
   <hr>
   <button data-home="play"    title="the shipped examples; nothing persists">home: examples</button>
   <button data-home="browser" title="private storage that survives reload">home: browser storage</button>
