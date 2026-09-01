@@ -934,26 +934,30 @@ not in the spec.
 **Acceptance:** every control on screen does what it says, verified
 by driving the real page.
 
-### M16 — a Rust toolchain *(L, research-first)* — consumes: the toolchain pattern (cc, go), the landing page's claim
+### M16 — Rust, as a package *(M, research-first)* — consumes: `pkg` (installing is a bind), the toolchain pattern (cc, go)
 
-`cc` runs `clang -cc1` and `wasm-ld` as wasip1 guests; `go` runs the
-real gc compiler and linker as guests, because they are pure Go and
-cross-build. **Rust is neither shape**: `rustc` is a Rust program with
-a C++ LLVM backend, loads codegen backends dynamically, and has no
-shipping `wasip1` build. So this is a MEASUREMENT before it is a
-milestone, and the measurement goes in RESEARCH.md with provenance:
+**Rust arrives the way anything else does: as a package.** `pkg
+install rust` binds a verified subtree into `/bin`, exactly as it does
+for any other toolchain, so this milestone needs NO new mechanism —
+which is the point of "installing is a bind". Hers, correcting an
+earlier draft of this entry that treated it as a bespoke build: *"We've
+already said we will support packages. Rust will obviously be one of
+them."*
 
-- can `rustc` be built for `wasm32-wasip1` at all, and at what size?
-- LLVM already runs here as a guest (clang), so is the obstacle the
-  backend or the driver — threads, dynamic loading, `std::process`?
-- is the tractable form a driver like `cc(1)`, orchestrating pieces
-  that DO cross-build, rather than rustc entire?
-- what does the demo pay? cc and go already stream ~260 MB.
+What remains is a MEASUREMENT, and it belongs to whoever builds the
+package rather than to the system: can `rustc` run as a wasip1 guest?
+`cc` runs `clang -cc1` and `wasm-ld` as guests, so LLVM already does;
+`go` runs the real gc compiler because it is pure Go and cross-builds.
+`rustc` is a Rust program with a C++ backend that loads codegen
+backends dynamically, and has no shipping wasip1 build — so the open
+questions are whether the obstacle is the backend or the driver
+(threads, dynamic loading, `std::process`), and whether the tractable
+form is a driver like `cc(1)` orchestrating pieces that DO cross-build.
 
-**Acceptance:** the finding recorded either way. A negative result —
-"rustc cannot run as a guest today, and here is what would have to
-change" — closes the question honestly and is worth as much as a
-positive one. Until then the landing page says planned, not shipped.
+**Acceptance:** the finding recorded in RESEARCH.md with provenance,
+either way. A negative — "rustc cannot be a guest today, and here is
+what would have to change" — closes it honestly and is worth as much
+as a positive. The registry entry lands when the answer is yes.
 
 ### Continuous — curation sweeps *(S each, standing)*
 The Plan 9 userland, command by command, PR-sized tranches as ever: `mk`, the
