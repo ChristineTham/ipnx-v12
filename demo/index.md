@@ -16,24 +16,39 @@ It is a refuge from the complexities of the current computing landscape:
 
 **Saranos** will enable you to do the equivalent of most of the above, but in a simpler integrated way, on the devices and the interfaces you are already used to. It can run completely in the browser, on top of any operating system, but it also installs as an app on the Mac, iPad or iPhone. It will also install as a container, and there are plans to make it available as a micro-VM to run inside a hypervisor, or natively on an IoT device. In short, it can run on Everything, Everywhere, All at Once.
 
+The name **Saranos** is derived from Sanskrit *śaraṇa* (refuge): a refuge from the complexities of the modern computing environment.
+
 **Saranos** is a reimagining of UNIX if it was implemented today, combined with a post-modern windowing system and user interface. It embraces the UNIX philosophy:
 
-> Write programs that do one thing and do it well. Write programs to work together. Write programs to handle text streams, because that is a universal interface”
+> Write programs that do one thing and do it well. Write programs to work together. Write programs to handle text streams, because that is a universal interface
 >
 > (McIlroy et al., UNIX time-sharing system: Foreword, 1978)
 
-It also adheres to the principles set by the designers of *Plan 9 from Bell Labs*, the successor to UNIX from it's original creators:
+It also adheres to the principles set by the designers of *Plan 9 from Bell Labs*, the successor to UNIX from its original creators:
 
 > First, resources are named and accessed like files in a hierarchical file system. Second, there is a standard protocol, called 9P, for accessing these resources. Third, the disjoint hierarchies provided by different services are joined together into a single private hierarchical file name space.
 >
 > (Pike et al., Plan 9 from Bell Labs)
 
-**Saranos** is built from another project called [IPNX](https://github.com/ChristineTham/ipnx) - a MacOS/iPadOS/iOS revitalisation of Research Unix 8th and 10th editions, running on a simulator on macOS/iOS.
+**Saranos** is built from another project called [IPNX](https://github.com/ChristineTham/ipnx) - a macOS/iPadOS/iOS revitalisation of Research Unix 8th and 10th editions, running on a simulator on macOS/iOS.
 
-The underlying kernel and userspace of Saranos is IPNX v12 
-**Saranos is a new operating system** — not a distribution of an old one, not an emulator. Three layers, and the parallel is exact: **Saranos** is the system, **IPNX** is the kernel and the userspace, **emca** is the windowing and UI — where Apple has macOS, Darwin and Aqua. The name is Sanskrit *śaraṇa*, refuge: a refuge from the complexities of the modern computing environment.
+The underlying kernel and userspace of Saranos is IPNX v12 - with a reimplementation of the Plan 9 kernel on Rust, compiled to WASM, but with a Unix v10 personality. The userspace supports a combination of Plan 9 and Unix v10 utilities, plus modern language toolchains and packages — C (real clang), Go (the real gc compiler) and Python (CPython 3.14 with pip), all running as guests — and it interoperates with WASI binaries today. A Rust toolchain is planned rather than shipped: `rustc` has no WASI build, so it is a measurement before it is a milestone.
 
-Its kernel is original, written in Rust — and **the very same kernel runs native on macOS and, compiled to WebAssembly, inside this tab**: one core, one conformance suite green on both, plus a JavaScript twin held as the frozen conformance oracle. The architecture takes what Plan 9 proved and Unix never shipped — **per-process namespaces**, 9P as the only IPC, everything a file — with none of Plan 9's kernel code, and **WebAssembly** as the executable format.
+The windowing system and user interface is an evolution of *acme*, Bell Labs' "user interface for programmers". We generalise the concepts behind acme into a user interface that we call **emca** ("acme" reversed).
+
+**Saranos** is intended to be a distributed operating system (aspirational vision, not reality). It can orchestrate across multiple instances of itself, all owned by you, from the cloud to personal devices.
+
+So in short
+- **Saranos** an operating system that can run on Everything, Everywhere, All at Once
+- using a user interface and windowing system called **emca** ("acme" reversed) supporting the browser and Apple devices
+- on a kernel called IPNX modelled after *Plan 9* but written in Rust and compiled into WASM
+- supporting WASM binaries from multiple personalities (Plan 9, UNIX, WASI, etc.)
+
+It has functionality similar to but not supplanting:
+
+- pod and container orchestration (IPNX processes have per process namespaces and run isolated from each other, and can coexist together)
+- package management and dependencies (IPNX packages are simply mappings into namespaces)
+- distributed computing (all processes communicate via a single protocol called 9P)
 
 What boots below is the complete system, entirely in this tab: it boots into **emca**, which is not an application but the system's face — one object, a window, composited recursively into rows, columns and tabs, where every window is itself a compositor. With `con`, `acme` and `sam` (each name inherited by passing its ancestor's tests; the raster originals still run as `sam9` and `acme9`), the real 4th-edition `rc`, twenty-four real commands, V10 binaries from the TUHS tapes in `/v10/bin`, real Go and CPython 3.14, a C compiler, a package manager, whole-system snapshots and a process orchestrator. Nothing you type leaves the page. **No other wasm runtime, development environment or Linux distribution can easily claim this**: a whole operating system — kernel, editors, compilers, Python with pip — running securely in a browser tab, in an internet café if need be; and the same system runs native on macOS with full JIT.
 
@@ -43,7 +58,7 @@ What boots below is the complete system, entirely in this tab: it boots into **e
 
 ## What's inside
 
-**acme** — the one editor, acme reimagined for modern surfaces and answering the 1994 paper example for example: columns of windows, every tag an editable line whose words are the commands, a directory listing as the file browser, sam's structural regexps in every tag (`Edit ,x/re/c/text/`), the dirty box (and `Put` appears in the tag only while it's needed). Execute any command in a tag — its output opens in a `dir/+Errors` window; `|`, `<` and `>` filter the selection through real programs; `Undo`/`Redo` unwind by sequence; right-click `hello.c:3` and the file opens *at line three*. And the editor is itself files: `mount acme /mnt/acme`, then `grep -n main *.c > /mnt/acme/new/body` puts grep's output in a fresh window — the paper's own example, running. **sam** — the same language as a standalone filter: `sam file < commands`, ed's true heir; it earned the name by passing the original's tests. **con** — the console as an editable transcript: scrollback is a buffer, search is the editor, no terminal emulation anywhere in the native path.
+**acme** — the one editor, acme reimagined for modern surfaces and answering the 1994 paper example for example: columns of windows, every tag an editable line whose words are the commands, a directory listing as the file browser, sam's structural regexps in every tag (`Edit ,x/re/c/text/`), the dirty box (and `Put` appears in the tag only while it's needed). Execute any command in a tag — its output opens in a `dir/+Errors` window; `|`, `<` and `>` filter the selection through real programs; `Undo`/`Redo` unwind by sequence; right-click `hello.c:3` and the file opens *at line three*. And the editor is itself files: `mount acme /mnt/acme`, then `grep -n main *.c > /mnt/acme/new/body` puts grep's output in a fresh window — the paper's own example, running. **sam** — the same language as a standalone filter: `sam file < commands`, ed's true heir; it earned the name by passing the original's tests. **con** — the console as an editable window: scrollback is a buffer, search is the editor, no terminal emulation anywhere in the native path.
 
 **pkg** — the package manager where *installing is a bind*: a package is a verified subtree, `pkg install ruby` binds its binaries into `/bin`, versions coexist, conflicts are refused at install time, and a subshell that does `rfork n` owns a private dev environment that vanishes with it — no venv, no nvm, no flatpak, because the kernel can say `bind`.
 
@@ -84,8 +99,10 @@ Once the prompt appears, take the guided tour:
 rc /rc/tour
 ```
 
-You boot as **kitty**, at home in `/usr/kitty`, where `hello.c`, `hello.py` and `hello.go` are waiting. With the toolchain aboard, `cc hello.c` then `./a.out` runs real clang and wasm-ld as guests, then the binary you built — Hello Kitty. It is a real `cc(1)`: flags, `-o`, `-c` and multiple files all work. Python interprets in the tab too (`python hello.py`); real Go binaries run, though Go's compiler is host-side (`go` explains why). The tour shows everything.
+You boot as **kitty**, at home in `/usr/kitty`, where `hello.c`, `hello.py` and `hello.go` are waiting. With the toolchain aboard, `cc hello.c` then `./a.out` runs real clang and wasm-ld as guests, then the binary you built — Hello Kitty. It is a real `cc(1)`: flags, `-o`, `-c` and multiple files all work. Python interprets in the tab too (`python hello.py`); the real gc compiler and linker run as guests too, because they are pure Go and cross-build (`go` explains how). The tour shows everything.
 
 Heritage is one command away: `font=/lib/font/bit/go/regular.13.font win acme9 &` opens the 1993 raster acme, verbatim source, beside its successor; `@{bind /lib/alt /etc; cat /etc/motd}` shows a subshell rearranging its own private namespace; `/v10/bin/echo -e 'a\nb' | wc` pipes 1989 into 1992.
 
-> Everything runs in your browser — nothing you type leaves this tab, and reloading forgets it all unless you chose a persistent home. **Measured green in Chromium (Chrome, Edge, Brave, Arc) and in Safari** — the full conformance suite (158 tests today; the floor is 131) passes in both. (Safari needed real engineering: WebKit deterministically fails concurrent module-worker loads through a service worker — minimal repro and file-ready report in the repository under `demo/webkit-repro/` — so this page serializes worker startup.) Firefox is untested. The whole system — kernel, sources, the conformance suite, and the documents that argue for it — is at [github.com/ChristineTham/ipnx-v12](https://github.com/ChristineTham/ipnx-v12). Third-party licences: [NOTICES](NOTICES.html).
+---
+
+Everything runs in your browser — nothing you type leaves this tab, and reloading forgets it all unless you chose a persistent home. **Measured green in Chromium (Chrome, Edge, Brave, Arc) and in Safari** — the full conformance suite (160 tests today; the floor is 131) passes in both. (Safari needed real engineering: WebKit deterministically fails concurrent module-worker loads through a service worker — minimal repro and file-ready report in the repository under `demo/webkit-repro/` — so this page serializes worker startup.) Firefox is untested. The whole system — kernel, sources, the conformance suite, and the documents that argue for it — is at [github.com/ChristineTham/ipnx-v12](https://github.com/ChristineTham/ipnx-v12). Third-party licences: [NOTICES](NOTICES.html).

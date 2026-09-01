@@ -934,6 +934,27 @@ not in the spec.
 **Acceptance:** every control on screen does what it says, verified
 by driving the real page.
 
+### M16 — a Rust toolchain *(L, research-first)* — consumes: the toolchain pattern (cc, go), the landing page's claim
+
+`cc` runs `clang -cc1` and `wasm-ld` as wasip1 guests; `go` runs the
+real gc compiler and linker as guests, because they are pure Go and
+cross-build. **Rust is neither shape**: `rustc` is a Rust program with
+a C++ LLVM backend, loads codegen backends dynamically, and has no
+shipping `wasip1` build. So this is a MEASUREMENT before it is a
+milestone, and the measurement goes in RESEARCH.md with provenance:
+
+- can `rustc` be built for `wasm32-wasip1` at all, and at what size?
+- LLVM already runs here as a guest (clang), so is the obstacle the
+  backend or the driver — threads, dynamic loading, `std::process`?
+- is the tractable form a driver like `cc(1)`, orchestrating pieces
+  that DO cross-build, rather than rustc entire?
+- what does the demo pay? cc and go already stream ~260 MB.
+
+**Acceptance:** the finding recorded either way. A negative result —
+"rustc cannot run as a guest today, and here is what would have to
+change" — closes the question honestly and is worth as much as a
+positive one. Until then the landing page says planned, not shipped.
+
 ### Continuous — curation sweeps *(S each, standing)*
 The Plan 9 userland, command by command, PR-sized tranches as ever: `mk`, the
 troff document factory, `cron`, upas (resequenced per decision), the games,
