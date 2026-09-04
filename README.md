@@ -123,7 +123,9 @@ This is also what `su` means here. It is not "superuser" — there is no superus
 become. It is an identity transition under the kernel's rules, with no password and no
 setuid machinery. The direction that matters most is downward: `su none` starts a shell
 with almost nothing, which is exactly what you want before running something you do not
-trust.
+trust. *(Status, 2026-09-03: the kernel half of this is under review — Plan 9's kernel
+holds one name per process and lets it drop only to `none`; `su` is becoming a
+personality program, and identity is established per file server at attach.)*
 
 ### The profile
 
@@ -160,7 +162,7 @@ The kernel is about 3,000 lines in JavaScript and 4,000 in Rust — small enough
 read in a sitting, twice over. It carries 61,000 lines of untouched Bell Labs
 userspace today, and Go binaries and Python already run beside them — with git
 repositories to come — through the same handful of operations on names. A hundred
-and thirty-eight tests boot it, exercise everything from fork to fonts to
+and sixty-one tests boot it, exercise everything from fork to fonts to
 the compilers to the package manager, and shut it down clean, identically on
 Node, in Chrome, on the Rust kernel under wasmtime — and, on every push, in
 a 62&nbsp;MB `FROM scratch` container.
@@ -172,7 +174,9 @@ a file, and every process composes its own world.
 
 - **A window is a file.** `bind '#w/1' /dev` makes a namespace into a window, and the
   editor draws by writing to it. This is one of the ideas that most Plan 9 ports had to
-  abandon. A browser tab provides a place where it works naturally.
+  abandon. A browser tab provides a place where it works naturally. *(Status,
+  2026-09-03: the window system is leaving the kernel — emca, a user program, serves
+  each window's files, and the host renders them. The idea stands; `#w` does not.)*
 - **A process can be given a world.** `exportfs` serves a namespace, including its
   private binds, to another process, container or machine. It is not a copy of the
   namespace; it is the namespace itself, served over one protocol.
@@ -183,9 +187,10 @@ a file, and every process composes its own world.
   modern UNIX interface are libc dialects over the same file protocol. The personalities
   can multiply in userspace while the kernel remains small and understandable. There is
   no ioctl interface because there is no separate mechanism to add one.
-- **Installing software is a bind.** A package is a subtree under `/pkg`;
-  `pkg install` verifies its digests and binds its `bin` into the union
-  `/bin`. The namespace is the installation record — there is no package
+- **Installing software is a bind.** A package is a declaration — a small file
+  under `/pkg` naming what to fetch, what it must hash to, and what to bind;
+  `pkg install` verifies the digests, puts the files in a shared store, and
+  binds its `bin` into the union `/bin`. The namespace is the installation record — there is no package
   database to corrupt — and because namespaces are per-process, a person, a
   role and an agent can each carry a different set of installed software.
   The consequences reach further than convenience. Versions coexist under
@@ -290,13 +295,16 @@ There are real `grep`, `sed`, `sort`, `ls`, `wc` and more than twenty other comm
 along with working `setjmp`/`longjmp`, a WASM `libthread`, bidirectional 9P, a uid model
 that enforces permissions, and hard and symbolic links implemented as this edition's
 own wire types. The uid model is particularly significant, since Plan 9's own
-compatibility layer considered this impossible.
+compatibility layer considered this impossible. *(Status, 2026-09-03: both the uid model
+and the links are **under review** — Plan 9's kernel has neither, and the kernel is being
+cut to a subset of Plan 9's with the Unix personality moving to userspace; see
+docs/design.md under that date. They run today; they are not the direction.)*
 
 The first proof that the modern world can coexist with this system is also working: **a
 real Go binary, compiled with ordinary `GOOS=wasip1 go build`, and real CPython 3.14**
 can read files, list directories, sleep on timers and run scripts against the kernel.
 They know nothing about Plan 9. They use a WASI shim whose single preopened directory is
-the process's namespace root. **138 acceptance tests pass on Node, in Chrome — and on
+the process's namespace root. **164 acceptance tests pass on Node, in Chrome — and on
 the Rust kernel core under wasmtime: the same suite, identical on the reference
 implementation and the native rewrite. The proof of concept is complete, and the
 kernel has been built twice.** Alongside it, TUHS-tape V10 `cat` and `echo` run
@@ -385,14 +393,18 @@ mechanism for identity across machines. The full history and its lessons are in
  wire must honour.
 **[docs/handbook.md](docs/handbook.md)** — the handbook: how to build, run,
  extend and debug it.
-**[docs/implementation.md](docs/implementation.md)** — the build plan: milestones
- with dependencies and acceptance, from the tree to the microVM.
+**[docs/implementation.md](docs/implementation.md)** — the plan, replanned 2026-09-04:
+ phases P0–P11 in three layers — IPNX, emca, Saranos — with the demo (`ipnx` in a
+ terminal, and the website) as the first milestone and every target to real hardware
+ as the last.
 **[docs/platforms.md](docs/platforms.md)** — the platforms: where it runs, the
  namespace map, and the deployment reviews.
 **[docs/syscalls.md](docs/syscalls.md)** — the derived call list: Plan 9's 40 live
- calls dispositioned, V10's 68 routines mapped onto them.
+ calls dispositioned, V10's 68 routines mapped onto them. Under revision: the derivation
+ ran from V10 inward, which is how a link syscall Plan 9 does not have got in.
 **[docs/identity.md](docs/identity.md)** — identity: what a user is here, and the
- uid model the compatibility layer could not do, and this kernel can.
+ uid model the compatibility layer could not do, and this kernel can. Under revision:
+ the model may be right as a personality; what the kernel holds is narrowing to Plan 9's.
 **[docs/personas.md](docs/personas.md)** — the personas: who this is for, and
  what each needs to see before believing.
 **[docs/design-thinking.md](docs/design-thinking.md)** — the design-thinking

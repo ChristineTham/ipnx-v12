@@ -1,5 +1,13 @@
 # A hosted Plan 9 with a Research Unix personality — feasibility study
 
+**META — this document does not answer one of the six questions. It informs
+and guides the ones that do.**
+
+**Role: the evidence base.** Every finding with provenance — measurements,
+source citations, measured tables with dates. It is what the *why* and the
+*what* documents are built on; a claim here carries file-and-line provenance,
+and a claim elsewhere that contradicts it is wrong.
+
 *Begun 2026-08-26 and **living** — the evidence base behind
 [docs/design.md](docs/design.md). Findings land here as they are established, with their
 provenance; decisions and scope stay in the plan.*
@@ -1092,6 +1100,463 @@ WASI shim. `kernel.mjs` remains the reference; the suite is the spec.
 
 ---
 
+### 9.9 What making emca a file server measured (2026-09-03)
+
+M17a1 turned `emca` from a **client** of the kernel's window device into a
+**9P server** of its own windows ([implementation.md](docs/implementation.md)).
+Four things were measured doing it, and each changed something.
+
+**1. `newkid` returns no window id — which is why a1 had to precede a2.**
+`userspace/cmd/emca.c`'s `convention()` grows a column by writing
+`wctlf(wid, "newkid")` and then **re-reads `kids/<i>/winid` from the kernel** to
+learn what it just created (`nkids()`, emca.c). So the window ids are the
+kernel's. The tree therefore cannot move into emca while emca is not the thing
+that mints ids — and that dependency is invisible in the read path, which is
+where the stage was originally scoped. **Reading the write path is what found
+it.**
+
+**2. Two rectangle paths exist, and only one is the contract's.**
+
+| path | who decides | does emca learn? |
+|---|---|---|
+| `rect x y w h` → the kernel's `wctl` | the kernel records it | **no** |
+| `resize w h` → the window's `events` | emca decides, then tells the kernel | yes |
+
+Measured directly: driving the first leaves emca serving `0 0 0 0` while the
+kernel holds `0 0 900 600`; driving the second makes both answer `0 0 900 600`.
+The suite drives the second and asserts the equality, because **that equality is
+what makes M17a2 a deletion rather than a rewrite** — two answers agree today,
+so one of them can go. The first path is the coupling a2 removes.
+
+**3. `ls` over a 9P mount had never been exercised, and the gap hid a
+marshalling bug.** The suite's wire-9P tests (`init.c`, the `namespace(6)` and
+`srv(3)` cases) **open and read a file**; none reads a *directory*, so no test
+had ever parsed an `Rstat`. emca's first server answered every read correctly
+and yet `ls` printed `/n/` — because `ls` had fallen into its **non-directory**
+branch, which prints `dirname(arg) + "/" + name` with an empty name (`ls.c`).
+
+The cause was one line: **`put16(p, 0)` returns the *advanced* pointer.**
+Writing the stat record at `p + 2` *after* that call left a two-byte hole and
+placed `nstat` at the wrong offset. Reads never touch `Tstat`, so `cat` worked
+throughout and only `ls` could see it.
+
+> The lesson generalises past this bug: **`p = put16(p, v)` is the idiom, and
+> mixing the returned pointer with the original in adjacent statements produces
+> a message that is wrong only in the paths no test walks.** The record itself
+> was byte-for-byte identical to the kernel's `marshal_stat` (`kernel/src/stat9.rs`)
+> — 62 bytes, plain 9P2000, no `.u` fields — which is what ruled the format out
+> and left only the framing.
+
+**4. `#s` is GLOBAL, and that decides how a service is named.** `srv_posts` is
+a single `HashMap<String, SrvPost>` on the kernel (`kernel/src/lib.rs`), so a
+posted name is system-wide — the one kind of name in this system that is *not*
+namespace-local. Since **emca nests by design**, a fixed `/srv/emca` is a
+collision by construction: the second emca fails to post and serves a door
+nobody can find. Verified after qualifying: two emcas post `emca.kitty.5` and
+`emca.kitty.9`.
+
+> The general rule this settles: **anything that may run more than once posts
+> `<name>.<user>.<pid>`**, which is what the real acme already does
+> (`plan9/sys/src/cmd/acme/acme.c:321`). And the reason it stayed invisible for
+> a while is worth keeping: the *posted* name was mistaken for the interface.
+> It is not — a manager reaches `/dev/window/` through its own namespace, which
+> has no global name and therefore nothing to collide.
+
+**5. One emca per event queue.** `/dev/window/events` is a **queue**, so two
+emca processes each consume half the events. Observed precisely: a second emca
+received a window's `new` event (so it knew the type) but not its `content`
+event (so its title stayed empty). The suite therefore runs exactly one emca,
+started after `bind '#s' /srv` so that its server has somewhere to post.
+
+### 9.10 What moving the window tree out of the kernel measured (2026-09-03)
+
+M17a2 moved the window tree out of the kernel entirely — **285 lines deleted**,
+zero references left to `parent`, `kids`, `axis`, `allocated`, `premax`,
+`split`, `maximise`, `reparent`, `clone_window`, the eight tree verbs, the
+three tree file kinds or `win_close`'s recursion. Seven measurements, and the
+first two change what "moving state out of a kernel" means in general.
+
+**1. THE INVARIANTS MOVE WITH THE STATE, and they are easy to leave behind.**
+The kernel's `reparent` refused two things: a window as its own parent, and a
+window becoming a child of its own descendant (`kernel/src/lib.rs`). Neither is
+state; both are guarantees *about* the state. emca's first tree accepted a
+self-reparent and corrupted the tree — caught because a test deliberately probes
+it. **A layout walk over a cycle does not terminate**, so this is not a tidiness
+point.
+
+> The general rule: **when state moves, enumerate what the old owner refused,
+> not just what it stored.** A move that copies the fields and not the refusals
+> is a regression that the type checker cannot see and that most tests will not
+> reach.
+
+**2. IDENTITY AND STRUCTURE ARE DIFFERENT THINGS, and only one of them moved.**
+`nextwid` is a single counter serving `#w/<type>/clone` — used by `acme`, `win`
+and `con` — and `newkid` alike, so the id space is shared. That means emca
+**cannot** mint ids while the raster half is still the kernel's, which is what
+M17a1 concluded from `newkid` returning nothing.
+
+Measuring further dissolved the problem rather than solving it: **`clone`
+returns the id synchronously**, so emca asks the kernel for a window, receives
+an identity, and decides the structure itself. The kernel supplies identity;
+emca decides place. The a2/a3 line runs exactly there.
+
+**3. A tree verb is now a MESSAGE, so it is asynchronous.** Written to the
+kernel's `wctl`, a verb applied before the write returned. Routed to emca, it
+crosses a process boundary and lands in a message loop. `tests.rc` gained
+`kidwait` and `allocwait` beside `emwait`. This is the visible cost of the
+window manager being a program rather than a table, and it is the same cost rio
+and acme pay.
+
+**4. A mirror must converge, not assume.** `reparent` carries parent and
+position but **not** the allocation bit, and the kernel's `alloc` is read-only —
+its only setter is `minimise`, which *toggles*. So the mirror reads the kernel's
+value and toggles on disagreement. Assuming a starting state was wrong because
+`treelink` runs both on fresh windows and on windows being hoisted, and those do
+not start alike.
+
+**5. `rc` does not substitute a backtick inside a REDIRECTION TARGET.**
+
+```
+echo newcol > /dev/window/`{cat $w/winid}/events     # goes nowhere, silently
+kwid=`{cat $w/winid}; echo newcol > /dev/window/$kwid/events   # correct
+```
+
+Measured while retargeting the suite: the first form produced no error and no
+effect, and cost an hour of looking for a fault in emca that was not there. The
+same substitution works fine in an ordinary word — it is the redirection target
+specifically. **Resolve into a variable first.**
+
+**6. `rc` HAS NO `return` AND NO `break`** — Plan 9 rc's `Builtin[]` table is
+`cd`, `whatis`, `eval`, `exec`, `exit`, `shift`, `wait`, `.`, `finit`, `flag`,
+`rfork`, and nothing else (`plan9/sys/src/cmd/rc/plan9.c:40`). The suite's
+`emwait` had called `return` since it was written: rc looked for `/bin/return`,
+did not find it, and reported — so **every wait ran its full eight seconds
+whether or not the condition had been met**, and printed an error each time.
+Forty-nine such lines were in the baseline output, read for months as noise.
+The idiom that works is a flag:
+
+```
+fn emwait {
+	wdone=no
+	for(i in 1 2 3 4 5 6 7 8){
+		if(~ $wdone no){
+			if(~ `{cat $1 >[2]/dev/null} $2) wdone=yes
+			if(~ $wdone no) sleep 1
+		}
+	}
+}
+```
+
+**7. A posted service is ONE channel, so it can be mounted only once.**
+srv(3)'s rule is that opening a posted name *shares the channel itself*. Two
+`mount`s of `/srv/emca.<user>.<pid>` therefore put two clients on one
+connection — a second `Tversion`, which 9P defines as resetting it, against a
+server holding a single fid table. Measured: the suite wedged indefinitely,
+with emca answering a well-formed read and then never being asked again. **One
+mount, made once where emca starts**, and every reader shares it through the
+namespace, which is what a namespace is for.
+
+### 9.11 The kernel audited against "process orchestration only" (2026-09-03)
+
+Christine's rule — *"the kernel only handles process orchestration; everything
+else is handled by host or userspace"* — applied to the whole kernel and
+measured, not estimated. Sizes are dedicated functions plus each device's arms
+in the four dispatchers (`dev_read_async`, `dev_write_sync`, `dev_walk_one`,
+`dev_stat`). Kernel total: **5,331 lines** (`lib.rs` 4,967 + `draw.rs` 364).
+
+**Does not belong — 1,825 lines, 34% of the kernel:**
+
+| | lines | why it fails the test |
+|---|---|---|
+| **`#w` windows, draw, canvas** | **1,460** | already decided (M17a3). Rendering, rasterising and compositing are not orchestration |
+| **`#M` ramfs** | 160 | it is doing **two jobs Plan 9 splits** — see §9.12. A tiny read-only bootstrap root belongs in a kernel (Plan 9's `#/` is 261 lines and refuses writes); a read-write general filesystem does not, and in Plan 9 it is a user program |
+| **`#V` snapshots** | 83 | copy-on-write snapshots of a filesystem — squarely the read-write half, so it goes with it (§9.12) |
+| **`#c` cons** | 69 | console I/O. The host owns the keyboard and the screen; this is a shim to them |
+| **`#H` web** | 53 | an **HTTP client in the kernel**. It already delegates the GET through `Effect::Fetch`, so what remains is a shim that should be a userspace file server over the host's fetch |
+
+**Arguable, and I would not move them without a ruling:**
+
+| | lines | the argument both ways |
+|---|---|---|
+| **`#p` proc** | 152 | the *state* is orchestration and unambiguously the kernel's; *serving it as files* is presentation. But `/proc/<pid>/ctl` is how one process controls another, which is orchestration's own interface |
+| **`#e` env** | 48 | per-namespace environment is process state — but it is also just a small filesystem, and Plan 9 kept it in the kernel |
+| **`#Z` host files** | 24 | this **is** the embedding boundary, already delegated. Small, and arguably the one filesystem that must be here |
+
+**Belongs — orchestration proper:** the union/namespace machinery (**574**),
+`#s` srv (54, connecting processes by name), `Mnt` (66, 9P at the boundary),
+`Pipe` (42), `#d` dup (9), and the dispatcher with `rfork`, `exec`, `exits`
+and `await`.
+
+> **The consequential one is the ramfs, and it is not a simple lift.** The
+> rootfs is loaded into it, so if it leaves, something else answers `/` at
+> boot — the host through `#Z`, or a userspace file server started before
+> anything else needs a filesystem. That is a real design question and it is
+> **undesigned**.
+
+### 9.12 How Plan 9 roots itself — and where §9.11 was sloppy (2026-09-03)
+
+Christine, on the audit's claim that the ramfs must leave: *"It sounds like you
+have strayed a lot from original plan 9 design. How does plan9 handle the root
+filesystem if ramfs is userspace?"* Answered from the source, now kept locally
+at `plan9/` — **the 9legacy tree**, 4th edition with the maintained patches
+applied (gitignored; `plan9-stock/` holds the raw Labs release beside it so a
+difference can be attributed). **9legacy leaves `devroot.c` byte-identical to
+stock**, so every quotation below holds under both.
+
+**Plan 9's kernel DOES have a root filesystem. It is deliberately almost
+nothing.** `sys/src/9/port/devroot.c` is **261 lines**, and the shape is in its
+first declarations:
+
+> ```c
+> Nrootfiles = 32,
+> static Dirtab rootdir[Nrootfiles] = {
+> 	"#/",		{Qdir, 0, QTDIR},	0,		DMDIR|0555,
+> 	"boot",	{Qboot, 0, QTDIR},	0,		DMDIR|0555,
+> };
+> ```
+
+**A fixed 32-entry table, mode `0555` throughout, and writing is not merely
+unimplemented but an error:**
+
+> ```c
+> static long
+> rootwrite(Chan*, void*, long, vlong)
+> {
+> 	error(Egreg);
+> 	return 0;
+> }
+> ```
+
+`rootreset()` adds empty directories — `bin`, `dev`, `env`, `fd` — and
+`addbootfile()` puts in files compiled into the kernel image. That is the whole
+device. **The real filesystem is a user program or another machine**: the
+kernel binds root(3) on `/`, execs `/boot/boot`, which mounts `bootfs.paq`, runs
+`bootrc`, which attaches the file server, *"mounts the root file system at
+/root … and makes the connection available as `#s/boot`"*, then binds `/root`
+after `/` ([boot(8)](https://man2.aiju.de/8/boot)). And `ramfs` is
+`sys/src/cmd/ramfs.c` — **907 lines of userspace**.
+
+**So Plan 9 splits two roles that ipnx-v12 has conflated in one device:**
+
+| role | Plan 9 | ipnx-v12 |
+|---|---|---|
+| bootstrap root | `#/` — 32 entries, read-only, writes are `Egreg` | `#M`, and it is the real one |
+| the actual filesystem | a **user program** (cwfs, kfs, fossil) or a remote server over 9P | `#M` again — read-write, plus `#V` snapshots |
+
+**§9.11's conclusion was right and its reasoning was sloppy.** It compared our
+`#M` to `ramfs(4)` and concluded "the ramfs is userspace in Plan 9, so ours
+should be". The honest comparison is that Plan 9 has **both** — a kernel root
+device *and* a userspace filesystem — and the disposition is therefore a
+**split, not an eviction**: a tiny read-only bootstrap root may legitimately
+stay in the kernel, because Plan 9 keeps one; what must leave is the read-write
+general filesystem and its snapshots.
+
+> **The straying is real but narrow, and it is now measurable.** Not "we drifted
+> from Plan 9" in general — one device doing two jobs, where Plan 9 does one of
+> them in 261 read-only lines and the other in a process.
+
+### 9.13 The device table audited against Plan 9's — the contract, broken (2026-09-03)
+
+Christine: *"the kernel was supposed to be a reimplementation of a subset of
+plan 9 kernel. it sounds like you have broken the contract. that needs to be
+rectified completely."* Measured against `plan9/sys/src/9/port/dev*.c` — **the 9legacy tree** — whose
+`Dev …devtab` first field is the device letter. **Verified the same under
+stock**: 9legacy changes no device letter, and `devroot.c`, `devwd.c` and
+`devdraw.c` are byte-identical between the two trees.
+
+| ours | we mean | **Plan 9 means** | |
+|---|---|---|---|
+| `#c` | cons | cons | ok |
+| `#e` | env | env | ok |
+| `#d` | dup | dup | ok |
+| `#p` | proc | proc | ok |
+| `#s` | srv | srv | ok |
+| **`#M`** | **our ramfs** | **`mnt` — THE MOUNT DRIVER** | **COLLISION** |
+| **`#w`** | **windows, draw, canvas** | **`watchdog`** | **COLLISION** |
+| **`#H`** | HTTP fetch | *nothing* — `webfs` is `sys/src/cmd/webfs`, **userspace** | **INVENTED** |
+| **`#V`** | snapshots | *nothing* | **INVENTED** |
+| **`#Z`** | host files | *nothing* | **INVENTED** (the hosted boundary; Inferno `emu`'s role, never written down as such) |
+
+Verbatim, so the collisions are not arguable:
+
+> ```c
+> Dev mntdevtab = {          Dev wddevtab = {
+> 	'M',                     	'w',
+> 	"mnt",                   	"watchdog",
+> ```
+
+**And two Plan 9 devices are missing where it matters.** `#/` **root** — the
+261-line read-only bootstrap device (§9.12) — does not exist here; `#M` does its
+job and much more. `#|` **pipe** we implement but gave **no letter at all**, as
+we did with the mount driver: `devmnt.c` is **1,198 lines** and the single most
+load-bearing device in the architecture, and in this kernel it is a nameless
+internal `DevId::Mnt` while its letter is on a ramfs.
+
+**The sharpest statement of the break is not about letters.** Plan 9's kernel
+holds `devdraw` (**2,218 lines**) and `devmouse` (**779**) — a graphics device,
+because it drives a framebuffer. Its **window system, `rio`, is 5,587 lines in
+`sys/src/cmd/rio` — USERSPACE.**
+
+> **We put rio in the kernel.** `#w` bundled the raster, the window tree, the
+> canvas, the chrome and the type registry into one device. That is the
+> contract break, and M17a1/a2 have been undoing it without naming it: the
+> tree's departure to emca was **restoring** Plan 9's shape, not innovating.
+
+**One departure is justified and must be recorded as one, not smuggled.**
+Moving the *raster* out (M17a3) is **not** Plan 9-faithful — Plan 9 keeps
+`devdraw` in the kernel. It is faithful to **Inferno `emu`**, which this project
+took its hosting architecture from: `devdraw` exists to drive hardware, and a
+hosted kernel has none — the host owns the screen. The role is preserved; the
+location moves because the machine did.
+
+### 9.14 The kernel audited against Plan 9's, completely (2026-09-03)
+
+Christine: *"we are essentially implementing a micro kernel based on a subset
+of Plan 9, we should not be adding to it (even the Unix v10 personality should
+be userspace) … It is important to keep our kernel pure otherwise we will
+encounter serious issues extending the kernel"* — to a MicroVM on a hypervisor,
+then to real hardware. Measured against `plan9/` (9legacy) and
+`plan9-stock/`.
+
+#### The syscall table — 28 right, 7 added
+
+Ours uses **Plan 9's own numbers** for 28 calls (`libc/9syscall/sys.h`), which
+is the contract working. Seven have no Plan 9 number, in two very different
+categories:
+
+| trap | | verdict |
+|---|---|---|
+| `LINK` 60, `SYMLINK` 61, `READLINK` 62 | **absent from Plan 9 AND from 9legacy** | **ADDITION.** Plan 9 has no links: `bind` and `mount` are its answer, and refusing them is a design position, not an omission |
+| `ARGS` 200 | `crt0.c`/`crt9.c` fetch argv with it; Plan 9 delivers argv on the stack at `exec` | hosting artifact |
+| `NOTEGET` 202 | Plan 9 delivers notes by upcall to a handler; wasm cannot | hosting artifact |
+| `AREAD` 210, `IOWAIT` 211 | libthread parks a thread and asks the kernel to wait only when nothing can run | hosting artifact |
+
+#### Identity — the Unix personality, in the kernel
+
+**Plan 9's per-process identity is one field.** `portdat.h:664`:
+
+> ```c
+> char	*user;
+> ```
+
+and `auth.c` gives it exactly one predicate, `iseve()`. **There is no `euid`,
+no `ruid`, no `setuid` anywhere in Plan 9's kernel** — the only match in
+`9/port` is `devpermcheck(char *fileuid, …)`, which compares `up->user` to the
+file's owner and nothing else.
+
+Ours carries `pub struct Cred { euid: String, ruid: String }` — **a Unix
+effective/real pair** — plus `DMSETUID`. And Plan 9's mode bits are exactly
+`DMDIR DMAPPEND DMEXCL DMMOUNT DMAUTH DMTMP` (`sys/include/libc.h:597`):
+**neither `DMSETUID` nor `DMSYMLINK` exists.** Both are 9P2000.u — a *Unix
+extension to 9P*, not Plan 9.
+
+> **This is the clearest instance of what the instruction names.** The uid
+> model is a **V10 personality feature living in the kernel**, and
+> [identity.md](docs/identity.md) argues for it explicitly — *"A hosted kernel
+> inverts the trust geometry"*. That reasoning is coherent and it is still an
+> addition to Plan 9, decided when "hosted" was the only target. **On a
+> hypervisor or on a Raspberry Pi there is no host to invert the geometry
+> toward, and the argument evaporates while the mechanism remains.**
+
+#### The Effect enum — the hosted boundary, undeclared
+
+`Effect` has thirteen variants the kernel pushes to its embedding: `WinUpdate`,
+`WinGone`, `WinText`, `WinCanvas`, `WinChrome`, `ReadDone`, `WriteDone`,
+`Fetch`, `SnarfSet`, `SnarfGet`, `ConsWrite`, `Timer`, `Host`, `Shutdown`.
+Plan 9 has no such concept; **Inferno `emu` does**, and that is the honest
+precedent — but it is nowhere written down as one, exactly as `#Z` was not
+until 2026-09-03.
+
+**Most of these die on real hardware**, which is the point of auditing now:
+`WinUpdate`/`WinCanvas`/`WinChrome` are the window system (leaving anyway),
+`Fetch` is `webfs` (userspace in Plan 9), `Snarf*` is a clipboard, and
+`Timer` is a clock the kernel should own directly.
+
+#### What is correct, and worth saying
+
+The 28 syscall numbers; the five matching devices; per-process namespaces with
+union directories; **wire 9P only at the mount boundary with a Dev table
+inside**; notes; `rfork` flags. The architecture is Plan 9's where it counts —
+the deviations are additions round the edge, not a different design.
+
+### 9.15 Is the kernel substrate-independent? (2026-09-03)
+
+Christine: deviations are authorised *"only when it is to do with adapting it
+for WASM and WASI"*, and *"even then it should be done in a machine independent
+way as we may want a non WASM kernel in the future … for example, dis, or .NET
+CLR"*. **So the question is not only whether a deviation is forced, but whether
+Dis or the CLR could satisfy it unchanged.** Measured across `kernel/src/`.
+
+**The kernel is nearly clean — eleven substrate-specific tokens in 5,331
+lines**, and they fall into two places.
+
+**1. `AsySnap` — a legitimate need in an illegitimate shape.** It sits in the
+**public** `Effect::Spawn`, which every host must implement:
+
+> ```rust
+> pub struct AsySnap {
+>     pub snap: Vec<u8>,
+>     pub data_ptr: u32,
+>     pub sp: u32,
+> }
+> ```
+
+`snap` is a memory image, `data_ptr` a **wasm linear-memory address**, and `sp`
+wasm's **`__stack_pointer` global**. Fork-on-a-VM is a real problem every
+substrate has — but **Dis has no linear memory, and the CLR has no stack
+pointer to snapshot**; both would fork by other means entirely. This is wasm's
+mechanism promoted into the kernel's interface, and it is the exact failure the
+second test exists to catch: *a deviation that is permanently justified is the
+one that quietly acquires the substrate's shape*.
+
+The fix is to make it **opaque** — a continuation token the kernel stores and
+returns without inspecting, whose contents are the embedding's business.
+
+**2. `#[cfg(target_arch = "wasm32")]` — eight occurrences, two purposes.** Six
+shadow `eprintln!` because wasm32 has no stderr (a build accommodation, and
+harmless). Two are load-bearing:
+
+> `// On wasm32 the host feeds the clock (clock_set); native asks the OS.`
+
+**A compile-time branch on the substrate, inside the kernel.** Time should
+arrive the way every other platform fact does — as an operation the embedding
+answers — not as a `cfg`. On a hypervisor or a Pi there is a third answer
+(a timer device), and a two-way `cfg` has nowhere to put it.
+
+**Nothing else.** No wasm types in the syscall path, no linear-memory
+assumptions in the namespace or mount code, no WASI anywhere in `kernel/`. The
+substrate leaks in exactly two places, and both are fixable without touching
+what the kernel *does*.
+
+> **The authorised deviations pass the second test as they stand:** `ARGS`,
+> `NOTEGET`, `AREAD` and `IOWAIT` are named and shaped for *a VM*, not for
+> wasm — Dis and the CLR would need the same four and could implement them
+> unchanged.
+
+### 9.16 The browser suite is bounded by process spawn, not by the kernel (2026-09-04)
+
+Measured while re-checking the landing page's test count: **164 PASS / 0 FAIL in
+Chromium on the Rust core** (`rustkern.mjs` + `kernel.wasm`, `dist` rebuilt from
+today's tree), exit 0 — the same 164 as wasmtime and Node. **But ~5 minutes of
+wall time against ~1 under wasmtime**, and the network log shows why: a
+`worker.mjs` fetch per process, because **a Worker is a process** (RESEARCH
+§5.3), and the suite's settling helpers — `emwait`, `kidwait`, `allocwait` —
+fork `cat`/`ls`/`wc` **once a second while they poll**. Chrome spawns a Worker
+an order of magnitude slower than wasmtime spawns a store.
+
+> Two consequences. **For the suite**: polling by forking is the wrong shape on
+> this host, and a blocking read on the thing being waited for — which the
+> window contract already specifies for `rect` — would remove the loop entirely.
+> **For P5's surface**: nothing the demo does should spawn a process per
+> event; the surface reads emca's files and the files change under it.
+
+Also measured: the deployed page (gh-pages, 2026-08-31) says **151**, the local
+`dist` said **160**, `index.md` said **161**, the suite is **164** — four values
+for one number, the drift CLAUDE.md's *status in one place* rule exists to stop.
+`mkpage.mjs` renders `index.md` verbatim with no templating, so the count on the
+landing page is hand-maintained; **generating it at build time from a measured
+run is the durable fix**, and is not done.
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on
@@ -1498,6 +1963,55 @@ the single-level store; and the deployment story (tab, laptop, container,
 agent sandbox) gets re-examined periodically with the same honesty as the
 code — Amoeba and Plan 9 both died of their deployment wave, not their
 kernels.
+
+## 13. Prior art: package formats (researched 2026-09-02)
+
+**Why measured:** the design needed to know whether a package is a *file* or a
+*directory*, and the answer turns on what a package format actually carries.
+Christine: *"Research existing package implementations before answering… That
+will tell you what is needed, rather than me guessing on your behalf."*
+
+| | Debian `.deb` | FreeBSD port | Homebrew |
+|---|---|---|---|
+| **shape** | control archive + data archive | **directory** | **single file** |
+| declaration | `control` | `Makefile` | the formula (Ruby) |
+| checksums | `md5sums` | `distinfo` | `sha256`, inline |
+| file list | implicit in `data.tar` | `pkg-plist` | implicit |
+| lifecycle | `preinst`, `postinst`, `prerm`, `postrm` — **four scripts** | `pkg-install` / `pkg-deinstall` | `install` method, inline |
+| config protection | `conffiles` | — | — |
+| patches | in the source package | **`files/`** subdirectory | **inline**, `patch :DATA`, or a URL |
+
+**Sources:**
+[Debian Policy §5, control files](https://www.debian.org/doc/debian-policy/ch-controlfields.html) ·
+[FreeBSD Porter's Handbook](https://docs.freebsd.org/en/books/porters-handbook/porting-why/) ·
+[Homebrew Formula Cookbook](https://docs.brew.sh/Formula-Cookbook)
+
+**What the measurement decided** (disposition in the decision log,
+[design.md](docs/design.md), 2026-09-02): **four of the five reasons a package
+is a folder elsewhere are compensations for MUTATION**, and this system does not
+mutate —
+
+| the compensation | why it is unnecessary here |
+|---|---|
+| four maintainer scripts | installing is a **bind**; nothing to prepare or clean up |
+| `md5sums` | the store is **immutable after verification**; files cannot drift |
+| `pkg-plist` | removal is an **unbind**; the namespace is the installation record |
+| `conffiles` | your `/home/<x>` **binds over** the system's — a different file in a union, never overwritten |
+
+Only **patches** survive as a reason for extra files, and Homebrew demonstrates
+they can be inline. So a package is a **file**, becoming a folder only when
+patches grow large enough to warrant separate ones.
+
+**Templates are the opposite, and the industry is unanimous there**:
+cookiecutter, GitHub template repositories, Yeoman, degit and `.devcontainer/`
+are all **directories**, because a project skeleton is files. The principle that
+separates them: **bind what stays shared, copy what becomes yours** — a
+package's content is shared and bound from `/store`; a template's skeleton
+becomes the user's files and is copied.
+
+**The finding exceeds the answer**: the format is small because it carries no
+compensations. This is the project's *"complexity is compensation"* thesis with
+the deleted parts enumerated and cited, rather than asserted.
 
 ## Appendix: primary sources
 

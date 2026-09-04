@@ -1,5 +1,19 @@
 # The kernel call list — derived
 
+> **UNDER REVISION (2026-09-03). The derivation runs the wrong way.** This list
+> is derived from **V10's 68 routines**, dispositioning each as library,
+> collapse, or kernel — which is how `link` became *"C: kernel, trap 60"* when
+> **Plan 9 has no link syscall at all**, and neither does 9legacy. Deriving
+> from the personality inward guarantees the personality ends up in the kernel.
+> The list must be derived from **Plan 9's subset outward**; what a personality
+> needs beyond it is the personality's problem, in userspace. See
+> [design.md](design.md) 2026-09-03 and [implementation.md](implementation.md)
+> P1 step 3. **The V10 disposition table below is still useful evidence — it is the
+> conclusion "therefore the kernel gains a trap" that does not follow.**
+
+
+**Role: a *what* — the derived kernel call list.**
+
 *The first task, stated in both the design and the research: derive, call by call, which
 system calls survive as kernel calls and which become 9P messages. Derived 2026-08-26.
 The inputs are Plan 9's `/sys/src/libc/9syscall/sys.h` and V10's `os/sysent.c`, both

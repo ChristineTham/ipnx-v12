@@ -1,384 +1,1471 @@
-# ipnx-v12 — the design
+# The decisions
 
-*Scope framing 2026-08-26; re-founded 2026-08-27 (decision log). The question this
-document exists to answer: **what is Unix if you write it afresh today, keep Plan 9's
-answers, and put back the compatibility Plan 9 threw away?***
+**Role: a *what* — the decision record.** Every decision taken, dated, with the
+constraint that forced it — reopening one requires new evidence, not a fresh
+opinion. The purpose and intent behind them is [why.md](why.md); what the
+system *is* is [architecture.md](architecture.md); what is *built* is
+[when.md](when.md); the *plan* is [implementation.md](implementation.md);
+*where* it runs is [platforms.md](platforms.md); *who* it is for is
+[personas.md](personas.md).
 
-*Role: the **why** — rationale and the decision log. What the system **is** is
-[architecture.md](architecture.md); **how** to work on it, [handbook.md](handbook.md);
-**when** it gets built, [implementation.md](implementation.md); **where** it runs and
-where things live, [platforms.md](platforms.md); **who** a user is,
-[identity.md](identity.md), and who it is **for**, [personas.md](personas.md);
-what **was**, [poc.md](poc.md).*
+## Decisions — the log
 
-**The statement, once.** **The IPNX kernel — Plan 9's architecture, none of its
-code — hosted as an ordinary userspace process** — browser, macOS, iPadOS, OCI,
-eventually hypervisor-direct; **9P as the only
-IPC**; **per-process namespaces**; **everything exposed as a file**; **WebAssembly as
-the executable format**; and **personalities as libc dialects** above the one kernel —
-Plan 9's userland entire by the curation principle, a WASI second ABI, and a **modern
-Unix personality** derived by measurement against git, CPython and Go. The V10 exhibit
-stays as heritage; its completeness is not a goal.
+**117 decisions, 2026-08-26 to 2026-09-04.** Each entry states the
+decision and the constraint that forced it. **Dated entries keep the words they
+were written with** — reopening one requires new evidence, not a fresh opinion.
 
-No VAX. No disk image. No emulator. No POSIX, no systemd, no sediment.
+<details>
+<summary>Index of all decisions, newest first</summary>
 
-## Why the kernel's architecture is Plan 9's and not V10's
+*Titles keep the words they were written with. Where a title itself was later
+amended the row says so; where only part of an entry was overtaken, the entry
+says what was replaced and by what.*
 
-The parent project's V10 kernel is 61,072 lines of C and 3,141 of VAX assembly. Measured
-against this target:
-
-| Subsystem | Lines | Fate |
-|---|---|---|
-| `io/` — 60 driver files | 27,035 | **Gone.** No hardware to drive |
-| `vm/` — demand paging | 5,882 | **Gone.** The engine is the MMU |
-| `md/` — per-machine | 8,116 | **Gone.** There is no machine |
-| `ml/` — `swtch.s`, `trap.s`, `setjmp.s`, `copy.s` | 3,141 asm | **Gone.** No registers to save |
-| `fs/` + the mount layer | 4,538 | Replaced by 9P |
-| `os/` process semantics | ~3,300 | The only part with anything to say |
-
-Three thousand surviving lines is not a port, it is a rewrite. And the kernel worth writing
-already exists.
-
-**The decisive asymmetry is which way the surgery runs.** Plan 9 has per-process
-namespaces, 9P and `rfork` *by design*. V10 has a mount table that lives on the inode —
-`ip->i_mpoint`, `mip->i_mroot`, pointers between two objects in a **global** inode table,
-so every process necessarily sees every mount. Making that per-process means lifting the
-relationship out of `struct inode` and rewriting `nami()`.
-
-So:
-
-- **Adding V10 semantics to Plan 9 is addition.** `setuid`, hard links, `umask` are things
-  Plan 9 chose not to have. Nothing is displaced.
-- **Adding Plan 9 semantics to V10 is eviction.** The mount table, `errno`, signals and
-  `ioctl` all have incumbents that must be torn out while the system keeps running.
-
-And only one direction has a precedent: **APE proves POSIX-on-Plan 9 works, built by the
-people who designed both systems.** Nobody has ever run Plan 9 binaries on a Unix kernel,
-and doing so would need a second `a.out` format *and* a second ABI on the same trap —
-V10's stubs are literally `.set open,5` / `chmk $open`, and Plan 9's `OPEN` is 14, `CLOSE`
-is 4, `DUP` is 5. The numbers collide on the same instruction.
-
-## The V10 personality, mapped
-
-Plan 9's `/sys/src/libc/9syscall/sys.h` names 52 slots holding **40 live calls** (eleven
-superseded `_` variants and one reserved slot). V10's `os/sysent.c` fills 69 of 128 slots
-with **68 distinct routines**. The mapping, and the full call-by-call derivation is
-[docs/syscalls.md](syscalls.md):
-
-| Class | Count | Detail |
-|---|---|---|
-| **A — direct** | **28** | `exit`→`exits`, `fork`→`rfork`, `creat`→`create`, `unlink`→`remove`, `exece`→`exec`, `wait`→`await`, `fmount`→`mount`, `dirread`→`read` on a directory, `sbreak`→`brk_` |
-| **B — library only** | **12** | `chmod` `fchmod` `chown` `fchown` `utime` all collapse into **`wstat`/`fwstat`**; `chroot`→`rfork(RFCNAMEG)`+`bind`; `setpgrp`→`rfork(RFNOTEG)`; `getlogname`→`/dev/user`; `saccess`→ try the open; `nice`/`times`→`/proc/n/ctl`, `/proc/n/status` |
-| **C — genuine work** | **17** | `link` · `symlink`/`readlink`/`lstat` · the seven uid/gid calls · `umask` · `mknod` · `ioctl` · `select` · `kill`/`ssig` vs notes |
-| **D — machine management, drop** | **11** | `stime` `sysacct` `biasclock` `syslock` `sysboot` `profil` `vadvise` `vlimit` `vswapon` `vtimes` `nap` |
-
-**40 of 68 — 59% — are free or library-only.** The counts are of routines rather than of
-rows — `lseek`/`seek` and `gtime`/`ftime` are two `sysent.c` entries each with one Plan 9
-answer — and the full census with its derivation is RESEARCH.md §3.
-
-Class B is where Plan 9 is smaller *and better*, and it should be preserved as such:
-`chmod`, `fchmod`, `chown`, `fchown` and `utime` are five V10 calls that each write one
-field of a file's metadata, and Plan 9 replaced the family with `wstat`, which writes a
-`Dir` (V10 has no `rename` syscall — renaming is `link`+`unlink` in userland). Restoring
-them as five **syscalls** would un-elegant the kernel. Restoring them as **libc functions**
-over `wstat` costs about forty lines and loses nothing.
-
-Of the 17 in class C, most are cases Plan 9 was right about and where V10 programs should be
-recompiled rather than accommodated — `ioctl` becomes `ctl` files, `mknod` becomes file
-servers, `chroot` becomes `bind`, `select` becomes processes. **The genuine kernel additions
-are the uid model and hard links**, and the uid model is the one APE called impossible:
-
-> setting the userid, groupid, effective userid and effective groupid do not do anything
-> useful. The concept is impossible to simulate in Plan 9.
-
-**That is the item to design first, because it decides whether the answer is yes.**
-
-### Why this is not APE
-
-APE targets POSIX.1-1990, and every limitation it confesses is a POSIX feature Plan 9
-refused:
-
-> the functions dealing with stacking signals, `sigpending`, `sigprocmask` and
-> `sigsuspend`, do not work
-> · `O_NOCTTY` option has no effect. The concept of a controlling tty is foreign to Plan 9.
-> · `setsid` forks the name space and note group, which is only approximately the right
-> behavior
-> · Advisory locking via `fcntl` is not implemented
-
-**V10 has none of those.** No `sigaction`, no `sigprocmask`, no sessions, no `fcntl`
-locking, no job control, no sockets, no `mmap`, no threads. The V10 personality is the
-subset of APE that would have existed if its authors had targeted their own previous system
-instead of a standards committee's — and APE's source, MIT, is the starting point to cut
-down rather than a thing to write fresh.
-
-## Hosting: the kernel as a userspace process
-
-The architecture has been built three times and the differences are instructive.
-
-| | Kernel | Guest execution |
-|---|---|---|
-| **plan9port** | none — a library port | native host processes |
-| **9vx** | Plan 9's, as a user program | **vx32**, a user-level x86 sandbox |
-| **Inferno `emu`** | Inferno's, hosted | **Dis** bytecode |
-
-9vx is the closest technical relative: it "runs as an ordinary user program, but behaves
-like a separate VM running Plan 9", treating vx32 as "an architecture with a
-software-managed TLB", unmapping pages on context switch and remapping on demand, and
-preempting by asking the host for `SIGALRM` at intervals. Everything in that sentence
-transfers except the sandbox, which is x86 and therefore dead.
-
-`emu` is the closest architectural relative: "The Inferno kernel can run both native and
-'hosted' on a range of platforms and which presents the same interface to programs in both
-cases." **This project is `emu` with wasm in place of Dis.**
-
-plan9port is the cautionary one: without a kernel there are no namespaces, and without
-namespaces `devdraw` had to abandon the file interface for graphics (see §The GUI).
-
-### The constraint that forces wasm
-
-**iOS apps cannot spawn child processes** — `fork()` and `posix_spawn()` are prohibited in
-the sandbox — and cannot make writable-executable pages, so there is no JIT. The jail
-therefore cannot be host processes and cannot be native ARM64 code.
-
-That leaves an in-process, sandboxed, interpretable substrate. 9vx's answer is dead; emu's
-answer is a VM. **Wasm is the answer that has an ecosystem.**
-
-### Building it
-
-The kernel is built with **clang, from Xcode** — and Harvey OS demonstrates this exact
-thing: Plan 9 working with gcc and clang, ELF64, standard ABIs, and **APEX** (APE
-reimplemented over musl). "You can compile in Linux (or Mac, or BSD) and run into Harvey."
-
-But kencc is not ANSI and the *userspace* is written in it. Three divergences matter:
-
-- **`extern register`** — "will dedicate a register to a variable on a global basis…
-  must be identically declared in all modules and libraries". Used for the current-process
-  pointer. clang has no equivalent.
-- **Anonymous struct/union members** — "the members of the internal structure or union are
-  addressable without prefix in the outer structure" — "the most important and most heavily
-  used of the extensions".
-- **The preprocessor "does not support `#if`"**, only `#ifdef`.
-
-Harvey's answer was to port the source; `goken9cc`'s is to keep kencc and add targets — it
-carries eight architectures on single letters including an experimental `e` for wasm
-(`ea`/`ec`/`el`), though its README states that back end was AI-written and unfinished, so
-it is evidence the retarget is tractable, not a component to depend on. **This is a decision
-to take deliberately, not to discover.**
-
-## `exec` is instantiate
-
-Unix's `exec` maps an `a.out` into an address space. This one is `WebAssembly.instantiate`
-over the bytes named by a path in the caller's namespace. Two consequences:
-
-- **The engine compiles on every process start.** There is no "compile to native" step a
-  program can see.
-- **A freshly produced `.wasm` is indistinguishable from a shipped one at `exec` time**, so
-  the toolchain question is about convenience, never about whether the system can run what
-  it just built.
-
-| | Browser | Native (iPadOS / macOS) |
-|---|---|---|
-| Engine | the host's, **JIT** — WKWebView's JavaScriptCore has JIT because it is out-of-process | an interpreter you own; **no JIT** |
-| Speed | near-native | wasm3's own docs: 4–15× slower than native, ~12.5× on CoreMark |
-| Candidate | the host engine | [WasmKit](https://github.com/swiftwasm/WasmKit) — pure Swift, iOS 12+, no Foundation dependency |
-
-## Processes: `rfork`, lazy fork, and what the platform will not give us
-
-A wasm process is five pieces of state and four are copyable from the supervisor:
-
-| State | Where | Copyable? |
-|---|---|---|
-| Code | `WebAssembly.Module` | **Yes** — structured-cloneable |
-| Heap, `.data`, **and the C shadow stack** | `Memory.buffer` | **Yes** — a byte copy |
-| Mutable globals, incl. `__stack_pointer` | `WebAssembly.Global` | **Yes**, if exported |
-| Table | `WebAssembly.Table` | **Yes** — per slot |
-| **Value stack, locals, return-address chain** | the engine's own stack | **No** |
-
-Clang keeps a downward-growing shadow stack in linear memory with `__stack_pointer` as its
-ABI stack register (`wasm-ld --stack-first`, `-z stack-size`), so a `memcpy` already carries
-everything address-taken. What is stranded is the **continuation**.
-
-**The platform will not fix this.** The stack-switching proposal (WasmFX, stage 2 since
-August 2024) names the exclusion in its own explainer:
-
-> some applications such as backtracking, probabilistic programming, and **process
-> duplication** exploit multi-shot continuations, none of the critical use cases require
-> multi-shot continuations
-
-Process duplication, listed and declined. JSPI suspends one stack; it does not duplicate
-one. So there are two mechanisms.
-
-### Lazy fork — and `rfork` already names it
-
-`rfork(RFPROC|RFMEM)` — *"the child and the parent will share data and bss segments"* — is
-exactly a fork that does not copy, **declared by the child rather than inferred by the
-kernel**:
-
-1. Child calls it → traps to the supervisor.
-2. Supervisor suspends the parent, creates a child record sharing the parent's instance,
-   returns `0`. The call returns once, into what is now the child.
-3. Child runs, mutating shared memory.
-4. Child `exec`s → supervisor builds a new instance, returns the child pid into the
-   original one, resuming it as the parent.
-
-**No asyncify in this path** — the child never reconstructs a stack, because it *is* the
-stack with a different return value. The parent's stack restores exactly for a 64 KB copy
-of the bounded shadow-stack region.
-
-The residual hazard is vfork's, and half of it is already gone by construction: vfork was
-dangerous because Unix kept fds, signal dispositions and cwd *in the process image*. Here
-they are in the kernel and the namespace, so the child's `dup`, `close`, `chdir` and note
-work touches nothing the parent can see. What remains is the program's own globals.
-
-### Asyncify — for children that do not exec
-
-Asyncify's saved state is **a data structure in linear memory** — two `i32`s bounding a
-stack of spilled frames. That is what defeats the one-shot restriction: *a wasm continuation
-cannot be resumed twice, but bytes in an `ArrayBuffer` can be copied as often as you like.*
-
-Cost is whole-module: Emscripten says "something like 50%", and "no worse than double size /
-halve speed for most code" — and the analysis that keeps it low **is defeated by indirect
-calls**, which a Unix userland is dense with. **So it is a per-binary flag, never
-system-wide.**
-
-Measured over V10's `cmd` tree: of 196 `.c` files calling `fork`, **161 also call some
-`exec*` and 35 do not**. But that is a per-file proxy and the shell disproves it — `xec.c`
-has one fork site with two exits, and `( cmd; cmd )` takes the branch that never execs.
-**The fast path is chosen at the call, which is what `rfork` flags are for.**
-
-## 9P is the system interface
-
-Every non-process call is a 9P message to a server named in the caller's namespace.
-
-| Namespace entry | Served by |
+| date | decision |
 |---|---|
-| `/` | a storage server |
-| `/proc` | a process server |
-| `/net` | a network server |
-| `/dev/cons`, `/dev/draw`, `/dev/mouse` | the window server |
-| `/mnt/*` | anything, including remote |
+| 2026-09-02 | emca is the WINDOW MANAGER; a type manager is what is IN a window |
+| 2026-09-02 | emca NESTS, and nesting is another view of the system |
+| 2026-09-02 | `su` becomes one line, because the flat `/home` makes it a namespace act |
+| 2026-09-02 | `shell` needs a CHANNEL, not a store — and a conversation is not a file |
+| 2026-09-02 | `shell` is a new paradigm: the body is an input |
+| 2026-09-02 | `shell` applies to FILES, not just channels — and it is a role with many backends |
+| 2026-09-02 | `run:` actions substitute ENVIRONMENT VARIABLES, not a templating syntax |
+| 2026-09-02 | `ns` as implemented is retired; the need it served is real |
+| 2026-09-02 | `/usr/<name>` is where an identity's FILES live — it is not an identity; `/home` binds to `/usr/<name>/home` — *title amended; see the entry* |
+| 2026-09-02 | `/template` and `/project`: the declaration is a FILE, the instance is a DIRECTORY |
+| 2026-09-02 | `/store` is proposed — the one genuinely new component |
+| 2026-09-02 | `/pkg` is a LIST OF BINDINGS, not a directory — and `/profile`, `/pkg` and `/template` are ONE FORMAT, three registries |
+| 2026-09-02 | `/output/<n>/` takes `/proc`'s shape — a number, with the command as a FILE |
+| 2026-09-02 | `/home`, `/credentials` and `/profile` — three roots, one rule |
+| 2026-09-02 | `/home` is the user's home, and it is a BIND |
+| 2026-09-02 | `/home/<thing>` bound over `/<thing>` IS the configuration mechanism — there is no other |
+| 2026-09-02 | `/dev` IS THE SLOT THAT CAN BE VIRTUALISED |
+| 2026-09-02 | When a convenience verb earns its place |
+| 2026-09-02 | What a type declares, and how a file is recognised |
+| 2026-09-02 | Unrecognised or unrenderable content: fall back, but ask |
+| 2026-09-02 | Two of the five tag line verbs are UNIVERSAL; three are implemented by the TYPE MANAGER — *title amended; see the entry* |
+| 2026-09-02 | The two-step promotion needs NO mechanism, because the union already does it |
+| 2026-09-02 | The three structural proposals are ENDORSED and moved into the specs |
+| 2026-09-02 | The surface may not intercept keys a manager needs |
+| 2026-09-02 | The shell is substitutable per NAMESPACE, and bash is a script interpreter rather than the interactive shell |
+| 2026-09-02 | The documentation is refactored by document KIND |
+| 2026-09-02 | The devices are Saranos's, and emca VIRTUALISES them |
+| 2026-09-02 | The STATUS LINE and LAYOUT PLACEMENT, designed — the two gaps the bounded lens review found |
+| 2026-09-02 | The New flow, traced |
+| 2026-09-02 | Tag line beats selection, and it is safe because the tag line is VISIBLE |
+| 2026-09-02 | TYPES ARE MIME TYPES. `text/plain` is the default; `/` is `inode/system` |
+| 2026-09-02 | THERE IS NO REPLACE VERB |
+| 2026-09-02 | THE WINDOW SYSTEM LEAVES THE KERNEL ENTIRELY |
+| 2026-09-02 | THE TOOLBAR BELONGS TO THE MANAGER, NOT THE TYPE |
+| 2026-09-02 | THE SIX TAG LINE VERBS AND THE WINDOW CONTROLS, landed precisely |
+| 2026-09-02 | THE OUTERMOST WINDOW IS SPECIAL — its chrome is the host's — and `inode/system`'s manager owns a writable child |
+| 2026-09-02 | Run, manage and shell are three different acts |
+| 2026-09-02 | Run supplies a CONTEXT, never an implicit input |
+| 2026-09-02 | MANAGERS ARE NAMED BY ROLE, and there are five |
+| 2026-09-02 | Everything is SPEC'D, PROPOSED or a GAP — and the third state was missing |
+| 2026-09-02 | Do not put configuration into a root that means something else |
+| 2026-09-02 | CONVENTION RESOLVES; the system does not defend against deliberate misuse |
+| 2026-09-02 | BARE `su` IS "EDIT THE SHARED HALF" — and `sudo` is it with a command |
+| 2026-09-02 | ALL PROPOSALS ACCEPTED; the register is empty |
+| 2026-09-02 | A type says what content IS; a manager says what to do with it |
+| 2026-09-02 | A package is a FILE, measured against apt, ports and brew |
+| 2026-09-02 | A manager's window is at `/dev/window/`, not directly in `/dev` |
+| 2026-09-03 | A move out of the kernel runs both answers and asserts they agree |
+| 2026-09-03 | A posted service name must be instance-qualified, because `#s` is global |
+| 2026-09-04 | Replanned: three layers, the demo a milestone, the code legacy |
+| 2026-09-03 | A deviation is authorised only for the substrate — and even then must be substrate-independent |
+| 2026-09-03 | The kernel is a subset of Plan 9's and nothing more — the personality is userspace |
+| 2026-09-03 | The device table is Plan 9's, and the contract is broken in five places |
+| 2026-09-03 | The kernel does not grow, and that is a test applied before a design is written |
+| 2026-09-03 | The host renders `/dev/draw`; the kernel does not know how to draw |
+| 2026-09-03 | `/dev/draw` is for acme; the demo does not need it, so a3 is not the gate |
+| 2026-09-03 | The window tree is files, because the founding principle leaves no exemption |
+| 2026-09-03 | When state moves, the refusals move with it |
+| 2026-09-03 | Identity is the raster's; place is the window manager's |
+| 2026-09-02 | A directory's roles: `look`, `edit`, `properties` — and `edit` IS the file manager |
+| 2026-09-02 | A WINDOW'S CONTENT IS ALWAYS A FILE; `emcaopen` takes one argument. The demo's boundary is closed |
+| 2026-09-01 | acme and emca are two documents about two things |
+| 2026-09-01 | The layering, sharpened: Saranos is the OPERATING SYSTEM |
+| 2026-09-01 | THE VERBS: the era's names, four surfaces with one operand each, and the floating bar restored |
+| 2026-09-01 | THE VERBS SETTLE INTO THREE GROUPS, and two of them are universal |
+| 2026-09-01 | THE COMPOSITOR: one object, composited recursively — and the redesign that should have come first |
+| 2026-09-01 | TABS ARE THE DEFAULT, AND /output MIRRORS THE FILESYSTEM — *title amended; see the entry* |
+| 2026-08-31 | emca is the user interface, and IPNX is a whole operating system |
+| 2026-08-31 | `/dev/window` belongs to every program, and both halves watch it |
+| 2026-08-31 | `/dev/canvas` was over-derived: the redesign into 9P, `/dev/window`, `/type`, and a canvas narrowed to drawing |
+| 2026-08-31 | The system is named Saranos; IPNX is the kernel; emca is the interface |
+| 2026-08-31 | The open questions, resolved in one pass — and what it revealed about them |
+| 2026-08-31 | The demo runs the Rust core — and the kernel loses its last OS dependency |
+| 2026-08-31 | The buffer contract: mirrored with detectable divergence, one undo stack, `/mnt/acme` merged, and versioning as policy |
+| 2026-08-31 | Parity is measured against the running reference |
+| 2026-08-31 | Editing is the surface's: emca implements sam, not a WYSIWYG editor |
+| 2026-08-31 | Building the web surface answered the gating question and corrected the responsive rules' own reading |
+| 2026-08-31 | Building emca amended two things the design had settled, and both amendments came from the code refusing to be written the stated way |
+| 2026-08-30 | `/dev/canvas` — the display is a semantic file tree; the modern-draw question, decided |
+| 2026-08-30 | The versioning layer, v1: a snapshot is a tree, restore is a bind — landed as `#V` |
+| 2026-08-30 | The ultimate dev environment, and VSCode as a surface |
+| 2026-08-30 | The succession rule: a name is inherited by passing the ancestor's tests |
+| 2026-08-30 | The paper is the yardstick: acme answers its own literature |
+| 2026-08-30 | The namespace's third dissolution: every process is a jail, a container and a microVM — "our computer is a network." |
+| 2026-08-30 | The name on the door: IPNX, not "modified Plan 9" |
+| 2026-08-30 | The input convention: roles in the tree, native grammar per platform, verbs never in the hardware |
+| 2026-08-30 | The iPad surface, re-aimed: an app that launches WebKit over local files |
+| 2026-08-30 | The design stretch: a distributed operating system |
+| 2026-08-30 | The console amendment: AND, not XOR |
+| 2026-08-30 | The compensation thesis: complexity grows where a primitive is missing |
+| 2026-08-30 | No half-working |
+| 2026-08-30 | Containerisation and orchestration, planned: a Dockerfile is a process file, the orchestrator is a file server, kubectl is `cat` and `echo` |
+| 2026-08-30 | Compatibility, kissed goodbye — the userland is reimagined, and the verbatim world becomes the exhibit |
+| 2026-08-29 | su without a superuser — the security landing |
+| 2026-08-29 | What a "user" is — the conflation decomposed |
+| 2026-08-29 | The virtue-ethics pass — character made explicit |
+| 2026-08-29 | The toolchains are real — the time for shims is over |
+| 2026-08-29 | The six-hats pass — the blind spots, caught and adopted |
+| 2026-08-29 | The profile: identity's configuration, unified |
+| 2026-08-29 | The porting inversion — personalities carry the environment, not patches on the source |
+| 2026-08-29 | The package model — a package is a subtree, installing is binding |
+| 2026-08-29 | The first formal design-thinking iteration — scope re-derived from personas, and the standing decisions survived it |
+| 2026-08-29 | The demo is the product |
+| 2026-08-29 | The PoC is declared complete; the implementation begins |
+| 2026-08-29 | Immutable systems and time travel are namespace operations |
+| 2026-08-29 | Dependency hell and package conflicts dissolve in the namespace |
+| 2026-08-29 | Capability doctrine, learned from the graveyard |
+| 2026-08-27 | iOS local files: always a file server over user-granted subtrees — and the browser sandbox is not the barrier it looks like |
+| 2026-08-27 | The native-to-the-new-world aspirations: cloud-native, AI-native, Kubernetes-native — stated now, sequenced later |
+| 2026-08-27 | The native host is a Rust kernel core plus per-platform embedding shims — after the PoC completes |
+| 2026-08-27 | The engine matrix: wasmtime everywhere, mode per shim; WasmKit stays superseded |
+| 2026-08-27 | The dev toolchain: mk, diff, `/cc` as a capability — and the document factory is Plan 9's |
+| 2026-08-27 | The curation principle: the Plan 9 command set is in scope entire, because it is the designers' own testimony about Unix |
+| 2026-08-27 | The completeness principle for V10 — and upas resequenced, not refused |
+| 2026-08-27 | The citizenship clause: ipnx lives in the wasm world in both directions |
+| 2026-08-27 | Storage in containers: the invariant and the design |
+| 2026-08-27 | OCI is two targets, taken at two different weights |
 
-**Where the bytes live** is a per-platform backing decision behind one interface:
+</details>
 
-- **Native** — the host filesystem.
-- **Browser** — **OPFS** via `@zenfs/dom` (ZenFS is BrowserFS's successor; the `browserfs`
-  packages are deprecated and republished under `@zenfs`). Two hard constraints:
-  `createSyncAccessHandle()` is **Worker-only**, so the storage server lives in a Worker;
-  and iOS Safari evicts aggressively with `persist()` hard to obtain.
 
-### WASI is a shim, not the system interface
+- **(2026-09-04) REPLANNED: THREE LAYERS, THE DEMO A MILESTONE, THE CODE
+  LEGACY.** Christine: *"I noticed you have been adding steps (M17, M18)
+  rather than realising earlier phases have been invalidated by design
+  decisions, so need to be redone. So let's replan properly, and restart
+  implementation rather than continuing."* And the shape: *"a plan that
+  gradually implements IPNX (kernel and userspace), then emca, then Saranos."*
 
-`wasi-filesystem`'s own README settles this:
+  The constraint she named is real and it is the kernel's disease in the plan:
+  M14's layout was superseded by M15, M15 by M17a, and the purity rule then
+  invalidated M0's links, the identity model and the window device — and at
+  each point a milestone was **appended** rather than the earlier one redone.
+  **A plan that grows by accretion cannot be executed from, because nothing in
+  it is ever finished.**
 
-> **"WASI filesystem is not intended to be used as a virtual API for accessing arbitrary
-> resources. Unix's 'everything is a file' philosophy is in conflict with the goals of
-> supporting modularity and the principle of least authority."**
+  **What the demo is:** *"a minimum viable proposition, not a final state …
+  take what we have designed to date and prove that it can replace the
+  previous demo. We will continue to design after the demo. Don't
+  overengineer."* Concretely, **`ipnx` in a macOS terminal and the website**
+  — and *"think of the demo as a milestone in the plan"*, so the plan runs
+  past it to the end: *"when saranos and ipnx are fully implemented on all
+  targets that we have mentioned: browser, macos app, ios app, container, Micro
+  VM, real hardware devices."* The gaps between here and there are *"documented
+  and filled as part of plan"* — and *"We don't need to design today, we have
+  all we need for the demo, and that's what we are focusing on."*
 
-The founding premise of this project, named as a stated non-goal. And the API bears it out:
-eight descriptor types including `block-device` and `character-device`, but **no `chmod`, no
-`chown`, no `ioctl`, no `mknod`** — it can recognise a character device and cannot create
-one.
+  **What Layer 1 is:** *"no window, no mouse, no draw, no canvas. That's why
+  window implementation cannot be in the kernel."* And *"WASI citizens (Go and
+  Python etc.) need to be reimplemented as packages."*
 
-Nor do processes arrive later: across the whole WASI proposal list there is **no proposal at
-any phase** for processes, spawning, fork, exec, signals, job control, tty or device nodes.
-WASI 0.3 (released 2026-06-11) moved `wasi:io` into the Canonical ABI as `async func`,
-`stream<T>` and `future<T>` — useful, because the supervisor's blocking calls become an
-unresolved `async func` rather than a fake — but it is suspend/resume, not a duplicable
-stack.
+  **What the code is:** *"treat existing code as legacy that needs to be
+  refactored."* Not thrown away, not continued — refactored toward the design,
+  measured against `plan9/`. The old plan is archived whole.
 
-There is also a tension worth naming rather than discovering: the component model's thesis
-is **typed** interfaces (WIT), and this system's is a **uniform untyped** one. They do not
-compose. A server exporting a WIT interface forfeits the property that makes 9P worth
-having — that any client works with any server, and `cat` works on a network connection.
+- **(2026-09-03) A DEVIATION IS AUTHORISED ONLY TO ADAPT TO THE EXECUTION
+  SUBSTRATE — AND EVEN THEN IT MUST BE SUBSTRATE-INDEPENDENT.** Christine:
+  *"Actual deviations from Plan 9 kernel are only authorised when it is to do
+  with adapting it for WASM and WASI"*, and *"even then it should be done in a
+  machine independent way as we may want a non WASM kernel in the future … for
+  example, dis, or .NET CLR etc."*
 
-**WASI's role is `wasi:cli/command`** — argv, environ, exit, stdio — so a ported foreign
-program can find its arguments. That is all.
+  **Two tests, in order.** Is the deviation *forced by running on a VM at all*
+  — not by wasm in particular? If not, it is unauthorised. If so, is it
+  expressed so that **Dis or the CLR could satisfy it** without the kernel
+  changing? If not, it is authorised in purpose and wrong in shape.
 
-## The GUI: rio-shaped, so `sam` and `acme` work
+  **Applying them (measured, [RESEARCH §9.15](../RESEARCH.md)):**
 
-The requirement is **the interface those programs open**, not rio itself. Window policy —
-placement, menus, tiling versus floating — is entirely ours.
+  | | verdict |
+  |---|---|
+  | `ARGS` 200 — argv at start-up | **authorised.** No VM hands argv on a Plan 9 stack. Shape is generic |
+  | `NOTEGET` 202 — collect a note | **authorised.** No VM takes an asynchronous upcall into a running instance. Shape is generic |
+  | `AREAD` 210, `IOWAIT` 211 — park cooperatively | **authorised.** A VM without blocking syscalls must yield. Shape is generic |
+  | **`AsySnap { snap, data_ptr, sp }`** in the public `Effect::Spawn` | **authorised in purpose, WRONG IN SHAPE.** `data_ptr` is a wasm linear-memory address and `sp` is wasm's `__stack_pointer` global. **Dis has no linear memory and the CLR has no stack pointer to snapshot** — fork means something else in both. It must become an **opaque continuation token the substrate defines** |
+  | `#[cfg(target_arch = "wasm32")]` on **the clock** | **wrong in shape.** A compile-time branch on the substrate inside the kernel. Time should arrive the way everything else does — as an operation the embedding answers |
+  | `link`/`symlink`/`readlink`, `Cred{euid,ruid}`, `DMSETUID` | **unauthorised.** None is forced by any VM; they are features and a Unix personality |
 
-From `rio(4)`:
+  **Why the second test matters as much as the first:** the substrate-forced
+  deviations are the ones that look permanently justified, so they are the ones
+  that quietly acquire wasm's shape. `AsySnap` is the instance — a legitimate
+  need expressed in a form only wasm can satisfy, sitting in the interface every
+  future host must implement.
 
-> A mount of `$wsys` causes rio to create a new window; the attach specifier in the mount
-> gives the coordinates of the created window.
+- **(2026-09-03) THE KERNEL IS A SUBSET OF PLAN 9'S AND NOTHING MORE — THE
+  PERSONALITY IS USERSPACE, INCLUDING V10's.** Christine: *"we are essentially
+  implementing a micro kernel based on a subset of Plan 9, we should not be
+  adding to it (even the Unix v10 personality should be userspace) … It is
+  important to keep our kernel pure otherwise we will encounter serious issues
+  extending the kernel"* — to a MicroVM on a hypervisor, then to real hardware
+  (Raspberry Pi).
 
-So the window server is **a 9P server that manufactures a namespace per window**, serving
-`cons`, `consctl`, `cursor`, `label`, `mouse`, `screen`, `snarf`, `text`, `wctl`, `wdir`,
-`winid`, `window`.
+  **The audit is [RESEARCH §9.14](../RESEARCH.md).** Three additions, measured:
 
-`/dev/draw` is likewise a file protocol. From `draw(3)`: a client opens `/dev/draw/new` and
-reads twelve 11-character strings — connection number, image id, channel format, and the
-display image's and clipping rectangle's coordinates — then writes single-letter binary
-messages to `data`, low-order byte first:
+  | | |
+  |---|---|
+  | **`link`/`symlink`/`readlink`** (traps 60–62) | absent from Plan 9 **and** 9legacy. Plan 9 refuses links as a *position* — `bind` and `mount` are its answer |
+  | **`Cred { euid, ruid }` + `DMSETUID`** | Plan 9's per-process identity is **one field**, `char *user`, with `iseve()` its only predicate. No euid, no ruid, no setuid anywhere in `9/port`. `DMSETUID` and `DMSYMLINK` are **9P2000.u — a Unix extension** — and Plan 9's bits are only `DMDIR DMAPPEND DMEXCL DMMOUNT DMAUTH DMTMP` |
+  | **`Effect`'s thirteen variants** | the hosted boundary. Inferno `emu` is the precedent and it was never written down as one, exactly as `#Z` was not |
 
-| msg | operation | backend |
-|---|---|---|
-| `b` | allocate image | texture / offscreen canvas |
-| `d` | combine rectangles with alpha mask | blit |
-| `L`, `e`, `E` | line, ellipse, arc | geometry, or rasterise in the server |
-| `s` / `x` | cached-font text | glyph atlas |
-| `y` / `Y` | replace pixels, raw / compressed | texture upload |
+  **The root cause is the derivation's DIRECTION.** `docs/syscalls.md` is titled
+  *"the kernel call list — derived"* and it derives from **V10's 68 routines**,
+  dispositioning each as library, collapse, or kernel — which is how `link`
+  became "C: kernel, trap 60". Running the derivation from the Unix personality
+  *inward* guarantees the personality ends up in the kernel. **It must run from
+  Plan 9's subset outward**, and anything a personality needs beyond it is the
+  personality's problem, in userspace.
 
-### The thing plan9port could not do
+  **Why now rather than later:** on a hypervisor and on a Pi there is no host,
+  so `Effect`'s callbacks have nothing to call and the "hosted kernel inverts
+  the trust geometry" argument for euid/ruid ([identity.md](identity.md))
+  evaporates — while the mechanism it justified remains. Every addition is a
+  thing that must be carried onto hardware or removed there.
 
-plan9port **abandoned the file interface for graphics**: `devdraw` is a separate binary with
-X11 and Cocoa (now `CAMetalLayer`) backends that libdraw talks to directly, not over 9P.
-The reason is structural — Unix has no per-process namespaces, so no client can have its own
-`/dev/draw`.
+- **(2026-09-03) THE DEVICE TABLE IS PLAN 9'S, AND THE CONTRACT IS BROKEN IN
+  FIVE PLACES.** Christine: *"the kernel was supposed to be a reimplementation
+  of a subset of plan 9 kernel. it sounds like you have broken the contract.
+  that needs to be rectified completely."*
 
-**This project has them by construction.** So `/dev/draw` can be an actual file, per window,
-per namespace, which is what Plan 9 does and what every Plan 9 port has had to give up. It
-is the one place this system can be *more* faithful to Plan 9 than the official port, and it
-costs nothing extra.
+  Measured against `plan9/sys/src/9/port/dev*.c` ([RESEARCH
+  §9.13](../RESEARCH.md)): five devices match Plan 9 (`#c #e #d #p #s`);
+  **`#M` and `#w` COLLIDE** — Plan 9's `'M'` is `mnt`, the mount driver, and
+  `'w'` is `watchdog`; **`#H`, `#V` and `#Z` are invented**; **`#/` root is
+  missing**; and the mount driver and pipe, both reimplemented, carry **no
+  letter at all**.
 
-### Per-platform backing
+  **The break is not really about letters.** Plan 9's kernel holds `devdraw`
+  (2,218 lines) and `devmouse` (779) because it drives a framebuffer — but its
+  window system, **`rio`, is 5,587 lines of USERSPACE**. `#w` bundled the
+  raster, the window tree, the canvas, the chrome and the type registry into
+  one kernel device. **We put rio in the kernel.**
 
-- **Browser** — canvas/WebGL, with **xterm.js** as the `/dev/cons` implementation for
-  character windows.
-- **macOS / iPadOS** — Metal, and a native terminal view for `/dev/cons`.
+  **So the rule is: a device exists here only if Plan 9 has it, means the same
+  thing by it, and uses the same letter** — with the sole exception of the
+  hosted boundary, which must be justified in writing against Inferno `emu`
+  rather than assumed. **Rectification is therefore not a design exercise: the
+  target is readable in `plan9/`.**
 
-Character windows and draw windows are the same kind of object with different files opened
-in them, which is what makes a terminal emulator and a bitmap editor peers rather than
-special cases.
+  M17a1 and M17a2 turn out to have been **restoring** this contract without
+  naming it — moving the window tree to emca is what makes emca rio. Recorded
+  so the remaining work is understood as rectification and not as invention.
 
-### What this buys, in order
+- **(2026-09-03) THE KERNEL DOES NOT GROW, AND THAT IS A TEST APPLIED BEFORE A
+  DESIGN IS WRITTEN.** Christine: *"you yourself said the kernel does not grow.
+  The kernel only handles process orchestration. everything else is handled by
+  host or userspace. Everytime you design a change to the kernel, the design is
+  wrong."*
 
-1. **`sam`** — needs libdraw and libframe and nothing else. plan9port's is MIT. First real
-   client.
-2. **`acme`** — the real test, because **acme is itself a file server**. It does not merely
-   run on the namespace design, it exercises it in both directions. If acme works, the design
-   works.
+  The constraint is the project's own thesis — *the kernel unable to bloat by
+  construction* — restated as something to run a design against rather than to
+  admire afterwards. **If answering a question needs an addition to `kernel/`,
+  the answer is wrong**, and the real one is in the host or in userspace. The
+  kernel may shrink; that is the only direction it moves.
 
-## The toolchain
+  **The instance that prompted it:** M17a3's "Design A" proposed extending
+  `HostOp` with draw operations. It was put up as a legitimate option and
+  argued against on other grounds — a second IPC beside 9P — when it should
+  have been struck out on sight. Arguing against a kernel change on its merits
+  is already the mistake.
 
-A wasm shell compiling a wasm program is a binding problem, not a location problem. Three
-answers, not exclusive:
+  **And the rule reaches further than the raster.** Measured the same day: `#w`
+  is **~1,100 lines, 22% of the kernel** — 745 in `wsys_*`, `win_*`, `cv_*` and
+  `drawmsgs`, plus `draw.rs`'s 364 — and **none of it is process
+  orchestration**. M17a1 and M17a2 took the tree out on exactly this reasoning
+  before it was written down. The remainder goes the same way, which makes
+  M17a3 *"the window device leaves the kernel"* rather than *"the rasteriser
+  moves"*.
 
-1. **Move the toolchain in** — clang and `wasm-ld` compiled to wasm, ~30 MB, as Wasmer ships
-   and Wanix does with Go. Costs size; buys no host dependency, which is what makes the
-   browser build self-contained.
-2. **Move the namespace out** — Plan 9's `cpu(1)`: *"The name space of the terminal side of
-   the cpu command is mounted, via exportfs(4), on the CPU side on directory /mnt/term."*
-   Native speed; needs 9P running **both directions**; has no browser.
-3. **Make the compiler a file server** — `/cc`, on the `/net` pattern. The only one that
-   makes compilation a **capability**: a process rforked with `RFCNAMEG` or `RFNOMNT` cannot
-   compile, because the name does not resolve. Makes 1 and 2 implementation details.
+- **(2026-09-03) THE HOST RENDERS `/dev/draw`; THE KERNEL DOES NOT KNOW HOW TO
+  DRAW.** Christine: *"/dev/draw should be rendered by host. the kernel does
+  not know how to draw."* So of the two designs put up for M17a3, **the host
+  SERVES the raster** — it is not a typed op channel the kernel forwards
+  through, and `Effect::WinUpdate`'s finished pixels stop being a thing the
+  kernel produces. It makes *"IPNX implements no renderers"* literal rather
+  than relocated.
 
-## Platform asymmetries to design for
+- **(2026-09-03) `/dev/draw` IS FOR ACME. THE DEMO DOES NOT NEED IT, AND a3 IS
+  THEREFORE NOT THE GATE.** Christine, correcting the plan: *"we don't use
+  /dev/draw — we use /dev/canvas"*, and *"we don't need /dev/draw for the demo,
+  text is sent to host, which is responsible for rendering. /dev/draw is only
+  needed for acme."*
 
-| | Browser | Native |
-|---|---|---|
-| Engine | host, JIT | owned interpreter, no JIT |
-| Fork | cannot own the stack → **asyncify** | owns the interpreter → host-side copy possible |
-| Storage | OPFS, Worker-only sync handles, evictable | host filesystem |
-| Toolchain | answer 1 or 3 | any |
+  **The plan said otherwise and was wrong on two of the three programs it
+  named.** Measured 2026-09-03: `con.c` has **zero** draw references; `win.c`
+  has one and it is **a comment**; `emca.c` has **zero**; and `/rc/emca` and
+  `/rc/emcaopen` touch draw nowhere. What actually opens the raster is **acme**
+  and **samterm** — the heritage exhibit — plus the programs that prove them
+  (`acmetest`, `drtest`, `samtest`, and `init.c` running them).
 
-Taking asyncify on both buys uniformity at ~2× on binaries that natively would not need it.
-Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it belongs.
+  The demo's path is **text**: `Effect::WinChrome` carries content, toolbar and
+  tag, `Effect::WinText` carries bytes, and the host renders them natively.
+  That is the whole of what a window needs to show a file.
 
-## Decisions (2026-08-26; native-host, OCI, storage, toolchain, userland-curation and V10-completeness decisions added 2026-08-27)
+  **Consequence for the sequence: M17b and M17d–h do not wait on a3.** The plan
+  had every remaining stage behind "the gate"; the gate was only ever the tree,
+  and the tree is out. a3 is heritage work — real, and not on the demo's path.
+
+- **(2026-09-03) THE WINDOW TREE IS FILES, BECAUSE THE FOUNDING PRINCIPLE LEAVES
+  NO EXEMPTION.** Christine: *"accept the proposal, then delete the kernel's
+  tree."*
+
+  The constraint is the project's own first rule — *everything is managed as a
+  file, so there are no manager programs*. A **window manager** whose
+  arrangement cannot be read would be exactly the manager program the design
+  exists to abolish; the reasoning that makes a process table a filesystem
+  makes a window tree one, and there is no reason the exemption would stop
+  there.
+
+  **emca serves the tree in the TOOL view only** — `/dev/emca/<n>/`, which
+  [window.md](window.md) already sanctioned in shape as *"the full set: what a
+  window tool reads"*. A manager's own `/dev/window/` gains **nothing**, so the
+  contract is untouched and no manager can see the arrangement it sits in.
+
+  Four names, and they are the kernel's own, so nothing is invented at the
+  moment of moving: `parent`, `axis`, `alloc`, and `kids/<i>/` — **positional,
+  because order IS the layout and `ls` sorts.** Naming children by window id
+  would hide the arrangement in the one listing that should show it. Walking
+  into `kids/<i>/` reaches that child's own directory, so the tree is navigable
+  without a second vocabulary.
+
+  **And with no emca running there is no tree** — which is correct rather than
+  a loss: no window manager, no arrangement. A window still opens bare in its
+  type's default pane, exactly as it always did.
+
+- **(2026-09-03) WHEN STATE MOVES, THE REFUSALS MOVE WITH IT.** The constraint,
+  found by a test that probes it: the kernel's `reparent` refused a window as
+  its own parent and as a child of its own descendant. Neither is state; both
+  are guarantees *about* state. emca's first tree kept the fields and dropped
+  the refusals, accepted a self-reparent, and corrupted the tree — and a layout
+  walk over a cycle does not terminate.
+
+  **So a move enumerates what the old owner REFUSED, not only what it stored.**
+  Measured in [RESEARCH §9.10](../RESEARCH.md), and it governs every remaining
+  stage of the window system's departure.
+
+- **(2026-09-03) IDENTITY IS THE RASTER'S; PLACE IS THE WINDOW MANAGER'S.** The
+  constraint: one `nextwid` serves `#w/<type>/clone` — `acme`, `win` and `con`
+  use it — and `newkid` alike, so the window id space is shared and emca cannot
+  mint while the raster half is the kernel's.
+
+  This dissolves M17a1's conclusion rather than answering it. **`clone` returns
+  the id synchronously**, so emca asks the kernel for a window, receives an
+  identity, and decides the structure itself. **The kernel supplies identity;
+  emca decides place** — and the M17a2/a3 line runs exactly there, which is why
+  a2 could land without waiting for the raster.
+
+- **(2026-09-03) A POSTED SERVICE NAME MUST BE INSTANCE-QUALIFIED, BECAUSE `#s`
+  IS GLOBAL.** Christine, on being told the srv table is one map for the whole
+  kernel: *"if it is global you need to resolve collision."*
+
+  The constraint, measured: `srv_posts` is a single `HashMap<String, SrvPost>`
+  on the kernel (`kernel/src/lib.rs`), so a posted name is **system-wide** while
+  every other name a process sees is namespace-local. **emca nests by design**,
+  so a fixed `/srv/emca` is a collision by construction — the second emca fails
+  to post and serves a door nobody can find.
+
+  The name is therefore **`/srv/emca.<user>.<pid>`** — Plan 9's own answer, and
+  already in this tree: the real acme posts `/srv/acme.%s.%d`
+  (`plan9/sys/src/cmd/acme/acme.c:321`). Verified: two emcas post
+  `emca.kitty.5` and `emca.kitty.9`. It is **removed on exit** — a posted
+  channel outliving its server is a door onto nothing.
+
+  **And the sharper half of the answer: `/srv` is not how a manager reaches
+  emca at all.** A manager opens `/dev/window/` in its own namespace, which
+  emca mounts for it — no name, no window id, nothing global. That is rio's
+  shape, it is what [window.md](window.md) already specifies, and it has no
+  collision to have. The posted name is the **external** door only: a window
+  tool, a debugger, the suite. Naming the two doors separately is what made the
+  fix obvious; treating the posted name as the interface is what hid it.
+
+- **(2026-09-03) A MOVE OUT OF THE KERNEL RUNS BOTH ANSWERS AND ASSERTS THEY
+  AGREE.** The constraint: the window system's departure (M17a) cannot be a
+  deletion, because `acme`, `sam`, `con` and `win` reach the kernel's device
+  today and 95 suite assertions ride on it. So each stage **adds** emca's answer
+  beside the kernel's, and the suite pins the **equality** — M17a1's test drives
+  a resize and asserts emca serves `0 0 900 600` and the kernel holds the same.
+
+  **Two answers that agree can lose one; two answers never compared cannot.**
+  That is what turns a2 from a rewrite into a deletion, and it is the general
+  shape every remaining stage of the move follows.
+
+  Two constraints found while doing it are recorded with their measurements in
+  [RESEARCH §9.9](../RESEARCH.md): **`newkid` returns no window id**, so ids are
+  the kernel's and a1 must precede a2; and a **`rect` written to the kernel's
+  `wctl` never reaches emca**, while a `resize` on the window's `events` does —
+  the second is the contract's direction and the first is the coupling a2
+  removes.
+
+- **(2026-09-02) THE OUTERMOST WINDOW IS SPECIAL — its chrome is the host's —
+  and `inode/system`'s manager owns a writable child.** Christine, after three
+  attempts to normalise it: *"I think the genuine solution to this is that the
+  '/' type and the screen is genuinely special, it is not a normal window.
+  That's an unescapable fact."* **When every route around an exception creates a
+  worse one, the exception is real** — the three routes were a sliver of body
+  beside children, an undecorated pane standing in for a body, and a second
+  title bar under the native one.
+
+  **The exception is exactly one thing: the outermost window's chrome belongs to
+  the host** — the macOS title bar and menu bar, the browser's tab and toolbar,
+  the iPad's furniture. Its **body is still children**, and allocation,
+  alternation and the tree are untouched, so the invariant *every window has
+  chrome and a body; the body holds either content or children* survives
+  unaltered.
+
+  **And the exception is the OUTERMOST SURFACE, not the type.** `inode/system`
+  is ordinary; a nested emca opens its own `/` with the same manager and
+  **ordinary emca chrome**, because its parent is an emca window rather than the
+  host. Otherwise every nested system would claim the host's title bar and
+  tier-1 nesting would break on first use.
+
+  **`inode/system`'s manager owns a writable child as well as the composition.**
+  A container's manager renders by *arranging*, but this one also needs
+  somewhere to write, so it opens **one ordinary window** — conventionally
+  `layout`'s first entry, `/` itself, listing the root. Nothing about bodies or
+  allocation changes. The surface renders it natively: a **left pane** in the
+  browser, a **collapsible sidebar** on macOS and iPadOS.
+
+  **Two mappings fall out rather than being designed.** **Collapsing the sidebar
+  IS `minimise`** on that window — the native gesture and the contract control
+  are one operation. And the toolbars split without ambiguity: the **global
+  toolbar or menu bar** carries the system's verbs, because the outermost
+  window's content is the system; the **sidebar's own toolbar** carries the
+  listing's. `inode/system` **specialises `inode/directory`** (recognised by the
+  exact path `/`), so the listing comes by inheritance and the type adds
+  `manage`.
+
+  **This is where "chrome is the surface's" pays best**: `NavigationSplitView`,
+  `.toolbar` and the menu bar mean the macOS surface is built from **native
+  furniture rather than emulated chrome**.
+
+- **(2026-09-02) A WINDOW'S CONTENT IS ALWAYS A FILE; `emcaopen` takes one
+  argument. The demo's boundary is closed.** Hers: *"a window's content is
+  always a file, but the host may choose not to render it as a file but as an
+  image, structured/formatted text, a table, etc."* So `body` exists for every
+  window, including one whose manager is host-side, and the mirror protocol
+  (`insert`, `delete`, `seq`) is an **optimisation for keeping a host editor in
+  step** — not a substitute for the file and not a second source of truth. A
+  guest reading `/dev/window/body` gets the content whatever is drawing it.
+  This is the rendering rule the system already uses everywhere: **the file is
+  the truth, the drawing is the surface's.**
+
+  **`emcaopen <path> [role]`** — one argument, because everything else is
+  derived: the **type** from recognition, the **role** from permissions. The
+  old form took a type first, which was right when a caller chose the type and
+  is wrong now that content decides it. `role` is the single override, and
+  `emcaopen /bin/rc manage` is the whole of "open a terminal" — **`manage` on an
+  executable runs it**, so no part of `emcaopen` knows what a shell is.
+
+  **And `/rc/emca` shrinks to one line.** An earlier draft had it opening the
+  startup windows *while* `/type/inode/system/layout` declared them — two
+  sources of truth for one fact. The **layout file wins**, because it belongs to
+  the type and is overridable by binding. `/rc/emca` starts emca; emca opens `/`;
+  `inode/system`'s `manage` manager reads `layout`. **Boot becomes a type's
+  configuration rather than a script**, which is what *"the managers are already
+  files"* was for.
+
+- **(2026-09-02) The STATUS LINE and LAYOUT PLACEMENT, designed — the two gaps
+  the bounded lens review found.** The review asked *"is the design enough to
+  rebuild the demo?"* and answered **no, by two named gaps**
+  ([reviews/2026-09-02.md](reviews/2026-09-02.md)). Both are now closed, and
+  neither needed new machinery.
+
+  **The status line reports state that is CONSEQUENTIAL and NOT OTHERWISE
+  VISIBLE.** Both halves decide: the match count qualifies because 247 matches
+  may be scrolled out of sight and typing changes all of them; **dirty** does
+  not, because `Save`'s presence is already the indicator; **read-only** does
+  not, because the *role* is in the title bar. **Fields are exceptions, not a
+  dashboard** — UTF-8 and `\n` are never shown, anything else is, so an
+  appearance is meaningful and a normal window's line is nearly empty. Format:
+  `<key> <value>` per line to `/dev/window/status`, the same shape as `verbs`;
+  the manager says what, the surface says how. **The directory case pays the
+  rule off twice**: `pending 3 renames, 1 delete` gives *"Save shows the plan"*
+  a home and turns a confirmation step into something continuously visible.
+
+  **The layout is one file naming PATHS, with three rules and one keyword.**
+  Each line is a path — type inferred, role derived — so a layout never says
+  what a thing is. **Indentation nests, and the axis is not stated** because
+  alternation already determines it; writing it would create a second source of
+  truth. **`tabs` groups**, and is the only keyword, because tabs are otherwise
+  the un-allocated *remainder* of the sizing heuristic and cannot be relied on
+  to produce a shape you asked for. **A shell window needs no special case**:
+  `/bin/rc` is an executable, `manage` on an executable runs it, and the window
+  is `shell` on the resulting channel — the two-step already settled, so the
+  format knows nothing about shells. `Reset` re-reads this file, which is what
+  makes it *"restore the root window to its default"*.
+
+- **(2026-09-02) THE SIX TAG LINE VERBS AND THE WINDOW CONTROLS, landed
+  precisely.** Christine, after finding the documents disagreeing three
+  different ways: *"We need to land on precisely what the window controls are
+  and what the standard toolbar buttons are. We cannot have inconsistency."*
+
+  **Tag line — six, always, in this order, in every window:**
+  **`New` `Open` `Run` `Find` `Edit` `Add`**. Membership is standardised; the
+  *manager* implements the meaning of New, Find and Edit, while Run, Open and
+  Add are universal. `|`, `<` and `>` are syntax within Run — **there is no
+  Pipe button** — and `:` and `#` are syntax within Find.
+
+  **`Add` was mine and is now hers.** I invented it, never raised it, and it sat
+  unendorsed in the specs until this review found it — *"you did not name Add in
+  our discussions"*. She then **adopted** it: `Add` puts the tag line's text on
+  the toolbar as a button, **writing to the manager's verbs file**, so unlike
+  acme's tag the button *persists* — and your `/home/type` binds over the
+  system's, so it is yours alone. That is how *"type Indent in the tag and it
+  works"* becomes durable.
+
+  **Window controls:** the **contract** names **close, minimise, maximise,
+  duplicate** — style-neutral, since a floating implementation has no columns.
+  **How many buttons a person sees is the implementation's**, and the tiled one
+  renders duplicate as **three** — as column, as row, as tab. Hers: *"duplicate
+  is three buttons on our current emca implementation but may change."*
+
+  **The toolbar is deliberately NOT standardised** — it is the manager's, so
+  `look` and `edit` on one type must differ.
+
+- **(2026-09-02) ALL PROPOSALS ACCEPTED; the register is empty.** Christine:
+  *"accept your proposals. review and update all documentation to reflect agreed
+  design. Make sure stale decisions that have been overruled are not still there
+  to confuse future readers."* Accepted and moved into [type.md](type.md): the
+  **manager interface** as a file interface, the **`/type` file syntax**,
+  **`properties`** as `edit` over the stat, the **pkg/template/project** shapes
+  and recognition, **`/store`**, **`inode/system`**'s layout declaration, the
+  **`shell`** type with line discipline host-side, and **`inode/directory`**'s
+  listing format. Every open question inside them is decided at the lean stated
+  in the proposal — including the **third registry level** for a directory that
+  is also a project (keeping the inheritance that was the reason for choosing
+  MIME), **one declaration named `template`** in a workspace (because
+  `/proc/N/ns` is the live state and promote serialises from it), and
+  **"anything still named"** as the prune retention policy.
+
+  **And the sweep it required.** Stale claims were corrected in three live
+  documents — `emca.md` still named `/mnt/emca` as the file interface, `when.md`
+  recorded the kernel window device without saying it had gone, and README:186
+  still said *"a package is a subtree under `/pkg`"*. Superseded *dated* entries
+  keep their words but now carry markers: the watcher/gatekeeper property and
+  its "default pane" degradation, `/output` mirroring the filesystem, undo
+  living in emca, and `/mnt/emca` as acme's client path. **A dated log entry is
+  history and keeps its wording; a live spec must simply be right.**
+
+- **(2026-09-02) A package is a FILE, measured against apt, ports and brew.**
+  Christine: *"Research existing package implementations before answering… That
+  will tell you what is needed, rather than me guessing on your behalf."*
+  Measured: Debian ships `control` plus **four maintainer scripts**, `md5sums`
+  and `conffiles`; FreeBSD ports are **directories** (`Makefile`, `distinfo`,
+  `pkg-plist`, `files/`); Homebrew formulae are **single files** with patches
+  inline via `patch :DATA`. **Four of the five reasons a package is a folder do
+  not exist here**: the maintainer scripts manage *mutation* and installing is a
+  bind; `md5sums` guards drift and the store is immutable after verification;
+  `pkg-plist` tells removal what to delete and removal is an unbind; `conffiles`
+  stops your config being overwritten and your `/home/<x>` binds *over* the
+  system's, so it never is. **Only patches survive**, and Homebrew shows they
+  need not force a folder. So `/pkg/<name>` is a **file**.
+
+  **But a TEMPLATE is a DIRECTORY** — corrected by Christine the same day: *"a
+  template really is a proto project… What about .gitignore, README,
+  package.json?"* Those cannot live in `/store`: its properties (immutable,
+  verified, content-addressed, prunable) fit *fetched* content, while a skeleton
+  is **editable source you iterate on**, and behind a digest, editing it changes
+  its identity. **Promote decides it**: you promote a project — a directory with
+  files — into a template, and promoting into a file loses the files. The
+  industry is unanimous where it was split on packages: cookiecutter, GitHub
+  template repositories, Yeoman, degit and `.devcontainer/` are all directories.
+
+  **Converting an existing project into a template:** the hard part is
+  *essential versus incidental*, which no mechanism can know — `docker commit`'s
+  problem. So **promote copies faithfully and making it general is an edit**,
+  which works here because the result is a **directory of files** opening in a
+  system whose editor handles directories and text natively. Two halves, two
+  sources: the declaration serialised from the live namespace, the skeleton
+  copied from the project. **One heuristic is not a guess** — skip what
+  `.gitignore` declares derived, since a project with one has already answered
+  "what is generated" in a declaration its author wrote; plus `.git`, since
+  history is not a skeleton. The declaration's own specifics — absolute paths, a
+  personal bind, the project's name — come out by the same editing. Promote
+  lands in `/home/template/<name>`, which is exactly where that tidying belongs
+  before the deliberate publish to `/template`.
+
+  **The principle underneath: BIND WHAT STAYS SHARED, COPY WHAT BECOMES
+  YOURS.** A package's content stays shared, so it lives in `/store` and is
+  bound; a template's skeleton becomes your files, so instantiating **copies**
+  it — binding would mean editing your `main.py` edited the template's. Same
+  declaration format, same registry shape, different outcome because the need
+  differs — which is her rule, confirmed by measurement (the measured table and its sources are
+  **RESEARCH §13**). **The finding exceeds the answer**: the format is small because it carries no compensations, which is
+  *"complexity is compensation"* with the deleted parts enumerated.
+
+- **(2026-09-02) `/store` is proposed — the one genuinely new component.** Once
+  `/pkg/<name>` is a **declaration file** rather than a directory, the bytes it
+  binds from need a home, and nothing in the design had one. Hers, twice: *"I do
+  understand pkg needs to wrap up a collection of files but that is not what the
+  package file actually is"*, and *"the store must be prunable."* Proposed in
+  [proposals.md](proposals.md): `/store/<name>/<version>/`, a union like every
+  other root (`/home/store` over the system's), **name-and-version as the
+  interface** so content-addressing stays an invisible implementation choice,
+  **immutable after verification** so a pinned digest never becomes a false
+  claim, and **not package-specific** — a template's skeleton files need the
+  same store. **Prune needs no new machinery**: reachability is readable (so the
+  listing IS the dry run), safety is **unlink-while-open** on channels the
+  kernel already refcounts, and pruning discards *materialisation, never
+  intent* — a pruned entry refetches, because the digest is pinned in the
+  declaration. Which is why it is categorically safer than `docker prune`, where
+  losing an image can lose something unreproducible.
+
+- **(2026-09-02) `/pkg` is a LIST OF BINDINGS, not a directory — and
+  `/profile`, `/pkg` and `/template` are ONE FORMAT, three registries.** Hers:
+  *"pkg is not a directory. it is a list of bindings… plus commands that may
+  need to be invoked during install… It is actually very similar to template."*
+
+  | | assembles | when its commands run |
+  |---|---|---|
+  | `/profile` | *your* namespace | at `su` / login |
+  | `/pkg` | a *tool's* availability | at **install** — prepare |
+  | `/template` | a *project's* world | at **instantiate** — start |
+
+  Each is *a list of bindings plus commands*. **A package is nearly a template
+  with no `cmd`**: its commands prepare the thing, a template's runs *in* the
+  result — the Dockerfile `RUN`/`CMD` split appearing a second time in a place
+  designed separately, where namespace directives build the world and the
+  command runs in it. `/lib/namespace`'s own header already half-claims this
+  (*"this file format is also the profile's namespace-fragment format"*); this
+  extends it to all three, so **three formats do not need designing** and `pkg`
+  stops being a subsystem.
+
+  **Consequence for `su`:** `pkg install` under `su` appends to the **system's
+  list**, not to a directory of files — cleaner than the earlier framing, since
+  what the union decides is whose *declaration* grows. Every user then inherits
+  the system's list plus their own.
+
+  **To flag rather than change** (her document): README:186 says *"A package is a
+  subtree under `/pkg`"*. Under this reading `/pkg/<name>` is a declaration and
+  the bytes live wherever it binds *from*. The load-bearing claim — *installing
+  is a bind* — is untouched; the wording would want a touch.
+
+- **(2026-09-02) BARE `su` IS "EDIT THE SHARED HALF" — and `sudo` is it with a
+  command.** Hers: *"su. followed by pkg install installs a package into the
+  system namespace, which is inherited by every user… su creates a process
+  where we can change the system namespace, credentials and profile"*, and
+  *"sudo mk install works exactly as we would imagine."*
+
+  **It is not about having less; it is about which union element your writes
+  land in.** With no `/home/pkg` bound in front, the **MCREATE element is the
+  system's** — so *"install for everyone"* is not a flag, a helper or a special
+  operation, it is the same command in a namespace whose create element
+  differs. `mk install` needs **no change and no `--user` flag**, which
+  dissolves the flag pip, npm, gem and cargo all carry because they cannot say
+  `bind`.
+
+  **There is no privileged program.** Unix's `sudo` is a setuid binary that must
+  be perfect — its CVE history is long precisely because it is privileged code
+  parsing user input, and a flaw is total compromise. Here the authorisation
+  happens once at namespace composition, under the eve/ruid rule, and the
+  command runs with **no special status at all**: a bug in `mk` cannot escalate,
+  because `mk` has nothing to escalate. Its reach is its namespace.
+
+  **The power is real but LEGIBLE**, which root's was not: bounded by which
+  create elements you hold, and readable — `cat /proc/N/ns` answers *what can
+  this process change?* And the audit exceeds `sudo`'s log by accident:
+  `/output/<n>/` already records `cmd`, `dir`, `status` **and the output**,
+  which sudo never captures. Three transitions, three authorisations:
+  `su none` (nothing), `su mimmy` (mimmy's), `su` (**eve's**).
+
+  Root is retired without losing what root was *for* — the daemon environment,
+  the system-wide install, changing what everyone inherits — all as consequences
+  of *where writes land* rather than as exemptions from the rules.
+
+- **(2026-09-02) `su` becomes one line, because the flat `/home` makes it a
+  namespace act.** Hers: *"su mimmy is 'Become mimmy, create a process with
+  /usr/mimmy mapped to home and mimmy's credentials'."*
+
+  ```
+  su mimmy  =  a fresh namespace
+               bind /usr/mimmy /home
+               apply /home/profile        ← now mimmy's
+               set the credentials
+  ```
+
+  **The third step does every union root for free**, because the profile *is*
+  the list of binds — `/bin`, `/lib`, `/type`, `/template`, `/pkg`,
+  `/credentials` all reassemble from mimmy's half without `su` naming any of
+  them. So **`su` is not a mechanism**: it is *"assemble someone else's
+  namespace"*, which is what a profile is for. No setuid, no privileged helper,
+  no `sudoers`, which is what identity.md asserted was possible without
+  spelling out.
+
+  **A caution, because the cheaper version looks like it works.** A bind
+  resolves a **channel, not a path** — namespaces here are per-process mount
+  maps with refcounted channels — so rebinding `/home` does NOT retarget
+  `/bin`'s union element, which still points at the previous person's
+  directory. That is why `su` is *a fresh namespace plus the profile* rather
+  than one rebind, and it would pass a test that checked `/home` while failing
+  in use, where you would be running kitty's `/bin` as mimmy.
+
+  The direction rule is unchanged: **downward is free** — `su none` needs no
+  permission — while becoming mimmy needs the eve/ruid check, since mimmy's
+  credentials were never yours to bind.
+
+- **(2026-09-02) `/home/<thing>` bound over `/<thing>` IS the configuration
+  mechanism — there is no other.** Hers: *"and `/home/bin`, etc. all standard
+  conventions."* Not three special cases for the registries but **one rule for
+  the whole system**, and Plan 9's own practice generalised — its standard
+  profile already does `bind $home/bin/rc /bin`.
+
+  ```
+  /home/bin  →  /bin        your commands, found first
+  /home/lib  →  /lib
+  /home/type /home/template /home/pkg  →  their system twins
+  ```
+
+  **What it dissolves** is larger than `PATH`, which the README already claims:
+  `~/.config`, `XDG_CONFIG_HOME`, `/etc` versus `~/.foorc` precedence, per-
+  application config directories, and *"where does this program look for its
+  settings"* as a question anyone must answer. A program looks in `/lib`;
+  whether that is yours or the system's is the **namespace's** business, not the
+  program's. It also gives the profile a concrete job — the profile is a list of
+  these binds, which is what `/lib/namespace`'s format already is and what
+  identity.md means by *"namespace fragments describe what to assemble"*. And
+  **`ls /home` answers "what have I customised?"**, which no dotfile system can:
+  there you would have to know every application's convention and search for
+  each.
+
+  **`/usr/<name>` IS `/home` — flat — and `/profile` and `/credentials` are
+  ordinary union roots.** Hers, following the inconsistency to its end: *"if
+  there is a system /profile, then the user profile should genuinely be
+  /home/profile. Which means we are back to /usr/kitty being a synonym for
+  /home."* Correct, and it leaves **zero special cases**: every root is a union
+  of the system's and yours, and every personal half lives at `/home/<x>`.
+
+  ```
+  /usr/kitty/           the person's tree; /home binds here
+      bin/ lib/ type/ template/ pkg/     your half of those system roots
+      project/ document/                 your work
+      profile/                           your half of /profile
+      credentials                        your half of /credentials
+  ```
+
+  **This retires `/usr/<name>/home`**, which I introduced when she asked whether
+  it was a synonym, justified as separating *what you are* from *what you own*.
+  That separation survives as **subdirectories** (`/home/profile` versus
+  `/home/project`) and did not need a tree split, which cost the uniformity. It
+  is also more conventional, not less: a Unix home has always held all three —
+  `~/.ssh` is credentials, `~/.config` is profile, `~/Documents` is work. The
+  permission argument is unchanged: someone may read `/usr/mimmy/project/foo`
+  and never `/usr/mimmy/credentials`, different subtrees with different modes.
+
+  *(An earlier draft of this entry called `/profile` and `/credentials`
+  exceptions to the `/home/<x>` rule, then a rule "with one parameter". Both
+  were wrong: there is one rule and no parameter.)* An earlier draft said so; Christine corrected it: *"you
+  could argue there are system `/profile` and system `/credentials`."* Both
+  exist. identity.md's profile design already assembles *"a base, a per-device
+  section, a section per service"* — **the base is the system's**, and
+  `/lib/namespace` is that base today. System credentials are equally ordinary:
+  CA roots, host identity, service keys, which no user owns.
+
+  So **the union rule is universal — `/x` is always the system's plus yours —
+  and what varies is only where "yours" is STORED**: `/home/<x>` for workspace
+  things, `/usr/<me>/<x>` for identity things. Hers, setting that parameter:
+  **"home is a workspace."** Identity's personal half lives in the identity
+  tree, not among your work. One rule with one parameter, not a rule with
+  exceptions.
+
+- **(2026-09-02) The two-step promotion needs NO mechanism, because the union
+  already does it.** Hers,
+  completing the pattern. Each personal root is bound `-b` over its system twin,
+  and the union-list machinery is already built and tested: *"walks try elements
+  in order, directory reads concatenate integrally, **creates land in the
+  MCREATE element**."* So `ls /template` shows the system's and yours as one
+  listing; a collision resolves to yours; and **`Promote` writes to
+  `/template/<name>` and it lands in `/home/template/<name>`** without knowing
+  there are two places. *"Promote to system level"* is then moving it between
+  union elements — one visible operation, and the only step needing
+  deliberation. **`/home/project` has no system twin**, because a project is
+  always someone's. This also retires the special framing of *"bind your own
+  `/type` over the system's"*: that is not an arrangement for the registry, it
+  is the general shape, and `/home/type` is where yours lives.
+
+- **(2026-09-02) CONVENTION RESOLVES; the system does not defend against
+  deliberate misuse.** Hers, on whether marker-file recognition needs a
+  tie-break when a directory matches several types: *"this is what convention
+  buys. someone creating a template in `/home/project` is an idiot."* The path
+  settles it, because a thing sits in exactly one place and **`New` creates
+  projects at `/home/project/<name>`** — the location is *caused by* the type,
+  which is why reading it backwards is valid here where deriving the default
+  *role* from location was not (nothing about a path causes writability).
+  Recognition is therefore **path first, `contains` as the fallback** for a repo
+  cloned elsewhere — and the residue, a directory genuinely of two kinds outside
+  the conventional roots, needs no new mechanism because the type is already
+  shown in the title bar and switchable. **The general form: prefer a convention
+  that makes the bad case obvious over machinery that makes it impossible.**
+
+- **(2026-09-02) Do not put configuration into a root that means something
+  else.** Caught by Christine twice in one day: `/mnt/emca` for a window's files
+  (when `/mnt` is for trees you attached and `/dev` is the virtualisable slot),
+  and `/profile/boot` + `/profile/breakpoints` as **bare files** in a root
+  defined an hour earlier as the *identity* profile — where `boot` also **takes
+  a name Unix already owns**: the bootfile, the kernel image, the loader.
+  **A namespaced subtree under a root is fine; bare files in it are not**, and
+  **a name Unix already uses is not available.** All three slips were the same
+  shape — reaching for a plausible-sounding name without checking what it
+  already carried. The startup file needed no new word: **`/rc/emca`** and
+  **`/profile/emca`**, named for the program, the same convention on both
+  sides.
+
+- **(2026-09-02) `/home`, `/credentials` and `/profile` — three roots, one
+  rule.** Each is a **bind** onto a subtree of `/usr/<me>`, so each means
+  *"mine"* and an agent's are its own. Chosen over a container (`/me/home`,
+  `/me/profile`) because **`/home` was already decided**, and a container would
+  undo a settled path to gain symmetry with two that did not yet exist — and
+  because `/me` was my coinage, not hers. They fit the root's existing style
+  (every root is one meaningful word) and, being system-defined, do not
+  reintroduce the mess `/home` exists to contain. **`/credentials` is a listing,
+  not the mechanism** — a program uses a key by challenge and response, so
+  secrets stay in the agent. **The rule that stops roots proliferating**: a
+  subtree of `/usr/<me>` earns a root when a process needs it **by name** and
+  would otherwise have to know whose it is.
+
+- **(2026-09-02) `/output/<n>/` takes `/proc`'s shape — a number, with the
+  command as a FILE.** Hers, after I rejected two of her forms and argued my way
+  back to the first: *"you mentioned that /output could be served by emca which
+  means its /output/XXX is the shortest where XXX could be just a number."*
+
+  ```
+  /output/7/0         stdin — WHAT WAS FED IN
+  /output/7/1         stdout
+  /output/7/2         stderr — captured separately
+  /output/7/3         …and anything else the command held open
+  /output/7/cmd       cat /template/Python   — full, unescaped
+  /output/7/dir       /template              — where it ran
+  /output/7/status    exit code
+  /output/7/log  the session as it read, text/plain — what Run opens:
+
+      % cd /template
+      % cat Python
+      ....
+      exit 0
+  ```
+
+  **Descriptors by number, which is `/fd`'s own pattern** (`bind #d /fd`, *"dup
+  by open"*) and generalises where `in`/`out` stop at two. **stderr stops being
+  conflated** — acme's `+Errors` merges them, which is why `2>/dev/null` exists
+  as a coping mechanism. **stdin is preserved**, which almost nothing does:
+  `|sort` on a selection records *what was sorted*, so an output window is a
+  complete record of a transformation rather than half of one — and `cmd`, `dir`
+  and `0` together are everything needed to run it again. **The one loss is
+  interleaving**: 1 and 2 captured apart cannot reconstruct the order they
+  arrived, and a build log is read in that order. Since emca serves this it
+  holds both streams with their arrival order, so it also serves
+  **`log`** — the session as it read, which is what `Run` opens, with
+  the numbered files underneath when you want one (`grep /output/7/2` for just
+  the errors). **The prompt is rc's own `%`**, unchanged from `exec.c:906` — no
+  configuration, and it signals correctly that this is not a Bourne shell. The
+  directory is **not** in the prompt; emca emits a `cd` line, so the log is
+  **self-contained**: paste it and it is complete, with `/output/<n>/dir` the
+  machine-readable copy of a fact the log already states. Selecting a command
+  line and pressing Run works, because Run takes the selection and you select
+  the command rather than the prompt. It is also what a person pastes into a bug report, and
+  it is complete, which three separate files are not.
+
+  **And it unifies output with `shell`: an output is a COMPLETED
+  CONVERSATION.** The `shell` role shows a transcript being written;
+  `/output/<n>/log` is one that finished. Same format, same rendering,
+  same property that selecting a path in it and pressing Open works — so a Run
+  window and a shell window are not two designs but one window at two points in
+  its life. `text/plain` throughout, so **`output` stays retired as a type**.
+
+  **This supersedes the mirror** (`/output/usr/kitty/ipnx/mk all`), which broke
+  on its own justification: **a command line contains `/` and therefore cannot
+  be a filename.** My defence of it rested on examples that happened to avoid
+  slashes — `mk all`, `cat Python` — and any command naming an absolute path
+  breaks it, which is most of them. Escaping or substituting (`cat :etc:motd`)
+  made every access require quoting, in a filesystem made typeable on purpose.
+
+  **The pattern is the system's own**: `/proc/<pid>/` is a number with metadata
+  as files, and an output is the residue of a process. So the fact the mirror
+  encoded becomes just another file — and answers the question *better*:
+  `grep -l /template /output/*/dir` finds what ran there without needing to know
+  the path first, which navigating a mirrored tree cannot do. The window's title
+  still reads the full command, because emca reads `cmd` and a title has no
+  filename rules.
+
+- **(2026-09-02) Two of the five tag line verbs are UNIVERSAL; three are
+  implemented by the TYPE MANAGER.** *(AMENDED later the same day: Christine
+  added a sixth, **`Add`**, so the split is three universal — Run, Open, Add —
+  and three the manager's. See the entry above.)* `New` (instantiate a template; create a
+  file in a directory), `Find` (text, filenames, a process list) and `Edit` (a
+  sam command for text, `resize 1024x1024` for an image) are **the manager's,
+  not the type's** — which matters because two managers of one type differ:
+  `Edit` under `look` cannot mean what it means under `edit`, on the same file.
+  **(Christine has had to make this correction three times: the toolbar, the
+  verbs, and these. The type declares WHICH managers exist; the manager
+  implements WHAT the verbs do.)** **`Run` and `Open` do not vary** —
+  Run always runs the tag line in the window's directory with `$file` and `$dir`
+  set, output to `/output`; Open always opens what the tag line names. So
+  *"behaviour specified by the type definition"* holds for three of the five.
+
+  **The property that gives: no window is a dead end.** Whatever you are looking
+  at — a template, an image, a process table, a binary shown as bytes — there is
+  a working command line with the subject already in the environment. `xxd
+  $file` in a `look` window is how you get past what the manager chose to show
+  you, and it exists in every window by construction.
+
+  **`/output` keeps the directory**: `cat Python` in a template window lands at
+  **`/output/template/cat Python`**, not `/output/cat Python` — two commands
+  with the same text in different directories must not collide. *(SUPERSEDED
+  hours later: a command line cannot be a filename. `/output/<n>/` with `cmd`
+  and `dir` as files inside — see the entry above.)*
+
+- **(2026-09-02) The New flow, traced.** Open `/template` — `inode/directory`,
+  and **`look` falls out of permissions** since the system registry is not
+  yours to write. **Open the template** — you do not merely select it, because
+  `New` in the *directory* window means "create a new thing of this type here",
+  which in `/template` is a new **template**. Once the template is the window's
+  *content*, `New` unambiguously means *instantiate me* — hers, 2026-08-31:
+  *"Opening a recipe shows the recipe and launches a recipe manager — one of its
+  buttons is New that instantiates a process with that recipe."* Type a name in
+  the tag line (never prefilled), press **New**, and the project is created at
+  **`/home/project/<name>`**. **You see the spec before instantiating it**,
+  which is the audit property arriving where it matters: *what will this touch*
+  is answered by the window you are standing in.
+
+- **(2026-09-02) `/usr/<name>` is where an identity's FILES live — it is not an
+  identity; `/home` binds to `/usr/<name>/home`.** *(AMENDED later the same day:
+  `/usr/<name>` IS `/home` — flat, no `home/` subdirectory — see the entry
+  below.)* Hers: *"/usr/kitty/home is a
+  synonym for /home?"* Yes. And she then caught a phrasing error of mine —
+  *"/usr/kitty is an identity?"* — no: it is a **directory named after** one.
+  The identity is credentials plus a namespace ([identity.md](identity.md)) and
+  exists whether or not a directory does; an agent may have a full identity and
+  no `/usr/<name>` at all, and `/usr/mimmy` may be a **mount of Mimmy's
+  system**, in which case the identity is over there and this is a view, made
+  readable by the per-attach identity at the mount rather than by the folder's
+  name. Calling the directory "the identity" would make a *name* look like it
+  confers something, against the standing rule that **names are for accounting;
+  namespaces are for authority**. Even `credentials` is a *listing* — hers,
+  2026-08-31: *"not exposing kitty's credentials in plaintext"* — the keys stay
+  in the agent. What the directory does hold: `home/` (the workspace),
+  `credentials`, `profile`; `/home` binds to the `home/` subtree only. That makes permissions natural rather than arranged: someone may read
+  `/usr/mimmy/home/project/foo` and never `/usr/mimmy/credentials`, because they
+  are different subtrees with different modes — not one tree with exceptions.
+
+- **(2026-09-02) A manager's window is at `/dev/window/`, not directly in
+  `/dev`.** Hers. Ten generic names — `ctl`, `events`, `size`, `type`, `role` —
+  sitting beside `cons`, `draw` and `canvas` would collide and read as nothing.
+  And it is **already this project's path**: `/lib/namespace` binds `#w` at
+  `/dev/window`, and the archived device spec used it. The full set is
+  **`/dev/emca/<n>/`** — named for the ROLE, so it survives the tiled
+  compositor being replaced; rio's own word was `wsys`, which would point a
+  reader at a different system. A manager sees only
+  `/dev/window/`, so no window id appears in any path a manager uses and it
+  cannot reach another window's files — they are not in its namespace.
+
+- **(2026-09-02) `/dev` IS THE SLOT THAT CAN BE VIRTUALISED.** Hers: *"the
+  convention is `/dev` can be virtualised."* Not "where devices live" — the
+  place whose contents may be substituted underneath a process **without it
+  being able to tell**. Without emca, `/dev/cons` and `/dev/draw` are the host's
+  real screen and keyboard; with emca they are virtualised per window; the
+  client cannot distinguish them. `/mnt` carries no such convention: a tree you
+  attached stays the tree you attached. **So a window's files live in `/dev`,
+  not `/mnt`** — a manager reading `/dev/window/rect` must not learn who provided it,
+  which is what makes emca nest, keeps the no-windows CLI case working, and will
+  make a floating implementation substitutable for the tiled one. rio, not acme,
+  is the analogue — it serves `/dev/cons`, `/dev/mouse`, `/dev/wctl` with the
+  full set at `/dev/emca/<n>/`, and this project already followed it: `bind
+  '#w/N' /dev`, and a supervisor file named `devwsys.mjs`. **Each manager's own
+  window is bound at `/dev/window`** — already this project's path, since
+  `/lib/namespace` binds `#w` there — so no window id appears in any path a manager
+  uses, and a manager cannot reach another window's files — they are not in its
+  namespace.
+
+- **(2026-09-02) The three structural proposals are ENDORSED and moved into the
+  specs.** Reviewed by Christine, with `/mnt/emca` corrected to `/dev`. **The
+  manager interface is a file interface** — emca serves one directory per
+  window, so it and the emca↔surface protocol are the same thing, and no new
+  protocol is needed because 9P is already the only IPC (now in
+  [window.md](window.md)). **The `/type` file syntax** — `recognise` one rule
+  per line in pipeline order, `managers` listing roles, `verbs` in three action
+  forms (now in [type.md](type.md)). **`properties` is `edit` over a text
+  rendering of the stat** — change the `mode` line and Save, and `chmod`
+  happens; it also makes provenance visible for the first time, a `served` line
+  answering *"which union element actually gave me this file?"* Three questions
+  stay **open inside them**, marked in place: whether the *content* is a file
+  too (for `text/plain` it lives in the host's editor, so `body` would be a
+  mirror — the one place the file interface does not collapse cleanly); whether
+  `magic` needs more than offset-and-literal; and whether `properties` is
+  genuinely a fifth role or just `edit` on a different *view*, in which case the
+  list is four.
+
+- **(2026-09-02) `shell` applies to FILES, not just channels — and it is a role
+  with many backends.** Hers: *"shell on a file is really append a shell
+  conversation to the file… I can open a log file, and append to it. In other
+  words, treat the file as a pseudo `/dev/cons`."* This corrects the earlier
+  entry below: a store *does* have another end — **you**, plus whatever else is
+  appending. Which inverts the usual framing: **`/dev/cons` is not special
+  because it is a device; it is the canonical instance of *a file two parties
+  append to*.** `tail -f` dissolves: open the log with `shell`, watch lines
+  arrive, type your own into the same stream, and the record stays one thing.
+
+  **Content is always renderable as a file; what `write` MEANS depends on the
+  role** — `edit` changes the content, `shell` sends to the other end and the
+  transcript grows. Same shape as `read` differing between a store and a
+  channel. acme's `win` proves it: its body is a file, typing at the end goes to
+  the process, output appends.
+
+  **You do not choose a backend — you choose a file, and whatever is on the
+  other end is the backend**: `rc`, a language REPL, a remote connection, a
+  daemon writing a log, **or an LLM**. So *adding a conversational backend is
+  adding a file* — "adding a manager is adding a file", one level out — and it
+  delivers what the README already claimed: *"the model is a file you write
+  prompts into"*. **History needs no mechanism: the transcript IS the history**,
+  which is one more argument for it being a real file.
+
+  **The cost, named rather than discovered: line discipline.** *"both sides have
+  to manage the result"* is exactly what a terminal driver does — hold the
+  partial line, redraw it below interrupting output, keep the cursor where the
+  user thinks it is. It cannot live purely on either side: the host has the
+  keystrokes, IPNX has the writer, the interleaving happens between them. **A
+  model makes it worse**, arriving token by token rather than line by line.
+  **And rendering must not eat the transcript**: markdown and code blocks are
+  drawn by the *surface*, while the file stays text — otherwise selecting a path
+  in the output and pressing Open stops working, which was the point of the
+  transcript being a file.
+
+- **(2026-09-02) `run:` actions substitute ENVIRONMENT VARIABLES, not a
+  templating syntax.** emca sets `$file`, `$dir` and `$window`; a verb is then
+  an ordinary command — `run:tar cf $file.tar $file`. No new language; `/env` is
+  already a filesystem (`bind '#e' /env`) so the variables are **inspectable
+  files**; and quoting, escaping and spaces-in-filenames are rc's problem, which
+  is solved. **The selection needs no variable**, because `|` already pipes it —
+  one mechanism, not two.
+
+- **(2026-09-02) When a convenience verb earns its place.** *"A convenience verb
+  earns its place when it does something the general mechanism doesn't, or when
+  it teaches something the mechanism hides. Otherwise it is a second path, and
+  second paths drift."* **Replace passes**: Find-then-type replaces *every*
+  match, while "replace the selection with the tag line" replaces *one thing*,
+  which has no other expression. **The Pipe affordance passes** on the second
+  clause — it exists to teach `|`. **chmod fails both**: `Run` does it and
+  `properties` does it more legibly. And the stakes are low, because **the
+  toolbar is declared in a file**: anyone can add `Chmod run:chmod $tag $file`
+  to their own `/type`. The only question is what ships by default.
+
+- **(2026-09-02) The shell is substitutable per NAMESPACE, and bash is a script
+  interpreter rather than the interactive shell.** Because `/bin` is a union and
+  namespaces are per-process, **different windows can have different shells** —
+  so "which shell" is a namespace fact, not a setting: `chsh`, `/etc/shells` and
+  the shell field in `passwd` all dissolve. But **`run:` actions execute in the
+  SYSTEM shell** while the interactive shell is personal — the separation Unix
+  already draws between `$SHELL` and `#!/bin/sh` — or a `/type` written for one
+  shell breaks for a user who chose another.
+
+  **bash and zsh bring behaviour built for a world this system removed**, and
+  every piece of it is a compensation for a missing primitive: **job control**
+  compensates for having one terminal (here: windows); **`PATH`** for no union
+  mount (here: `bind`); **terminal control** — termios, raw mode, ANSI escapes —
+  for output not being addressable content (here: a transcript that is a file);
+  **`screen`/`tmux`** for sessions not being namespaces. It cannot be suppressed
+  from inside bash; what can be done is **not providing the mechanisms** — no
+  termios, no process groups, no controlling terminal (`/dev/tty` deliberately
+  does not exist) — so the interactive half fails to initialise and the script
+  interpreter still runs. **So: bash for existing scripts, never as the
+  interactive shell**, the same posture the V10 exhibit gets. And note the
+  closure: remove job control, `PATH` and terminal control, and what remains is
+  close to **what rc already is** — Plan 9 removed the same compensations for
+  the same reasons, one system earlier, which is why the curation principle kept
+  it.
+
+- **(2026-09-02) `shell` needs a CHANNEL, not a store — and a conversation is
+  not a file.** Hers: *"the shell breaks the convention that everything is a
+  file. It is a conversation, not a file"*, then *"the conversation can be
+  displayed as a file though"*. Both are right, and the resolution is that
+  **"everything is a file" was always an INTERFACE claim, not an ontological
+  one** — Unix has had two things behind one `read()` since the start: a
+  **store** (reading is idempotent) and a **channel** (reading consumes; two
+  readers race). Same shape as *"everything is text" is a fiction*: true about
+  the interface, false about the things. A conversation has **two file-shaped
+  aspects** — the **channel** you read and write, and the **transcript**, which
+  is ordinary content. Those are exactly the shell body's two regions: the past
+  is immutable, the end is live. **The transcript should be a real file**, so
+  selecting a path in a build error and pressing Open works, and a session can
+  be grepped and kept — acme's `win` already does this, its body being
+  `/mnt/acme/N/body`. Bell Labs never wrote a terminal emulator; a terminal
+  emulator is a pile of features compensating for scrollback not being content.
+  **CORRECTED later the same day: `shell` is NOT restricted to channels** — see
+  the entry above on shell backends. The reasoning here was that a store has
+  no other end; the other end can be *you*, plus whatever else appends. What
+  survives is that running a script is `Run` or `manage`, never `shell`: running a script is `Run` (output) or `manage` (under control), and
+  *interactive with a file* is the two-step, `manage` creating the process and
+  `shell` conversing with it.
+
+- **(2026-09-02) A directory's roles: `look`, `edit`, `properties` — and `edit`
+  IS the file manager.** A directory's **content is its entries**, so renaming,
+  moving and deleting are *editing the listing*, not managing the object —
+  hers, on 2026-08-31: *"the same directory can be an `ls` window or, if you
+  want to edit the listing, an `edit` window"*. Precedent that it works:
+  Emacs' `wdired` and `vidir`. **There is no file manager program**; Finder is
+  `look` and `edit` on `inode/directory`. The rename-versus-delete ambiguity a
+  text diff cannot resolve is settled by **identity, not diffing** — 9P's
+  **qid**, *"unique id from the server"*, is exactly the field for it. Four
+  guards, three already built: nothing happens until **Save**; Save shows the
+  **plan** ("3 renames, 1 delete"); **`#V` snapshots** make a destructive save
+  genuinely reversible rather than Finder's simulated undo; and read-only from
+  permissions means the interface **grants no authority you did not have**.
+  `manage` on a directory is **serving it** — `exportfs` is the one sense in
+  which a directory runs. And batch rename falls out of parts designed
+  separately: select lines, `|sed s/old/new/` (acme's `|` replaces the
+  selection with the output), Save applies the renames.
+
+- **(2026-09-02) Run supplies a CONTEXT, never an implicit input.** `grep foo *`
+  in a directory window greps **the files** — the `*` expands in the window's
+  directory. `|grep foo` greps **the content** — the listing — because the
+  operator gives the selection its own slot. Bare `grep foo` waits on stdin and
+  is useless, which is honest. Implicit stdin would make every command's
+  behaviour depend on which window you were in, which is the hidden state
+  removed from Run earlier, arriving by another door.
+
+- **(2026-09-02) Tag line beats selection, and it is safe because the tag line
+  is VISIBLE.** The rule: **the tag line is the operand; the selection is the
+  fallback when it is empty, and the input when an operator asks for it.** They
+  rarely compete — `Run |sort` uses both, in different slots. The one bad case
+  is a stale tag line silently beating a fresh selection, and the only thing
+  preventing it is that the winning text is on screen. **So a populated tag line
+  must READ as populated** — a rendering decision, but load-bearing rather than
+  cosmetic. Precedence is only ever a question *within* the tag line's five:
+  selection verbs always take the selection, toolbar verbs always take the
+  content.
+
+- **(2026-09-02) THERE IS NO REPLACE VERB.** `Find` with the tag line searches
+  for its text *or an address*; `Find` with a selection and an empty tag line
+  finds every occurrence of the selection. Because **dot is a set**, Find puts a
+  cursor at every match — **so typing after a Find is replace-all**. The Find
+  and Replace dialogue (two fields, a direction, match-case, whole-word,
+  Replace versus Replace All) dissolves into one verb and the keyboard;
+  VS Code's Ctrl-D and Sublime's multi-select prove the gesture. **This creates
+  the first genuine requirement for the status line: it must show the match
+  count**, because typing after a Find that matched 247 occurrences changes 247
+  things that may all be scrolled out of view. Every other status-line candidate
+  is a convenience; this one is a safety property. **Escape collapses to a
+  single cursor at the last match** — a deterministic exit; clicking is the
+  other. Find is always **within the window**: cross-file searching is `grep`
+  plus Run, because *Find selects* (you are about to edit) while *grep reports*
+  (you are about to read).
+
+- **(2026-09-02) The surface may not intercept keys a manager needs.** Escape
+  collapses multi-cursor **in the `edit` role** — it cannot be a surface-wide
+  binding, because in a `shell` window Escape must reach the process or vi,
+  `less`, readline and ncurses all break. The general rule, which is the
+  keyboard form of *"emca does not reach inside a manager's window"*: **the
+  surface owns chrome and window-level gestures; the manager owns the keyboard
+  inside its rectangle.** The reserved set must be small and stated, or every
+  new manager discovers by accident which keys it is not allowed to have.
+
+- **(2026-09-02) MANAGERS ARE NAMED BY ROLE, and there are five.** Not by type:
+  `textmgr` and `ipnxmgr` named a type where a ROLE was meant,
+  and both are retired. A role **means the same thing wherever it applies** —
+  which is the test, not "on every type", since an unoffered role is no more a
+  hole than `edit` on a PNG.
+
+  | role | the file is | |
+  |---|---|---|
+  | **look** | content to read | universal; delegates to the platform's native preview — QuickLook on macOS, the browser's own viewers. Always read-only |
+  | **edit** | content to change | |
+  | **properties** | an object with attributes | permissions, owner, timestamps, provenance |
+  | **manage** | something **running**, to control | *runs the thing's own runtime on it*: the debugger for a binary, the interpreter's debugger for a `.py`, reboot/halt/new-shell for `inode/system`, kill/note for `/proc/N` |
+  | **shell** | **a conversation** | a two-way stream: `/dev/cons`, or a network connection exposed as a file — so a remote shell needs no ssh client, no telnet, no minicom |
+
+  **`manage` creates the running thing; `shell` converses with it.** So "open a
+  terminal" is `manage` on `/`, and the window you get is `shell` on the
+  resulting stream — which keeps `shell` from ever meaning "create", the way
+  "terminal *here*" would have made it.
+
+  **The role dropdown lives in the window's top bar**, beside the type, and
+  switching it re-opens the window under a different manager. Read-only stops
+  being a mode with a warning modal and becomes *which manager is in charge* —
+  the safety is visible, and there is no hidden state.
+
+  **The default role is derived from PERMISSIONS, not from location or a
+  list**: writable → `edit`, not writable → `look`. So "read-only by default"
+  is literally true rather than a policy, it is per-identity for free (an agent
+  with no write permission gets `look` on everything, from the uid model that
+  already runs), and "why is this read-only?" is answerable with `ls -l`. A
+  person who edits all day binds their own `/type` to reorder it.
+
+  **And the type hierarchy carries CAPABILITY, not just manager names**:
+  `text/plain` offers look/edit/properties, while `text/x-python` inherits
+  those and **adds `manage`**, because a Python file is text *and* runnable.
+  That is a stronger justification for MIME nesting than avoiding duplication.
+
+- **(2026-09-02) `shell` is a new paradigm: the body is an input.** Every other
+  role treats the body as content — `look` reads it whole, `edit` writes it
+  whole. A shell's body is a **transcript**: the past is immutable, the end is
+  live, and there is nothing to save, which is why Save, Revert and Undo are
+  meaningless there. **Two regions with different rules inside one body**, which
+  nothing else in the system has. A shell window therefore has two places to
+  type, and they **coexist with different scopes**: the *body* talks to the
+  process, the *tag line* operates on the window — Find in the scrollback, Open
+  a path visible in the output. Unifying them would move commands out of the
+  transcript, and a transcript that does not record what you typed is not a
+  record. Because the scrollback is ordinary content, `look`'s behaviour applies
+  to it: select a path in a build error and press Open. That property survives
+  precisely because the history is content rather than a terminal grid.
+
+- **(2026-09-02) Run, manage and shell are three different acts.** **Run**
+  produces *output* — a finished result, shown in a `text/plain` window under
+  the `look` role. **`/output` therefore dissolves completely**: not a type, not
+  a special window, just text viewed. **manage** changes *state*. **shell** is
+  *interactive*. Python shows all three without collision: `python hello.py` in
+  the tag line is Run; `manage` on `hello.py` is the debugger; a REPL is
+  `shell`.
+
+- **(2026-09-02) THE TOOLBAR BELONGS TO THE MANAGER, NOT THE TYPE.** `look` and
+  `edit` are the same type and must offer different toolbars — Save, Undo and
+  Redo are meaningless under `look`. An earlier entry the same day said the type
+  declares its verbs; it does not.
+
+- **(2026-09-02) What a type declares, and how a file is recognised.** A type
+  definition holds: the **name** (a MIME type); **how files of it are
+  recognised**; a **list of managers**, the first being the default; and its
+  **toolbar verb bindings**. Recognition is an ordered pipeline, and ordering by
+  *cost* happens to order by *certainty* — (1) the **serving device**, free in
+  9P's stat, which carries `type` and `dev`, and is the signal no desktop has;
+  (2) the **qid bits**, directory and symlink; (3) an **exact filename**
+  (`/etc/passwd`); (4) an **extension**; (5) **magic bytes**; (6) **fallback to
+  `text/plain`**, which never fails. That bounds classification at one stat and
+  one short read, which is the answer to *"emca may spend too long trying to
+  figure out"*. Verb bindings take three forms, not two: ask the manager, ask
+  the surface (`ipnx:` / `host:`), or **run a command** — hers: *"may be
+  commands outside manager, eg. a shell"*. The default manager needs no file of
+  its own: it is the first line of the managers list, so changing a default is
+  editing or binding one line.
+
+- **(2026-09-02) `ns` as implemented is retired; the need it served is real.**
+  `/type/<x>/ns` was a file of bind lines `eval`'d as rc on window open — my
+  interpretation of her *"each window type is associated with a namespace (eg,
+  `/recipe`)"*, which meant a **place**, not a script. As built it was nearly
+  vestigial: ten of thirteen were empty, and two of the three that weren't
+  belonged to types she never asked for. It also made the registry contain
+  **executable text**, which nobody decided. But the concept became *more*
+  important, not less: **"a manager owns a window, and populating it is
+  binding"** — the debugger binds the debuggee's `/dev/cons` into one pane —
+  so a type declaring what is bound into its windows is genuinely needed and
+  must be designed rather than inherited.
+
+- **(2026-09-02) Unrecognised or unrenderable content: fall back, but ask.**
+  emca **tests** for type and **falls back** to `text/plain`, which therefore
+  can never fail. **Recognised but unmanaged is refused for safety, with a
+  prompt** — hers: *"file type not displayable, want me to display as text?"*
+  Content that is not valid UTF-8 renders with **escapes** and the window opens
+  **read-only**, because the danger was never display but round-tripping: open
+  a binary, touch nothing, save, and it is destroyed. Save on such a window
+  prompts a warning modal, once. **Line endings are never rewritten** — the
+  bytes on disk are not normalised, both endings display as a line break, a
+  file keeps what it had when saved, and new files get `\n`. That is the text
+  manager's specification, not the type's.
+
+- **(2026-09-02) `/template` and `/project`: the declaration is a FILE, the
+  instance is a DIRECTORY.** A template is a text file — like a Dockerfile, it
+  inherits another template, binds packages and files into a namespace, runs
+  commands, attaches a network interface — and **the syntax is ours, not
+  Docker's**, because Docker's tokens encode a *mutation* model (`RUN` makes a
+  layer) and ours is declaration (`bind`); borrowing them would lie familiarly.
+  **Inheritance is free here**: binds compose, so "inherits another template"
+  is *apply the parent's binds first*, with no layer format, no union
+  filesystem, no storage driver — a whole Docker subsystem that exists only to
+  simulate what `bind` already does. Opening a template runs the template
+  manager, whose **New** instantiates it into a workspace named by the tag
+  line. The name **`/template`** was chosen over `/recipe` because the design's
+  own prose already said it five times — *"Templates instantiate, workspaces
+  open"* — and the filesystem must agree with the documentation; her earlier
+  objection to "recipe" (*"a user cloning ipnx is genuinely cloning a
+  project"*) dissolves once the instance is what carries the name "project".
+  **`New` on a template creates the project at `/home/project/<name>`**, and
+  **instantiating creates a PROCESS and a NAMESPACE**, not merely a directory —
+  so New on a template is `run` on a process spec, the same act as the
+  orchestration suite. The template persists as a file in the project's
+  namespace. **Promotion writes a file that RECREATES the namespace and
+  process** — a serialisation of the live state, which `/proc/N/ns` already
+  provides, and which Docker structurally cannot do (`docker commit` yields an
+  opaque layer, never a Dockerfile). **Not a directory move** *(and not a copy —
+  corrected later the same day, when Christine confirmed **project and template
+  are different objects**: a `project` declaration is specific to one workspace,
+  a `template` is generic, so promoting strips what is true of this project —
+  the name, the path, the remote — and keeps what is true of the kind: the
+  inherited base, the packages, the commands)*:
+  `/home/project/ipnx/template` → `/template/ipnx`, which is her recorded
+  principle — *"promotion promotes the declaration, not your files"* — and
+  which dissolves the dir-versus-file mismatch, because no directory was ever
+  in the operation. A project therefore always carries the declaration it came
+  from, so "what is this environment?" is `cat`, and changing it is editing
+  that file.
+
+- **(2026-09-02) `/home` is the user's home, and it is a BIND.** `/usr/<name>`
+  is V7's convention, kept by Plan 9 — both timesharing systems. This one is
+  not: *"exactly one per instance… you do not log into your own machine"*, so a
+  directory whose job is to hold many homes is machinery for a problem that
+  does not exist here. **`/home` means "mine", resolved by the namespace** — an
+  agent's `/home` is the agent's, a role's is the role's — so **no path ever
+  contains a username**, which is *"names are for accounting; namespaces are
+  for authority"* holding. It must be a **bind, not a symlink**: a symlink
+  stores its target, so `/home → /usr/kitty` would mean *kitty* for everyone
+  who walked it, and namespace-relative symlink resolution does not save it
+  because the target text is still fixed. `/usr/<name>` survives as the
+  **durable, addressable** name — `/usr/kitty`, `/usr/mimmy`, `/usr/daniel`,
+  readable subject to permission — because `/home` is relative by construction
+  and cannot name someone else's. `/usr` then holds **files belonging to identities, not logins**:
+  a mount of another person's system (per-attach identity already enforced), or
+  a resident role or agent. An agent's namespace need not contain `/usr` at
+  all — its world is `/home` plus what it was given.
+
+- **(2026-09-02) THE WINDOW SYSTEM LEAVES THE KERNEL ENTIRELY.** Hers: *"the
+  kernel should not be involved at all"*, and *"The kernel is completely out of
+  this."* **Saranos is the app the user launches**; it instantiates the kernel
+  and the emca host-side app. The kernel handles the IPNX side — processes and
+  namespaces — and one of the processes it launches is emca IPNX-side. The two
+  emca halves speak 9P to each other. What this removes from the kernel:
+  `Win.{parent,kids,axis,allocated,premax}`, `split`, `maximise`, `reparent`,
+  recursive close, the four window file kinds, the nine `wctl` verbs, and
+  `kernel/src/draw.rs` — 363 lines of raster engine. The constraint that forced
+  it is the founding rule the kernel had already broken: *"the kernel unable to
+  bloat by construction"*. **Plan 9 never did this either** — acme's own
+  `fsys.c` (in the tree, verbatim) is a userspace 9P server that mounts itself
+  at `/mnt/acme`, and rio serves its clients' device files the same way. The
+  kernel device was the deviation. NOTE the sentence someone will later use to
+  undo this: the kernel does carry the 9P transport across the host boundary,
+  because only it can reach the host — but **carrying is not participating**,
+  the way a pipe carries HTTP without understanding it.
+
+- **(2026-09-02) The devices are Saranos's, and emca VIRTUALISES them.** Hers:
+  *"Only saranos knows about the host… I am a macos app. I have a screen,
+  keyboard and mouse. I will serve these as virtual devices to the IPNX
+  kernel."* emca-host is a **Kit** inside the Saranos app. On the IPNX side
+  `/dev/cons`, `/dev/draw` and `/dev/canvas` exist either way: **without emca
+  they connect straight to the host's screen, keyboard and mouse** — which is
+  how IPNX runs as a CLI with no windows — and **with emca they are virtualised
+  per window**, indistinguishable to the client. That substitutability is the
+  load-bearing property, and it is rio's: a Plan 9 client cannot tell rio's
+  `/dev/draw` from the hardware's, which is exactly why rio nests. It also
+  gives *"IPNX implements no renderers"* its precise meaning at last —
+  renderers are in Saranos, and emca-host is the part of Saranos that
+  virtualises them.
+
+- **(2026-09-02) emca is the WINDOW MANAGER; a type manager is what is IN a
+  window.** Hers: *"emca is a window manager. it controls the placement of
+  windows on the screen. a type manager controls what is in a window… type
+  managers may communicate with window managers (over 9P of course)."* emca
+  owns every relationship between windows — the tree, allocation, fit, and each
+  child→parent instruction (*minimise me*). A type manager owns rendering,
+  editing, the status line, the toolbar's verbs, and the semantics of Find,
+  Edit and selection. **This retires "emca is a watcher, not a gatekeeper"**
+  and the *"a window still opens in its type's default pane"* degradation — both
+  were artefacts of the hardcoded-pane design M15 replaced. The real
+  degradation is better: no window manager, no windows, and the devices go
+  straight to the screen.
+
+- **(2026-09-02) TYPES ARE MIME TYPES. `text/plain` is the default; `/` is
+  `inode/system`.** Everything emca opens into a window is a file in the
+  namespace, and **emca infers the type from the file's contents** — not from a
+  suffix. Unknown content is `text/plain`, which is the Unix answer. Adopting
+  MIME is consistent with the founding rather than a departure: the refusal is
+  of POSIX-*the-standard* as an interface to implement, while *"sockets won"*
+  and *"UTF-8 won"* are the precedent for adopting a vocabulary that won.
+  `inode/directory` is shared-mime-info's own name, not an invention. **The
+  two-part form matters structurally** — the registry is a path, so
+  `/type/text/plain/` nests under `/type/text/`, and a future `text/x-csrc`
+  that declares nothing inherits `text/`'s manager with no algorithm and no
+  merge rule. `/` is **`inode/system`** — `inode/*` being freedesktop's space
+  for filesystem objects that are not content — its manager is **`ipnxmgr`**
+  *(superseded later the same day: managers are named by ROLE, so this is the
+  `manage` role on `inode/system`; `ipnxmgr` as a name is retired)*,
+  and its content is the layout: **ipnxmgr owns the responsive breakpoints and
+  which windows exist at boot; emca owns what rectangles they get.** `output`
+  **is not a type**: it is `text/plain` under a path convention. Two facts, and
+  only two, are hardcoded in emca: `/` is `inode/system`, and unrecognised
+  content is `text/plain`.
+
+- **(2026-09-02) emca NESTS, and nesting is another view of the system.** Hers:
+  *"acme… is an emca like program using /dev/draw running under emca"*, and
+  *"we could instantiate a new emca in a window - it will open '/', does a
+  layout in that window"*. **There is only one host emca**; it manages
+  recursive emcas as further windows. Because namespaces are per-process, a
+  nested emca opened after `rfork n` composes a **different world** — the
+  visual form of *"a process can be given a world."* Two tiers, and the ideal
+  is delivered by both rather than by engine nesting: **tier 1 — same kernel,
+  different namespace** — easy, and the work to do now; **tier 2 — a separate
+  kernel instance** shown in a window, requiring Saranos and emca-host to be
+  **multi-system**, deferred to the distributed-OS stretch, where *"Saranos may
+  need to switch between multiple local and remote systems, or even display
+  them side by side on a single emca interface."* Literal IPNX-inside-IPNX
+  would need a wasm engine reachable from a guest (there is none — measured);
+  the path if ever wanted is to delegate instantiation upward as a host
+  operation. It buys little, since both kernels are equally confined by the
+  same host already.
+
+- **(2026-09-02) Everything is SPEC'D, PROPOSED or a GAP — and the third state
+  was missing.** Hers: *"everything that we have not explicitly discussed and
+  endorsed should be a gap (or proposed if you have created a design). proposed
+  designs need to be reviewed."* And the response she wants to "implement the
+  demo": *"X is speced, Y is proposed and Z is gap. Would you like me to review
+  Y with you before implementing, and would you like me to propose Z, before we
+  implement."* The constraint that forced it: with only two states — specified,
+  or forbidden — both failure modes fired in one day. Types were built that she
+  never mentioned (`env`, `errors`, `srv`), *and* `implementation.md` acquired
+  the invented line **"Types: root, ls, edit, shell, output, and no others"**,
+  which closed a list she had left open and erased the `/pkg` and `/project` she
+  had named as *types we will need to design*. **Naming a type is not
+  specifying one**, and in emca a type becomes a toolbar button — so an
+  undesigned type ships as a control that does nothing. Recorded in CLAUDE.md's
+  Conventions; the middle state's home is [proposals.md](proposals.md).
+
+- **(2026-09-02) A type says what content IS; a manager says what to do with
+  it.** Hers: *"The default type is 'text' which you have been calling. But edit
+  is really the manager of text."* A type is a folder of text files — *"in full
+  alignment with Unix philosophy"* — but *"a window type is encapsulating things
+  that are not text, that's why we need a manager, which understands how to
+  render/edit the type, knows what to do with the status line, supplies toolbar
+  buttons, etc."* The reasoning that forced it: **"everything is text" is a
+  fiction and Unix never held it** — *"Unix commands are binary executables.
+  /dev/kmem is binary. /etc/passwd is a text file, but it is a structured text
+  file."* What Unix aims at is narrower and true: the system is configurable
+  through text files, and commands are oriented towards processing them. **IPNX
+  holds to that; Saranos need not** — *"it understands we live in a modern world
+  of user interfaces, rich media"* — which is why they are separate layers. A
+  **manager interface** is therefore a requirement, not merely managers:
+  *"Acme was deliberately a minimalist design - every window exposes a file. We
+  have already broken this minimalism."* Managers live on either side —
+  *"monaco is a manager over a file"* — which is all that "editing is the
+  surface's" and "IPNX implements no renderers" ever meant. The design is
+  [type.md](type.md); the interface itself is a **gap**.
+
+- **(2026-09-02) The documentation is refactored by document KIND.** Hers, on
+  finding emca.md conflating four kinds at once: *"You are conflating a
+  description of saranos and components, which should live in a separate file…
+  next you are describing a spec as a transcript of what we discussed rather
+  than as a spec document. Next you are evaluating what has been built vs what
+  was designed. That does not belong in a spec document."* And: *"There are
+  issues throughout. You need to completely refactor everything."* The
+  separation was already agreed in CLAUDE.md's table and was simply not being
+  kept. Applied: **[saranos.md](saranos.md)** is new and is the single home of
+  the layer names (moved out of architecture.md, its duplicate removed from
+  emca.md); decision records and the superseded canvas protocol moved here;
+  build status and "what remains" moved to
+  [implementation.md](implementation.md); the packages/projects design moved to
+  [proposals.md](proposals.md) as the unreviewed proposal it is; acme.md's stale
+  session brief moved to [design-thinking.md](design-thinking.md); and the
+  `PART ONE…PART TEN` banners — plain-text convention that survived the
+  Markdown conversion — became a heading hierarchy. **Specs are present tense
+  and carry neither chronology nor build status.**
 
 - **(2026-08-31) emca is the user interface, and IPNX is a whole operating
   system.** The largest reframe since the re-founding, and it reorders much of
@@ -389,7 +1476,7 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   boots into emca. Emca is the user interface."* And on what that makes the
   project: *"It's not just a barebones UNIX reimagined, it is a full operating
   system with our own semantics, user interface, artifacts."* The full design is
-  [emca.txt](emca.txt); the parts list it derives from is [acme.txt](acme.txt).
+  [emca.md](emca.md); the parts list it derives from is [acme.md](acme.md).
   **The mechanism, and why it is an IPNX design rather than a portable one**:
   *"Traditional Unix and Linux manages different types differently, using
   separate commands. ps list processes, there are separate commands to manage
@@ -414,7 +1501,10 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   verbs are IPNX's. **A window type is a triple** — namespace, *optional*
   command, window configuration — and the command being optional dissolves the
   types-vs-programs fork: no command means emca renders the tree, a command
-  means the program drives the window through `/mnt/emca` (acme's client model,
+  means the program drives the window through `/mnt/emca` *(the path became
+  `/dev/window` on 2026-09-02, when the window system left the kernel and
+  `/dev` was recognised as the virtualisable slot; the client model stands)*
+  (acme's client model,
   unchanged), so `/proc` can start as a one-line type and grow a live `ps`
   without the type system changing. `/type` is itself a type, so the interface
   is configured by editing files *in* the interface — no plugin API, no manifest,
@@ -448,7 +1538,7 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   route, with reasons kept so the search is not redone: `recipe` (6), `rec`
   (opaque), `menu` (32 uses in the UI sense in these documents, and the design's
   founding quote is *"Acme doesn't need menus"*), `kit`/`app` (overloaded),
-  `spec` (geeky). **The protocol amendment**: acme.txt's constraint 2 expected
+  `spec` (geeky). **The protocol amendment**: acme.md's constraint 2 expected
   "little or no protocol change" and this exceeds it — four additions to
   `/dev/canvas` and no more (structure roles, window type, verb applicability,
   show request), recorded as deliberate. Canvas v0 anticipated the direction
@@ -481,7 +1571,7 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
 
   | | |
   |---|---|
-  | **Saranos** | **the user experience** — emca the shell ([emca.txt](emca.txt)), the window types, the presenters, the surfaces' furniture |
+  | **Saranos** | **the user experience** — emca the shell ([emca.md](emca.md)), the window types, the presenters, the surfaces' furniture |
   | **IPNX** | **the kernel AND the userspace** — the file world (Darwin's slot, not XNU's) |
   | wasm, and the surfaces | the machine it runs on |
 
@@ -547,13 +1637,13 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   **Scope of the rename, and its limit**: dated entries in this log and in the
   other records are HISTORY and keep the words they were written with — a log is
   not retroactively renamed. Only present-tense statements of what the system
-  *is* take the new layering ([CLAUDE.md](../CLAUDE.md), [emca.txt](emca.txt),
+  *is* take the new layering ([CLAUDE.md](../CLAUDE.md), [emca.md](emca.md),
   [platforms.md](platforms.md), and architecture.md when the contracts land).
   README.md is Christine's and is not touched.
 
 - **(2026-08-31) Editing is the surface's: emca implements sam, not a WYSIWYG
   editor.** The two-halves split taken to its conclusion — and the first draft
-  of [emca.txt](emca.txt) had the rule and stopped short of it. Christine:
+  of [emca.md](emca.md) had the rule and stopped short of it. Christine:
   *"emca doesn't really need to implement a WYSIWYG editor on the IPNX side. It
   can implement sam, a batch editor. The job of emca is to push a file into a
   window via /dev/canvas. The host side can display and scroll the file, and
@@ -759,7 +1849,11 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   root's**, which dissolves the choice that was put as either/or: the **device**
   mints (mechanism), **emca watches and places** the window by writing its `ctl`
   (policy), the **host watches and renders** where emca placed it. emca is a
-  **watcher, not a gatekeeper** — programs mint directly so emca has no privilege,
+  **watcher, not a gatekeeper** *(RETIRED 2026-09-02: emca is the WINDOW
+  MANAGER — without it there are no windows, which is ordinary and is how X
+  behaves with no WM running. The phrase and its "default pane" degradation
+  were artefacts of the hardcoded-pane design M15 replaced)* — programs mint
+  directly so emca has no privilege,
   and emca is not bypassed so it keeps the workspace it owns. Policy in a
   userspace program watching a device is the Plan 9 move, the same shape as
   `/rc/tile` being a window manager in a dozen lines of rc. **Both offered
@@ -768,7 +1862,10 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   owns); *programs ask emca, emca tells the host* makes emca a required
   intermediary and contradicts the premise — it is what acme did through
   `/mnt/acme/new`, and worked only because acme **was** the file server, where here
-  the device is. **The property that decided it**: with emca not running the window
+  the device is. **The property that decided it** *(both the pane model and this
+  property were RETIRED 2026-09-02: panes are gone, and the real degradation is
+  that with no window manager there are no windows, the devices going straight
+  to the host's screen)*: with emca not running the window
   still exists and still renders, in its type's default pane, because the type is
   in the path — so `pkg --emca` works with no shell at all. Neither alternative had
   that. **One race, named**: mint → host renders → emca places, so a window sits
@@ -1099,6 +2196,10 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   through and protect nothing.
 
 - **(2026-09-01) TABS ARE THE DEFAULT, AND /output MIRRORS THE FILESYSTEM.**
+  *(The second half was SUPERSEDED on 2026-09-02: a command line contains `/`
+  and cannot be a filename, so `/output/<n>/` took `/proc`'s shape — a number,
+  with `cmd`, `dir`, `0`, `1`, `2`, `status` and `log` as files inside. Tabs
+  stand.)*
   Two late corrections, both hers, and both removing something rather than
   adding it.
   **Rows and columns are only ever created by a user.** The draft rule was mine
@@ -1122,7 +2223,10 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   REAL. Two candidates failed in opposite directions: acme's `<dir>/+Errors` gets
   the context right but lies about what is there, and a file in `/tmp` is truthful
   but gives the wrong context (the title determines the directory, so Run would
-  re-run in /tmp) and dangles. Hers, resolving it: *"/output/usr/kitty/ipnx/mk
+  re-run in /tmp) and dangles. Hers, resolving it *(the mirror form here was
+  superseded 2026-09-02 by `/output/<n>/`; what survives is that output is a
+  filesystem served by emca and that WHERE it ran must be recorded)*:
+  *"/output/home/project/ipnx/mk
   all" so we know which directory mk was run in.* The mirror pays twice — it
   resolves the collision of one command run in two projects, and it REMOVES an
   exception rather than accommodating one: with the directory in the path, context
@@ -1174,9 +2278,9 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
 - **(2026-09-01) acme and emca are two documents about two things.** Hers:
   *"acme is Bell Labs program. We are going to update it to fit emca, but not
   change functionality. emca is effectively our new windowing system and UI.
-  Don't confuse between the two."* So `docs/acme.txt` stops being "the anatomy
+  Don't confuse between the two."* So `docs/acme.md` stops being "the anatomy
   emca derives from" and becomes **the port spec**: how acme is modified to fit
-  into emca, functionality preserved. `docs/emca.txt` is the windowing system —
+  into emca, functionality preserved. `docs/emca.md` is the windowing system —
   what a window is, how the compositor works, window types. The anatomy was
   input, not parentage, and describing emca as "derived from acme" invited
   exactly the confusion that had me editing acme's own record to justify emca's
@@ -1190,7 +2294,7 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   furniture would reach its columns.
 
 - **(2026-08-31) The open questions, resolved in one pass — and what it revealed
-  about them.** Eleven items stood open across [emca.txt](emca.txt) and
+  about them.** Eleven items stood open across [emca.md](emca.md) and
   [window.md](window.md); worked through together on Christine's instruction,
   they resolved almost entirely by reasoning from decisions already taken, which
   is itself the finding: **most of them were consequences waiting to be noticed
@@ -1511,7 +2615,7 @@ Taking `rfork(RFMEM)` plus a per-binary asyncify flag keeps the cost where it be
   problems: parity first; the touchscreen/HIG redesign is PARKED for a
   full design-thinking session (mouse chords and discoverability
   belong there; nothing of it ships in this pass — the brief is
-  docs/acme.txt). Method, per the
+  docs/acme.md). Method, per the
   house rule that measurement beats memory: her plan9port acme was
   launched beside the demo, driven through its own /mnt/acme file
   interface (dirty, selection, tag states staged with 9p), and
@@ -2558,6 +3662,286 @@ Evidence for each is in RESEARCH.md at the cited section.
 - **`/dev/tty`: there is none.** The console is `/dev/cons`; the V10 personality's libc
   aliases the name. The fd-3 accident stays history.
 
+## emca's decisions and resolved questions (2026-08-31)
+
+Moved here from emca.md 2026-09-02: the spec states what emca *is*, and the
+record of what was decided and which questions closed belongs with the other
+decisions. **Dated entries keep the words they were written with.**
+
+### What was decided
+
+```
+1.  emca is the IPNX user interface — what the system boots into,
+    on every surface. Not an editor; an editor is one window type.
+2.  Two halves: IPNX owns state, meaning, policy; the surface owns
+    rendering and input. Differs by device -> surface; differs by
+    workspace -> IPNX.
+3.  Four protocol additions and no more: structure roles, window
+    type, verb applicability, show request.
+4.  Everything is managed as a file; there are no manager programs,
+    only filesystems, types and a surface.
+5.  A window type is a triple: namespace, optional command, window
+    configuration. The command being optional dissolves the types-
+    vs-programs fork.
+6.  Core verbs are emca's; extra verbs are the type's. They live on
+    the window's toolbar, and the tag line supplies their argument.
+7.  Text is the default; a type that renders non-text owes a
+    reason.
+8.  /type is itself a type: the UI is configured by editing files
+    in the UI. One built-in type, dir, is the bootstrap floor.
+9.  Root names are <= 4 characters; /project is the one exception,
+    with its reason recorded.
+10. /pkg and /project are different types: ingredients and dishes.
+    Packages are leaves, projects combine them.
+11. A project is a proto-process; /project and /proc are the same
+    information at two times.
+12. Templates instantiate; workspaces open. Promotion promotes the
+    declaration, not your files.
+13. Clone and instantiate are separate acts, and instantiate shows
+    the declaration first.
+14. /pkg dependencies are declared; language dependencies are
+    content.
+15. Breakpoints in characters, not pixels — 72 columns a leaf, 10
+    lines a body. Nothing disappears as the viewport grows.
+16. One structure, two knobs: a concertina row, a rail entry and a
+    minimised window are the same object. No tabs at any size.
+17. The window in four parts, backed by ONE tag string, so the 9P
+    interface and the suite are untouched.
+18. The toolbar is closed and type-derived; the tag bar is open and
+    the user's. This fixes acme's conflation of methods with
+    subprocesses.
+19. Operand determines surface, and each surface sits where its
+    operand is.
+20. ONE OBJECT: a window is a rectangle with a tag, containing
+    either a body or child windows. Acme's own dat.h says a column
+    is a window; depth three was its implementation, not its
+    concept. (2026-09-01)
+20a. ALLOCATION IS THE LAYOUT MODEL: a parent gives rectangles to
+    some of its children along an axis, and those it does not
+    allocate to appear as TABS. So a tabbed window is a maximised
+    one, "tabs show only when there is more than one" falls out
+    rather than being enforced, and stack disappears as a third
+    composition beside row and column. (2026-09-01)
+21. EVERY WINDOW IS A COMPOSITOR and runs it on itself. The root
+    window IS the screen. Named regions — pane, rail, leaf — do not
+    exist. (2026-09-01)
+22. THE TAG LINE IS AN OPERAND, not a command line: its text is the
+    argument to its own buttons — Run, Add, Open, Find. That is
+    the 2-1 chord decomposed, and it retires the pin. It does NOT
+    retire the selection's verbs: composing text and pointing at
+    text are different operands. AN EMPTY TAG LINE MEANS "USE THE
+    SELECTION", which reaches all six from permanently visible
+    buttons, so a menu at the selection is an optional surface
+    shortcut and not a required fifth surface. (2026-09-01)
+22a. FOUR SURFACES, ONE OPERAND EACH: the window in its layout ->
+    the title bar row; the window's content -> the toolbar; the tag
+    line's text -> its own buttons; a selection in the body -> the
+    floating bar. And EMCA USES THE ERA'S NAMES — Copy, Save,
+    Revert, Open — while acme's port keeps Snarf, Put, Get and
+    Zerox, because renaming acme's buttons would be changing acme.
+    (2026-09-01)
+23. Every window has its own status bar, carrying that window's
+    state. The root window's is the workspace's.
+24. The surface owns text input natively; the hand-rolled caret is
+    deleted; autocorrect off.
+25. Type buys back the single tap for structured output.
+26. N windows may view one buffer; Zerox aliases.
+27. Window controls INFORM THE PARENT — close, minimise, maximise.
+    A child never resizes or removes itself, which is what makes
+    the recursion work. MINIMISE AND MAXIMISE ARE ONE OPERATION:
+    minimise(me) moves me out of the allocation, maximise(me) moves
+    everyone else out, and each is undone by moving back. Both cost
+    one strip however many windows are in it — which the discarded
+    "maximise minimises every sibling" did not, since that cost a
+    title bar per sibling and so freed little room. A TAB IS A WHOLE
+    WINDOW the parent has not given a rectangle to, never a reduced
+    one. (2026-09-01)
+28. The system boots into emca; the default workspace is a
+    namespace file; the hosts become surfaces; rio-today retires.
+29. EDITING IS THE SURFACE'S. emca implements sam (batch,
+    structural), not a WYSIWYG editor; the host displays, scrolls
+    and EDITS with Monaco, TextKit or the platform's own. Selection,
+    clipboard, command history, line editing and terminal emulation
+    are all host-side; /dev/snarf is the sync point.
+30. emca is a file server with a workspace, not an editor.
+31. xterm.js returns as the RAW-INPUT door beside the console's line
+    door — the "AND, not XOR" given its architectural reason.
+32a. THE UNIT IS DEVICE-INDEPENDENT PIXELS, plus a reported text
+    cell. Characters stay the leaf measure (72 x cellWidth) so
+    accessibility sizing still moves the breakpoints, but they
+    cannot be the unit: acme could measure in characters because
+    everything was text, and emca holds images, video and
+    PostScript, which have aspect ratios. Display PostScript and
+    Quartz are the precedent. (2026-09-01)
+32. FOUR SEMANTICS, ONE PROTOCOL. Content is 9P directly and the
+    host renders it natively — IPNX implements no renderers.
+    /dev/window/<type>/<n> is the bidirectional control interface,
+    with the TYPE IN THE PATH. /type is the registry both sides
+    read. /dev/canvas narrows to genuine drawing, the exception.
+33. Controls name a side: ipnx:Put round-trips, host:toggle-wrap
+    never does. The two-halves split, enforced in the vocabulary.
+34. Put is the host streaming the edited file back over 9P.
+35. emca HOLDS THE AUTHORITATIVE BUFFER; the host mirrors it, with
+    optimistic local echo. Forced by four things, only one of which
+    is undo: the headless suite, sam, Put and the filters, and the
+    body file for client programs. Each edit carries a sequence
+    number, each sync a hash; mismatch triggers resync. con(1)'s
+    "apps never re-read" becomes "never re-read ROUTINELY".
+36. ONE UNDO STACK, IN EMCA. The host's undo is disabled and Cmd-Z
+    round-trips — emca is not remote, so every argument for a local
+    optimistic stack is a latency argument that does not apply here.
+    Acme's infinite undo survives exactly.
+37. /mnt/acme RETIRES, merged into /dev/window — one window
+    vocabulary, and /dev/window must therefore be usable by ordinary
+    programs, not only by emca and the host.
+38. VERSIONING IS POLICY OVER #V: optional, off by default,
+    per-namespace, triggered on Put for authored files and on a
+    clock for things that change without human intention. Nothing
+    may be built on it, because it can be off — which is what
+    protects 36.
+39. /dev/window BELONGS TO EVERY PROGRAM — emca has no privilege,
+    only a job. One binary serves both worlds: `pkg` lists to
+    stdout, `pkg --emca` mints a window and lists them there.
+40. NO /dev/emca. *(SUPERSEDED 2026-09-02 on both its premises: there
+    is no device — the window system left the kernel entirely — and
+    "emca is a watcher, not a gatekeeper" was retired when emca became
+    the window manager. `/dev/emca/<n>/` now names the WINDOW SET that
+    emca serves, which is a different object from the control channel
+    rejected here. WHAT SURVIVES is the mechanism below: 9P has no
+    change notification, so a root `events` whose reads PARK is still
+    how anyone learns a window appeared.)*
+    The device already mints; the difficulty is that
+    9P has no change notification. So /dev/window grows a root
+    `clone` and a root `events` whose reads PARK — and BOTH the
+    host and emca read it. The device mints (mechanism), emca
+    watches and places (policy), the host watches and renders.
+    emca is a watcher, not a gatekeeper.
+41. It degrades correctly: with emca not running the window still
+    exists and still renders, in its type's default pane, because
+    the type is in the path. *(RETIRED 2026-09-02 with item 40: panes
+    are gone, and the real degradation is better — no window manager
+    means no windows, with the devices going straight to the host's
+    screen and keyboard. IPNX as a CLI is a mode that must keep
+    working, and that is what "degrades correctly" now means.)*
+```
+
+### The open questions, resolved (2026-08-31)
+
+Worked through in one pass. Most resolved by reasoning from decisions
+already taken; two were stale (answered by later decisions and never
+struck out); one resolved by ADOPTING an existing protocol rather than
+designing one; one DISSOLVED by the canvas redesign. What genuinely
+remains is listed at the end and is small.
+
+SNAPSHOT VS REPLAY — RESOLVED: snapshot, and it is free.
+```
+A project's writable layer IS a tree, so keeping it is the snapshot;
+nothing is captured because nothing was ever anywhere else. Replay
+is the optional extra: the declaration records provenance (which
+/pkg entries, which language installs) so a workspace can be audited
+and rebuilt from scratch when someone wants that. Docker's answer by
+default, Nix's available, neither implemented as machinery.
+```
+
+THE PLUMBER — RESOLVED BY ADOPTION, not design.
+```
+Adopt Plan 9's plumb(6) rules syntax and message format verbatim;
+own the model. The house move exactly — the same "adopt the
+notation, own the model" that took SVG path data for canvas — and it
+answers the standing instruction to maximise reuse of existing
+protocols. Look's dispatch IS a plumb rule evaluating; nothing new
+is invented, and the plumber finally has a face: the FLOATING BAR
+shows which of open/go-to/search/plumb the rules chose, instead of
+look deciding silently.
+```
+
+THE SURFACE'S OWN SUITE — RESOLVED: the surface publishes what it
+```
+rendered, and the suite asserts over that.
+Each window grows a `ui` file listing the controls the surface
+actually produced — label, role, keyboard path, enabled state. On a
+real surface it is DERIVED FROM THE PLATFORM ACCESSIBILITY TREE (the
+a11y tree is precisely the "can this be reached" answer, on the web
+and on Apple alike); on the virtual surface it is synthesised. So
+ONE test asserts "every floating-bar verb and every toolbar button
+is present, named, and keyboard-reachable" and it runs on every
+surface including headless.
+This also turns an assertion into a measurement: the input
+convention claims accessibility is "enforced BY CONSTRUCTION", and
+until now nothing checked it. Now the suite does.
+```
+
+CROSS-WINDOW AT SMALL — RESOLVED as a stated degradation.
+```
+Cross-window OPERATION works at every size: the tag line carries the
+argument, and it survives navigation because it is the window's own
+text (2026-09-01: this was the pin's job before the tag line
+subsumed it). Cross-window VIEWING does not and cannot at one
+visible body — no design can show two bodies on one small screen.
+So it is named rather than solved: at small, emca is a reduced emca,
+and the reduction is exactly one thing.
+```
+
+UNNAMED INSTANCE STORAGE — RESOLVED: it is a rename, not a copy.
+```
+An instantiated template gets its writable layer at birth, under
+/usr/$user/.inst/<id>. "Save as workspace" RENAMES that tree into
+/usr/$user/<name>. Nothing migrates, nothing is copied, and there is
+no window during which work is somewhere it might be lost.
+```
+
+THE FLOATING BAR'S CONTENTS — RESOLVED in the part that is derivable.
+```
+The SET is closed and comes from acme's layer 3, not from taste:
+cut, copy, paste, execute, look (open/jump/search/plumb), pin, Edit.
+What is not derivable is ORDER and GROUPING, which is genuinely
+empirical and stays a measurement task rather than a design
+question. The set can ship; the arrangement is tuned against use.
+```
+
+HOW A TYPE DECLARES A VIEW MODE — DISSOLVED by the canvas redesign.
+```
+It does not. The host opens the file over 9P and RENDERS IT
+NATIVELY according to what it is; a type declares a namespace, an
+optional command, and chrome — and nothing whatever about
+rendering. So there is no vocabulary for a type to grow into, and
+the widget-toolkit tripwire has nothing to trip. The redesign
+removed the risk rather than bounding it.
+```
+
+WHO OWNS UNDO — STALE. Answered by decision 36: one stack, in emca,
+```
+the host's undo disabled, Cmd-Z round-trips because emca is not
+remote. *(SUPERSEDED 2026-09-02: undo is content state, and emca
+became the WINDOW manager while a TYPE manager owns what is in a
+window — so the stack belongs to the text manager, not to emca.)*
+```
+
+BUFFER FIDELITY — STALE. Answered by decision 35: sequence number per
+```
+edit, hash per sync, resync as a repair path, and "apps never
+re-read" relaxed to "never re-read ROUTINELY".
+```
+
+PROPERTY 1 UNDER MONACO — RESOLVED by reframing: it is a SELECTION
+```
+CRITERION, not a risk.
+The design does not depend on Monaco; it depends on the editor
+component exposing the selection and accepting custom commands in
+its context menu. Monaco does (addAction, getSelection), CodeMirror
+does, TextKit does. A component that does not is DISQUALIFIED — so
+the question is how a component is chosen, not whether the approach
+works. The spike still runs, to verify the chosen one; it no longer
+gates the design.
+```
+
+SURFACE DEPENDENCY DIVERGENCE — NOT OPEN. Accepted and named by the
+```
+input convention (2026-08-30): divergence between surfaces is
+expected, and Monaco on the web against TextKit on Apple is that
+convention working, not a problem to solve.
+```
+
 ## Open questions
 
 - ~~The uid model~~ — **decided and running**: [docs/identity.md](identity.md). Per-process
@@ -2640,3 +4024,4 @@ and the decision log.
 - Measurements against Research Unix V10 come from the parent repository
   ([ipnx](https://github.com/ChristineTham/ipnx)): `usr/src/sys/os/{sysent.c,mount.c}`,
   `usr/src/sys/{io,vm,md,ml,fs}/`, `usr/src/cmd/sh/xec.c`, `usr/src/libc/sys/open.s`
+

@@ -16,3 +16,18 @@ demo/registry/cache/
 hosts/oci/ctx/
 hosts/macos/build/
 demo/index.html
+
+# Plan 9 source, kept LOCAL for reference and provenance — never built, never
+# edited, never committed. The same role ../ipnx plays for V10: a claim about
+# Plan 9 must trace to file and line, and it cannot if the source is not here
+# to cite.
+#
+#   plan9/        the 9legacy tree — 4th edition with the maintained patches
+#                 applied, which is what a claim should be checked against
+#   plan9-stock/  the raw final Labs release, kept so a difference can be
+#                 attributed: 778 files under sys/src differ between them
+#
+#   git clone --depth 1 https://github.com/0intro/9legacy plan9
+#   git clone --depth 1 https://github.com/plan9foundation/plan9 plan9-stock
+plan9/
+plan9-stock/

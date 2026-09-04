@@ -1,5 +1,20 @@
 # Identity — the who
 
+> **UNDER REVISION (2026-09-03).** This document argues that a hosted kernel
+> should carry an effective/real uid pair because *"a hosted kernel inverts the
+> trust geometry"*. **Plan 9's kernel has one identity field — `char *user` —
+> and no euid, ruid or setuid anywhere**; `DMSETUID` is 9P2000.u, a Unix
+> extension. The argument was made when *hosted* was the only target; **on a
+> hypervisor or a Raspberry Pi there is nothing to invert toward, and the
+> mechanism would remain without its justification.** The model below is
+> coherent and may well be right *as a personality* — the question reopened is
+> whether any of it belongs in the kernel. See [design.md](design.md)
+> 2026-09-03 and [implementation.md](implementation.md) P1.
+
+**Role: a *what* — the identity model.** What a user *is* inside the
+system: person, role, agent, network identity, and the uid model that
+implements them. Who the system is *for* is [personas.md](personas.md).
+
 *Role: the **who** — what a "user" is in this system (person, role, agent,
 network person), the kernel's credential mechanism, `su`, and where the profile
 sits. The mechanism was decided 2026-08-26; the identity architecture
@@ -208,3 +223,44 @@ question no longer gates it).
   changes within membership arrive with D2.
 - **D4 — closed.** A created file takes the creator's effective uid and gid
   (`os/iget.c:314`), not the directory's — matching what ramfs already does.
+
+## `su`, concretely (2026-09-02)
+
+Once `/home` binds to `/usr/<me>` as a whole tree, `su` stops needing machinery:
+
+```
+su mimmy  =  a fresh namespace
+             bind /usr/mimmy /home
+             apply /home/profile        ← now mimmy's
+             set the credentials
+```
+
+The third step reassembles every union root — `/bin`, `/lib`, `/type`,
+`/template`, `/pkg`, `/profile`, `/credentials` — because **the profile is the
+list of binds**, so `su` names none of them. It is not a mechanism; it is
+*assemble someone else's namespace*.
+
+**A bind resolves a channel, not a path**, so rebinding `/home` alone does not
+retarget `/bin`'s union element — the profile must be re-applied. That failure
+would pass a test that checked `/home` and fail in use.
+
+**Downward is free** (`su none`); becoming another person needs the eve/ruid
+check, since their credentials were never yours to bind.
+
+### Bare `su`, and `sudo`
+
+**`su` with no argument binds no personal half at all**, so every union root
+falls back to the system's — including its **create element**. That is the whole
+of what root was:
+
+```
+su ; pkg install ruby      installs into the SYSTEM /pkg — every user inherits
+sudo mk install            the same, for one command instead of a shell
+```
+
+**The power is which union element your writes land in**, not a bit in the
+process. So `mk install` needs no change and no `--user` flag; **no privileged
+program exists** — no setuid binary to be perfect, and a bug in `mk` cannot
+escalate because `mk` has nothing to escalate; and the power is **legible**,
+since `cat /proc/N/ns` answers *what can this process change?* Authorisation is
+the eve/ruid check, once, at composition.

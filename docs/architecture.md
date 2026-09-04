@@ -1,6 +1,7 @@
 # The architecture — invariants and contracts
 
-**Role: what the system *is*, present tense.** The *why* behind every shape here
+**Role: the *what*.** What the system is, present tense — invariants and
+contracts. The *why* behind every shape here
 is argued in [design.md](design.md); the *evidence* lives in
 [RESEARCH.md](../RESEARCH.md); the *sequence* is [implementation.md](implementation.md);
 the *practice* is [handbook.md](handbook.md); the *deployments and namespace map*
@@ -10,32 +11,12 @@ chronology — if a sentence would start with "because," it belongs elsewhere an
 appears here as a link. It changes only when a contract changes, in the same
 commit as the change.
 
-## The three layers, and what each is called
+## The three layers
 
-**Saranos is the operating system** — the whole thing, and what someone would
-say they are running. **IPNX is the kernel and the userspace** — the wasm side.
-**emca is the windowing and UI system**, and it spans both sides by
-construction: `emca` the program is a guest, the surface that renders its tree
-is the host's.
-
-| Apple | here | |
-|---|---|---|
-| macOS | **Saranos** | the operating system: **host and wasm together** |
-| Darwin | **IPNX** | the kernel and the userspace — the wasm side |
-| Aqua | **emca** | the windowing and UI system — a half on each side |
-
-**SARANOS IS A SYMBIOSIS, AND THAT IS WHY IT NEEDS ITS OWN NAME.** It
-encompasses the host side — the Rust host under wasmtime, the browser runtime,
-the surface — *and* the wasm side. Neither exists without the other: the kernel
-is wasm and cannot run without a host to give it workers, memory and a screen;
-the host has nothing to do without the kernel. IPNX names only the wasm half,
-which is exactly why a second name was needed rather than a qualifier.
-
-Saranos is Sanskrit *śaraṇa*, refuge. Note the symmetry that forced the
-layering: XNU is "X is Not Unix" and IPNX is "IP is Not UNIX" — the same joke,
-so the layer above wanted a human name rather than a second acronym, exactly as
-Darwin did. **Dated entries in the records keep the words they were written
-with**; only present-tense statements of what the system *is* carry these names.
+**Saranos** is the operating system, **IPNX** the kernel and userspace,
+**emca** the windowing and UI system. What each name covers, why Saranos needs
+a name of its own, and where the boundaries fall is [saranos.md](saranos.md).
+This document is the contract map for the technical system underneath.
 
 ## The system, in one paragraph
 
@@ -96,6 +77,25 @@ ABI. The conformance suite binds all three.
         ([canvas.md](canvas.md))) a namespace can `bind` over `/dev` |
   | `d` | `/fd` — dup by open |
   | `s` | `/srv` — a posted fd's channel, kept alive by name |
+
+**THE DEVICE LETTERS ARE PLAN 9'S, AND `#Z` IS THE ONE EXCEPTION.** A device
+exists in this kernel only if Plan 9 has it, means the same thing by it, and
+uses the same letter (`plan9/sys/src/9/port/dev*.c`; the audit is
+[RESEARCH §9.13](../RESEARCH.md)). **`#Z` — host files — has no Plan 9
+equivalent, and it is kept deliberately.**
+
+Its justification is **Inferno's `emu`**, which is where this project's hosting
+architecture comes from. A Plan 9 kernel reaches a disk through `#S`; a hosted
+kernel has no disk, and the storage it does have belongs to the process it runs
+inside. `#Z` is that boundary made a device, so it is reached the way every
+other resource is — by walking a name — rather than by a special call. The
+kernel speaks root-relative paths; **the host owns the real root and the
+canonicalise-under-root check**, which is why the security property lives on
+the side that can enforce it.
+
+Nothing else in the table may be invented on this reasoning. The exception is
+the *machine* being different, not the system being different, and that is a
+single boundary rather than a licence.
   | `H` | webfs — `#H/<hex-of-url>` reads an http(s) body (native + demo hosts) |
   | `Z` | hostfs — a host directory as files, canonicalise-prefix guarded (native) |
   | `V` | the versioning layer — `#V/ctl` takes `snap [name]` / `del name`;
@@ -115,9 +115,55 @@ action names the side that performs it: `ipnx:` round-trips, `host:` never
 leaves the surface), `tag`, `verbs` (which of the closed RANGE verb set applies to the live
 selection — emca's answer to a `select` event), `ui`, `events` (the surface's
 voice), and `wctl`
-(rio's file, grown a `pane <name>` verb; its reads are unchanged, because real
-Plan 9 programs parse them). The plain `#w/<n>` path still resolves — the type
+(rio's file — `rect`, `move`, `resize`, `mouse`, `delete`; its reads are
+unchanged, because real Plan 9 programs parse them, and the eight tree verbs
+left with the tree). The plain `#w/<n>` path still resolves — the type
 segment was added additively.
+
+**emca serves its own windows as files (landed 2026-09-03 as the legacy a1 step, refactored under P4 step 1).** The
+manager interface is a file interface ([window.md](window.md)), and emca now
+implements it: a 9P2000 server over a pipe posted with srv(3), two levels deep
+— the window set, then one directory per window holding `rect`, `size`,
+`verbs`, `status`, `dirty`, `type`, `role`, `title`, `events` and `ctl`. Every
+answer comes from **emca's own state**: the rectangle it decided, the title it
+owns, the verb list it already computed for the window's toolbar.
+
+Both interfaces answer today, deliberately — `#w` above and emca's server here
+— and **the suite asserts they agree on a window's rectangle**. That equality is
+what makes the tree's move (the legacy a2 step, now P4 step 1) a deletion rather than a rewrite.
+
+**Two doors, and only one of them is the interface.** A manager reaches its
+window at `/dev/window/` in **its own namespace**, which emca mounts for it —
+no name, no window id, nothing global. That is rio's shape and it is what
+[window.md](window.md) specifies. The **posted** name is the external door
+only — a window tool, a debugger, the suite — and it is
+**`/srv/emca.<user>.<pid>`**, removed on exit.
+
+> **It must be qualified because `#s` is GLOBAL**: `srv_posts` is one map for
+> the whole kernel, while every other name a process sees is namespace-local.
+> emca nests, so a fixed name is a collision by construction. The `<user>.<pid>`
+> form is Plan 9's own — the real acme posts `/srv/acme.%s.%d`. **Nothing
+> discovers emca by a fixed name; the suite lists `/srv` and matches.**
+
+**The TREE IS EMCA'S, and the kernel has none (the legacy a2 step, 2026-09-03; now P4 step 1).** Which window is whose child, in
+what order, on what axis, allocated or tabbed — all of it is decided in emca
+and stored there. The kernel supplies **identity** only: `#w/<type>/clone`
+mints a window and returns its number, which is the raster half and moves to
+the host after the demo (the raster is not on its path). **Tree verbs — `newcol`, `newrow`, `newtab`, `minimise`,
+`maximise`, `reparent` — arrive on a window's `events`, which is emca's door**;
+written to the kernel's `wctl` they would be the surface talking past the
+window manager, and emca would not learn. emca serves the tree at
+**`/dev/emca/<n>/`** — `parent`, `axis`, `alloc`, `winid` and `kids/<i>/`,
+positional because order IS the layout and `ls` sorts. Walking into `kids/<i>/`
+reaches that child's own directory. **A manager's `/dev/window/` shows none of
+it**: a manager has no business seeing the arrangement it sits in. With no emca
+running there is no tree, which is correct — no window manager, no arrangement
+— and a window still opens bare in its type's default pane.
+
+Not yet served, and owned by P4: `body`; **a blocking read on `rect`, which
+is what makes a read *be* resize**; `/dev/window/` bound per manager so no
+window id appears in a manager's namespace; and `ctl`'s minimise and maximise.
+
 
 Three invariants hold across it. **The type is in the path**, and it is
 validated, not decoration. **Content is an event, not a sample**: a window is

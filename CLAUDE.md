@@ -36,7 +36,7 @@ its files accept, and a surface rendering those verbs natively. Adding a manager
 the system is adding a file. A rich system UI normally destroys acme's central
 property (any text can be a verb's operand) because a process table becomes a widget;
 here it cannot, **because the managers are already text filesystems**. The design is
-[docs/emca.txt](docs/emca.txt); the acme anatomy in [docs/acme.txt](docs/acme.txt)
+[docs/emca.md](docs/emca.md); the acme anatomy in [docs/acme.md](docs/acme.md)
 was input to it, not parentage.
 
 **The layers have names** (decision log, 2026-08-31; sharpened twice on
@@ -85,7 +85,7 @@ wire 9P at the mount boundary, exportfs serving a guest's namespace
 back out, and the window server: `#w` mints windows, `bind '#w/N' /dev` makes a
 namespace a window, `/dev/draw` is a real per-window file with text (`y i l s` and an
 8×8 font of our own authorship), `win rc` is a shell and `win sam` THE EDITOR in a
-browser window, and the link/symlink family lands as the V12 additions, and **both real userspaces have their
+browser window, and the link/symlink family lands as the V12 additions (under review — Plan 9 has no such calls), and **both real userspaces have their
 real libraries**: `libp9.a` is ~150 files of genuine 4th-edition libc/libbio/libregexp
 over one platform shim (`u.h`), twenty-four real commands and the real `rc` ride it,
 V10 `cat`/`echo` sit in `/v10/bin` on `libv10`, and the kernel carries what rc needs:
@@ -174,37 +174,122 @@ is indistinguishable from a shipped one.
 
 ## The documents
 
+**Every document answers ONE of six questions, and one only** (Christine's rule,
+2026-09-02). Several documents may answer the same question from different
+perspectives; none may answer two. A *when* fact written into a *why* document
+goes stale there — that is how four different test counts came to exist.
+
+### why — why are we doing this?
+
 | | |
 |---|---|
-| `README.md` | public overview — why this repository is separate from the parent, the precedents, status |
-| `RESEARCH.md` | **living evidence base** — every finding with provenance: Plan 9's call list, `rfork` flags verbatim, APE's limits, the fork-resume mechanism and its measurements, WASI phases, the toolchain recipe (§9.4), V10 measurements |
-| `docs/design.md` | **the why** — scope, design rationale, decisions taken (with dates), open questions |
-| `docs/architecture.md` | **the what** — present-tense invariants and contracts: component map, guest ABI, host contract, wire, the suite; changes only with a contract, in the same commit |
-| `docs/handbook.md` | **the how** — prerequisites, build/run, the build system's load-bearing flags, how to add a command/test/device/host, debugging practice |
-| `docs/platforms.md` | **the where** — deployment forms with engine and state, the canonical boot namespace, and the dated deployment-review ledger (doctrine #5's home) |
-| `docs/implementation.md` | **the living build plan** — milestones M0–M12 with dependencies, acceptance criteria, engineering questions; the sequence work follows |
-| `docs/poc.md` | **frozen** — the PoC's record and declaration (2026-08-26 → 2026-08-29): chronology, final state, what it proved |
-| `docs/syscalls.md` | **the derived call list** — Plan 9's 40 live calls dispositioned for V12; V10's 68 routines mapped onto them |
-| `docs/identity.md` | **the who** — what a user is (person, role, agent, network person), and the uid model — the item APE called impossible, decided and running: kernel credentials, `/proc` ctl transitions, `DMSETUID`, the two enforcement regimes |
-| `docs/personas.md` | **who it is for** — the five personas with jobs and belief tests, the non-users, the coverage map over the milestones, and the gaps the exercise caught (the public demo) |
-| `docs/design-thinking.md` | **the iteration record** — method (cited), POVs, the ideation table with rejected ideas, the rederived will/won't and its reconciliation, the doc review, the validation plan and cadence |
-| `docs/six-hats.md` | **the completeness check** — dated parallel-thinking sessions (facts/feelings/risks/value/alternatives/process), each catch dispositioned; runs on the consolidated review cadence |
-| `docs/virtue-ethics.md` | **the character record** — the telos, the virtues as means with receipts, habituation (the rituals are the character), the practitioners' temptations named, dispositions per session |
-| `docs/emca.txt` | **the windowing system** — what a window is, how the compositor works (one object, composited recursively), window types, the two halves (IPNX owns the tree, the surface renders it) |
-| `docs/acme.txt` | **the acme port** — acme is Bell Labs' program; this is how it is modified to fit into emca with its functionality preserved. Its four-layer anatomy was *input* to emca, not parentage — do not conflate the two |
-| `docs/window.md` | **the control interface** — `/dev/window/<type>/<n>`: chrome, actions that name a side, the type in the path |
-| `docs/canvas.md` | `/dev/canvas`, **narrowed 2026-08-31 to genuine drawing** — the v0 text is kept as the record of what runs today |
-| `docs/userland.md` | the userland reimagined on the new paradigms; the heritage exhibit's scope |
+| `README.md` | **Christine's own, in her voice** — never rewrite or re-voice it; update only the factual status lines inside her text |
+| `demo/index.md` | the landing page — also hers |
+| `docs/why.md` | the codified purpose, and the intent of each component |
+
+### who — who are we doing this for?
+
+| | |
+|---|---|
+| `docs/personas.md` | the five personas: jobs, needs, wants, pains, and the belief test that converts each |
+
+### what — design, architecture, specifications
+
+| | |
+|---|---|
+| `docs/architecture.md` | present-tense invariants and contracts; changes only with a contract, in the same commit |
+| `docs/saranos.md` | the system's identity — the three layers and what each name covers |
+| `docs/emca.md` | **emca the ROLE** — what a window is, and which half owns which part. A role, not an implementation |
+| `docs/window.md` | **the window manager CONTRACT** — emca gives a manager a rectangle and a namespace, and stops. Every implementation honours this and nothing more |
+| `docs/compositor.md` | **the tiled implementation** — allocation, alternation, tabs, sizing. Replaceable without touching managers or types |
+| `docs/surface.md` | **the host half** — chrome, theming, placement, and the devices Saranos serves |
+| `docs/type.md` | the type system: a type is a folder of text files; a MANAGER renders and edits it |
+| `docs/canvas.md` | `/dev/canvas`, narrowed 2026-08-31 to genuine drawing |
+| `docs/acme.md` | the acme port — Bell Labs' program fitted into emca, functionality preserved |
+| `docs/userland.md` | the userland's shape; the heritage exhibit's scope |
+| `docs/syscalls.md` | the derived call list — Plan 9's 40 live calls dispositioned |
+| `docs/identity.md` | the identity model — what a user *is* inside the system (not who it is *for*) |
+| `docs/design.md` | **the decision record** — every decision dated, with the constraint that forced it |
+
+### where — surfaces and targets
+
+| | |
+|---|---|
+| `docs/platforms.md` | deployment forms with engine and state, the canonical boot namespace, the dated deployment ledger |
+
+### when — what is built, and what is not
+
+| | |
+|---|---|
+| `docs/when.md` | **the single authoritative statement of build status.** No other document carries it |
+| `docs/poc.md` | frozen — the PoC's record and declaration (2026-08-26 → 2026-08-29) |
+
+### how — the plan, and the practice
+
+| | |
+|---|---|
+| `docs/implementation.md` | **the plan, replanned 2026-09-04**: three layers — IPNX, emca, Saranos — with the demo (`ipnx` in a terminal + the website) as the first milestone. The accreted M0–M18 plan is in `docs/archive/` |
+| `docs/handbook.md` | the practice: prerequisites, build/run, load-bearing flags, how to add a command/test/device/host |
 | `poc/README.md` | the frozen reference implementation's layout and its deliberate v0 deviations |
 
-Findings go in RESEARCH.md with provenance; decisions go in the design (docs/design.md);
+### meta — documents that inform and guide the six
+
+| | |
+|---|---|
+| `RESEARCH.md` | the evidence base: every finding with provenance. What *why* and *what* are built on |
+| `docs/design-thinking.md` | **a lens** — *who is this for, what do they need* |
+| `docs/six-hats.md` | **a lens** — *what are we not seeing* |
+| `docs/virtue-ethics.md` | **a lens** — *what character does the work express* |
+| `docs/reviews/` | **the readings** — one dated log per application of the lenses to the whole project |
+| `docs/proposals.md` | **a register, not a question** — proposed answers awaiting review, kept out of the specs |
+| `docs/archive/` | **superseded specs — NOTHING HERE IS CURRENT.** A replaced spec goes here, never folded into a live document |
+
+**A LENS NEVER CHANGES BECAUSE THE PROJECT CHANGED** (2026-09-02). The
+instrument is stable; each application produces a dated *reading* in
+`docs/reviews/`. Never add a session record to a lens document. The same rule
+one level down governs `docs/personas.md`: a persona is **extrinsic** and
+cannot be made stale by a design change — if deleting this project from the
+universe would change a card, that line is in the wrong document.
+
+Findings go in RESEARCH.md with provenance; decisions go in the decision record (docs/design.md);
 contract changes go in docs/architecture.md in the same commit as the code; deployment-story
-reviews land dated in docs/platforms.md's ledger; all of these are living.
+reviews land dated in docs/platforms.md's ledger; build status goes in docs/when.md
+and NOWHERE else; all of these are living.
 Keep them consistent — the architecture statement appears in RESEARCH's TL;DR and the
 plan, deliberately, and a change to it changes both. **README.md is Christine's own
 document, written in her voice (2026-08-29): never rewrite or re-voice it — when a
 milestone lands, update only the factual status lines inside her text.** Prefer a
 pointer over a copy for anything else ("a list that appears twice will disagree").
+
+## The Plan 9 reference tree
+
+**Plan 9's source is kept locally and gitignored** — never built, never edited,
+never committed. It exists for the same reason `../ipnx` holds the V10 tree:
+**a claim about Plan 9 must trace to file and line**, and it cannot if the
+source is not here to cite. Added 2026-09-03, after a claim about Plan 9's
+ramfs turned out to be right by luck rather than by reading (RESEARCH §9.12).
+
+| | |
+|---|---|
+| **`plan9/`** | **the 9legacy tree** — 4th edition with the maintained patches applied. **Check claims against this one** |
+| `plan9-stock/` | the raw final Labs release, so a difference can be *attributed*: **778 files under `sys/src` differ** between them |
+
+```bash
+git clone --depth 1 https://github.com/0intro/9legacy plan9
+git clone --depth 1 https://github.com/plan9foundation/plan9 plan9-stock
+```
+
+**9legacy changes nothing the device audit rests on** (verified 2026-09-03):
+every device letter — `M` mnt, `w` watchdog, `/` root, `i` draw, `s` srv, `p`
+proc, `c` cons, `e` env, `d` dup, `|` pipe — is unchanged, and `devroot.c`,
+`devwd.c` and `devdraw.c` are byte-identical to stock. What it does change
+nearby is tuning: `devmnt.c`'s `MAXRPC` grows from `IOHDRSZ+8192` to
+`IOHDRSZ+16*1024`, with a `MAXCMNRPC` kept at the old size for initial
+negotiation.
+
+Note the distinction from `userspace/plan9/`, which is the **vendored** subset
+actually compiled into the system (libc, libdraw, libframe, the commands) and
+IS committed.
 
 ## The parent repository
 
@@ -273,14 +358,21 @@ evidence, not a fresh opinion.
   **Self-hosting is not a goal** (`/cc` as
   file server makes compilation a capability).
 
-- **The uid model is decided and running** (`docs/identity.md`): mutable per-process
+- **The uid model is decided and running — AND UNDER REVIEW (2026-09-03)**: Plan 9's
+  kernel identity is one field, `char *user`, with no euid/ruid/setuid anywhere, so
+  this is a **V10 personality feature in the kernel** and the personality belongs in
+  userspace (decision log). What is running (`docs/identity.md`): mutable per-process
   credentials in the kernel, names canonical (numbers are the personality's, via
   `/etc/passwd`), transitions through `/proc/<pid>/ctl` under the eve/ruid rule — no new
   syscalls — 9P2000.u's `DMSETUID` bit at exec, V10 enforcement in in-process devices,
   per-attach identity stamped on wire mounts. Identity.md's D1–D4 are measured and
   dispositioned (D1/D3/D4 closed with `../ipnx` provenance; D2's group implementation
   deferred by design, riding a later milestone).
-- **Links landed as the V12 additions**: kernel traps 60–62 (`lstat` is a stat flag),
+- **Links landed as the V12 additions — AND ARE UNDER REVIEW (2026-09-03)**, because
+  **Plan 9 has no link syscall and neither does 9legacy**: refusing links is a design
+  position there, answered by `bind` and `mount`. The kernel is a subset of Plan 9's
+  and the personality is userspace (decision log), so the traps are a candidate for
+  removal and the capability's home is an open question. What landed: kernel traps 60–62 (`lstat` is a stat flag),
   minted wire types 128/130/132 above every dialect's range (strangers `Rerror`,
   clients degrade), 9P2000.u's `QTSYMLINK`/`DMSYMLINK` bits, and V10's rule — **the
   kernel resolves symlinks in the walking process's namespace**, since no server knows
@@ -358,6 +450,68 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Conventions
 
+- **THE KERNEL IS A SUBSET OF PLAN 9'S; DEVIATIONS ARE AUTHORISED ONLY FOR THE
+  SUBSTRATE, AND EVEN THEN MUST BE SUBSTRATE-INDEPENDENT** (Christine's rule,
+  2026-09-03). *"we are essentially implementing a micro kernel based on a
+  subset of Plan 9, we should not be adding to it (even the Unix v10
+  personality should be userspace)"*; *"Actual deviations … are only authorised
+  when it is to do with adapting it for WASM and WASI"*; *"even then it should
+  be done in a machine independent way as we may want a non WASM kernel in the
+  future … for example, dis, or .NET CLR"*.
+
+  **Two tests, in order.** Is it forced by running on **a VM at all** — not by
+  wasm in particular? If not, unauthorised. If so, could **Dis or the CLR**
+  satisfy it without the kernel changing? If not, it is right in purpose and
+  wrong in shape. The reason is concrete: **MicroVM on a hypervisor, then real
+  hardware (Raspberry Pi)** — where there is no host, so every addition must be
+  carried onto the metal or removed there, and removing it there is harder.
+
+  The audits are RESEARCH §9.11–9.15; the rectification is implementation.md's
+  **P1**. A personality — including V10's — is **userspace**, always.
+
+- **THE KERNEL DOES NOT GROW — AND A DESIGN THAT CHANGES IT IS WRONG**
+  (Christine's rule, 2026-09-03). *"you yourself said the kernel does not grow.
+  The kernel only handles process orchestration. everything else is handled by
+  host or userspace. Everytime you design a change to the kernel, the design is
+  wrong."*
+
+  **It is a TEST, applied before a design is written down, not a preference
+  weighed against others.** If answering a question requires adding to
+  `kernel/`, the answer is wrong and the real answer is in the host or in
+  userspace. The kernel may **shrink**; that is the only direction it moves.
+
+  The failure it names is specific and recent: the raster proposal's "Design A" proposed
+  extending `HostOp` with draw operations. It was offered as a legitimate
+  option and argued against on *other* grounds — a second IPC beside 9P — when
+  it should have been struck out on sight for growing the kernel.
+
+  **What the rule says about what is already there:** `#w` — the window device —
+  is **~1,100 lines, 22% of the kernel** (745 in `wsys_*`/`win_*`/`cv_*`/
+  `drawmsgs`, 364 in `draw.rs`), and none of it is process orchestration. the legacy a1
+  and a2 steps removed the tree by this reasoning without the rule being written
+  down; the rest follows the same way.
+- **SPEC'D, PROPOSED or GAP — triage before building** (Christine's rule,
+  2026-09-02). Everything sits in one of three states: **spec'd** (explicitly
+  discussed *and endorsed* — may be implemented), **proposed** (a design exists
+  but she has not reviewed it — needs review first), **gap** (undesigned —
+  needs a proposal first). *"everything that we have not explicitly discussed
+  and endorsed should be a gap (or proposed if you have created a design).
+  proposed designs need to be reviewed."* So the answer to **"implement the
+  demo"** is a triage, not a build: *"X is speced, Y is proposed and Z is gap.
+  Would you like me to review Y with you before implementing, and would you
+  like me to propose Z, before we implement."* Mark proposals **in the document
+  itself** — never as settled prose — and **never write an exclusionary
+  constraint** (*"and no others"*) she did not state: absence of endorsement is
+  a gap, not a prohibition. Naming a thing is not specifying it, and a green
+  suite is no defence — the tests assert what was built, not what was agreed.
+- **REWRITE THE PROPOSAL AFTER EVERY DECISION** (Christine's rule, 2026-09-02).
+  *"The decision itself moves off the proposal — so I am reviewing genuine open
+  decisions rather than settled decisions."* `docs/proposals.md` is a **register
+  that shrinks**, not a document that grows: the moment something is decided it
+  moves into the relevant spec and the decision log, and **leaves** the
+  proposal. Adding to a proposal instead of emptying it is how stale blocks
+  accumulate and how she ends up re-reading settled material to find what
+  actually needs her.
 - **Cite primary sources, quote verbatim in blockquotes; numbers are load-bearing** —
   line counts, call counts and file:line references carry the argument, and each traces to
   a measurement or source. State the decision, then the constraint that forced it.
@@ -375,12 +529,21 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
   Guest C is Plan 9 style (tabs, `nil`, no const clutter); the build silences the
   builtin-redeclaration warnings that style causes.
 
-## Current state (design: 2026-08-31; code: 2026-08-29)
+## Current state — REPLANNED 2026-09-04
+
+**The code is legacy.** Everything below describes what it does today and is
+refactored toward the design under `docs/implementation.md`'s three layers, not
+built upon. Layer 1 has no window, no mouse, no draw, no canvas; the kernel is
+cut to a subset of Plan 9's measured against `plan9/`; Go and Python become
+packages; the demo is `ipnx` in a terminal plus the website, and iOS and the
+macOS app come after it.
+
+### What the legacy code does (design: 2026-08-31; code: 2026-09-03)
 
 **emca is designed AND the IPNX half of it runs** (2026-08-31): emca is the IPNX
 user interface — `/dev/canvas` narrows to genuine drawing, `/pkg` and `/project`
 split the old package concept, and the hosts become *surfaces* rather than demos
-([docs/emca.txt](docs/emca.txt), decision log 2026-08-31). Landed the same day
+([docs/emca.md](docs/emca.md), decision log 2026-08-31). Landed the same day
 (implementation.md M14a–c): the `/dev/window/<type>/<n>` control interface, `/type`
 as a real registry of four small files per type, the browser surface rebuilt as
 emca itself (top toolbar of managers, panes, tabs, a status line carrying the
@@ -393,7 +556,7 @@ pane. **And the web surface (M14d)**: the floating bar at the selection with
 emca answering verb applicability (a path offers Open, an address Jump, a word
 neither — acme's `look` decomposed and SHOWN), the pin replacing the 2-1 chord,
 the responsive rules measured in CHARACTERS not pixels, and the keyboard grammar
-entire. **157 PASS / 0 FAIL** on both hosts, plus two headless surface proofs
+entire. **164 PASS / 0 FAIL** on all three hosts, plus two headless surface proofs
 (`winproof.mjs` with no emca, `emcaproof.mjs` with it). Still design-only:
 `/project` (M14e) and the SwiftUI surface (M14g).
 
@@ -410,11 +573,15 @@ recorded (su, the user decomposition, the profile, the capability doctrine — a
 
 **The public demo is live: <https://christham.net/ipnx-v12/>** — the frozen
 browser port on GitHub Pages behind a COI service worker; redeploy per the
-handbook. Work now follows `docs/implementation.md`: M0 is landed (the guest world lives at
-`userspace/`); M1 is the `FROM scratch` OCI container; then the namespace-file boot,
-the macOS app, host storage, the browser host on the Rust core, iPadOS on Pulley,
-`/net`, identity on the wire, the profile, the modern personality (where git gets
-built), the microVM — with curation sweeps continuous throughout. The load-bearing
+handbook. **Work now follows `docs/implementation.md` as replanned on 2026-09-04**: the demo
+is the first milestone — **D1**, `ipnx` in a macOS terminal booting to `rc` with
+every Layer-1 command, and **D2**, the website with emca to spec — built from what
+is designed today and nothing undesigned. Layer 1 (the kernel cut to a subset of
+Plan 9's, the root the Plan 9 way, the personalities as userspace, the `ipnx` host)
+precedes Layer 2 (emca on the pure kernel, the browser surface reading files).
+After the demo the plan runs to the end state — IPNX and Saranos on browser, macOS
+app, iOS app, container, MicroVM and real hardware — through gaps documented in
+the plan and designed only when reached. The load-bearing
 engineering lessons live where they always did: RESEARCH §5 (fork, transport, SAB
 TextDecoder), §9.4–9.6 (toolchain, kencc call-site adjustment, the native core's
 findings), and the decision log for everything chosen.
