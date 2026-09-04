@@ -10,7 +10,7 @@
 
 mod wasi;
 
-use kernel::{AsySnap, Effect, HostEnt, HostOp, HostReply, KAction, KReply, Kernel, Pid, Seed, TXSIZE};
+use kernel::{Cont, Effect, HostEnt, HostOp, HostReply, KAction, KReply, Kernel, Pid, Seed, TXSIZE};
 use std::collections::HashMap;
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::Arc;
@@ -22,7 +22,7 @@ mod ui;
 pub enum Ev {
     Sys { worker_pid: Pid, trap: i32, a: [i32; 5], tx: Vec<u8>, reply: Sender<KReply> },
     Started { pid: Pid, asyncified: bool },
-    AsyFork { parent: Pid, child: Pid, snap: Vec<u8>, data_ptr: u32, sp: u32 },
+    AsyFork { parent: Pid, child: Pid, cont: Vec<u8> },
     Died { pid: Pid, msg: String },
     Timer { token: u64 },
     Stdin(Vec<u8>),
@@ -225,6 +225,13 @@ fn get_sp(caller: &mut Caller<'_, RState>) -> u32 {
     0
 }
 
+// Time is the embedding's to answer: this host reads the OS clock and stamps
+// it into the kernel before every entry.
+fn host_now_ms() -> u64 {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     let rootdir = args.get(1).cloned().unwrap_or_else(|| "userspace/rootfs".into());
@@ -306,6 +313,7 @@ fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
     } else {
         vec!["init".to_string()]
     };
+    kernel::clock_set(host_now_ms());
     kern.boot(init_argv).expect("boot");
 
     if interactive {
@@ -330,15 +338,17 @@ fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
 
     // the kernel loop: pure state machine + effects
     loop {
+        kernel::clock_set(host_now_ms());
         run_effects(&mut kern, &engine, &ev_tx, &ui, &host_root);
         let ev = match ev_rx.recv() {
             Ok(e) => e,
             Err(_) => break,
         };
+        kernel::clock_set(host_now_ms());
         match ev {
             Ev::Sys { worker_pid, trap, a, tx, reply } => kern.syscall(worker_pid, trap, a, tx, reply),
             Ev::Started { pid, asyncified } => kern.set_asyncified(pid, asyncified),
-            Ev::AsyFork { parent, child, snap, data_ptr, sp } => kern.asyfork(parent, child, snap, data_ptr, sp),
+            Ev::AsyFork { parent, child, cont } => kern.asyfork(parent, child, cont),
             Ev::Died { pid, msg } => kern.proc_died(pid, &msg),
             Ev::Timer { token } => kern.timer_fired(token),
             Ev::Stdin(b) => kern.cons_feed(&b),
@@ -381,13 +391,13 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
                 out.write_all(&bytes).ok();
                 out.flush().ok();
             }
-            Effect::Spawn { pid, image, argv, asy } => {
+            Effect::Spawn { pid, image, argv, cont } => {
                 let engine = engine.clone();
                 let ev = ev_tx.clone();
                 std::thread::Builder::new()
                     .name(format!("guest-{}", pid))
                     .stack_size(8 << 20)
-                    .spawn(move || run_guest(engine, ev, pid, image, argv, asy))
+                    .spawn(move || run_guest(engine, ev, pid, image, argv, cont))
                     .expect("spawn guest thread");
             }
             Effect::Timer { ms, token } => {
@@ -613,12 +623,29 @@ fn load_seed(path: &std::path::Path, name: &str) -> std::io::Result<Seed> {
     }
 }
 
+// The continuation THIS substrate mints (kernel::Cont is opaque bytes): the
+// guest's whole linear memory, with asyncify's data pointer and the stack
+// pointer appended. Nothing outside these two functions knows its shape.
+fn cont_pack(mem: &[u8], data_ptr: u32, sp: u32) -> Vec<u8> {
+    let mut v = Vec::with_capacity(mem.len() + 8);
+    v.extend_from_slice(mem);
+    v.extend_from_slice(&data_ptr.to_le_bytes());
+    v.extend_from_slice(&sp.to_le_bytes());
+    v
+}
+fn cont_unpack(c: &[u8]) -> (&[u8], u32, u32) {
+    let n = c.len() - 8;
+    let data_ptr = u32::from_le_bytes(c[n..n + 4].try_into().unwrap());
+    let sp = u32::from_le_bytes(c[n + 4..].try_into().unwrap());
+    (&c[..n], data_ptr, sp)
+}
+
 fn run_guest(engine: Arc<Engine>, ev: Sender<Ev>, pid: Pid, image: Arc<Vec<u8>>,
-             _argv: Vec<String>, asy: Option<AsySnap>) {
+             _argv: Vec<String>, cont: Option<Cont>) {
     let mut image = image;
-    let mut asy = asy;
+    let mut cont = cont;
     loop {
-        match run_one(&engine, &ev, pid, &image, asy.take()) {
+        match run_one(&engine, &ev, pid, &image, cont.take()) {
             RunEnd::Exec(next, _argv) => {
                 image = next;
             }
@@ -686,7 +713,7 @@ fn run_wasi(engine: &Arc<Engine>, ev: &Sender<Ev>, pid: Pid, module: &Module) ->
 }
 
 fn run_one(engine: &Arc<Engine>, ev: &Sender<Ev>, pid: Pid, image: &Arc<Vec<u8>>,
-           asy: Option<AsySnap>) -> RunEnd {
+           cont: Option<Cont>) -> RunEnd {
     let module = match module_cached(engine, image.as_slice()) {
         Ok(m) => m,
         Err(e) => return RunEnd::Crash(format!("exec format error: {}", e)),
@@ -722,8 +749,9 @@ fn run_one(engine: &Arc<Engine>, ev: &Sender<Ev>, pid: Pid, image: &Arc<Vec<u8>>
         .find(|i| i.module() == "env" && i.name() == "memory")
         .and_then(|i| i.ty().memory().map(|m| m.minimum()))
         .unwrap_or(32);
-    let min_pages = if let Some(a) = &asy {
-        declared_min.max(((a.snap.len() + 65535) / 65536) as u64)
+    let min_pages = if let Some(c) = &cont {
+        let (snap, _, _) = cont_unpack(&c.0);
+        declared_min.max(((snap.len() + 65535) / 65536) as u64)
     } else {
         declared_min
     };
@@ -862,16 +890,17 @@ fn run_one(engine: &Arc<Engine>, ev: &Sender<Ev>, pid: Pid, image: &Arc<Vec<u8>>
             store.data_mut().stack_top = v as u32;
         }
     }
-    if let Some(a) = asy {
+    if let Some(c) = cont {
         // a freshly forked child: copy the snapshot in and rewind
-        memory.write(&mut store, 0, &a.snap).ok();
+        let (snap, data_ptr, sp) = cont_unpack(&c.0);
+        memory.write(&mut store, 0, snap).ok();
         store.data_mut().rewind_return = 0;
         store.data_mut().rewinding = true;
         if let Some(g) = instance.get_global(&mut store, "__stack_pointer") {
-            g.set(&mut store, Val::I32(a.sp as i32)).ok();
+            g.set(&mut store, Val::I32(sp as i32)).ok();
         }
         if let Some(f) = instance.get_typed_func::<i32, ()>(&mut store, "asyncify_start_rewind").ok() {
-            f.call(&mut store, a.data_ptr as i32).ok();
+            f.call(&mut store, data_ptr as i32).ok();
         }
     }
 
@@ -892,10 +921,8 @@ fn run_one(engine: &Arc<Engine>, ev: &Sender<Ev>, pid: Pid, image: &Arc<Vec<u8>>
                 if let Some((child, databuf)) = store.data_mut().pending_fork.take() {
                     stop_unwind(&instance, &mut store);
                     let sp = global_sp(&instance, &mut store);
-                    let snap = memory.data(&store).to_vec();
-                    let _ = ev.send(Ev::AsyFork {
-                        parent: pid, child: child as Pid, snap, data_ptr: databuf, sp,
-                    });
+                    let cont = cont_pack(memory.data(&store), databuf, sp);
+                    let _ = ev.send(Ev::AsyFork { parent: pid, child: child as Pid, cont });
                     store.data_mut().rewind_return = child;
                     store.data_mut().rewinding = true;
                     set_global_sp(&instance, &mut store, sp); // exact, not drifted

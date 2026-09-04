@@ -21,10 +21,48 @@ node demo/supervisor/main-rust.mjs userspace/rootfs   # the Rust kernel core
 bash poc/run.sh                                       # the frozen JS oracle
 ```
 
-The permanent floor is **131** (the PoC's declaration count, 2026-08-29); the
-count grows as features add self-skipping tests. `poc: all 64 tests passed` is
+**The floor is what passes on the pure kernel** (decided 2026-09-04, P1 step 0
+— [design.md](design.md)). It is no longer the number 131: P1 makes the kernel
+*shed* features, and 15 of the 164 assert what it is losing, so a numeric floor
+would argue against purifying it. A deletion must name the assertions it
+removes, in the same commit. What still holds exactly is the **agreement
+between the two hosts that run the Rust core** — wasmtime and the browser —
+assertion for assertion. `poc/run.sh` keeps passing its own 164 because `poc/`
+never changes; it is the PoC's record, not evidence about the kernel. `poc: all 64 tests passed` is
 init.c's C-level tranche only, not the whole suite — the two numbers measure
 different things and both are correct.
+
+## Landed — under the current plan
+
+| | |
+|---|---|
+| **P0** ground — the reference trees, the audits, the archive | 2026-09-03/04 |
+| **P1 step 1** the substrate leaves the kernel's interface | 2026-09-04 |
+| **P1 step 0** the floor decision, recorded | 2026-09-04 |
+| **P1 step 2** *part* — the mount driver's letter given back | 2026-09-04 |
+
+**P1 step 1** (2026-09-04): `AsySnap { snap, data_ptr, sp }` became **`Cont(Vec<u8>)`**
+— opaque bytes the embedding mints at the fork and is handed back at the spawn, never
+inspected by the kernel — and **time became an operation the embedding answers**, every
+host stamping the clock before it enters the kernel. Both
+`#[cfg(target_arch = "wasm32")]` branches on the clock are gone; `grep wasm kernel/src`
+now returns **two lines, both the stderr shim** that covers the kernel's ten `eprintln!`
+sites. The contract moved with the code ([architecture.md](architecture.md), *Contract:
+the host*). Measured: 164 PASS / 0 FAIL on all three hosts, every bare-fork assertion
+among them, and the native host's `date` matching the wall clock to the second.
+
+**P1 step 2, the `'M'` half** (2026-09-04): `'M'` is the mount driver's letter
+(`plan9/sys/src/9/port/devmnt.c`) and the ramfs was squatting on it. The ramfs
+moved to **`#R`** — deliberately outside Plan 9's letter set, and temporary: it
+leaves with `#V` when P2 step 2 replaces it with a userspace root file server.
+`'M'` is now absent from the by-name attach table for the reason Plan 9 has it
+absent — `mntattach` takes an internal struct, not a user spec, so the driver
+is reached only through `mount()`. Measured from `rc`: `bind '#R' /tmp/r` lists
+the rootfs; `bind '#M' /tmp/m` answers *unknown device #M*. 164 PASS / 0 FAIL
+on all three hosts, wasmtime and Node identical assertion for assertion.
+
+**Still open in step 2:** `#|`. The plan says the pipe device "takes its
+letter"; what that means is not settled and nothing has been built for it.
 
 ## Replanned 2026-09-04 — what follows is LEGACY state
 

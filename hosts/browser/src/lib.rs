@@ -5,7 +5,7 @@
 // as processes, the SAB mailbox), so state crosses as one length-
 // prefixed binary blob per drain. Little-endian throughout; strings are
 // UTF-8 with u16/u32 length prefixes; u64 crosses as lo,hi u32 pairs.
-use kernel::{AsySnap, Effect, HostEnt, HostOp, HostReply, KAction, KReply, Kernel, Seed};
+use kernel::{Cont, Effect, HostEnt, HostOp, HostReply, KAction, KReply, Kernel, Seed};
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::mpsc::Receiver;
@@ -168,8 +168,26 @@ pub extern "C" fn bh_started(pid: u32, asy: u32) {
 #[no_mangle]
 pub extern "C" fn bh_asyfork(parent: u32, child: u32, snap_ptr: *const u8,
                              snap_len: usize, data_ptr: u32, sp: u32) {
-    let snap = unsafe { bytes(snap_ptr, snap_len) }.to_vec();
-    with(|w| w.kern.asyfork(parent as kernel::Pid, child as kernel::Pid, snap, data_ptr, sp));
+    let cont = cont_pack(unsafe { bytes(snap_ptr, snap_len) }, data_ptr, sp);
+    with(|w| w.kern.asyfork(parent as kernel::Pid, child as kernel::Pid, cont));
+}
+
+// The continuation THIS substrate mints (kernel::Cont is opaque bytes): the
+// guest's whole linear memory, with asyncify's data pointer and the stack
+// pointer appended. Nothing outside these two functions knows its shape —
+// below them the worker protocol is unchanged.
+fn cont_pack(mem: &[u8], data_ptr: u32, sp: u32) -> Vec<u8> {
+    let mut v = Vec::with_capacity(mem.len() + 8);
+    v.extend_from_slice(mem);
+    v.extend_from_slice(&data_ptr.to_le_bytes());
+    v.extend_from_slice(&sp.to_le_bytes());
+    v
+}
+fn cont_unpack(c: &[u8]) -> (&[u8], u32, u32) {
+    let n = c.len() - 8;
+    let data_ptr = u32::from_le_bytes(c[n..n + 4].try_into().unwrap());
+    let sp = u32::from_le_bytes(c[n + 4..].try_into().unwrap());
+    (&c[..n], data_ptr, sp)
 }
 
 #[no_mangle]
@@ -384,14 +402,15 @@ pub extern "C" fn bh_drain() -> *const u8 {
         for e in effects {
             ne += 1;
             match e {
-                Effect::Spawn { pid, image, argv: _, asy } => {
+                Effect::Spawn { pid, image, argv: _, cont } => {
                     ev.push(1);
                     w32(&mut ev, pid as u32);
                     image_ref(w, &mut ev, &image);
-                    match asy {
-                        Some(AsySnap { snap, data_ptr, sp }) => {
+                    match cont {
+                        Some(Cont(c)) => {
+                            let (snap, data_ptr, sp) = cont_unpack(&c);
                             ev.push(1);
-                            wbytes32(&mut ev, &snap);
+                            wbytes32(&mut ev, snap);
                             w32(&mut ev, data_ptr);
                             w32(&mut ev, sp);
                         }

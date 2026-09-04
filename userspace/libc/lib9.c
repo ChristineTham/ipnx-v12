@@ -480,7 +480,7 @@ sha256final(SHA256state *s, uchar out[32])
  * single quotes group words rc-style. The namespace is CLEARED first
  * (RFCNAMEG) and rebuilt from the file — boot's empty namespace makes that
  * a no-op there, and the root stays implicit (an empty namespace resolves
- * absolute paths through #M). Errors warn on fd 2 and continue: a boot must
+ * absolute paths through #R). Errors warn on fd 2 and continue: a boot must
  * not wedge on one bad line. This file format IS the profile's namespace
  * fragment format (identity.md) — stage one, landed. */
 static int

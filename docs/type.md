@@ -362,7 +362,7 @@ group   kitty
 size    4096
 mtime   2026-09-02 14:22:07
 qid     0x8a3f1c v3 file
-served  #M (ramfs)
+served  #R (ramfs)
 ```
 
 Change the `mode` line and Save, and `chmod` happens. Change `owner`, and the

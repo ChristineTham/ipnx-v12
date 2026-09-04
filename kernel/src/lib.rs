@@ -87,11 +87,12 @@ const OTRUNC: u32 = 16;
 pub const TXSIZE: usize = 65536;
 
 // ---- what leaves the kernel ----
-pub struct AsySnap {
-    pub snap: Vec<u8>,
-    pub data_ptr: u32,
-    pub sp: u32,
-}
+// A forked child's CONTINUATION: opaque bytes the embedding mints at the fork
+// and is handed back at the spawn. The kernel never inspects them, so what a
+// continuation *is* belongs to the substrate — a memory image and the state
+// needed to resume inside it on one, something else entirely on another, with
+// the kernel unchanged either way.
+pub struct Cont(pub Vec<u8>);
 
 #[derive(Clone)]
 pub struct CvSnap {
@@ -131,7 +132,7 @@ pub enum HostReply {
 }
 
 pub enum Effect {
-    Spawn { pid: Pid, image: Arc<Vec<u8>>, argv: Vec<String>, asy: Option<AsySnap> },
+    Spawn { pid: Pid, image: Arc<Vec<u8>>, argv: Vec<String>, cont: Option<Cont> },
     // M3: the presentation layer's feed — a window's fresh pixels (r8g8b8a8,
     // w*h*4) or its departure. The host may show them, log them, or drop
     // them; the kernel never knows there is a screen.
@@ -624,30 +625,19 @@ fn new_fdt() -> FdtR {
     Rc::new(RefCell::new(Fdt { refs: 1, fds: Vec::new() }))
 }
 
-// On wasm32 the host feeds the clock (clock_set); native asks the OS.
-#[cfg(target_arch = "wasm32")]
+// Time is an OPERATION THE EMBEDDING ANSWERS, on every substrate: each host
+// stamps the clock before it enters the kernel. The kernel never asks an OS
+// for the time — under a hypervisor or on a Pi there is no OS to ask, and
+// asking would put a compile-time branch on the substrate inside the kernel.
 static CLOCK_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
-#[cfg(target_arch = "wasm32")]
 pub fn clock_set(ms: u64) {
     CLOCK_MS.store(ms, std::sync::atomic::Ordering::Relaxed);
 }
-#[cfg(target_arch = "wasm32")]
 fn now_secs() -> u32 {
     (CLOCK_MS.load(std::sync::atomic::Ordering::Relaxed) / 1000) as u32
 }
-#[cfg(target_arch = "wasm32")]
 fn now_nanos() -> u64 {
     CLOCK_MS.load(std::sync::atomic::Ordering::Relaxed) * 1_000_000
-}
-#[cfg(not(target_arch = "wasm32"))]
-fn now_secs() -> u32 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs() as u32).unwrap_or(0)
-}
-#[cfg(not(target_arch = "wasm32"))]
-fn now_nanos() -> u64 {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(0)
 }
 
 // ---- the kernel state (behind the public facade) ----
@@ -2061,7 +2051,7 @@ impl Kernel {
                 let p = kb.procs.get_mut(&pid).unwrap();
                 p.argv = argv2.clone();
                 p.image = Some(image.clone());
-                kb.effects.push(Effect::Spawn { pid, image, argv: argv2.clone(), asy: None });
+                kb.effects.push(Effect::Spawn { pid, image, argv: argv2.clone(), cont: None });
                 Ok(())
             }
             .await;
@@ -2170,7 +2160,7 @@ impl Kernel {
         self.ex.run_until_stalled();
     }
 
-    pub fn asyfork(&mut self, parent_pid: Pid, child_pid: Pid, snap: Vec<u8>, data_ptr: u32, sp: u32) {
+    pub fn asyfork(&mut self, parent_pid: Pid, child_pid: Pid, cont: Vec<u8>) {
         let mut kb = self.k.borrow_mut();
         let argv = kb.procs.get(&parent_pid).map(|p| p.argv.clone()).unwrap_or_default();
         if let Some(c) = kb.procs.get_mut(&child_pid) {
@@ -2178,7 +2168,7 @@ impl Kernel {
             if let Some(image) = c.image.clone() {
                 kb.effects.push(Effect::Spawn {
                     pid: child_pid, image, argv,
-                    asy: Some(AsySnap { snap, data_ptr, sp }),
+                    cont: Some(Cont(cont)),
                 });
             }
         }
@@ -2393,7 +2383,17 @@ fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
         'e' => Ok(DN { dev: DevId::Env, node: Node::EnvRoot, path: None }),
         'd' => Ok(DN { dev: DevId::Dup, node: Node::DupRoot, path: None }),
         'p' => Ok(DN { dev: DevId::Proc, node: Node::Proc { kind: 0, pid: 0 }, path: None }),
-        'M' => Ok(DN { dev: DevId::Ram, node: Node::Ram(k.borrow().ram_root.clone()), path: None }),
+        // 'M' is the MOUNT DRIVER's letter (plan9/sys/src/9/port/devmnt.c:
+        // `Dev mntdevtab = { 'M', ...`), and it is not attachable by name:
+        // mntattach takes an internal struct, not a user spec, so the driver
+        // is reached only through mount(). It is absent from this table for
+        // that reason, not by oversight.
+        //
+        // '#R' is the ramfs, TEMPORARY: it holds the letter only until P2
+        // step 2 replaces it with a userspace root file server, at which
+        // point it leaves the kernel with '#V'. It is deliberately outside
+        // Plan 9's letter set so it cannot be mistaken for one of theirs.
+        'R' => Ok(DN { dev: DevId::Ram, node: Node::Ram(k.borrow().ram_root.clone()), path: None }),
         'w' => Ok(DN { dev: DevId::Wsys, node: Node::Wsys { kind: WKind::Root, win: None, conn: None, ty: None }, path: None }),
         's' => Ok(DN { dev: DevId::Srv, node: Node::SrvRoot, path: None }),
         'H' => Ok(DN { dev: DevId::Web, node: Node::WebRoot, path: None }),
@@ -4921,7 +4921,7 @@ async fn exec_call(k: &K, worker_pid: Pid, pid: Pid, tx: &[u8], argc: i32) -> KR
     if is_borrowed {
         let mut kb = k.borrow_mut();
         kb.procs.get_mut(&worker_pid).unwrap().borrower = None;
-        kb.effects.push(Effect::Spawn { pid, image, argv, asy: None });
+        kb.effects.push(Effect::Spawn { pid, image, argv, cont: None });
         return Ok(KReply {
             ret: -1000, aux: pid as i32, data: Vec::new(),
             action: KAction::ForkResume, load: None, note_pending: false,

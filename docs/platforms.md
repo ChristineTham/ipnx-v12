@@ -57,7 +57,7 @@ the directory):
 
 | path | served by | contents |
 |---|---|---|
-| `/` | ramfs (`#M`), seeded from `rootfs/` | V10 permissions enforced |
+| `/` | ramfs (`#R`), seeded from `rootfs/` | V10 permissions enforced |
 | `/bin` | seed | the Plan 9 userland — rc, sam, acme, the twenty-four, the harnesses |
 | `/rc` | seed | rc's library and `tests.rc`, the shell half of the suite |
 | `/lib` | seed | `namespace` (the boot file itself), `pkg/` (registries), `font/` (real subfonts + `*default*`), `python3.14/` (the full stdlib + personality files), `alt/` (union-test fixture) |

@@ -281,10 +281,18 @@ gets an execution context; the kernel never blocks**):
 - **exec** as module instantiation on a fresh context; **forka** as memory
   snapshot, fresh context over the copy, both sides rewound; **the guard** as
   a frame that catches the child's exec/exit and returns the pid (a host
-  function natively; hand-assembled wasm in the JS reference).
-- **Console** wiring for `#c` (stdio, a DOM window, a terminal view), a clock,
-  and the effect seam outward: the core emits effects (console output, window
-  presentation), the host performs them.
+  function natively; hand-assembled wasm in the JS reference). The snapshot
+  and whatever else is needed to resume inside it are **the host's own**: they
+  cross the kernel as an **opaque continuation** (`Cont`), minted at the fork
+  and handed back at the spawn, which the kernel never inspects. A substrate
+  with no linear memory and no stack pointer mints something else and the
+  kernel does not change.
+- **Console** wiring for `#c` (stdio, a DOM window, a terminal view); **the
+  clock** — the host stamps the current time into the kernel before every
+  entry, because the kernel never asks an OS for the time and under a
+  hypervisor or on bare hardware there is none to ask; and the effect seam
+  outward: the core emits effects (console output, window presentation), the
+  host performs them.
 - **Presentation is optional** — a headless host is legal and complete; the
   suite reads windows back through `rgb`, not through a screen.
 

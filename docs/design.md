@@ -10,7 +10,7 @@ system *is* is [architecture.md](architecture.md); what is *built* is
 
 ## Decisions — the log
 
-**117 decisions, 2026-08-26 to 2026-09-04.** Each entry states the
+**118 decisions, 2026-08-26 to 2026-09-04.** Each entry states the
 decision and the constraint that forced it. **Dated entries keep the words they
 were written with** — reopening one requires new evidence, not a fresh opinion.
 
@@ -72,6 +72,7 @@ says what was replaced and by what.*
 | 2026-09-02 | A manager's window is at `/dev/window/`, not directly in `/dev` |
 | 2026-09-03 | A move out of the kernel runs both answers and asserts they agree |
 | 2026-09-03 | A posted service name must be instance-qualified, because `#s` is global |
+| 2026-09-04 | The suite's floor is what passes on the PURE kernel |
 | 2026-09-04 | Replanned: three layers, the demo a milestone, the code legacy |
 | 2026-09-03 | A deviation is authorised only for the substrate — and even then must be substrate-independent |
 | 2026-09-03 | The kernel is a subset of Plan 9's and nothing more — the personality is userspace |
@@ -143,6 +144,40 @@ says what was replaced and by what.*
 
 </details>
 
+
+- **(2026-09-04) THE SUITE'S FLOOR IS WHAT PASSES ON THE *PURE* KERNEL — AND
+  THE FROZEN ORACLE IS THE PoC's RECORD, NOT A CONSTRAINT ON THE KERNEL.**
+  P1 step 0, the decision the plan holds open before any test is touched.
+  Christine, choosing the plan's own proposal.
+
+  **The constraint that forced it.** The 131 were declared on 2026-08-29 as a
+  permanent floor, and the rule that the count only grows was right while the
+  system only grew. P1 does not grow it: the purity rule
+  (2026-09-03) makes the kernel *shed* features, and **15 of the 164
+  assertions assert what the kernel is losing** — 9 for `link`/`symlink`/
+  `readlink`, 6 for the `Cred{euid,ruid}` identity model, both of them
+  measured unauthorised deviations. A floor defined as a *number* would make
+  those fifteen a reason not to purify, which inverts what the suite is for:
+  **the tests assert what was built, not what was agreed.**
+
+  So the floor is **what passes on the pure kernel** — a bar that moves with
+  the design rather than against it. Three consequences, stated so they are
+  not rediscovered:
+
+  - **A deletion must name its assertions.** Removing a feature removes its
+    tests *in the same commit*, and the commit says which and why. A silently
+    shrinking count is the failure this decision is most exposed to.
+  - **The frozen oracle stays frozen, and stops being a gate.** `poc/run.sh`
+    is the PoC's record (`docs/poc.md`, 2026-08-29): it will keep passing its
+    own 164 because `poc/` never changes. It is no longer evidence about the
+    kernel, because it no longer runs the kernel's code.
+  - **The three-host agreement survives, and narrows.** The two hosts that
+    *do* run the Rust core — wasmtime and the browser — must still agree
+    exactly, assertion for assertion. That is the invariant the 131 were
+    protecting, and it is the one worth keeping.
+
+  Build status, including the current number, lives in
+  [when.md](when.md) and nowhere else.
 
 - **(2026-09-04) REPLANNED: THREE LAYERS, THE DEMO A MILESTONE, THE CODE
   LEGACY.** Christine: *"I noticed you have been adding steps (M17, M18)
