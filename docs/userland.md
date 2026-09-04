@@ -1,5 +1,8 @@
 # The userland, reimagined
 
+**Role: a *what* — the userland's shape.** Build status is
+[when.md](when.md).
+
 The design record for the 2026-08-30 decision: *redesign sam, acme and the
 rest of the Plan 9 utilities to use our new paradigms — it's time to kiss
 compatibility goodbye.* The curation survives; the verbatim does not. Each
@@ -86,7 +89,7 @@ tested through the virtual surface.
 > surface, with an editor as one window type among `proc`, `pkg`,
 > `project`, `usr`, `net` and `type`. The curation and the essence
 > below stand; the *scope* was too small. The design is
-> [emca.txt](emca.txt), the parts list [acme.txt](acme.txt), the
+> [emca.md](emca.md), the parts list [acme.md](acme.md), the
 > milestone M14.
 
 

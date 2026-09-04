@@ -1,5 +1,8 @@
 # /dev/canvas — the drawing device
 
+**Role: a *what* — the `/dev/canvas` interface.** Build status is
+[when.md](when.md).
+
 > **NARROWED 2026-08-31 (decision log), and the title above is the
 > correction.** This document was called *"the display protocol"* — but
 > **9P is the only protocol** (founding decision). Naming canvas a
@@ -190,7 +193,7 @@ consume the same tree over their bridges.
 
 ## The emca additions, as first specified
 
-emca (the system's user interface, [emca.txt](emca.txt)) is the benchmark
+emca (the system's user interface, [emca.md](emca.md)) is the benchmark
 that demands the span/role vocabulary v0 deferred — *"span attrs arrive
 with the web presenter's real links, later"*. **Four additions and no
 more**, generic rather than emca-specific: con(1) and any future client
@@ -214,7 +217,7 @@ get the same furniture from the same roles. Nothing below is built.
   precedent exactly — the app steers and does not command, so an
   `+Errors` tail never steals focus.
 
-The v0 statement that this amends is acme.txt's constraint 2 ("expect
+The v0 statement that this amends is acme.md's constraint 2 ("expect
 little or no protocol change"); the amendment is deliberate and dated,
 recorded in the decision log rather than absorbed silently.
 

@@ -1,5 +1,7 @@
 # The proof of concept — the record (2026-08-26 → 2026-08-29, complete)
 
+**Role: a *when* — the frozen record of the proof of concept.**
+
 **Declared complete 2026-08-29.** The PoC ran three days by the calendar and one
 architecture by intent: the full design of [design.md](design.md), built as a
 working slice until it had nothing left to prove. Final state: **131 acceptance
@@ -144,7 +146,8 @@ meaning: the five identity decisions (su as transition never escalation; the
 user decomposed into person, role, agent, and network person; the profile as a
 file tree; the capability doctrine from the graveyard — all dated 2026-08-29 in
 the decision log, told as one story in [identity.md](identity.md) and RESEARCH §12), and
-their one running artifact: `su` ([poc/cmd/su.c](../poc/cmd/su.c)), the
+their one running artifact: `su` ([userspace/cmd/su.c](../userspace/cmd/su.c) — written in `poc/cmd/`
+and graduated with the guest world at M0), the
 privilege-*drop* shell, whose test made the suite **131** — the number the
 declaration freezes. The boot namespace gained `#p` at `/proc` so identity is
 visible from the first process on.

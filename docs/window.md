@@ -1,438 +1,195 @@
-# /dev/window — the control interface (v0)
+# The window manager contract
 
-> **The device half LANDED 2026-08-31.** `#w` grew the control interface and the
-> suite proves it headlessly: a window minted through `#w/pkg/clone`, the mint
-> announced on the root `events`, a toolbar declared with `ipnx:` and `host:`
-> actions, content set to a path, the type in the path **validated** (`#w/text/<n>`
-> correctly misses), the plain `#w/<n>` still answering (nothing broke), and the
-> surface's voice round-tripping. **152 PASS / 0 FAIL** on the Rust host; the
-> frozen oracle self-skips.
->
-> **The host half landed the same day too.** Chrome crosses to the host as an
-> ordinary effect (`WinChrome`), the browser shell renders it as **native
-> furniture** — content path, real buttons, a tag field — and a click returns
-> through `bh_win_event`. Actions naming a side are honoured in the surface:
-> `host:toggle-wrap` never leaves it. Proved headlessly and repeatably by
-> `node demo/supervisor/winproof.mjs userspace/rootfs`, which mints a window
-> from rc, reads the toolbar the host was handed, clicks the `ipnx:` control,
-> and watches a plain guest read `exec Install` out of the window's events —
-> **with no emca anywhere in the loop**, which is the claim that most
-> distinguishes this design from acme's.
->
-> **And the content half landed too.** The surface *opens the file itself* —
-> `readPath` on the bridge, resolved in the namespace, answered as
-> `Effect::ReadDone` — and **the browser renders it with its own engines**: SVG
-> as SVG, images as images, HTML in a sandboxed frame, anything else as text.
-> `IPNX implements no renderers` is now a fact about the code, not a claim.
-> Verified both ways: `winproof.mjs` opens a 602-byte SVG headlessly, and in the
-> browser the same file is *drawn* beside its declared toolbar.
->
-> **On 9P and the wire**: in-process this is a function call, per the founding
-> shape — *"wire 9P at boundaries, a Dev table inside"*. A surface sharing the
-> address space calls; a **remote** surface (M12) marshals. The host decides what
-> to open and when, and renders it, which is the property that matters.
->
-> **And the editor component landed, which answers the spike.** Text windows use
-> **CodeMirror 6** (374KB, vendored, offline). Caret, selection, clipboard, IME,
-> wrapping and find are the component's and none were written. What crosses to
-> IPNX is only what IPNX owns: the buffer as `insert`/`delete` with a **sequence
-> number and a hash per change**, the selection, and the verbs. `⌘Z` is
-> intercepted and sent to emca — **one undo stack**, as decided. `⌘S`/`Put`
-> streams the file back through `writePath`, truncating.
->
-> **The spike's question — can the verbs ride a rich editor's grammar? — is
-> answered YES, and observed.** CodeMirror has no menu of its own; it uses the
-> platform's, which is exactly where the verbs belong. Selecting a word and
-> right-clicking gives the closed set (Execute · Look · Pin · Cut · Copy ·
-> Paste), and choosing one puts `look 29 36 surface` in the window's events,
-> where a plain guest read it. **Property 1 survives a rich editor**: any text is
-> still a verb's operand.
->
-> One detail worth keeping: those byte offsets are correct **across a multi-byte
-> character** — the file opens with an em-dash, and "surface" genuinely begins at
-> byte 29. The protocol's coordinate and the editor's are reconciled, not
-> assumed.
+**Role: a *what* — the contract.** What a window manager gives a type manager,
+and what a type manager gives back. **Every window manager implementation must
+honour this and nothing more**; the tiled implementation we built is
+[compositor.md](compositor.md), what the surface owns is
+[surface.md](surface.md), and the types themselves are [type.md](type.md).
 
-The contract for the 2026-08-31 redesign (design.md): the bidirectional
-device through which IPNX declares a window's chrome and the host reports what
-the user did. **Not a protocol** — 9P is the only protocol. This is a device
-presenting files, and what varies per window type is the *semantics* of those
-files.
+*Derived with Christine on 2026-09-02; the decisions are dated in
+[design.md](design.md). The kernel is not party to any of it.*
 
-Christine's test for the whole design, which is the reason this document exists:
-*"This is the only solution that fits the principle (everything is a file, per
-process namespace, and 9P is the only protocol)."*
+## The contract in one line
 
-## The derivation
+> **emca gives a manager a rectangle and a namespace, and stops.**
 
-Not chosen — forced, by three founding decisions:
+Everything inside is the manager's: it renders there, binds into it,
+subdivides it if it wants. emca does not reach inside a manager's window, in
+the same way rio does not reach inside acme's columns.
 
-| decision | what it forces |
+## What emca gives a manager
+
+| | |
 |---|---|
-| everything is a file | a window is a file tree |
-| 9P is the only IPC | host↔IPNX is 9P; there is no second wire, only conventions |
-| per-process namespaces | a window's tree binds into the process that owns it |
+| **a rectangle** | the **content** rectangle — chrome is already subtracted. A manager never learns what furniture exists around it, or where |
+| **notification when it changes** | *resize*. The only thing crossing continuously — and the **cause** is never communicated, because the cause is the implementation's business: allocation, a drag, a grouping gesture |
+| **a namespace** | the window's own. Populating a window is **binding**: a debugger binds the debuggee's `/dev/cons` into one pane, its control file into another |
 
-The error this corrects is recorded in [canvas.md](canvas.md): calling
-`/dev/canvas` *"the display protocol"* invited treating it as the place all
-host/IPNX exchange happens, until it carried layout, chrome, text and drawing.
-Three of its four founding benchmarks were never drawing consumers.
+## What a manager gives back
 
-## The division of labour
-
-| carried by | what |
+| | |
 |---|---|
-| **9P, directly** | the file itself. IPNX names it; the host mounts it and **renders it natively** — text, SVG, HTML, Markdown, PostScript, images. **IPNX implements no renderers.** |
-| **`/dev/window/<type>/<n>`** | chrome and control, both directions |
-| **`/type`** | what types exist, what command drives each, what that type's exchange means |
-| **`/dev/canvas`** | genuine drawing, the exception |
+| **minimum and natural size** | so any implementation can size it sensibly — tiled allocation and a floating window's initial size both need it |
+| **a status line** | what the window reports about itself. The manager says *what*; the surface decides *how* it is drawn |
+| **verbs** | what the toolbar offers. **The MANAGER declares these, not the type** — `look` and `edit` are the same type and must differ, since Save and Undo are meaningless under `look` ([type.md](type.md)) |
+| **dirty state** | whether unsaved work exists |
 
-## The tree
+## The controls
 
-`#w` mints windows as it always has; `/dev/window` is where it is conventionally
-bound. This is that device grown up — it keeps minting and owning windows and
-gains the interface it should have had.
+**close**, **minimise**, **maximise**, **duplicate** — a child *informs its
+parent*, which acts. The first three are in the contract because they are
+universal: every window system under every style has had them since 1984.
+Duplicate joins them because copying a window is equally style-neutral.
 
-```
-/dev/window/
-  clone            mint a window; reading it returns the new number
-  events           reads PARK — one line per window lifecycle change
-  pin              THE PINNED RANGE, at workspace scope — emca declares it,
-                   the surface shows it in the status line
-  <type>/<n>/
-    wctl           layout and lifecycle — rio's file, grown `newrow`,
-                   `newcol`, `newtab`, `minimise`, `maximise`, and a
-                   `delete` that takes the subtree with it; reads
-                   unchanged (rio parses them)
-    axis           how this window arranges its children: row (side by
-                   side), col (stacked), or empty for one holding a body
-    alloc          `allocated` or `tab` — whether the parent has given
-                   this window a rectangle. A tab is a WHOLE window with
-                   no rectangle, never a reduced one
-    kids/<i>/      THE CHILDREN, as a walkable directory, named BY
-                   POSITION — because order IS the layout and `ls` sorts,
-                   so naming entries by window id would have hidden the
-                   arrangement. Each walks to that child's own window
-                   directory; its id is in `winid`, and it is reachable
-                   equally at #w/<type>/<id>
-    content        the PATH the host opens over 9P and renders
-    toolbar        one control per line: <label> <action>
-    tag            the tag line — the host's way back into sam
-    events         the host speaks: clicks, tag commands, dirty, resize, close
-```
+**How many BUTTONS a person sees is the implementation's.** The tiled
+implementation renders duplicate as **three** — *as column*, *as row*, *as tab*
+— because those are its placements; a floating implementation would show one
+and place the copy itself. So the contract names **duplicate**, once, and
+[compositor.md](compositor.md) names the three. (Three buttons is what emca
+renders today, and may change.)
 
-`clone` and the root `events` are the house shape — `/net/tcp/clone`,
-`/dev/draw/new`, `#s`. Two levels of `events`: the **root's** carries window
-lifecycle (a window appeared, was destroyed, changed type); a **window's** carries
-what the user did inside it.
+What they *mean* is the implementation's. Under tiling, maximise minimises
+every sibling; under a floating manager it zooms. The manager asking never
+knows which.
 
-## Any program may open a window
+## The four operands
 
-`/dev/window` is not emca's. **Any program writes to it, and that is how emca
-itself operates** — emca has no privilege, only a job.
+A verb needs something to act on, and there are exactly four things it can be:
 
-The practical shape this gives every tool: one binary, and a flag is the only
-difference between a command-line utility and a system manager.
-
-```
-pkg              lists packages to stdout
-pkg --emca       mints a window and lists them there
-```
-
-## How anyone learns a window exists — and why there is no `/dev/emca`
-
-The device mints, so nothing needs to *announce*. The real difficulty is
-narrower and is already named in the plan (M13): **9P has no change
-notification** — *"poll, or a synthetic event file"*. The house answer is the
-second, and canvas already uses it: a file whose reads park.
-
-So the root `events` file is read by **both** the host and emca, and that
-dissolves the question of who tells whom:
-
-| | role |
+| operand | |
 |---|---|
-| **the device** | mints the window — **mechanism** |
-| **emca** | watches; *places* the window (which leaf, tab or pane) by writing its `ctl` — **policy** |
-| **the host** | watches; renders it where emca placed it |
+| **the window in its layout** | close, minimise, maximise, duplicate |
+| **the window's content** | the manager's verbs |
+| **the tag line's text** | **New, Open, Run, Find, Edit, Add** — always these six, in this order, in every window. The tag line is an *operand*, not a command line; empty means "use the selection" |
+| **the selection** | verbs offered contextually |
 
-emca is a **watcher, not a gatekeeper.** Programs mint directly, so emca holds no
-privilege; but emca is not bypassed either, and keeps the workspace it owns
-(layout, session, `Dump`/`Load`). Policy in a userspace program watching a device
-is the Plan 9 move — the same shape as `/rc/tile` being a window manager in a
-dozen lines of rc.
+**The operands are the contract; where each appears is the surface's.** A title
+bar row, a toolbar, a floating bar at the selection — those are rendering
+decisions, and a target with a side-mounted toolbar needs no change on this
+side of the line.
 
-**Two rejected alternatives**, recorded so they are not revisited: *programs write
-and only the host watches* loses emca's workspace, since a window it never learns
-of is outside the session it owns; *programs ask emca, and emca tells the host*
-makes emca a required intermediary and contradicts "any program may write to
-`/dev/window`" — it is what acme did through `/mnt/acme/new`, and it worked only
-because acme **was** the file server. Here the device is.
+## What is NOT in the contract
 
-**And it degrades correctly**: with emca not running, the window still exists and
-still renders — in its type's default pane, since the type is in the path. So
-`pkg --emca` works with no shell at all. Neither alternative had that property.
+Naming these matters as much as naming what is, because each was at some point
+mistaken for universal:
 
-**One race, named rather than discovered**: mint → the host renders → emca places,
-so for an instant a window sits in its type's *default* pane rather than its
-considered one. Benign by construction — type already determines default
-placement, so a window never appears somewhere *wrong*, only somewhere
-provisional, and at most it moves once.
+| not in the contract | where it belongs |
+|---|---|
+| axis, alternation, allocation, slack, tabs, `leaves = cols / 72`, Fit, Reset | [compositor.md](compositor.md) — the tiled implementation only |
+| how chrome is drawn, icons, colours, light/dark, toolbar placement | [surface.md](surface.md) — native to each target |
+| what the content *is*, and how it is rendered or edited | the type and its manager ([type.md](type.md)) |
+| anything at all | the kernel — it is not party to the window system |
 
-**The type is a path component, not an attribute.** `/dev/window/proc/1` tells
-the host it is drawing a proc window, exactly as `/net/tcp/0` differs from
-`/net/udp/0`. This is the house pattern throughout — `/proc/17`, `/net/tcp/0`,
-`/mnt/acme/27` — and it means the whole window system greps.
+## The one exception: the outermost window
 
-## Actions name a side
+**Every window in the tree obeys this contract. The outermost one obeys it
+except for its chrome, which belongs to the host.**
 
-The capability that had no home in canvas, and the reason a control interface
-was needed at all: a control must be able to say **which half performs it.**
+| | |
+|---|---|
+| title, window controls, toolbar | **the host's** — the macOS title bar and menu bar, the browser's tab and toolbar, the iPad's furniture |
+| its body | **children**, exactly like any container |
+| allocation, alternation, the tree | **unchanged** |
 
-```
-Put      ipnx:Put            round-trips; emca decides what it means
-Look     ipnx:Look
-Wrap     host:toggle-wrap    never round-trips; layout is the surface's
-Split    host:split-right
-```
+It is not a special *type*: `inode/system` is ordinary, and a **nested** emca
+opens its own `/` with ordinary emca chrome, because its parent is an emca
+window rather than the host. **The exception is the outermost surface.**
 
-`host:` actions are the two-halves split enforced in the vocabulary: *toggle
-wrap, split the pane, show the rail, switch tab, change font size* are the
-surface's by rule, and must not cost a round trip. `ipnx:` actions carry the
-verbs whose **meaning** is policy — which is IPNX's half.
+Three attempts to remove it each produced a worse one — a sliver of body beside
+children, an undecorated pane standing in for a body, and a second title bar
+under the native one. Declared once, it costs less than any of them.
 
-## Editing, and what `Put` is
+**And its manager owns an ordinary child.** A container's manager renders by
+arranging, but `inode/system`'s also wants somewhere to write — so it opens one
+**ordinary window** and writes there. Nothing about bodies or allocation
+changes; it is a child like any other, and *collapsing it is `minimise` on that
+window*.
 
-The host **edits** (*editing is the surface's*, design.md 2026-08-31 — Monaco,
-TextKit, or the platform's own) and holds a **mirror** of the buffer; emca holds
-the authoritative copy (see *The buffer* below). On Save the host **streams the
-edited file back to IPNX over 9P**: an ordinary write, no new mechanism, and it
-doubles as a resync — the whole file arriving is a chance to confirm the two
-copies agreed.
+## Why the contract is this small
 
-Dirty state therefore needs no reporting channel of its own: emca knows the
-buffer and knows what was last written, so `Putall` and `Exit`-refuses-if-dirty
-are answered locally.
+Because a manager receives a rectangle and a namespace and nothing else, it
+cannot depend on how the rectangle was chosen. **That is what makes the
+windowing implementation replaceable** — tiled, overlapping, Stage
+Manager-style — with no change to any manager or any type. A contract that
+leaked allocation, or chrome, or the cause of a resize, would freeze one
+windowing style into every program that ever ran here.
 
-## The buffer: mirrored, with divergence detectable
+## The manager interface — a file interface
 
-**emca holds the authoritative buffer; the host mirrors it.** Four independent
-reasons force this, only one of which is undo:
+*Reviewed and endorsed by Christine, 2026-09-02.*
 
-- **the suite runs headless** — against a virtual surface there is no host
-  buffer, so every acme behaviour test would break
-- sam's structural commands operate on text
-- `Put` and the `| < >` filters need it
-- the `body` file serves client programs
+### The claim
 
-**The risk, named**: emca writes too (sam, `Get`, `+Errors`, steering `sel`), so
-this is not replication with one writer — it is two writers on one buffer, which
-is collaborative editing. The canvas design already solved it and the solution
-is lifted rather than reinvented: *the device applies `insert`/`delete` to the
-data **before** queueing the event, so echo and data are one thing.* Single
-source of truth, optimistic local echo.
+> **The manager interface is a file interface. emca serves one directory per
+> window, and a manager reads and writes files in it.**
 
-**Divergence must be detectable.** Its failure mode is not a crash but silent
-disagreement — one dropped edit and every later `s//` operates on text that is
-not there. So each edit carries a **sequence number** and each sync a **hash of
-the buffer**; mismatch triggers a resync.
+This needs no new protocol, because 9P is already the only IPC. It works
+identically for a host-side manager (`edit` over CodeMirror) and a guest-side
+one (`/proc`), because one reaches the files through emca-host↔emca-IPNX and
+the other mounts them directly — the symbiosis doing what it is for.
 
-That amends a load-bearing discipline on purpose: con(1)'s *"apps never re-read"*
-becomes **"apps never re-read *routinely*"**. A resync on detected divergence is
-a repair path, not normal operation.
+And it is what the tradition already does: acme serves `addr`, `body`, `ctl`,
+`data`, `event`, `tag` per window at `/mnt/acme/N/`; rio serves its clients
+`/dev/cons`, `/dev/mouse` and `/dev/wctl`. **The archived `/dev/window` device
+was this design already** — the proposal is to keep its shape and change its
+server from the kernel to emca.
 
-## Undo: one stack, and it lives in emca
+### The per-window directory
 
-The host's undo is **disabled**; `⌘Z` round-trips to emca, which undoes by
-sequence number and pushes the change back.
+**The path is `/dev`, not `/mnt`** (Christine, 2026-09-02): *"the convention is
+`/dev` can be virtualised."* That is the reason, and it is stronger than
+precedent — **`/dev` is not "where devices live", it is the slot that can be
+substituted underneath you.** Without emca, `/dev/cons` and `/dev/draw` are the
+host's real screen and keyboard; with emca they are virtualised per window; and
+the client cannot tell. `/mnt` carries no such convention — a tree you attached
+stays the tree you attached.
 
-This is simple rather than a compromise because **emca is not remote** — a
-process on the same machine behind a SAB mailbox, so a round trip is
-microseconds. Every argument that forces web editors into local optimistic undo
-stacks is a *latency* argument, and none apply. Acme's infinite undo survives
-exactly, with no interleaving semantics to explain and no "sometimes it undoes a
-keystroke, sometimes a command".
+So a window's files belong in `/dev` for the same reason `/dev/draw` does: **a
+manager reading `/dev/window/rect` must not be able to tell who provided it.** That is
+what makes emca nest, what keeps the no-windows CLI case working, and what will
+make a floating implementation substitutable for the tiled one.
 
-The exception, for later: a **remote** surface under M12's distributed story
-would feel the trip. Only then is local undo worth its complexity.
-
-**Versioning is not undo.** `#V` is tree-granular and durable; undo is
-edit-granular and session-scoped. Neither substitutes, and because versioning is
-optional (decision log), **nothing may be built on it** — undo cannot be "walk to
-the previous version", or a user with versioning off would have none.
-
-## The event vocabulary
-
-Reused from canvas rather than invented — the verbs and their fields are the
-ones already in service, which keeps one vocabulary across the system.
-
-**Root — `/dev/window/events`** (window lifecycle; read by both emca and the
-host):
+rio — not acme — is therefore the analogue: it serves `/dev/cons`,
+`/dev/mouse` and `/dev/wctl` to its clients, with the full set at
+`/dev/emca/<n>/`. This project already follows it: `bind '#w/N' /dev` makes a
+namespace a window, and the supervisor's file is named `devwsys.mjs`.
 
 ```
-new <type> <n>            a window was minted
-content <type> <n> <path> a window's content file was written
-del <n>                   a window is gone
+/dev/window/      each manager's OWN window — the common case, no id in the path
+/dev/emca/<n>/    the full set: what emca serves, what a window tool reads
+
+A manager opens /dev/window/rect, never /dev/emca/3/rect: no window id appears
+in any path a manager uses, because its namespace contains only its own window.
+It cannot reach another window's files — they are not there.
+
+/dev/window is ALREADY this project's path: /lib/namespace binds '#w' there,
+and the archived device spec used it. Ten generic names directly in /dev
+(ctl, events, size, type...) would collide with cons, draw and canvas.
+
+    rect      read  x y w h — the CONTENT rectangle, chrome already subtracted.
+              A blocking read returns when it changes: that IS resize, and the
+              cause is never reported
+    size      write minw minh natw nath — what the implementation needs to lay
+              you out, tiled or floating alike
+    verbs     write the toolbar, one per line, same grammar as /type/*/verbs
+    status    write the status line's text
+    dirty     write 0 or 1
+    type      read  the MIME type this window holds
+    role      read  which role this manager is serving
+    title     read  the window's title. emca OWNS it; the manager may look
+    events    read  input not consumed by the surface — the manager owns the
+              keyboard inside its rectangle
+    ctl       write window-level requests: close, minimise, maximise, duplicate
 ```
 
-**`content` is an event, not a sample** (landed 2026-08-31). A window is minted
-*before* its file is known — `clone` first, `content` after — so a watcher that
-read `content` once at mint would race whoever fills it in, and emca is a
-watcher. Announcing the write closes that race, and the same line is how a
-surface reopens an existing window on a different file.
-
-**Per window — `/dev/window/<type>/<n>/events`** (what the user did):
-
-```
-exec <label>              a toolbar control was activated
-open <text>               a new window whose title is <text>
-find <text>               select every item <text> names; dot becomes a set
-run <text>                execute <text>, ignoring dot
-pipe <text>               selected items to <text>'s stdin, one per line;
-                          the results open in a new window
-edit <text>               apply <text> as a sam command to each selected
-                          item's text
-add <text>                put <text> on this window's toolbar as a button
-snarf <text>              the surface copied — /dev/snarf is the sync point
-insert <q0> <text>        the user typed or pasted
-delete <q0> <q1>          the user removed a range
-select <q0> <q1>[ <q0> <q1>]...
-                          the selection changed. A LIST OF RANGES, not
-                          one: Find selects every match, so dot is a
-                          SET and the surface's multi-cursor is the
-                          same object (emca.txt). One pair is the
-                          ordinary case; no pairs is a collapsed caret
-dirty <0|1>               the buffer's dirty state changed
-put                       THE SURFACE PUT — it already wrote the file
-seq <n> <hash>            the mirror's sequence and buffer hash
-resize <w> <h> [<cellw> <cellh>]
-                          two fields is a user drag; four is a surface
-                          reporting its VIEWPORT and its TEXT CELL, both
-                          device-independent. Only the surface knows the
-                          cell, so only it can report one
-size <w> <h>              the surface decoded a picture emca could not
-                          parse and says how big it is
-close
-```
-
-`put` is a **notification, not a command**, and the distinction is load-bearing:
-the surface holds the real editor's byte-exact text, where emca's buffer is
-reconstructed from the change stream above. So the surface writes the file and
-emca **re-reads what landed** — one writer per file. Were it the other way round
-(surface writes, then `exec Put`), any reconstruction error would silently
-overwrite correct bytes. `exec Put` remains the road for a window with no editor
-component behind it, where emca's buffer *is* the only copy.
-
-`seq` is the divergence check from *The buffer* above: emca compares and
-reports on mismatch. Because `put` re-reads, a divergence can no longer corrupt
-a file — it is a diagnostic, which is what makes it cheap enough to always send.
-The hash is FNV-1a **over the bytes**, not over UTF-16 code units: the offsets
-in this vocabulary are byte offsets, and a check measured in different units
-than its coordinates false-positives on exactly the multi-byte content it exists
-to protect. Everything else here is a user action.
-
-## The range verbs, and which side runs them
-
-Splitting acme's `look` into **Open / Jump / Search** is not only a display
-change — it **re-divides the labour**, along the line the toolbar already draws
-between `ipnx:` and `host:`.
-
-| verb | side | why |
-|---|---|---|
-| Open | IPNX | mints a window and resolves against the namespace |
-| Execute | IPNX | runs a command in the window's directory, and consumes the pin |
-| Pin | IPNX | workspace state, and `execute` is emca's, so emca must hold it |
-| Edit | IPNX | sam's structural language |
-| Jump, Search | surface | moving a caret inside a buffer the surface already holds |
-| Cut, Copy, Paste | surface | the platform's clipboard, IME and permissions |
-| where selection verbs appear | surface | a native callout, a context menu, a small bar, or nothing — an EMPTY TAG LINE already reaches all six from fixed, visible buttons, so this surface is optional |
-
-Sending Jump or Search down would be a round trip to accomplish nothing; taking
-Cut/Copy/Paste would replace working platform behaviour with a worse copy.
-`/dev/snarf` stays the sync point, written by the surface after a copy.
-
-**Applicability is emca's judgement, and the bar SHOWS it.** A path that exists
-offers Open; an address offers Jump; a word offers neither. **A path takes
-precedence over an address**, which is acme's own order — `look` tries the file
-first — so `/usr/kitty/` is a directory and not the regexp `usr/kitty`. And a
-regexp address is **delimited at both ends**: without that rule every absolute
-path reads as one, and `/etc/motd` offers Jump, which is exactly the silent
-misjudgement the bar exists to expose.
-
-## `ui` — what the surface actually rendered
-
-Each window also carries a **`ui`** file: the controls the surface produced, one
-per line — label, role, keyboard path, enabled state.
-
-This exists so the **grammar is testable**, which nothing else in the design
-made possible. On a real surface it is derived from the **platform accessibility
-tree** — which is precisely the "can this be reached" answer, on the web and on
-Apple alike — and the virtual surface synthesises it. So one assertion (*every
-floating-bar verb and every toolbar button is present, named and
-keyboard-reachable*) runs on every surface, headless included.
-
-It also converts a claim into a measurement: the input convention holds that
-accessibility is *"enforced by construction"*, and until now nothing checked it.
-
-## The console window
-
-A console window is not a special mechanism. Its `content` is a **growing
-file the host tails**; typed lines arrive back through the window's `events` as
-ordinary `insert` lines terminated by a newline. History and line editing are the
-host's (*editing is the surface's*), which **deletes con(1)'s mark arithmetic** —
-the input region is just the host's editable tail.
-
-For programs wanting keystrokes rather than lines, the raw-input door is
-xterm.js, per the console's "AND, not XOR" (userland.md).
-
-## `/type` — read by both sides
-
-The registry binds a type name to three things:
-
-- **what IPNX command drives it** (optional — a type with no command is rendered
-  from its files alone)
-- **what chrome it declares** — the toolbar's default contents
-- **what the semantics of its host/IPNX exchange are** — still 9P, but a `proc`
-  window and a `text` window agree different things about their files
-
-This answers *"how does the host know what this is"* without content sniffing,
-and it is the same registry the emca design already required.
-
-**LANDED 2026-08-31.** `/type/<name>/` is four small files — `ns` (bind lines),
-`cmd` (optional), `window` (one control per line, `<label> <side>:<verb>`) and
-`pane` (the placement hint). `/rc/emcaopen` knows *nothing* about any type: it
-reads the registry, applies the `ns`, copies the `window` into the new window's
-toolbar. The surface reads the registry too — `dir` is the only type compiled
-into the shell, as the bootstrap floor, and every other placement arrives from
-`/type/*/pane`. Twelve types ship; **`/type` is itself a type**, so the interface
-is configured by editing files inside it.
-
-The demonstration that matters: clicking **Processes** opens `/proc` with `Kill
-Note Ns` and a live pid list, drilling into `ctl · status · note · notepg` — and
-**no process manager program exists anywhere.** There is a filesystem, four
-small files, and a surface. Suite: 154 PASS / 0 FAIL on both hosts.
-
-## What this replaces
-
-From canvas: `stack` (layout → `ctl`), `text` and `edit` (content → a file over
-9P), and the `role=`/`type=` attrs specified earlier the same day. From the app:
-every renderer emca would have needed, and most of its display machinery.
-
-## Open
-
-- ~~One window vocabulary or two?~~ **Answered 2026-08-31: one.**
-  `/mnt/acme` retires and merges into `/dev/window` — the two were the same files
-  pointing opposite ways (a program driving emca; emca driving the host), and the
-  only difference was that `/dev/window` declares toolbars and actions, which
-  acme's interface arguably should have had. The obligation it carried —
-  *`/dev/window` must be usable by ordinary programs*, that being the acme paper's
-  §7 and the thing that made acme extensible without plugins — is **discharged
-  above**: any program mints through `clone`, and emca is a watcher rather than a
-  gatekeeper.
-- ~~Event granularity on the way back~~ — **specified above**, reusing canvas's
-  vocabulary rather than inventing one.
-- ~~The console window's shape~~ — **specified above**: a growing file the host tails,
-  typed lines back as `insert`, con(1)'s mark arithmetic deleted.
-
-**Nothing is open in this contract, and every half is built** — the device, the
-host's chrome, the host's content, and the editor. The design's last named risk
-(property 1 under a rich editor) is retired by observation, not argument.
+> **RESOLVED (Christine, 2026-09-02): the window's content is ALWAYS a file.**
+> What varies is only how the host **renders** it — as text, an image,
+> structured or formatted text, a table. That is the rendering rule the system
+> uses everywhere ([surface.md](surface.md)): the file is the truth, the drawing
+> is the surface's.
+>
+> So `body` exists for every window, including one whose manager is host-side.
+> The mirror protocol (`insert`, `delete`, `seq`) is then an **optimisation for
+> keeping a host editor in step** — not a substitute for the file and not a
+> second source of truth. A guest reading `/dev/window/body` gets the content,
+> whatever is drawing it.

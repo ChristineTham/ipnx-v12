@@ -15,7 +15,7 @@ engine change (the engine matrix is a dated decision in
 [design.md](design.md)). **Amended 2026-08-31**: each form below is also a
 **surface of `emca`**, the shell of **Saranos** — the user-experience layer
 named 2026-08-31, sitting on IPNX (kernel and userspace); see
-[emca.txt](emca.txt) —
+[emca.md](emca.md) —
 so a form is complete when a person can work in it, not merely when the suite
 runs green. The surface half is unbuilt (M14); the engines and states below
 are unaffected.
@@ -71,6 +71,33 @@ the directory):
 | `/srv` | `bind #s` | posted channels, alive by name |
 | `/proc` | `bind #p` | status, ctl (identity transitions — [identity.md](identity.md)), notes |
 | `/net` | — | **does not exist yet** (M7); its absence is what the suite's future network tests will probe |
+
+**Designed 2026-09-02, not yet in `/lib/namespace`** (decision log):
+
+| path | served by | contents |
+|---|---|---|
+| `/home` | **bind**, per-process | **the user's home, and it means "mine"** — bound to `/usr/<whoever this process is>` — the person's whole tree. **A bind, never a symlink**: a symlink stores its target, so `/home → /usr/kitty` would mean *kitty* for every process that walked it. An agent's `/home` is the agent's, and an agent's namespace need not contain `/usr` at all |
+| `/home/project` | seed | the person's projects. **`New` on a template creates one here**, named from the tag line. Each carries the `template` it was instantiated from |
+| `/home/bin` `/home/lib` `/home/rc` `/home/type` `/home/template` `/home/pkg` `/home/profile` `/home/credentials` | seed | **your own version of any system root**, bound `-b` over it so yours come first — one rule, Plan 9's own practice (`bind $home/bin/rc /bin`) generalised. **This is the configuration mechanism; there is no other**, which is why no dotfile, `XDG_` variable or per-application config directory exists here. `ls /template` shows both concatenated, a collision resolves to yours, and **creates land here** because the MCREATE element is yours — so `Promote` writes to `/template/<name>` and it lands in `/home/template/<name>` without knowing there are two |
+| `/credentials` | **union** | the system's — CA roots, host identity, service keys — plus **`/home/credentials`**. A **listing** of what keys exist — never plaintext, and never the mechanism: a program uses a key by writing a challenge and reading a response, so secrets stay in the agent. Also a union: system credentials — CA roots, host identity, service keys — plus **`/home/credentials`** |
+| `/profile` | **union** | the system's base (`/lib/namespace` today) plus **`/home/profile`**. A tree: namespace fragments, services, key references. **A union like every other root** — the system's base (`/lib/namespace` today) plus **`/home/profile`**. No special case: your half lives at `/home/<x>` exactly as `/home/bin` does |
+| `/home/document` | seed | and whatever else a person makes. **This is where a person is allowed to be messy**, which is why it is not the root |
+| `/usr/<name>` | seed or mount | **where an identity's files live — a directory NAMED AFTER an identity, not an identity**. Holds your work, your overrides of system roots, `credentials` (a *listing*, never plaintext — the keys stay in the agent), `profile`. Separating what you *are* from what you *own* makes permissions natural: someone may read `/usr/mimmy/home/project/foo` and never `/usr/mimmy/credentials`. The **durable, addressable** name — `/usr/kitty`, `/usr/mimmy` — readable subject to permission. `/usr` holds **files belonging to identities, not logins**: a mount of another person's system (per-attach identity enforced at the attach), or a resident role or agent |
+| `/template` | seed + union | the **system's** declarations, with `/home/template` bound over them. Declarations — each a text file that inherits another and binds packages, files and commands into a namespace. Instantiating one produces a workspace, whose own declaration is a **`project`** file — a *different* object, specific where a template is generic. `Promote` **generalises** a `project` into a template here. **`New` on a template creates the project at `/home/project/<name>`** — the name from the tag line, or a default |
+
+**One rule, no exceptions.** `/home` binds to `/usr/<me>` — the person's whole
+tree — and **every other root is a union of the system's and yours**, with your
+half at `/home/<x>`. `/bin`, `/lib`, `/type`, `/template`, `/pkg`, `/profile`
+and `/credentials` all work the same way; `/home/project` and `/home/document`
+are simply work, with no system twin. An agent's are its own, because the bind
+is per-process.
+
+**Why both `/home` and `/usr/<name>`:** `/home` is relative by construction, so
+it cannot name *someone else's* home — and mounting another system's namespace
+is exactly where that is needed. `/home/...` is what you type and what
+templates contain, portable across every instance; `/usr/kitty/...` is what
+another system says when it needs to name your files specifically. Same pattern
+as `/n/` and `/mnt/`.
 
 Where the pieces live in the **repository** is the tree in
 [implementation.md](implementation.md) — one copy, there.
@@ -137,7 +164,7 @@ ring) was removed the day it was noticed. **Next review** unchanged.
 
 Unscheduled, and taken because a decision changed what every form *is*
 rather than how it performs (decision log 2026-08-31; the design is
-[emca.txt](emca.txt)). The ledger exists to catch exactly this.
+[emca.md](emca.md)). The ledger exists to catch exactly this.
 
 **What changed.** The browser page, the macOS app and the iPadOS app were
 hosts that ran a system. They are now **surfaces of `emca`** — the system's
@@ -159,7 +186,7 @@ as well: **a surface that nobody can use is a form that has not shipped**,
 whatever the suite says. Amoeba and Plan 9 died of their deployment wave,
 and the specific way this project could repeat that is now visible — build
 four surfaces, make none of them livable, and call the suite's green a
-result. The named guard is emca.txt's acceptance test (any text is an
+result. The named guard is emca.md's acceptance test (any text is an
 operand; context is location; the working set is visible) plus "no
 half-working": a surface ships its grammar whole or not at all.
 
