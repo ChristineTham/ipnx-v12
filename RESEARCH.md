@@ -1330,11 +1330,24 @@ unimplemented but an error:**
 `rootreset()` adds empty directories — `bin`, `dev`, `env`, `fd` — and
 `addbootfile()` puts in files compiled into the kernel image. That is the whole
 device. **The real filesystem is a user program or another machine**: the
-kernel binds root(3) on `/`, execs `/boot/boot`, which mounts `bootfs.paq`, runs
-`bootrc`, which attaches the file server, *"mounts the root file system at
-/root … and makes the connection available as `#s/boot`"*, then binds `/root`
-after `/` ([boot(8)](https://man2.aiju.de/8/boot)). And `ramfs` is
-`sys/src/cmd/ramfs.c` — **907 lines of userspace**.
+kernel binds root(3) on `/` and execs `/boot/boot`, **the bootloader**, which
+attaches the file server and execs `init`.
+
+> **CORRECTED 2026-09-04.** This paragraph originally said boot *"mounts
+> `bootfs.paq`, runs `bootrc`, which attaches the file server … then binds
+> `/root` after `/`"*, cited to [boot(8)](https://man2.aiju.de/8/boot) — **a
+> web man page, not the tree**. There is **no `bootrc` anywhere in `plan9/`**.
+> In 9legacy the bootloader is C: `sys/src/9/boot/boot.c`, whose `rootserver()`
+> picks a method, `nsinit()` attaches and mounts the root, and `execinit()`
+> (line 202) execs `/$cputype/init`. `newns` is not boot's either — it is
+> `newns(2)` (`sys/src/libauth/newns.c:60`), called by `cmd/init.c` among
+> others. The rule this breaks is CLAUDE.md's own: a claim about Plan 9 traces
+> to file and line **in `plan9/`**, which is why the tree is checked out at
+> all.
+
+And `ramfs` is `plan9/sys/src/cmd/ramfs.c` — **945 lines of userspace**
+(plan9-stock's is 907, and the two differ; the figure first recorded here was
+stock's).
 
 **So Plan 9 splits two roles that ipnx-v12 has conflated in one device:**
 
@@ -1652,13 +1665,40 @@ a question of design. This is the sweep for the rest.
 
 **Two of the plan's own claims are wrong, measured:**
 
-- **P2 step 3 says `/boot/boot` "**is rc**".** It is **C** —
-  `sys/src/9/boot/boot.c`. Its `main` picks a boot method, sets the root up,
-  and `execinit()` (line 202) execs `/$cputype/init`.
+- **P2 step 3 calls the thing `/boot/boot` and says it "**is rc**".** Both
+  wrong, and the first is the one that matters: **`/boot` is the loader's
+  name.** *"We can't call something /boot and refer to something other than a
+  bootloader"* — and *"not that we should implement a bootloader"*. The name is
+  simply unavailable, and what the step's program is called is now an open gap.
+  On "is rc": the reference's equivalent is C (`sys/src/9/boot/boot.c`, whose
+  `execinit()` at line 202 execs `/$cputype/init`), and **there is no `bootrc`
+  in `plan9/` at all** — §9.12 said there was, on the authority of a 9front web
+  man page rather than the tree, and is corrected above.
 - **P2 step 3 puts `newns` in `/boot/boot`.** `/lib/namespace` is read by
   **`newns(2)`** — `libauth/newns.c:60` — and its callers are `cmd/init.c`,
   `auth/login.c`, `cmd/cpu.c`, `auth/none.c`. **`newns` belongs to init**, not
-  to boot. Boot attaches the root and execs; init makes the namespace.
+  to the bootloader. Boot attaches the root and execs; init makes the
+  namespace.
+
+**A third failure mode, and it is the worst of the three.** `/boot` was
+neither undecided nor merely a fact: **it was decided, recorded, and I did not
+find it.** design.md 2026-09-02 says it outright — *"`boot` also takes a name
+Unix already owns: the bootfile, the kernel image, the loader … a name Unix
+already uses is not available. All three slips were the same shape — reaching
+for a plausible-sounding name without checking what it already carried."*
+P2 step 3 is the fourth instance of that shape, and this sweep first wrote the
+correction down **backwards** — as *"`/boot/boot` IS the bootloader"*, i.e. as
+a licence to build one — before Christine corrected it twice more.
+
+**Why it was missed, which is the transferable part.** The search was for
+*bootloader* and `/boot/boot`. The rule is filed under **naming** — *"do not
+put configuration into a root that means something else"* — and contains
+neither term prominently. So: **a decision has to be findable from the words
+someone would search, not only from the words it was written with.** Grepping
+`design.md` for the *thing* is not enough; the rule that governs a thing is
+often filed under the *principle*. When a search comes up empty, that is
+evidence the wrong word was used, not that the decision does not exist —
+especially when Christine says *"we definitely had this conversation before."*
 
 **A provenance slip, and the reason the two trees exist.** P2 step 2 cites
 *"`sys/src/cmd/ramfs.c` (907 lines)"*. That is **plan9-stock's** figure;

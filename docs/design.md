@@ -10,7 +10,7 @@ system *is* is [architecture.md](architecture.md); what is *built* is
 
 ## Decisions — the log
 
-**118 decisions, 2026-08-26 to 2026-09-04.** Each entry states the
+**119 decisions, 2026-08-26 to 2026-09-04.** Each entry states the
 decision and the constraint that forced it. **Dated entries keep the words they
 were written with** — reopening one requires new evidence, not a fresh opinion.
 
@@ -72,6 +72,7 @@ says what was replaced and by what.*
 | 2026-09-02 | A manager's window is at `/dev/window/`, not directly in `/dev` |
 | 2026-09-03 | A move out of the kernel runs both answers and asserts they agree |
 | 2026-09-03 | A posted service name must be instance-qualified, because `#s` is global |
+| 2026-09-04 | `/boot` is the loader's name and is not available — the boot path needs one |
 | 2026-09-04 | The suite's floor is what passes on the PURE kernel |
 | 2026-09-04 | Replanned: three layers, the demo a milestone, the code legacy |
 | 2026-09-03 | A deviation is authorised only for the substrate — and even then must be substrate-independent |
@@ -144,6 +145,35 @@ says what was replaced and by what.*
 
 </details>
 
+
+- **(2026-09-04) `/boot` IS THE LOADER'S NAME AND IS NOT AVAILABLE — THE BOOT
+  PATH NEEDS A NAME, AND THAT IS A GAP.** Christine, on P2 step 3: *"`/boot/boot`
+  is wrong I've already said that is bootloader by convention"*, then, when
+  this was first written down backwards: *"What I meant was we can't call
+  something /boot and refer to something other than a bootloader"* — and,
+  pointedly, *"**not that we should implement a bootloader**"*.
+
+  **This is the 2026-09-02 rule, applied again.** *"Do not put configuration
+  into a root that means something else"* — recorded that day after she caught
+  the same slip three times — says it in as many words: *"`boot` also takes a
+  name Unix already owns: the bootfile, the kernel image, the loader … **a name
+  Unix already uses is not available.** All three slips were the same shape —
+  reaching for a plausible-sounding name without checking what it already
+  carried."* P2 step 3 is the fourth instance of that shape.
+
+  **So what is settled is a refusal, not a design.** The step's *work* is real
+  — something attaches the root server, binds it over `/`, and execs `init`
+  (`newns` is `init`'s own, `plan9/sys/src/libauth/newns.c:60`, called by
+  `plan9/sys/src/cmd/init.c`). What that something is **called**, and whether
+  it is a program at all or falls to the kernel or to `init`, is **undesigned**
+  — a gap, and not to be filled by reaching for another plausible name. We are
+  not building a loader, so `/boot` is out; that is the whole of the decision.
+
+  **She had said it and I did not find it**, because I searched for *bootloader*
+  and `/boot/boot` while the rule was filed under naming. A decision is not
+  only recorded — it has to be **findable from the words someone would search**.
+  That, and not the re-derivation, is the failure worth carrying forward
+  ([RESEARCH §9.19](../RESEARCH.md)).
 
 - **(2026-09-04) THE SUITE'S FLOOR IS WHAT PASSES ON THE *PURE* KERNEL — AND
   THE FROZEN ORACLE IS THE PoC's RECORD, NOT A CONSTRAINT ON THE KERNEL.**

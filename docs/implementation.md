@@ -93,7 +93,7 @@ dependency.**
 | **2** | **`#\|`** takes its letter. **`'M'` returns to the mount driver**; the ramfs is reachable by another name until P2 removes it | — | the letter table is a subset of `plan9/sys/src/9/port/dev*.c` except `#Z` and the temporary ramfs name |
 | **3** | **`link`/`symlink`/`readlink`** (60–62), wire types 128/130/132, `DMSYMLINK`, and the kernel's walk-time symlink resolution leave. The nine link assertions leave with them | step 0 | `sys.h` ∪ {`ARGS NOTEGET AREAD IOWAIT`} contains every trap |
 | **4** | **identity narrows to Plan 9's**: `user` per process, `eve` for the machine, `iseve()`. `#c/user` readable, writable only as `"none"` (`auth.c:109`); `#c/hostowner` eve-only, and writing it sets `user`. Permission is `devpermcheck` by name. **`Cred{euid,ruid}`, `DMSETUID`, setuid-at-exec, and credential transitions through `/proc/<pid>/ctl` leave**. Of the nine uid assertions, three are Plan 9's own and survive (*`/dev/user` names the host owner*, *mode 0600 denies another user*, *the owner still reads it*); six leave. `cmd/su.c` becomes a personality program (P2) | step 0 | one identity field; the three assertions pass; `identity.md` carries its **UNDER REVISION** banner until P2 rewrites it |
-| **5** | **`#H`** leaves, with `Effect::Fetch`. `pkg`'s registry fetch — today over `#H` — needs a userspace `webfs` **or a local registry**; the demo uses a local one (`registries` allows *"a local path"*) | — | no `DevId::Web` |
+| **5** | **`#H`** leaves, with `Effect::Fetch`. `pkg`'s registry fetch — today over `#H` — moves to a userspace `webfs` **or a local registry**; the demo uses a local one (`registries` allows *"a local path"*). `webfs` is **not undesigned**: Plan 9 ships it as a userspace program, `plan9/sys/src/cmd/webfs` | — | no `DevId::Web` |
 | **6** | **`#w` leaves entirely** — 29 `WKind` variants, `wsys_*`, `win_*`, `cv_*`, `drawmsgs`, `draw.rs`, and `Effect::WinUpdate/WinGone/WinText/WinCanvas/WinChrome`. The 2 snarf assertions and the 2 allocimage/draw assertions leave; the 5 emca tree assertions are retargeted to `/dev/emca` | **P4 step 1** — emca must already mint windows and serve `/dev/cons` per window, or the demo's shell has nowhere to run. **This step lands inside P4** | `#w` unreachable; no `Win*` effect; the kernel is ~3,600 lines |
 | **7** | **`Effect` shrinks to machine facts**: `Spawn{…, Cont}`, `ConsWrite`, `Timer`, `Host`, `ReadDone`/`WriteDone`, `Shutdown`. `SnarfSet/Get` leave with `#w` | steps 5, 6 | every variant is something a driver on a Pi could answer |
 
@@ -104,8 +104,12 @@ is in `plan9/sys/src/libc/9syscall/sys.h` or is one of the four VM traps; the
 per-process identity is one name; the kernel has no window, mouse, draw or
 canvas concept; the floor passes on all three hosts.
 
-**Exposes:** whether links survive as a *capability* in a userspace file server
-(cross-cutting, below); identity as a personality (P2).
+**Exposes:** identity as a personality (P2). **Not exposed — measured and
+closed:** whether links survive as a *capability* in a userspace file server.
+There is nothing to relocate: no `Tlink`/`Rlink`/`Tsymlink` in
+`plan9/sys/include/fcall.h`, no `syslink` in `plan9/sys/src/9/port/`, nothing
+in `9syscall/sys.h`. Plan 9 answers this with `bind` and `mount`, at every
+layer.
 
 ---
 
@@ -117,9 +121,9 @@ no `/boot`. **Plan 9 designed this; we read it rather than invent it.**
 
 | | builds | deletes | depends on |
 |---|---|---|---|
-| **1 `#/`** | Plan 9's root device: a fixed small read-only table, `rootwrite` is `error(Egreg)`, holding `/boot` and empty mount points (`devroot.c`, 261 lines). **The plan's one addition to the kernel**, replacing `#M`+`#V` (243 lines) — net, the kernel shrinks | — | P1 step 2 |
-| **2 the root file server** | a **userspace** 9P server for the rootfs — `sys/src/cmd/ramfs.c` (907 lines) is the reference shape. It serves the seed the host provides through `#Z`, so the host stays a storage box and the tree is a process | `#M`, `#V`, `ram_*`, `snap_*` from the kernel | 1 |
-| **3 `/boot/boot`** | attaches the root server, binds it over `/`, then `newns` from `/lib/namespace` — which loses its `bind #w /dev/window` line — and execs `init`. **It is rc**, as `/lib/namespace` already is text | `init.c`'s implicit-root assumption; `-w` and every window path in `init.c` | 2 |
+| **1 `#/`** | Plan 9's root device: a fixed small read-only table, `rootwrite` is `error(Egreg)`, holding empty mount points (`devroot.c`, 261 lines — Plan 9's table also holds `/boot`, which **this system has no name for yet**: step 3's gap reaches back into this table). **The plan's one addition to the kernel**, replacing `#M`+`#V` (243 lines) — net, the kernel shrinks | — | P1 step 2 |
+| **2 the root file server** | a **userspace** 9P server for the rootfs — `plan9/sys/src/cmd/ramfs.c` (**945 lines**; plan9-stock's is 907 and the two differ — 9legacy is what a claim is checked against) is the reference shape. It serves the seed the host provides through `#Z`, so the host stays a storage box and the tree is a process | `#M`, `#V`, `ram_*`, `snap_*` from the kernel | 1 |
+| **3 the boot path — ⚠ THE NAME IS A GAP** | The **work** is settled: something attaches the root server, binds it over `/`, and execs `init`; `/lib/namespace` loses its `bind #w /dev/window` line. Three things it is **not**. It is **not `/boot`** — *"we can't call something /boot and refer to something other than a bootloader"*, and *"not that we should implement a bootloader"* (Christine, 2026-09-04; the 2026-09-02 naming rule, [design.md](design.md)). It is **not rc** — the earlier claim; in the reference the equivalent is C and there is **no `bootrc` in 9legacy at all**. It does **not** do `newns` — that is `init`'s (`plan9/sys/src/libauth/newns.c:60`, called by `plan9/sys/src/cmd/init.c`). **What it is called, and whether it is a program at all or falls to the kernel or to `init`, is UNDESIGNED — a gap, and needs a proposal before it needs a review.** | `init.c`'s implicit-root assumption; `-w` and every window path in `init.c` | 2 |
 | **4 V10, as it is** | `libv10` over the kernel, `/v10/bin/{cat,echo}` — already userspace. **`su`** becomes a V10/Unix program: identity is established per file server at attach, so `su` is *attach with a different identity*. [identity.md](identity.md) is rewritten for userspace | the kernel's V10 semantics went in P1 step 4 | P1 |
 | **5 Go and Python, as packages** | the `pkg` design is spec'd ([type.md](type.md)): `/pkg/<name>/<version>` subtrees, bind-to-install, `/lib/pkg/registries`. Each ships as a package — the binary, its stdlib (Python's measured 21-file subset), its bindings, its install commands — from a **local registry** for the demo | — | `pkg`'s `#H` fetch (P1 step 5) |
 
@@ -132,8 +136,8 @@ personality** — a libc dialect over 9P, as the modern personality is — so a
 Go or Python package runs on any host unchanged. **Unreviewed.** For the demo
 the host-side shim stays, because it exists and the personality does not.
 
-**Acceptance:** `ipnx` boots through `#/` → `/boot/boot` → the root server →
-`init` → `rc`; `pkg install go` and `pkg install python` from the local
+**Acceptance:** `ipnx` boots through `#/` → *(the unnamed step 3 — its name is
+a gap)* → the root server → `init` (which does `newns`) → `rc`; `pkg install go` and `pkg install python` from the local
 registry; `gohello` and the Python test run; the floor passes.
 
 ---
@@ -231,10 +235,13 @@ the site, storage that persists (the browser's), the registry served from it.
 The SwiftUI surface reading emca's files — `NavigationSplitView` for the
 sidebar, `.toolbar` for the global verbs, the menu bar free
 ([surface.md](surface.md)). **The raster returns here**: the host renders
-`/dev/draw` for acme and samterm. **Gaps:** the three raster questions in
-[proposals.md](proposals.md) — shared rasteriser or native per host, `rgb`'s
-home, chattiness — and `/dev/mouse`, which left with `#w` and comes back as
-the host's.
+`/dev/draw` for acme and samterm. **Not a gap, decided:** *"the host renders `/dev/draw`; the kernel does not
+know how to draw"* and *"we don't use `/dev/draw` — we use `/dev/canvas`"*
+(both 2026-09-03, [design.md](design.md)), so there is **no rasteriser inside
+IPNX** to place. `/dev/mouse` comes back as the host's; its letter, if one is
+wanted, is Plan 9's `'m'` (`plan9/sys/src/9/port/devmouse.c`). **Still open:**
+chattiness, unmeasured — worth measuring against real acme rather than
+designing around.
 
 ### P8 — the container *(S–M)*
 P3's host with no console attached; `#Z` on a volume; the suite as the image's
@@ -247,9 +254,11 @@ the runtime (WebKit launcher, or a native host), storage, the surface on touch,
 the App Store's rules against JIT.
 
 ### P10 — the MicroVM *(L, research-first)*
-The kernel boots from a hypervisor with no host process. **Gaps:** what the
-embedding is when it is virtual hardware — the console, the timer, storage,
-the boot — and whether the kernel is still wasm there or a native build of the
+The kernel boots from a hypervisor with no host process. **Partly answered by
+the reference:** Plan 9 already boots over virtio-9p
+(`plan9/sys/src/9/boot/bootvirtio9p.c`), so storage-and-boot on a hypervisor
+has a shape to read rather than invent. **Gaps:** what the rest of the
+embedding is when it is virtual hardware — the console, the timer — and whether the kernel is still wasm there or a native build of the
 same source, which is what P1 step 1's substrate independence was for.
 
 ### P11 — real hardware *(L)*
@@ -259,7 +268,7 @@ guaranteed is possible.
 
 ### Cross-cutting, and designed when a phase needs them
 `/net` (the founding *"sockets won"* adoption); the modern personality and git
-(the third benchmark); links as a capability; the WASI personality (P2's gap);
+(the third benchmark); the WASI personality (P2's gap);
 the profile; identity on the wire; `/project` and `template`.
 
 ---

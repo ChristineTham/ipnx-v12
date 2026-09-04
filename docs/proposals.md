@@ -37,38 +37,31 @@ recording because it is what the rule is for:
 
 | | |
 |---|---|
-| **A shared rasteriser, or native per host?** | `hosts/macos` and `hosts/browser` are both Rust and could share a crate; `rustkern.mjs` needs JS, with the frozen oracle's `poc/supervisor/draw.mjs` (220 lines) as a readable reference. Sharing is much cheaper; rendering natively — Core Graphics, Canvas2D — is the point of moving it. **These pull opposite ways and the answer decides how large a3 is** |
 | **Chattiness** | libdraw issues many small operations; today each is a direct call. Whether a per-op crossing needs batching is **unmeasured**, and worth measuring against real acme rather than designing around |
 | **What `#w` leaves behind, if anything** | a window still needs an identity a process can name. Whether that is a thin kernel device or nothing at all is undesigned — and the rule says to try nothing first |
+
+**A shared rasteriser, or native per host? — GONE, it was already decided**
+(emptied 2026-09-04). The question outlived its answer by a day: *"the host
+renders `/dev/draw`; the kernel does not know how to draw"* and *"we don't use
+`/dev/draw` — we use `/dev/canvas`"*, both 2026-09-03 in
+[design.md](design.md). There is no rasteriser inside IPNX to place, so the
+two horns never pulled against each other. Left standing here, it invited
+exactly the mistake it got: being re-derived from Plan 9's own drawterm, whose
+portable `libmemdraw` is a renderer in precisely the place those decisions
+emptied ([RESEARCH §9.19](../RESEARCH.md)).
 
 **None of this is urgent.** a3 is heritage work for acme and samterm; the demo
 carries text and the host renders it, so nothing waits on this.
 
+## GAP — where the ramfs goes, and what answers `/` at boot — FILLED
 
-## GAP — where the ramfs goes, and what answers `/` at boot
-
-**Undesigned, named 2026-09-03** by auditing the kernel against *"process
-orchestration only"* ([RESEARCH §9.11](../RESEARCH.md)), then sharpened by
-reading how Plan 9 actually does it ([§9.12](../RESEARCH.md)).
-
-**Plan 9 splits two roles that `#M` currently combines.** Its kernel root
-device `#/` is **261 lines, a fixed 32-entry table, mode 0555**, and writing to
-it is `error(Egreg)` — it holds `/boot` and empty mount points and nothing
-else. The **real** filesystem is a user program (cwfs, kfs, fossil) or a remote
-machine, attached over 9P by `bootrc` and bound over `/`. Our `#M` is both at
-once, read-write, with `#V` snapshots on top.
-
-**So the question is not "should the ramfs leave" but "where is the seam".** A
-tiny read-only bootstrap root has Plan 9's own precedent for staying. The
-read-write filesystem does not — and if it leaves, something must answer `/`
-before anything runs: the host through `#Z`, or a userspace file server started
-before any process needs a filesystem, which is a bootstrap **ordering**
-problem rather than a relocation.
-
-**No design exists. This is a gap and it wants a proposal before it wants a
-review.** It is not urgent: nothing on the demo's path depends on moving it.
-
----
+**Emptied 2026-09-04.** This gap asked for a design and one now exists: it is
+[implementation.md](implementation.md)'s **P2 steps 1–2** — `#/`, Plan 9's
+root device (a fixed read-only table, `rootwrite` is `error(Egreg)`), and a
+**userspace** root file server over the seed the host provides through `#Z`.
+That is the split this block was asking for, written down. The evidence is
+[RESEARCH §9.12](../RESEARCH.md); the bootstrap-ordering worry it raised is
+answered by the boot path in P2 step 3.
 
 ## Resolved, and therefore gone
 
