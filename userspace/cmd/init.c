@@ -102,63 +102,62 @@ expcat(void *v)
 
 static int idpipe[2];
 
-static void
-becomeuser(char *who)
+/* Does this kernel still take credential transitions through /proc/<pid>/ctl?
+ * Writing our OWN name is a no-op where it is accepted (rule 1: eve may become
+ * anyone, and we name eve), and an error where the verb is gone. */
+static int
+ctltransitions(void)
 {
-	int fd;
+	int fd, r;
+	char path[64];
 
-	fd = open("/proc/self/ctl", OWRITE);
-	if(fd < 0 || fprint(fd, "user %s", who) < 0)
-		exits("ctl");
+	snprint(path, sizeof path, "/proc/%d/ctl", getpid());
+	fd = open(path, OWRITE);
+	if(fd < 0)
+		return 0;
+	r = fprint(fd, "user %s", evename);
 	close(fd);
+	return r >= 0;
 }
 
 static void
-idchild(void *v)
+becomenone(void)
 {
-	char *av[] = { "id", nil };
+	int fd, n;
+	char who[64];
 
-	USED(v);
-	becomeuser("none");
-	dup(idpipe[1], 1);
-	close(idpipe[0]);
-	close(idpipe[1]);
-	exec("/bin/id", av);
-	exits("exec");
+	/* userwrite's rule (plan9 auth.c): anyone can become none, and that is
+	 * the only identity change a process may make to itself. The FROZEN
+	 * ORACLE predates that file being writable — there a write to /dev/user
+	 * reaches the CONSOLE, which corrupts the suite's own output, so ask
+	 * first and use its ctl transition where that is what exists. One
+	 * rootfs, two kernels. */
+	if(ctltransitions()){
+		snprint(who, sizeof who, "/proc/%d/ctl", getpid());
+		fd = open(who, OWRITE);
+		if(fd < 0 || fprint(fd, "user none") < 0)
+			exits("user");
+		close(fd);
+		return;
+	}
+	fd = open("/dev/user", OWRITE);
+	if(fd < 0 || write(fd, "none", 4) < 0)
+		exits("user");
+	close(fd);
+	USED(n);
 }
+
+
 
 static void
 secretchild(void *v)
 {
 	USED(v);
-	becomeuser("none");
+	becomenone();
 	exits(open("/etc/secret", OREAD) < 0 ? nil : "opened the secret");
 }
 
-static void
-climbchild(void *v)
-{
-	int fd;
 
-	USED(v);
-	becomeuser("none");
-	fd = open("/proc/self/ctl", OWRITE);
-	exits(fprint(fd, "user %s", evename) < 0 ? nil : "climbed back to eve");
-}
-
-static void
-setidchild(void *v)
-{
-	char *av[] = { "setid", nil };
-
-	USED(v);
-	becomeuser("none");
-	dup(idpipe[1], 1);
-	close(idpipe[0]);
-	close(idpipe[1]);
-	exec("/tmp/setid", av);
-	exits("exec");
-}
 
 static void
 dtestchild(void *v)
@@ -503,9 +502,10 @@ main(int argc, char *argv[])
 	ok(n > 0 && atoi(buf) == pid && strstr(buf, "''") != nil,
 	   "exportfs: exec of a binary served over the export");
 
-	/* The uid model (docs/identity.md): per-process credentials in the kernel,
-	 * transitions through /proc/self/ctl, V10 enforcement in ramfs, and
-	 * the DMSETUID bit at exec. The thing APE called impossible. */
+	/* Identity, Plan 9's (docs/identity.md): ONE name per process, `eve` for
+	 * the machine, and devpermcheck deciding by name — owner bits, eve gets
+	 * the GROUP bits, everyone else the other bits. A process may become
+	 * "none" through /dev/user and may not come back. */
 	bind("#p", "/proc", MREPL);
 	fd = open("/dev/user", OREAD);
 	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
@@ -513,21 +513,6 @@ main(int argc, char *argv[])
 	close(fd);
 	strncpy(evename, buf, sizeof evename - 1);	/* whatever this instance calls its person */
 	ok(buf[0] != 0, "uid: /dev/user names the host owner");
-
-	pipe(idpipe);
-	pid = procrfork(RFFDG, idchild, nil);
-	close(idpipe[1]);
-	n = read(idpipe[0], buf, sizeof buf - 1);
-	buf[n > 0 ? n : 0] = 0;
-	close(idpipe[0]);
-	await(name, sizeof name);
-	ok(strstr(buf, "none none") != nil,
-	   "uid: setuid down via /proc/self/ctl, seen by an exec'd id");
-	fd = open("/dev/user", OREAD);
-	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
-	buf[n > 0 ? n : 0] = 0;
-	close(fd);
-	ok(strcmp(buf, evename) == 0, "uid: the parent's credential is untouched");
 
 	fd = create("/etc/secret", OWRITE, 0600);
 	fprint(fd, "the host owner's business\n");
@@ -539,28 +524,26 @@ main(int argc, char *argv[])
 	ok(fd >= 0, "uid: the owner still reads it");
 	close(fd);
 
-	pid = procrfork(RFFDG, climbchild, nil);
-	n = await(buf, sizeof buf);
-	ok(n > 0 && strstr(buf, "''") != nil, "uid: a non-owner cannot climb back");
-
-	/* the setuid bit: eve installs an id owned by tms with DMSETUID */
-	fd = open("/bin/id", OREAD);
-	i = create("/tmp/setid", OWRITE, 0755);
-	while((n = read(fd, (char*)edir, sizeof edir)) > 0)
-		write(i, edir, n);
-	close(fd);
-	close(i);
-	ok(chown("/tmp/setid", "tms") == 0 && chmod("/tmp/setid", 0755|DMSETUID) == 0,
-	   "uid: chown and chmod land as wstat (class B, no syscalls)");
-	pipe(idpipe);
-	pid = procrfork(RFFDG, setidchild, nil);
-	close(idpipe[1]);
-	n = read(idpipe[0], buf, sizeof buf - 1);
-	buf[n > 0 ? n : 0] = 0;
-	close(idpipe[0]);
-	await(name, sizeof name);
-	ok(strstr(buf, "tms none") != nil,
-	   "uid: DMSETUID elevates euid to the image's owner; ruid stays");
+	/* devpermcheck's MIDDLE case, which is the one P1 step 4 changed: eve is
+	 * tested against the GROUP bits, not waved through. A 0600 file owned by
+	 * someone else is closed to eve too; open the group bits and it opens.
+	 * Self-skips on a kernel that still has the old credential model. */
+	if(ctltransitions())
+		ok(1, "uid: eve and the GROUP bits — old credential model on this host, skipped");
+	else{
+		fd = create("/tmp/others", OWRITE, 0600);
+		close(fd);
+		chown("/tmp/others", "tms");
+		i = open("/tmp/others", OREAD);
+		if(i >= 0)
+			close(i);
+		chmod("/tmp/others", 0060);
+		n = open("/tmp/others", OREAD);
+		if(n >= 0)
+			close(n);
+		ok(i < 0 && n >= 0,
+		   "uid: eve is checked against the GROUP bits, not waved through");
+	}
 
 	/* The window server: dtest mints a window from #w, paints through its
 	 * /dev/draw, and asserts pixels — headless, the same on every host. */

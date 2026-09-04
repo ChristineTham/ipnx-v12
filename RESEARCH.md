@@ -1805,6 +1805,54 @@ for — so substituting it silently would trade a loud failure for a quiet one.
 Where `rename` lives belongs to the **WASI personality**, which
 implementation.md's P2 already carries as an open gap.
 
+### 9.21 Identity narrowed to Plan 9's — and eve stopped being omnipotent (2026-09-04)
+
+P1 step 4. `Cred{euid,ruid}` became one `user` per process, and `devpermcheck`
+was ported **by rule**, not by name only (`plan9/sys/src/9/port/dev.c:339`):
+
+> ```c
+> if(strcmp(up->user, fileuid) == 0)   perm <<= 0;   /* owner bits  */
+> else if(strcmp(up->user, eve) == 0)  perm <<= 3;   /* GROUP bits  */
+> else                                 perm <<= 6;   /* other bits  */
+> ```
+
+**The load-bearing detail, and it is easy to miss:** eve is tested against the
+**group** bits, not waved through. The old `ram_access` returned `Ok(())` for
+eve unconditionally; Plan 9 does not. So a 0600 file owned by someone else is
+now closed to eve too, because its group bits are zero. **Nothing in the suite
+would have caught that**, since every rootfs file is eve's own and eve
+therefore takes the *owner* path — the change is invisible until someone else
+owns something. An assertion was written with the rule for exactly that reason.
+
+Also ported by citation: `#c/user` writable only as `"none"`
+(`auth.c`'s `userwrite`: *"anyone can become none"*), and `#c/hostowner`
+eve-only, renaming the machine's owner as well as the writer
+(`hostownerwrite`).
+
+**Two dependents, both found by RUNNING and not by reading**, which is the
+recurring lesson of this phase:
+
+- **`run(1)`'s `user` directive.** `cmd/run.c` performed the spec's identity
+  change through `/proc/<pid>/ctl`. With transitions gone it errored, and
+  the failure surfaced as *"rc ran the test script and exited clean"* — a
+  suite-level FAIL that named nothing. Rewired to `/dev/user`, which makes the
+  directive what it always meant: **a drop**, never an escalation ("the
+  credential drops LAST" is the comment already in that file).
+- **`cmd/su.c`.** Its whole mechanism left. It is no longer built; P2 step 4
+  rewrites it as a userspace personality program.
+
+**And a frozen-oracle hazard of a new shape.** The suite's helpers had to keep
+working on the old kernel *and* the new one from one rootfs. Making
+`becomenone()` try `/dev/user` first and fall back looked right and was wrong:
+on the oracle a write to the **cons device reaches the console whatever the
+fds say**, so the word `none` landed in the middle of the suite's own output —
+`nonePASS uid: mode 0600 …` — which does not match `^PASS` and silently
+*lowered the count* without failing anything. The helper now **asks first**
+(does `/proc/<pid>/ctl` still take a transition?) and takes one path or the
+other. The same hazard is why `run`'s spec line left the suite rather than
+`run.c` growing an oracle special case: **a shipped program does not carry
+compatibility with the frozen reference.**
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on

@@ -1,5 +1,18 @@
 # Identity — the who
 
+> **UNDER REVISION — AND THE KERNEL HAS ALREADY MOVED (P1 step 4, 2026-09-04).**
+> What this document describes is **no longer what the kernel does.** The kernel
+> now carries **one name per process**, `eve` for the machine, and
+> `devpermcheck` deciding by name (owner bits / eve gets the GROUP bits /
+> other). `Cred{euid,ruid}`, `DMSETUID`, setuid-at-exec and the credential
+> transitions through `/proc/<pid>/ctl` are **gone**. A process may become
+> `"none"` through `/dev/user` and may not come back; `/dev/hostowner` is
+> eve-only. **P2 step 4 rewrites this document for userspace** — until then,
+> read everything below as the *personality* being designed, not as the
+> kernel's behaviour, and read `su` as a program that P2 has yet to write.
+>
+> The original banner, kept because its reasoning is what the revision acts on:
+>
 > **UNDER REVISION (2026-09-03).** This document argues that a hosted kernel
 > should carry an effective/real uid pair because *"a hosted kernel inverts the
 > trust geometry"*. **Plan 9's kernel has one identity field — `char *user` —

@@ -21,7 +21,7 @@ use exec::{oneshot, Completer, LocalExec};
 macro_rules! eprintln {
     ($($t:tt)*) => {{ let _ = format_args!($($t)*); }};
 }
-use stat9::{marshal_stat, parse_stat, StatIn, DMDIR, DMSETUID, QTDIR, QTFILE};
+use stat9::{marshal_stat, parse_stat, StatIn, DMDIR, QTDIR, QTFILE};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
@@ -234,6 +234,7 @@ enum Node {
     ConsRoot,
     ConsCons,
     ConsUser,
+    ConsHostowner,
     ConsPid,
     ConsNull,
     PipeDir { p: PipeR },
@@ -296,6 +297,7 @@ fn node_eq(a: &Node, b: &Node) -> bool {
         (Node::ConsRoot, Node::ConsRoot)
         | (Node::ConsCons, Node::ConsCons)
         | (Node::ConsUser, Node::ConsUser)
+        | (Node::ConsHostowner, Node::ConsHostowner)
         | (Node::ConsPid, Node::ConsPid)
         | (Node::ConsNull, Node::ConsNull)
         | (Node::DupRoot, Node::DupRoot)
@@ -589,7 +591,7 @@ struct Proc {
     ns: NsR,
     fdt: FdtR,
     cwd: String,
-    cred: Cred,
+    user: Cred,
     env: EnvR,
     umask: u32,
     errstr: String,
@@ -610,11 +612,10 @@ struct Proc {
     iowait: Option<(Completer<RRes>, Option<u64>)>,
 }
 
-#[derive(Clone)]
-pub struct Cred {
-    pub euid: String,
-    pub ruid: String,
-}
+// Plan 9's kernel identity is ONE field — `char *user` per process, with
+// `eve` the host owner and `iseve()` the only privilege test
+// (plan9/sys/src/9/port/auth.c). There is no euid, no ruid, no setuid.
+pub type Cred = String;
 
 struct Fdt {
     refs: u32,
@@ -2036,7 +2037,7 @@ impl Kernel {
         let k = self.k.clone();
         let eve = k.borrow().eve.clone();
         let pid = new_proc(&k, 0, Rc::new(RefCell::new(HashMap::new())), new_fdt(),
-                           "/".into(), Cred { euid: eve.clone(), ruid: eve },
+                           "/".into(), eve,
                            Rc::new(RefCell::new(HashMap::new())), None);
         let argv2 = argv.clone();
         self.ex.spawn(async move {
@@ -2206,7 +2207,7 @@ fn load_seed(s: &Seed, name: &str, eve: &str, boot: u32, qgen: &mut u64) -> RamR
     }
 }
 
-fn new_proc(k: &K, ppid: Pid, ns: NsR, fdt: FdtR, cwd: String, cred: Cred, env: EnvR,
+fn new_proc(k: &K, ppid: Pid, ns: NsR, fdt: FdtR, cwd: String, user: Cred, env: EnvR,
             note_group: Option<u32>) -> Pid {
     let mut kb = k.borrow_mut();
     let pid = kb.nextpid;
@@ -2217,7 +2218,7 @@ fn new_proc(k: &K, ppid: Pid, ns: NsR, fdt: FdtR, cwd: String, cred: Cred, env: 
         g
     });
     kb.procs.insert(pid, Proc {
-        pid, ppid, ns, fdt, cwd, cred, env,
+        pid, ppid, ns, fdt, cwd, user, env,
         umask: 0o22, errstr: String::new(), zombies: Vec::new(),
         await_wait: None, argv: Vec::new(), image: None, asyncified: false,
         borrower: None, nomnt: false, nowait: false, note_group: group,
@@ -2458,6 +2459,7 @@ async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>
         (DevId::Cons, Node::ConsRoot) => Ok(match name {
             "cons" => Some(Node::ConsCons),
             "user" => Some(Node::ConsUser),
+            "hostowner" => Some(Node::ConsHostowner),
             "pid" => Some(Node::ConsPid),
             "null" => Some(Node::ConsNull),
             _ => None,
@@ -2797,17 +2799,26 @@ fn snap_tree(n: &RamRef) -> RamRef {
     }))
 }
 
-fn ram_access(k: &K, node: &RamRef, cred: &Cred, want: u32) -> Result<(), KErr> {
-    // V10's shape: policy concentrates here. The ro gate outranks even eve —
-    // nobody rewrites history, which is what makes a snapshot a snapshot.
+// devpermcheck, by name and by rule (plan9/sys/src/9/port/dev.c:339): the
+// OWNER is tested against the owner bits, EVE against the GROUP bits, and
+// everyone else against the other bits. Note what that means, and that it is
+// meant: eve is not omnipotent — a 0600 file owned by someone else is closed
+// to eve too, because its group bits are zero.
+fn ram_access(k: &K, node: &RamRef, user: &str, want: u32) -> Result<(), KErr> {
+    // The ro gate outranks even eve — nobody rewrites history, which is what
+    // makes a snapshot a snapshot.
     if want & 2 != 0 && node.borrow().ro {
         return Err("read-only snapshot".into());
     }
-    if cred.euid == k.borrow().eve {
-        return Ok(());
-    }
+    let eve = k.borrow().eve.clone();
     let n = node.borrow();
-    let bits = if n.uid == cred.euid { n.mode >> 6 } else { n.mode };
+    let bits = if n.uid == *user {
+        n.mode >> 6
+    } else if *user == eve {
+        n.mode >> 3
+    } else {
+        n.mode
+    };
     if bits & want != want {
         return Err(format!(
             "permission denied ('{}' is {}'s, mode {:o})",
@@ -2833,6 +2844,7 @@ async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
                 Node::ConsRoot => ("/", true),
                 Node::ConsCons => ("cons", false),
                 Node::ConsUser => ("user", false),
+                Node::ConsHostowner => ("hostowner", false),
                 Node::ConsPid => ("pid", false),
                 Node::ConsNull => ("null", false),
                 _ => return Err("no stat".into()),
@@ -3030,9 +3042,15 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
         }
+        (DevId::Cons, Node::ConsHostowner) => {
+            let eve = k.borrow().eve.clone();
+            let out = if off == 0 { eve.into_bytes() } else { Vec::new() };
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
         (DevId::Cons, Node::ConsUser) => {
-            let euid = k.borrow().procs.get(&pid).map(|p| p.cred.euid.clone()).unwrap_or_default();
-            let out = if off == 0 { euid.into_bytes() } else { Vec::new() };
+            let who = k.borrow().procs.get(&pid).map(|p| p.user.clone()).unwrap_or_default();
+            let out = if off == 0 { who.into_bytes() } else { Vec::new() };
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
         }
@@ -3159,7 +3177,7 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
             let s = {
                 let kb = k.borrow();
                 kb.procs.get(&q)
-                    .map(|tp| format!("{} {} {} {}\n", tp.pid, tp.cred.euid, tp.cred.ruid, tp.ppid))
+                    .map(|tp| format!("{} {} {}\n", tp.pid, tp.user, tp.ppid))
                     .unwrap_or_default()
             };
             let out = s.into_bytes();
@@ -3483,6 +3501,32 @@ fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Re
             data.len()
         }
         (DevId::Cons, Node::ConsNull) => data.len(),
+        // userwrite (plan9/sys/src/9/port/auth.c): "anyone can become none",
+        // and nothing else — the only identity change a process may make to
+        // itself, and it is one-way.
+        (DevId::Cons, Node::ConsUser) => {
+            if String::from_utf8_lossy(data).trim() != "none" {
+                return Err("permission denied".into());
+            }
+            k.borrow_mut().procs.get_mut(&pid).ok_or("no proc")?.user = "none".into();
+            data.len()
+        }
+        // hostownerwrite (same file): eve only, and it renames the machine's
+        // owner as well as the writer.
+        (DevId::Cons, Node::ConsHostowner) => {
+            let who = String::from_utf8_lossy(data).trim().to_string();
+            if who.is_empty() {
+                return Err("bad arg in system call".into());
+            }
+            let mut kb = k.borrow_mut();
+            let me = kb.procs.get(&pid).ok_or("no proc")?.user.clone();
+            if me != kb.eve {
+                return Err("permission denied".into());
+            }
+            kb.eve = who.clone();
+            kb.procs.get_mut(&pid).ok_or("no proc")?.user = who;
+            data.len()
+        }
         (DevId::Cons, _) => {
             k.borrow_mut().effects.push(Effect::ConsWrite(data.to_vec()));
             data.len()
@@ -3651,13 +3695,13 @@ async fn dev_write_async(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid
 }
 
 fn proc_write(k: &K, kind: u8, q: Pid, data: &[u8], pid: Pid) -> Result<usize, KErr> {
-    let (cred, tcred, eve) = {
+    let (user, tuser, eve) = {
         let kb = k.borrow();
-        let cred = kb.procs.get(&pid).ok_or("no proc")?.cred.clone();
-        let tcred = kb.procs.get(&q).ok_or("process gone")?.cred.clone();
-        (cred, tcred, kb.eve.clone())
+        let user = kb.procs.get(&pid).ok_or("no proc")?.user.clone();
+        let tuser = kb.procs.get(&q).ok_or("process gone")?.user.clone();
+        (user, tuser, kb.eve.clone())
     };
-    if cred.euid != eve && cred.euid != tcred.euid {
+    if user != eve && user != tuser {
         return Err("not your process".into());
     }
     let text = String::from_utf8_lossy(data).trim().to_string();
@@ -3679,22 +3723,10 @@ fn proc_write(k: &K, kind: u8, q: Pid, data: &[u8], pid: Pid) -> Result<usize, K
             Ok(data.len())
         }
         _ => {
-            let mut it = text.split_whitespace();
-            let (verb, arg) = (it.next().unwrap_or(""), it.next().unwrap_or(""));
-            if verb != "user" || arg.is_empty() {
-                return Err(format!("bad ctl message '{}'", text));
-            }
-            let mut kb = k.borrow_mut();
-            let tp = kb.procs.get_mut(&q).ok_or("process gone")?;
-            if cred.euid == eve {
-                tp.cred.euid = arg.into(); // rule 1: eve -> anyone
-                tp.cred.ruid = arg.into();
-            } else if arg == tp.cred.ruid {
-                tp.cred.euid = arg.into(); // rule 2: back to ruid
-            } else {
-                return Err(format!("'{}' may not become '{}'", cred.euid, arg));
-            }
-            Ok(data.len())
+            // No credential transitions. Plan 9 changes identity through
+            // '#c/user' (only ever to "none") and '#c/hostowner' (eve only) —
+            // never through /proc/<pid>/ctl.
+            Err(format!("bad ctl message '{}'", text))
         }
     }
 }
@@ -3876,7 +3908,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
             if ver != "9P2000" {
                 return Err(format!("server speaks '{}', not 9P2000", ver));
             }
-            let uname = k.borrow().procs.get(&pid).unwrap().cred.euid.clone();
+            let uname = k.borrow().procs.get(&pid).unwrap().user.clone();
             let fid = {
                 let mut cb = conn.borrow_mut();
                 let f = cb.nextfid;
@@ -4078,13 +4110,13 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                 }));
                 return Ok(ok(fd_alloc(k, pid, chan, None)));
             }
-            let (umask, cred) = {
+            let (umask, user) = {
                 let kb = k.borrow();
                 let p = kb.procs.get(&pid).unwrap();
-                (p.umask, p.cred.clone())
+                (p.umask, p.user.clone())
             };
             if let Node::SrvRoot = &parent.node {
-                let cred = k.borrow().procs.get(&pid).ok_or("no proc")?.cred.clone();
+                let user = k.borrow().procs.get(&pid).ok_or("no proc")?.user.clone();
                 {
                     let mut kb = k.borrow_mut();
                     if kb.srv_posts.contains_key(&base) {
@@ -4092,7 +4124,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                     }
                     let q = kb.qgen;
                     kb.qgen += 1;
-                    kb.srv_posts.insert(base.clone(), SrvPost { qpath: q, uid: cred.euid.clone(), chan: None });
+                    kb.srv_posts.insert(base.clone(), SrvPost { qpath: q, uid: user.clone(), chan: None });
                 }
                 let chan = Rc::new(RefCell::new(Chan {
                     dev: DevId::Srv, node: Node::SrvName(base.clone()), path: Some(cpath),
@@ -4112,7 +4144,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                 }));
                 return Ok(ok(fd_alloc(k, pid, chan, None)));
             }
-            let node = ram_create(k, &parent, &base, perm & !umask, isdir, &cred)?;
+            let node = ram_create(k, &parent, &base, perm & !umask, isdir, &user)?;
             let chan = Rc::new(RefCell::new(Chan {
                 dev: DevId::Ram, node: Node::Ram(node), path: Some(cpath),
                 mode, offset: 0, refs: 1,
@@ -4151,9 +4183,9 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                     .map_err(|e| format!("{}: {}", base, e))?;
                 return Ok(ok(0));
             }
-            let cred = k.borrow().procs.get(&pid).unwrap().cred.clone();
+            let user = k.borrow().procs.get(&pid).unwrap().user.clone();
             if let Node::Ram(pr) = &parent.node {
-                ram_access(k, pr, &cred, 2)?;
+                ram_access(k, pr, &user, 2)?;
                 let found = kid(pr, &base).ok_or_else(|| format!("'{}' does not exist", base))?;
                 if found.borrow().dir && !found.borrow().kids.is_empty() {
                     return Err("directory not empty".into());
@@ -4231,23 +4263,23 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                 }
                 return Ok(ok(0));
             }
-            let (cred, eve) = {
+            let (user, eve) = {
                 let kb = k.borrow();
-                (kb.procs.get(&pid).ok_or("no proc")?.cred.clone(), kb.eve.clone())
+                (kb.procs.get(&pid).ok_or("no proc")?.user.clone(), kb.eve.clone())
             };
             let Node::Ram(node) = &dn.node else {
                 return Err("wstat not supported on this device".into());
             };
-            wstat_ram(node, &parent, &base, &st, &cred, &eve)?;
+            wstat_ram(node, &parent, &base, &st, &user, &eve)?;
             Ok(ok(0))
         }
         FWSTAT => {
             let c = fdchk(k, pid, a[0])?;
             let rec = tx[..(a[2] as usize).min(tx.len())].to_vec();
             let st = parse_stat(&rec).ok_or("bad stat record")?;
-            let (cred, eve) = {
+            let (user, eve) = {
                 let kb = k.borrow();
-                (kb.procs.get(&pid).ok_or("no proc")?.cred.clone(), kb.eve.clone())
+                (kb.procs.get(&pid).ok_or("no proc")?.user.clone(), kb.eve.clone())
             };
             enum Target {
                 Ram(RamRef),
@@ -4270,13 +4302,13 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                 }
                 Target::Ram(node) => {
                     if st.mode != 0xffff_ffff {
-                        if cred.euid != eve && cred.euid != node.borrow().uid {
+                        if user != eve && *user != node.borrow().uid {
                             return Err(format!("not owner of '{}'", node.borrow().name));
                         }
                         node.borrow_mut().mode = st.mode & (0o7777 | 0x000C_0000);
                     }
                     if !st.uid.is_empty() {
-                        if cred.euid != eve {
+                        if user != eve {
                             return Err("only the host owner may chown (docs/identity.md D3)".into());
                         }
                         node.borrow_mut().uid = st.uid.clone();
@@ -4495,24 +4527,24 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
 }
 
 fn wstat_ram(node: &RamRef, parent: &DN, base: &str, st: &stat9::StatOut,
-             cred: &Cred, eve: &str) -> Result<(), KErr> {
+             user: &Cred, eve: &str) -> Result<(), KErr> {
     if node.borrow().ro {
         return Err("read-only snapshot".into());
     }
     if st.mode != 0xffff_ffff {
-        if cred.euid != eve && cred.euid != node.borrow().uid {
+        if user != eve && *user != node.borrow().uid {
             return Err(format!("not owner of '{}'", node.borrow().name));
         }
         node.borrow_mut().mode = st.mode & (0o7777 | 0x000C_0000);
     }
     if !st.uid.is_empty() {
-        if cred.euid != eve {
+        if user != eve {
             return Err("only the host owner may chown (docs/identity.md D3)".into());
         }
         node.borrow_mut().uid = st.uid.clone();
     }
     if !st.name.is_empty() && st.name != base {
-        if cred.euid != eve && cred.euid != node.borrow().uid {
+        if user != eve && *user != node.borrow().uid {
             return Err(format!("not owner of '{}'", node.borrow().name));
         }
         if let Node::Ram(pr) = &parent.node {
@@ -4546,7 +4578,7 @@ async fn open_perm(k: &K, dn: &DN, mode: u32, pid: Pid) -> Result<(), KErr> {
         return Ok(());
     }
     if let Node::Ram(r) = &dn.node {
-        let cred = k.borrow().procs.get(&pid).ok_or("no proc")?.cred.clone();
+        let user = k.borrow().procs.get(&pid).ok_or("no proc")?.user.clone();
         let rw = mode & 3;
         let mut want = match rw {
             1 => 2,
@@ -4556,7 +4588,7 @@ async fn open_perm(k: &K, dn: &DN, mode: u32, pid: Pid) -> Result<(), KErr> {
         if mode & OTRUNC != 0 {
             want |= 2;
         }
-        ram_access(k, r, &cred, want)?;
+        ram_access(k, r, &user, want)?;
         if mode & OTRUNC != 0 && !r.borrow().dir {
             Rc::make_mut(&mut r.borrow_mut().data).clear();
         }
@@ -4565,7 +4597,7 @@ async fn open_perm(k: &K, dn: &DN, mode: u32, pid: Pid) -> Result<(), KErr> {
 }
 
 fn ram_create(k: &K, parent: &DN, name: &str, perm: u32, isdir: bool,
-              cred: &Cred) -> Result<RamRef, KErr> {
+              user: &Cred) -> Result<RamRef, KErr> {
     let pr = match &parent.node {
         Node::Ram(r) => r.clone(),
         _ => return Err("create not supported on this device".into()),
@@ -4573,12 +4605,12 @@ fn ram_create(k: &K, parent: &DN, name: &str, perm: u32, isdir: bool,
     if !pr.borrow().dir {
         return Err("create in non-directory".into());
     }
-    ram_access(k, &pr, cred, 2)?;
+    ram_access(k, &pr, user, 2)?;
     if let Some(old) = kid(&pr, name) {
         if old.borrow().dir || isdir {
             return Err(format!("'{}' already exists", name));
         }
-        ram_access(k, &old, cred, 2)?;
+        ram_access(k, &old, user, 2)?;
         Rc::make_mut(&mut old.borrow_mut().data).clear();
         return Ok(old);
     }
@@ -4590,7 +4622,7 @@ fn ram_create(k: &K, parent: &DN, name: &str, perm: u32, isdir: bool,
     };
     let node = Rc::new(RefCell::new(RNode {
         name: name.into(), qpath: q, dir: isdir, data: Rc::default(),
-        kids: Vec::new(), uid: cred.euid.clone(), mode: perm & 0o7777,
+        kids: Vec::new(), uid: user.clone(), mode: perm & 0o7777,
         atime: now_secs(), mtime: now_secs(), ro: false,
     }));
     pr.borrow_mut().kids.push((name.into(), node.clone()));
@@ -4726,7 +4758,7 @@ fn rfork(k: &K, worker_pid: Pid, pid: Pid, flags: i32, marker: i32) -> KRes {
         ns: NsR,
         env: EnvR,
         cwd: String,
-        cred: Cred,
+        user: Cred,
         group: Option<u32>,
         nomnt: bool,
         image: Option<Arc<Vec<u8>>>,
@@ -4751,7 +4783,7 @@ fn rfork(k: &K, worker_pid: Pid, pid: Pid, flags: i32, marker: i32) -> KRes {
                 p.env.clone()
             },
             cwd: p.cwd.clone(),
-            cred: p.cred.clone(),
+            user: p.user.clone(),
             group: if flags & rf::NOTEG != 0 { None } else { Some(p.note_group) },
             nomnt: p.nomnt,
             image: p.image.clone(),
@@ -4778,7 +4810,7 @@ fn rfork(k: &K, worker_pid: Pid, pid: Pid, flags: i32, marker: i32) -> KRes {
         if flags & rf::MEM != 0 {
             return Err("RFMEM is the lazy path's flag; a bare fork copies".into());
         }
-        let child = new_proc(k, pid, bits.ns, fdt, bits.cwd, bits.cred, bits.env, bits.group);
+        let child = new_proc(k, pid, bits.ns, fdt, bits.cwd, bits.user, bits.env, bits.group);
         let mut kb = k.borrow_mut();
         let c = kb.procs.get_mut(&child).unwrap();
         c.nomnt = bits.nomnt || flags & rf::NOMNT != 0;
@@ -4793,7 +4825,7 @@ fn rfork(k: &K, worker_pid: Pid, pid: Pid, flags: i32, marker: i32) -> KRes {
     if flags & rf::MEM == 0 {
         return Err("plain fork needs asyncify — the guard path is lazy".into());
     }
-    let child = new_proc(k, pid, bits.ns, fdt, bits.cwd, bits.cred, bits.env, bits.group);
+    let child = new_proc(k, pid, bits.ns, fdt, bits.cwd, bits.user, bits.env, bits.group);
     {
         let mut kb = k.borrow_mut();
         let c = kb.procs.get_mut(&child).unwrap();
@@ -4821,9 +4853,6 @@ async fn exec_call(k: &K, worker_pid: Pid, pid: Pid, tx: &[u8], argc: i32) -> KR
         if let Some(st) = parse_stat(&rec) {
             if st.mode & DMDIR != 0 {
                 return Err(format!("'{}' is a directory", path));
-            }
-            if st.mode & DMSETUID != 0 {
-                k.borrow_mut().procs.get_mut(&pid).unwrap().cred.euid = st.uid.clone();
             }
         }
     }

@@ -338,7 +338,11 @@ for c in plan9/sys/src/cmd/*.c; do
 done
 for c in cmd/*.c; do
   b=$(basename "$c" .c)
+  # su is NOT built: its mechanism (credential transitions through
+  # /proc/<pid>/ctl) left the kernel in P1 step 4, and P2 step 4 rewrites it as
+  # a userspace personality program. The source stays for that rewrite.
   case "$b" in drtest|threadtest|con|emca|acme|sam) continue;; esac   # built above, against the real headers
+  case "$b" in su) continue;; esac
   $CC -c "$c" -o "build/$b.o"
   $LD build/crt0.o build/lib9.o build/lib9p.o build/draw9.o "build/$b.o" build/libp9.a -o "rootfs/bin/$b"
   case " $ASYNCIFY " in *" $b "*)

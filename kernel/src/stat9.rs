@@ -5,7 +5,6 @@
 pub const QTDIR: u8 = 0x80;
 pub const QTFILE: u8 = 0x00;
 pub const DMDIR: u32 = 0x8000_0000;
-pub const DMSETUID: u32 = 0x0008_0000;
 
 pub struct StatIn<'a> {
     pub name: &'a str,

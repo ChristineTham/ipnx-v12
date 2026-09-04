@@ -1,7 +1,8 @@
 /* run: instantiate a process file — M12's local stage (design.md 2026-08-30).
  * A spec is a directory: namespace (namespace(6) subset, applied whole),
  * packages ("name [version]" per line, pkg-verified), env (NAME=value),
- * user (an identity.md transition), cmd (path then one argument per line).
+ * user (a drop to "none", the only transition there is), cmd (path then
+ * one argument per line).
  * A Dockerfile is a script because installing is mutation; this is a
  * declaration because installing is a bind. Order matters and is the
  * doctrine's: detach the namespace, declare the view, land the packages
@@ -133,14 +134,16 @@ main(int argc, char *argv[])
 	}
 
 	/* the credential drops LAST, so declaring the world never needed more
-	 * privilege than the declarer had */
+	 * privilege than the declarer had. A DROP is all this can be: the
+	 * kernel's identity is Plan 9's, so the only change a process may make
+	 * to itself is becoming "none" (auth.c's userwrite), through /dev/user.
+	 * Naming anyone else is refused, and the spec says so. */
 	if(readspec("user", ubuf, sizeof ubuf) > 0){
 		for(i = 0; ubuf[i] != 0 && ubuf[i] != '\n'; i++)
 			;
 		ubuf[i] = 0;
-		snprint(path, sizeof path, "/proc/%d/ctl", getpid());
-		fd = open(path, OWRITE);
-		if(fd < 0 || fprint(fd, "user %s", ubuf) < 0){
+		fd = open("/dev/user", OWRITE);
+		if(fd < 0 || write(fd, ubuf, strlen(ubuf)) < 0){
 			fprint(2, "run: user %s: %r\n", ubuf);
 			exits("user");
 		}

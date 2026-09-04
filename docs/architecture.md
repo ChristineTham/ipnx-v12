@@ -199,8 +199,14 @@ type may not redeclare one. `/dev/canvas` narrows to genuine drawing
   never consumed. `exportfs` is its mirror in userspace: it relays wire
   requests into real syscalls, so private binds travel and binaries exec
   across the wire. `Tflush` is handled kernel-side; servers never see it.
-- **Notes** are delivered at the syscall boundary; kill rides note
-  permissions (V10's euid rule — [identity.md](identity.md)).
+- **Notes** are delivered at the syscall boundary; kill rides note permissions
+  — the writer must be `eve` or the target's own user.
+- **Identity is one name per process**, Plan 9's `char *user`, with `eve` the
+  machine's owner. Permission is `devpermcheck`: the owner is tested against
+  the owner bits, **`eve` against the GROUP bits** (it is not omnipotent), and
+  everyone else against the other bits. A process may become `"none"` through
+  `#c/user` and may not come back; `#c/hostowner` is eve-only and renames the
+  machine's owner. There is no euid, no ruid, no setuid.
 
 ## Contract: the guest ABI
 
@@ -316,7 +322,6 @@ host is written against this section and judged by the suite.
   again** (P1 step 3, 2026-09-04): Plan 9 has no link operation at any layer,
   so there was nothing for them to carry. A message type above 127 is now
   unused, as it is upstream.
-- Reused bit positions from 9P2000.u, not its protocol: `DMSETUID`.
 - **Identity crosses at attach**: every wire mount carries the mounting
   process's `uname` in `Tattach`; the server applies its own policy to that
   name ([identity.md](identity.md) — "the namespace unions services; it cannot union

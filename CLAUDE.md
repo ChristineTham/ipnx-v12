@@ -361,16 +361,19 @@ evidence, not a fresh opinion.
   **Self-hosting is not a goal** (`/cc` as
   file server makes compilation a capability).
 
-- **The uid model is decided and running — AND UNDER REVIEW (2026-09-03)**: Plan 9's
-  kernel identity is one field, `char *user`, with no euid/ruid/setuid anywhere, so
-  this is a **V10 personality feature in the kernel** and the personality belongs in
-  userspace (decision log). What is running (`docs/identity.md`): mutable per-process
-  credentials in the kernel, names canonical (numbers are the personality's, via
-  `/etc/passwd`), transitions through `/proc/<pid>/ctl` under the eve/ruid rule — no new
-  syscalls — 9P2000.u's `DMSETUID` bit at exec, V10 enforcement in in-process devices,
-  per-attach identity stamped on wire mounts. Identity.md's D1–D4 are measured and
-  dispositioned (D1/D3/D4 closed with `../ipnx` provenance; D2's group implementation
-  deferred by design, riding a later milestone).
+- **Identity is Plan 9's, as of 2026-09-04 (P1 step 4): ONE NAME per process.**
+  `eve` is the machine's owner and the only privilege test; permission is
+  **`devpermcheck`** — owner bits for the owner, **the GROUP bits for `eve`** (so eve
+  is *not* omnipotent: a 0600 file owned by someone else is closed to it too), other
+  bits for everyone else. A process may become `"none"` through `/dev/user` and may
+  not come back (`auth.c`'s `userwrite`); `/dev/hostowner` is eve-only and renames the
+  machine's owner. **Gone**: `Cred{euid,ruid}`, `DMSETUID` and setuid-at-exec, and the
+  credential transitions through `/proc/<pid>/ctl` — a V10 personality inside the
+  kernel, which is where it did not belong. Consequences: `cmd/su.c` is **not built**
+  (its mechanism left; P2 step 4 rewrites it as a userspace program), and `run`'s
+  `user` directive is now a drop to `"none"` and nothing else.
+  `docs/identity.md` describes the *personality* and carries a banner saying so until
+  P2 rewrites it.
 - **Links are GONE — removed 2026-09-04 (P1 step 3), and there is no capability to
   relocate.** They were added as the V12 additions and reviewed out: **Plan 9 has no
   link operation at any layer** — no `Tlink`/`Rlink`/`Tsymlink` in `fcall.h`, no

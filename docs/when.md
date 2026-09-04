@@ -14,11 +14,12 @@ repository (2026-09-02).
 
 ## The suite
 
-**155 tests, 0 failures** — measured 2026-09-04 on wasmtime, on the Rust core
+**150 tests, 0 failures** — measured 2026-09-04 on wasmtime, on the Rust core
 under Node, and on the frozen oracle, with the two hosts that run the Rust core
 identical assertion for assertion. The count **fell from 165 by design**: P1
-step 3 deleted the ten link assertions with the feature they asserted, which is
-what the floor decision below provides for. **Chromium was last measured at
+step 3 deleted the ten link assertions and step 4 six of the nine uid ones,
+each with the feature it asserted, which is what the floor decision below
+provides for; step 4 added one back with the rule it changed. **Chromium was last measured at
 164** on 2026-09-04, before the pipe device and before this deletion; the
 browser run takes ~5 minutes against ~1 under wasmtime and has not been re-run
 since (RESEARCH §9.16).
@@ -48,6 +49,7 @@ different things and both are correct.
 | **P1 step 0** the floor decision, recorded | 2026-09-04 |
 | **P1 step 2** the letter table is Plan 9's | 2026-09-04 |
 | **P1 step 3** the link family leaves | 2026-09-04 |
+| **P1 step 4** identity narrows to Plan 9's | 2026-09-04 |
 
 **P1 step 1** (2026-09-04): `AsySnap { snap, data_ptr, sp }` became **`Cont(Vec<u8>)`**
 — opaque bytes the embedding mints at the fork and is handed back at the spawn, never
@@ -114,6 +116,36 @@ a deletion to name them, and because **the plan said nine**: the tenth,
 contract — not atomic, which is what callers use `rename` for — and was not
 silently substituted. Where `rename` lives is the WASI personality's question,
 which is P2's open gap.
+
+**P1 step 4** (2026-09-04): **identity is one name.** `Cred{euid,ruid}` became
+Plan 9's single `user` per process; `eve` and the eve test remain; permission is
+**`devpermcheck`** ported by rule from `plan9/sys/src/9/port/dev.c:339` — owner
+bits for the owner, **GROUP bits for `eve`**, other bits for everyone else.
+`#c/user` is writable only as `"none"` (`auth.c`'s `userwrite`) and `#c/hostowner`
+is eve-only and renames the machine's owner. **Gone**: `DMSETUID` and
+setuid-at-exec, and the credential transitions through `/proc/<pid>/ctl`.
+
+**The six assertions removed**, named as the floor decision requires:
+
+1. uid: setuid down via /proc/self/ctl, seen by an exec'd id
+2. uid: the parent's credential is untouched
+3. uid: a non-owner cannot climb back
+4. uid: chown and chmod land as wstat (class B, no syscalls)
+5. uid: DMSETUID elevates euid to the image's owner; ruid stays
+6. su none: the privilege-drop shell (rule 1, both ids move)
+
+**One added with the rule it tests** — *"uid: eve is checked against the GROUP
+bits, not waved through"* — because eve stopped being omnipotent and nothing
+would otherwise have noticed. It self-skips where the old credential model is
+still present.
+
+**Two dependents, both found by running rather than by reading.** `cmd/su.c` is
+**no longer built**: its mechanism left, and P2 step 4 rewrites it as a
+userspace program (the source stays for that). And `run`'s `user` directive is
+now a **drop to `"none"`** through `/dev/user` and nothing else — its line is
+out of the suite's spec, because on the frozen oracle a write to the cons
+device reaches the console whatever the fds say, which corrupted the suite's
+own output; the drop is asserted in `init.c` instead.
 
 ## Replanned 2026-09-04 — what follows is LEGACY state
 

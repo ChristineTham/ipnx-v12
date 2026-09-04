@@ -89,7 +89,6 @@ int   chown(char *path, char *uid);
 
 /* file modes */
 #define DMDIR    0x80000000
-#define DMSETUID 0x00080000	/* 9P2000.u's bit position (docs/identity.md) */
 
 /* library: strings and prints are the REAL Plan 9 sources (libp9.a);
  * these declarations mirror their ABI for our own commands */
