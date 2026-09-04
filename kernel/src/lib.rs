@@ -239,6 +239,7 @@ enum Node {
     ConsUser,
     ConsPid,
     ConsNull,
+    PipeDir { p: PipeR },
     Pipe { p: PipeR, end: usize },
     DupRoot,
     DupFd(ChanR),
@@ -302,6 +303,7 @@ fn node_eq(a: &Node, b: &Node) -> bool {
         | (Node::ConsNull, Node::ConsNull)
         | (Node::DupRoot, Node::DupRoot)
         | (Node::EnvRoot, Node::EnvRoot) => true,
+        (Node::PipeDir { p: x }, Node::PipeDir { p: y }) => Rc::ptr_eq(x, y),
         (Node::Pipe { p: x, end: e1 }, Node::Pipe { p: y, end: e2 }) => Rc::ptr_eq(x, y) && e1 == e2,
         (Node::EnvVar(x), Node::EnvVar(y)) => x == y,
         (Node::Mnt(x), Node::Mnt(y)) => Rc::ptr_eq(x, y),
@@ -354,6 +356,12 @@ struct Pipe {
     q: [VecDeque<Vec<u8>>; 2],
     nbytes: [usize; 2],
     refs: [u32; 2],
+    // Whether an end has EVER been walked to. Plan 9 hangs a pipe up when a
+    // side CLOSES (devpipe.c's pipeclose drops qref and calls qhangup), not
+    // when it was never opened — so a `bind '#|' dir` where only `data` is
+    // open must BLOCK a reader, not answer EOF. refs alone cannot tell those
+    // apart; this can.
+    opened: [bool; 2],
     parked: [Vec<Waiter>; 2],
 }
 type PipeR = Rc<RefCell<Pipe>>;
@@ -2394,6 +2402,9 @@ fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
         // point it leaves the kernel with '#V'. It is deliberately outside
         // Plan 9's letter set so it cannot be mistaken for one of theirs.
         'R' => Ok(DN { dev: DevId::Ram, node: Node::Ram(k.borrow().ram_root.clone()), path: None }),
+        // devpipe.c: `Dev pipedevtab = { '|', ...`. Each attach allocates a
+        // fresh pair of cross-connected streams (pipe(3)).
+        '|' => Ok(DN { dev: DevId::Pipe, node: Node::PipeDir { p: pipe_new() }, path: None }),
         'w' => Ok(DN { dev: DevId::Wsys, node: Node::Wsys { kind: WKind::Root, win: None, conn: None, ty: None }, path: None }),
         's' => Ok(DN { dev: DevId::Srv, node: Node::SrvRoot, path: None }),
         'H' => Ok(DN { dev: DevId::Web, node: Node::WebRoot, path: None }),
@@ -2473,6 +2484,11 @@ async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>
             let c = fdt.borrow().fds.get(fdn).cloned().flatten();
             Ok(c.map(|c| DN { dev: DevId::Dup, node: Node::DupFd(c), path: None }))
         }
+        (DevId::Pipe, Node::PipeDir { p }) => Ok(match name {
+            "data" => Some(pipe_end(p, 0, None)),
+            "data1" => Some(pipe_end(p, 1, None)),
+            _ => None,
+        }),
         (DevId::Env, Node::EnvRoot) => {
             let env = k.borrow().procs.get(&pid).ok_or("no proc")?.env.clone();
             let has = env.borrow().contains_key(name);
@@ -2893,6 +2909,15 @@ async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
         (DevId::Env, Node::EnvRoot) => Ok(marshal_stat(&StatIn {
             name: "/", qtype: QTDIR, mode: DMDIR | 0o775, ..Default::default()
         })),
+        (DevId::Pipe, Node::PipeDir { .. }) => Ok(marshal_stat(&StatIn {
+            name: ".", qtype: QTDIR, mode: DMDIR | 0o555, ..Default::default()
+        })),
+        (DevId::Pipe, Node::Pipe { p, end }) => Ok(marshal_stat(&StatIn {
+            name: if *end == 0 { "data" } else { "data1" },
+            mode: 0o600,
+            length: p.borrow().nbytes[*end] as u64,
+            ..Default::default()
+        })),
         (DevId::Pipe, _) => Ok(marshal_stat(&StatIn { name: "data", mode: 0o600, ..Default::default() })),
         (DevId::Mnt, Node::Mnt(m)) => {
             let conn = m.conn.clone();
@@ -3104,8 +3129,8 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
                 let mut pb = p.borrow_mut();
                 if pb.nbytes[d] > 0 {
                     Some(pipe_drain(&mut pb, d, n))
-                } else if pb.refs[d] == 0 {
-                    Some(Vec::new()) // EOF
+                } else if pb.refs[d] == 0 && pb.opened[d] {
+                    Some(Vec::new()) // EOF: that end was open and has closed
                 } else {
                     None
                 }
@@ -3133,6 +3158,21 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
             let start = (off as usize).min(data.len());
             let end = (off as usize + n).min(data.len());
             let out = data[start..end].to_vec();
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Pipe, Node::PipeDir { p }) => {
+            let mut skip = off as usize;
+            let mut out = Vec::new();
+            let lens = { let pb = p.borrow(); [pb.nbytes[0], pb.nbytes[1]] };
+            for (i, nm) in ["data", "data1"].iter().enumerate() {
+                let rec = marshal_stat(&StatIn {
+                    name: nm, mode: 0o600, length: lens[i] as u64, ..Default::default()
+                });
+                if skip >= rec.len() { skip -= rec.len(); continue; }
+                if out.len() + rec.len() > n { break; }
+                out.extend_from_slice(&rec);
+            }
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
         }
@@ -3381,11 +3421,35 @@ fn pipe_drain(p: &mut Pipe, d: usize, want: usize) -> Vec<u8> {
     out
 }
 
+// '#|' — devpipe(3). ONE mechanism: attach mints the pipe, a walk to `data`
+// or `data1` takes an end, and pipe(2) is those three steps (plan9's syspipe
+// in sysfile.c does exactly this: namec("#|"), walk, walk, open).
+fn pipe_new() -> PipeR {
+    Rc::new(RefCell::new(Pipe {
+        q: [VecDeque::new(), VecDeque::new()],
+        nbytes: [0, 0],
+        refs: [0, 0],
+        opened: [false, false],
+        parked: [Vec::new(), Vec::new()],
+    }))
+}
+
+fn pipe_end(p: &PipeR, end: usize, path: Option<String>) -> DN {
+    {
+        let mut pb = p.borrow_mut();
+        pb.refs[end] += 1;
+        pb.opened[end] = true;
+    }
+    DN { dev: DevId::Pipe, node: Node::Pipe { p: p.clone(), end }, path }
+}
+
 fn pipe_serve(k: &K, p: &PipeR, d: usize) {
     loop {
         let fired = {
             let mut pb = p.borrow_mut();
-            if pb.parked[d].is_empty() || (pb.nbytes[d] == 0 && pb.refs[d] != 0) {
+            if pb.parked[d].is_empty()
+                || (pb.nbytes[d] == 0 && !(pb.refs[d] == 0 && pb.opened[d]))
+            {
                 return;
             }
             let w = pb.parked[d].remove(0);
@@ -3479,7 +3543,9 @@ fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Re
         (DevId::Pipe, Node::Pipe { p, end }) => {
             {
                 let mut pb = p.borrow_mut();
-                if pb.refs[1 ^ end] == 0 {
+                // Hung up only if the far end was OPEN and has closed —
+                // devpipe.c hangs a queue up in pipeclose, never at attach.
+                if pb.refs[1 ^ end] == 0 && pb.opened[1 ^ end] {
                     return Err("write on closed pipe".into());
                 }
                 pb.q[end].push_back(data.to_vec());
@@ -4314,20 +4380,17 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
             }
         }
         PIPE => {
-            let p = Rc::new(RefCell::new(Pipe {
-                q: [VecDeque::new(), VecDeque::new()],
-                nbytes: [0, 0],
-                refs: [1, 1],
-                parked: [Vec::new(), Vec::new()],
-            }));
-            let mk = |end: usize| {
+            // syspipe, ported: attach '#|', walk to data and data1, open both.
+            // The device is the mechanism; this call is a user of it.
+            let p = pipe_new();
+            let mk = |end: usize, nm: &str| {
+                let dn = pipe_end(&p, end, Some(format!("#|/{}", nm)));
                 Rc::new(RefCell::new(Chan {
-                    dev: DevId::Pipe, node: Node::Pipe { p: p.clone(), end },
-                    path: Some("#|/data".into()), mode: 2, offset: 0, refs: 1,
+                    dev: dn.dev, node: dn.node, path: dn.path, mode: 2, offset: 0, refs: 1,
                 }))
             };
-            let fd0 = fd_alloc(k, pid, mk(0), None);
-            let fd1 = fd_alloc(k, pid, mk(1), None);
+            let fd0 = fd_alloc(k, pid, mk(0, "data"), None);
+            let fd1 = fd_alloc(k, pid, mk(1, "data1"), None);
             let mut data = Vec::with_capacity(8);
             data.extend_from_slice(&fd0.to_le_bytes());
             data.extend_from_slice(&fd1.to_le_bytes());

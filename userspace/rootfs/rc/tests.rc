@@ -77,6 +77,38 @@ if(~ `{cat /tmp/samf} 'SAM TEST LINE') echo PASS 'sam-today holds the ancestor'^
 # M4, hostfs ('#Z'): a host directory as files — create, write, read back,
 # stat length, remove, all against the real disk. Self-skips where the host
 # offers no '#Z' (the frozen oracle, the browser).
+# The pipe device ('#|'): pipe(3) says an attach allocates two cross-connected
+# streams, data and data1, and that pipe(2) IS an attach of this device. So the
+# device is the mechanism and the syscall is a user of it — every pipeline in
+# this file already proves the syscall path. What this proves is the OTHER way
+# in: bind the device, get the two names, and pass bytes between them. The
+# hangup rule is Plan 9's — a queue hangs up when an end that was OPEN closes
+# (pipeclose), never merely because an end was never walked to — so writing
+# data while nothing holds data1 must succeed, not error. Self-skips where the
+# device is absent.
+#
+# The gate is INDIRECT, and deliberately. Probing '#|' the way every other
+# test probes its device — bind it and read $status — CRASHES the frozen
+# oracle: poc/supervisor/kernel.mjs:1014 has `"|": makePipeDev()` in its
+# device table but that object has no attach method, so kernel.mjs:312's
+# `dev.attach(spec, proc)` throws a TypeError and takes the kernel with it.
+# poc/ is frozen and must not be edited, so the probe cannot be the feature
+# itself. '#R' stands in: it is the purified kernel's ramfs letter, absent
+# from the oracle's table, and it attaches on exactly the hosts where '#|'
+# does. WHEN P2 STEP 2 REMOVES '#R', THIS GATE MOVES WITH IT.
+mkdir -p /n/pp /n/pg
+pd=`{bind '#R' /n/pg >[2=1]; echo $status}
+if(~ $"pd ''){
+	unmount /n/pg
+	bind '#|' /n/pp
+	pdl=`{ls /n/pp}
+	{echo through the device >/n/pp/data} &
+	sleep 1
+	pdr=`{cat /n/pp/data1}
+	if(~ $"pdl '/n/pp/data /n/pp/data1' && ~ $"pdr 'through the device') echo PASS 'the pipe device: an attach mints two cross-connected streams, and a bound end carries bytes'; if not fails=bad
+}
+if not echo PASS 'the pipe device: no #| on this host — skipped'
+
 hz=`{bind '#Z' /n/hz >[2=1]; echo $status}
 if(~ $"hz ''){
 	echo persist me > /n/hz/m4file

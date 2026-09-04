@@ -14,7 +14,11 @@ repository (2026-09-02).
 
 ## The suite
 
-**164 tests, 0 failures**, identical on both hosts — and **measured in Chromium on the Rust core on 2026-09-04** (the browser run takes ~5 minutes against ~1 under wasmtime; see RESEARCH §9.16):
+**165 tests, 0 failures** — measured 2026-09-04 on wasmtime, on the Rust core
+under Node, and on the frozen oracle, with the two hosts that run the Rust core
+identical assertion for assertion. **Chromium was last measured at 164** on
+2026-09-04, before the pipe device; the browser run takes ~5 minutes against ~1
+under wasmtime and has not been re-run since (RESEARCH §9.16).
 
 ```
 node demo/supervisor/main-rust.mjs userspace/rootfs   # the Rust kernel core
@@ -39,7 +43,7 @@ different things and both are correct.
 | **P0** ground — the reference trees, the audits, the archive | 2026-09-03/04 |
 | **P1 step 1** the substrate leaves the kernel's interface | 2026-09-04 |
 | **P1 step 0** the floor decision, recorded | 2026-09-04 |
-| **P1 step 2** *part* — the mount driver's letter given back | 2026-09-04 |
+| **P1 step 2** the letter table is Plan 9's | 2026-09-04 |
 
 **P1 step 1** (2026-09-04): `AsySnap { snap, data_ptr, sp }` became **`Cont(Vec<u8>)`**
 — opaque bytes the embedding mints at the fork and is handed back at the spawn, never
@@ -61,8 +65,19 @@ is reached only through `mount()`. Measured from `rc`: `bind '#R' /tmp/r` lists
 the rootfs; `bind '#M' /tmp/m` answers *unknown device #M*. 164 PASS / 0 FAIL
 on all three hosts, wasmtime and Node identical assertion for assertion.
 
-**Still open in step 2:** `#|`. The plan says the pipe device "takes its
-letter"; what that means is not settled and nothing has been built for it.
+**P1 step 2, the `#|` half** (2026-09-04): the reference settled what "takes
+its letter" means — `pipe(3)` says **`pipe(2)` is an attach of the device**,
+and `syspipe` does exactly that. IPNX had the inversion: the syscall was the
+primitive and no device existed. Now `attach('|')` mints the pipe, a walk to
+`data`/`data1` takes an end, and `pipe(2)` is those three steps; kernel size is
+near neutral because the syscall shed what the device gained. The inversion had
+hidden two bugs — a refcount of 0 read as "closed" when it also meant "never
+opened" — fixed by tracking whether an end was ever walked to, per Plan 9's
+hang-up-on-close rule. Full account and the frozen-oracle hazard it exposed:
+[RESEARCH §9.18](../RESEARCH.md).
+
+**The suite is now 165** — the pipe device's own test, self-skipping where the
+device is absent.
 
 ## Replanned 2026-09-04 — what follows is LEGACY state
 

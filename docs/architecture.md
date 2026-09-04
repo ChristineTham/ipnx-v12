@@ -63,10 +63,21 @@ ABI. The conformance suite binds all three.
 
   | dev | serves |
   |---|---|
-  | `M` | the root ramfs (seeded at boot; V10 permission enforcement) |
+  | `M` | **devmnt** — the mount driver, the only wire-9P marshal. **Not
+        attachable by name**: Plan 9's `mntattach` takes an internal struct
+        rather than a user spec (`devmnt.c`), so the driver is reached only
+        through `mount()`, and the letter is absent from the attach table for
+        that reason |
+  | `R` | the root ramfs (seeded at boot; V10 permission enforcement).
+        **Temporary and not Plan 9's** — it held `M` until 2026-09-04 and
+        leaves with `#V` when a userspace root file server replaces it |
   | `c` | the console — `/dev/cons` (there is no `/dev/tty`) |
-  | `\|` | pipes, bidirectional |
-  | `m` | **devmnt** — the mount driver, the only wire-9P marshal |
+  | `\|` | **devpipe** — each attach allocates two cross-connected streams,
+        `data` and `data1` (`pipe(3)`). **`pipe(2)` is an attach of this
+        device**, not a second mechanism: the syscall attaches, walks to both
+        names and opens them, exactly as Plan 9's `syspipe` does. A queue
+        hangs up when an end that was *open* closes, never because an end was
+        never walked to |
   | `p` | `/proc` — status, ctl (identity transitions), notes, wait |
   | `e` | `/env` |
   | `w` | the window server — `#w/clone` mints windows; a window is a

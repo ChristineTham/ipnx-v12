@@ -1586,6 +1586,54 @@ that started with the repo and nothing else. What it measured:
   `git ls-remote`, Go through `GOTOOLCHAIN` and the module proxy — are recorded
   in the prompt so the next session does not rediscover them.
 
+### 9.18 `pipe(2)` IS an attach of `#|` — and IPNX had it inverted (2026-09-04)
+
+Asked what "`#|` takes its letter" should mean (implementation.md P1 step 2),
+the reference answers it outright. `pipe(3)`:
+
+> `bind #|` *dir* … An attach(5) of this device allocates two new
+> cross-connected I/O streams, *dir*`/data` and *dir*`/data1`. … The
+> `pipe(2)` system call performs an *attach* of this device and returns file
+> descriptors to the new pipe's `data` and `data1`.
+
+And `syspipe` (`plan9/sys/src/9/port/sysfile.c`) is literally that:
+`namec("#|", Atodir, 0, 0)`, `cclone`, `walk` to `data` and `data1`, `open`
+both. **There is one pipe mechanism in Plan 9 and it is the device.**
+
+**IPNX had it the other way round.** `pipe(2)` built the `Pipe` and both chans
+itself and no device existed — the letter `'|'` was in no attach table. The
+tell was already in the tree: those chans carried `path: Some("#|/data")`, a
+path naming a device that could not be walked to, and both ends said `data`.
+This is **not a substrate-forced deviation** (the 2026-09-03 test): no VM
+requires it, so it was unauthorised, and it had survived only because the PoC
+wrote pipes as a special case and nothing revisited them.
+
+Corrected: `attach('|')` mints the pipe, a walk to `data`/`data1` takes an end,
+and `pipe(2)` is those three steps. Net effect on kernel size is close to
+neutral — the syscall shed what the device gained — and the *shape* is now
+Plan 9's.
+
+**Two bugs the inversion had hidden**, both the same mistake: a per-end
+refcount of 0 was read as "closed" when it also means "never opened". With
+both ends always minted together that could never be observed; the moment a
+bound `#|` had one end walked and not the other, a read answered EOF and a
+write answered *write on closed pipe*. Plan 9 hangs a queue up in `pipeclose`
+— on a *close*, never at attach — so a third bit was needed: `opened[2]`,
+with EOF and hangup now requiring `refs[e] == 0 && opened[e]`. Measured before
+and after from `rc`: `bind '#|' /n/pp` then `echo … >data` errored, and after
+the fix `cat data1` prints what was written.
+
+**A frozen-oracle hazard, found by the new test and worth knowing.** The
+oracle's device table (`poc/supervisor/kernel.mjs:1014`) contains
+`"|": makePipeDev()`, but that object has **no `attach` method**, and
+`kernel.mjs:312` calls `dev.attach(spec, proc)` unguarded — so binding `#|`
+does not fail cleanly, it throws a `TypeError` and takes the whole kernel
+down (suite stopped at 42 PASS, exit 1). `poc/` is frozen and must not be
+edited, so **a test may not probe a device by binding it unless the oracle
+either has it working or lacks the table entry entirely.** The pipe-device
+test therefore gates on `#R` instead, with the reason written at the test.
+Any future test that binds a letter should check the oracle's table first.
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on
