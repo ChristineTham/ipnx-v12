@@ -1665,15 +1665,27 @@ a question of design. This is the sweep for the rest.
 
 **Two of the plan's own claims are wrong, measured:**
 
-- **P2 step 3 calls the thing `/boot/boot` and says it "**is rc**".** Both
-  wrong, and the first is the one that matters: **`/boot` is the loader's
-  name.** *"We can't call something /boot and refer to something other than a
-  bootloader"* — and *"not that we should implement a bootloader"*. The name is
-  simply unavailable, and what the step's program is called is now an open gap.
-  On "is rc": the reference's equivalent is C (`sys/src/9/boot/boot.c`, whose
-  `execinit()` at line 202 execs `/$cputype/init`), and **there is no `bootrc`
-  in `plan9/` at all** — §9.12 said there was, on the authority of a 9front web
-  man page rather than the tree, and is corrected above.
+- **P2 step 3 calls the thing `/boot/boot`.** The *name* is wrong and the name
+  alone: **`/boot` is the loader's.** *"We can't call something /boot and refer
+  to something other than a bootloader"* — and *"not that we should implement a
+  bootloader"*. What the script is called is now an open gap.
+
+  **"It is rc" was RIGHT, and this sweep's first draft wrongly "corrected" it**
+  — the mirror error for the third time in one day. *"No systemd — boot is rc
+  plus a namespace file"* is one of CLAUDE.md's three founding refusals. Plan 9's
+  equivalent being C (`sys/src/9/boot/boot.c`) is not a counter-argument; it is
+  **the departure that refusal exists to make**. The `plan9/` measurement was
+  sound and the inference from it was not: *the reference does not overrule a
+  decision to differ from the reference.*
+
+  (Still true, and separately useful: **there is no `bootrc` in `plan9/` at
+  all** — §9.12 claimed one on the authority of a 9front web man page rather
+  than the tree, and is corrected above.)
+
+  Also already right in the code: `/lib/namespace`'s own header says it is
+  *"read by init through newns()"*, so this system had `newns` in the correct
+  process before the sweep questioned it. The namespace-file half of the
+  refusal landed as M2 on 2026-08-29; **step 3 is the rc half**.
 - **P2 step 3 puts `newns` in `/boot/boot`.** `/lib/namespace` is read by
   **`newns(2)`** — `libauth/newns.c:60` — and its callers are `cmd/init.c`,
   `auth/login.c`, `cmd/cpu.c`, `auth/none.c`. **`newns` belongs to init**, not

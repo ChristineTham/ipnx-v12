@@ -161,13 +161,24 @@ says what was replaced and by what.*
   reaching for a plausible-sounding name without checking what it already
   carried."* P2 step 3 is the fourth instance of that shape.
 
-  **So what is settled is a refusal, not a design.** The step's *work* is real
-  — something attaches the root server, binds it over `/`, and execs `init`
-  (`newns` is `init`'s own, `plan9/sys/src/libauth/newns.c:60`, called by
-  `plan9/sys/src/cmd/init.c`). What that something is **called**, and whether
-  it is a program at all or falls to the kernel or to `init`, is **undesigned**
-  — a gap, and not to be filled by reaching for another plausible name. We are
-  not building a loader, so `/boot` is out; that is the whole of the decision.
+  **What is settled is a refusal, and only the name is open.** The boot path
+  **is rc** — *"no systemd: boot is rc plus a namespace file"*, one of the three
+  founding refusals — and its namespace half already landed as M2 (2026-08-29):
+  `/lib/namespace`, read by `init` through `newns()`. Step 3 is the **rc half**,
+  a script that attaches the root server and binds it over `/`. **Where that
+  script lives and what it is called is the gap**, and it is not to be filled by
+  reaching for another plausible name. We are not building a loader, so `/boot`
+  is out; that is the whole of the decision.
+
+  **`/profile` is not the answer either, and it is worth saying why**, since it
+  is the nearest-sounding root. `/profile` is *yours* — one of the three roots
+  (`/home`, `/credentials`, `/profile`) that are **binds onto a subtree of
+  `/usr/<me>`**, so each means *"mine"* — and it assembles **your namespace at
+  `su`/login** (2026-09-02, the three-registries entry). The system's boot is
+  nobody's login. What the two **do** share is the *format*: `/profile`, `/pkg`
+  and `/template` are one format — a list of bindings plus commands — and
+  `/lib/namespace`'s header already says that little language is the profile's
+  fragment format too. **Shared format, different root.**
 
   **She had said it and I did not find it**, because I searched for *bootloader*
   and `/boot/boot` while the rule was filed under naming. A decision is not
