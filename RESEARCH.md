@@ -1853,6 +1853,34 @@ other. The same hazard is why `run`'s spec line left the suite rather than
 `run.c` growing an oracle special case: **a shipped program does not carry
 compatibility with the frozen reference.**
 
+### 9.22 `#H` removed — the need was real and the placement was not (2026-09-04)
+
+P1 step 5. `#H` fetched an http(s) body as a file: `#H/<hex-of-url>`, with the
+kernel parking the reader and the host performing the GET. It is a clean design
+and it was in the wrong place — **`'H'` is not one of Plan 9's letters**
+(§9.13's audit), and the need is answered upstream in **userspace**:
+`plan9/sys/src/cmd/webfs`, twelve files (§9.19).
+
+Removed: `DevId::Web`, `Node::WebRoot`/`Node::Web`, the `WebState`/`WebEntry`
+machinery, `Effect::Fetch`, `Kernel::fetch_done`, the wasmtime host's `ureq`
+client **and its dependency**, the browser host's `bh_fetch_done`, and
+`rustkern.mjs`'s tag-9 handler. Measured after: `grep -c DevId::Web` is 0, and
+`bind '#H'` answers *unknown device #H*.
+
+**The suite did not move**, which is worth stating plainly: 150 before and
+after. The `pkg` test already ran against an **offline local registry**
+(`pkg -r /tmp/reg`), so nothing in it ever touched the device. That is the
+opposite hazard to §9.20's — there a deleted feature left live callers the
+suite could not see; here the suite was blind to the feature from the start.
+**Both are the same lesson twice: the suite is evidence about what it asserts,
+never about what it does not.**
+
+The three callers that did use it were found by reading, and each now says why
+it cannot: `pkg`'s http branch, the Python shim's `pip.fetch()`, and the
+deployed demo's own registry, which is served over http from the page and is
+therefore the one live capability this step costs until P2 step 5 makes the
+demo's registry local.
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on

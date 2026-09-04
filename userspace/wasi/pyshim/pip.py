@@ -1,11 +1,12 @@
 # pip: package installation for ipnx's Python personality.
 #
-# Installs real packages from the real PyPI. The network is the kernel's:
-# '#H/<hex-url>' reads as the body of a GET (webfs, demo/supervisor/devs.mjs),
-# so this runs anywhere the kernel offers that device — in the browser the
-# fetch is the page's own, and PyPI's CORS headers permit it (the same fact
-# micropip relies on). Wheels are verified against PyPI's sha256 before
-# unpacking into site-packages.
+# Installed real packages from the real PyPI over the kernel's '#H' device.
+# THAT DEVICE IS GONE (P1 step 5, 2026-09-04): fetching is not the kernel's
+# job, and Plan 9 answers it with a USERSPACE webfs (sys/src/cmd/webfs), which
+# nobody has written here yet. So pip has no network and says so. Everything
+# below — the sha256 verification, the wheel unpacking — is intact and waits
+# on a fetch(). Wheels were verified against PyPI's sha256 before unpacking
+# into site-packages, and will be again.
 #
 # Scope, honestly: pure-Python wheels (py3-none-any). Native-code wheels need
 # a compiled extension for this platform, and stock CPython-wasi loads no
@@ -26,8 +27,12 @@ SITE = Path("/lib/python3.14/site-packages")
 
 
 def fetch(url):
-    with open("#H/" + url.encode().hex(), "rb") as f:
-        return f.read()
+    # '#H' left the kernel in P1 step 5 — fetching is not the kernel's job, and
+    # Plan 9 answers it with a userspace webfs (sys/src/cmd/webfs). Until one
+    # exists here, pip has no network. See docs/implementation.md P1 step 5.
+    raise OSError(
+        "pip: no network — '#H' left the kernel and no userspace webfs exists yet"
+    )
 
 
 def norm(name):

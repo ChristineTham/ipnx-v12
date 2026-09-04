@@ -325,21 +325,6 @@ export async function boot(host, opts) {
           winSync(wid, label, x, y, w2, h);
           host.winCanvas?.(wid, snap);
           call(X.bh_win_ack, wid);   // the browser's rAF is the presenter's own credit
-        } else if (tag === 9) { // Fetch
-          const url = str16();
-          (async () => {
-            try {
-              const r = await fetch(url);
-              if (!r.ok) throw new Error(`GET ${url}: ${r.status}`);
-              const body = new Uint8Array(await r.arrayBuffer());
-              withBytes(te.encode(url), (up, un) =>
-                withBytes(body, (bp, bn) => call(X.bh_fetch_done, up, un, 1, bp, bn)));
-            } catch (e) {
-              const msg = te.encode(String(e?.message ?? e));
-              withBytes(te.encode(url), (up, un) =>
-                withBytes(msg, (bp, bn) => call(X.bh_fetch_done, up, un, 0, bp, bn)));
-            }
-          })();
         } else if (tag === 10) {
           { const s = td.decode(bytes32()); host.snarfSet?.(s); }
         } else if (tag === 11) { // SnarfGet

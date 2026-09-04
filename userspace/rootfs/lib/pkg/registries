@@ -1,4 +1,6 @@
-# pkg(1)'s registries, tried in order: "name baseurl" — a base may be an
-# http(s) origin (fetched over '#H') or a local path (a registry is just
-# a tree of files). The demo site is the first ipnx registry.
-ipnx https://christham.net/ipnx-v12/registry
+# pkg(1)'s registries, tried in order: "name base" — a base is A LOCAL PATH.
+# A registry is just a tree of files. An http(s) base is refused: '#H' left
+# the kernel in P1 step 5 (fetching is not the kernel's job — Plan 9 answers
+# it with a userspace webfs, sys/src/cmd/webfs), and that webfs is not written
+# yet. P2 step 5 ships the demo's packages from a local registry.
+ipnx /pkg/registry

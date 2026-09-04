@@ -8,7 +8,9 @@
  * sha256-verified against the registry's published digest — refusal on
  * mismatch, as pip already practises.
  *
- * Registries are trees of files, local or over '#H' (webfs):
+ * Registries are trees of files. A LOCAL tree only, for now: '#H' left the
+ * kernel (P1 step 5) and the userspace webfs that replaces it is not written,
+ * so an http(s) base is refused with an error that says so.
  *   <base>/index          lines: name version kind url sha256
  *     kind bin:  url is one wasm; lands at <pkgroot>/bin/<name>
  *     kind tree: url is a manifest — lines: relpath url sha256
@@ -43,34 +45,28 @@ hex(uchar *d, int n, char *out)
 	out[n*2] = 0;
 }
 
-static char *
-urlpath(char *url)			/* '#H/<hex-of-url>' for the webfs walk */
-{
-	static char p[LINELEN*2 + 4];
-	int i, n = strlen(url);
-
-	p[0] = '#'; p[1] = 'H'; p[2] = '/';
-	for(i = 0; i < n; i++){
-		p[3+i*2]   = "0123456789abcdef"[(uchar)url[i] >> 4];
-		p[3+i*2+1] = "0123456789abcdef"[(uchar)url[i] & 15];
-	}
-	p[3+n*2] = 0;
-	return p;
-}
-
 static int
 fetchopen(char *base, char *url)	/* local trees and http, one opener */
 {
 	char full[LINELEN];
 
-	if(strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0)
-		return open(urlpath(url), OREAD);
+	if(strncmp(url, "http://", 7) == 0 || strncmp(url, "https://", 8) == 0){
+		/* '#H' left the kernel in P1 step 5: fetching is not the kernel's
+		 * job, and Plan 9 answers this with a USERSPACE webfs
+		 * (plan9/sys/src/cmd/webfs). Until one is here, a registry is a
+		 * local tree. */
+		fprint(2, "pkg: %s: http registries need a userspace webfs "
+		          "('#H' left the kernel); use a local path\n", url);
+		return -1;
+	}
 	if(url[0] == '/')
 		return open(url, OREAD);
 	snprint(full, sizeof full, "%s/%s", base, url);
 	if(full[0] == '/')
 		return open(full, OREAD);
-	return open(urlpath(full), OREAD);
+	fprint(2, "pkg: %s: a relative url on a non-local base needs a "
+	          "userspace webfs\n", full);
+	return -1;
 }
 
 static void

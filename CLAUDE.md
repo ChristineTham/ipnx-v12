@@ -323,6 +323,13 @@ evidence, not a fresh opinion.
   needs wire compatibility with original 9P.
 - **Wire 9P at boundaries, a Dev table inside** — Plan 9's own kernel shape: devices
   present the file interface as function calls, only the mount driver marshals 9P.
+- **Fetching is NOT the kernel's job — `#H` left on 2026-09-04 (P1 step 5).**
+  It was never Plan 9's letter, and Plan 9 answers the need in **userspace**:
+  `plan9/sys/src/cmd/webfs`. Gone with it: `Effect::Fetch`, `fetch_done`, the
+  hosts' HTTP clients and the `ureq` dependency. **Consequence:** `pkg`
+  registries are **local trees only** (an http base is refused with an error
+  that says why), and the Python shim's `pip` has no network. A userspace
+  webfs, or `/net`, is what brings either back.
 - **The kernel call list is derived** (`docs/syscalls.md`): of Plan 9's 40 live calls, 29
   never leave the supervisor; ten are one 9P message each; `mount` is the boundary itself.
   `Twalk` has no syscall, and `seek` is fd-table state, not a message.

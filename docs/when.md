@@ -50,6 +50,7 @@ different things and both are correct.
 | **P1 step 2** the letter table is Plan 9's | 2026-09-04 |
 | **P1 step 3** the link family leaves | 2026-09-04 |
 | **P1 step 4** identity narrows to Plan 9's | 2026-09-04 |
+| **P1 step 5** `#H` leaves; fetching is not the kernel's | 2026-09-04 |
 
 **P1 step 1** (2026-09-04): `AsySnap { snap, data_ptr, sp }` became **`Cont(Vec<u8>)`**
 — opaque bytes the embedding mints at the fork and is handed back at the spawn, never
@@ -146,6 +147,26 @@ now a **drop to `"none"`** through `/dev/user` and nothing else — its line is
 out of the suite's spec, because on the frozen oracle a write to the cons
 device reaches the console whatever the fds say, which corrupted the suite's
 own output; the drop is asserted in `init.c` instead.
+
+**P1 step 5** (2026-09-04): **`#H` is gone**, with `Effect::Fetch`,
+`fetch_done`, the `WebState`/`WebEntry` machinery, both hosts' HTTP clients and
+the `ureq` dependency. It was never one of Plan 9's letters, and Plan 9 answers
+the need in **userspace** — `plan9/sys/src/cmd/webfs` — which is where it goes
+when someone writes it. Acceptance met: **no `DevId::Web`**, and `bind '#H'`
+answers *unknown device #H*. No assertion moved; the count stays **150**,
+because the suite's `pkg` test already used an offline local registry.
+
+**Three consequences, none of them silent:**
+
+- **`pkg` registries are local trees only.** `/lib/pkg/registries` now names
+  `/pkg/registry`, and an http(s) base is refused with an error saying a
+  userspace webfs is what it needs.
+- **The Python shim's `pip` has no network.** Its `fetch()` raises with that
+  reason rather than failing on a missing file.
+- **The DEPLOYED demo cannot `pkg install`.** Its registry is served over http
+  from the page and was fetched through `#H`. P2 step 5 is where the demo's
+  packages come from a local registry instead; until then that one capability
+  is missing from the live site.
 
 ## Replanned 2026-09-04 — what follows is LEGACY state
 

@@ -267,15 +267,6 @@ pub extern "C" fn bh_canvas_event(wid: u32, p: *const u8, n: usize) {
 }
 
 #[no_mangle]
-pub extern "C" fn bh_fetch_done(url_ptr: *const u8, url_len: usize, ok: u32,
-                                body_ptr: *const u8, body_len: usize) {
-    let url = String::from_utf8_lossy(unsafe { bytes(url_ptr, url_len) }).into_owned();
-    let body = unsafe { bytes(body_ptr, body_len) }.to_vec();
-    let r = if ok != 0 { Ok(body) } else { Err(String::from_utf8_lossy(&body).into_owned()) };
-    with(|w| w.kern.fetch_done(&url, r));
-}
-
-#[no_mangle]
 pub extern "C" fn bh_snarf_done(has: u32, p: *const u8, n: usize) {
     let t = if has != 0 {
         Some(String::from_utf8_lossy(unsafe { bytes(p, n) }).into_owned())
@@ -488,10 +479,6 @@ pub extern "C" fn bh_drain() -> *const u8 {
                     wstr16(&mut ev, &content);
                     wstr16(&mut ev, &toolbar);
                     wstr16(&mut ev, &tag);
-                }
-                Effect::Fetch { url } => {
-                    ev.push(9);
-                    wstr16(&mut ev, &url);
                 }
                 Effect::SnarfSet { text } => {
                     ev.push(10);

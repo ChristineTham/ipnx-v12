@@ -107,7 +107,6 @@ the side that can enforce it.
 Nothing else in the table may be invented on this reasoning. The exception is
 the *machine* being different, not the system being different, and that is a
 single boundary rather than a licence.
-  | `H` | webfs — `#H/<hex-of-url>` reads an http(s) body (native + demo hosts) |
   | `Z` | hostfs — a host directory as files, canonicalise-prefix guarded (native) |
   | `V` | the versioning layer — `#V/ctl` takes `snap [name]` / `del name`;
         `#V/<name>/…` walks the frozen root read-only; restore is a `bind`

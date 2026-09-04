@@ -33,7 +33,6 @@ pub enum Ev {
     WinTick,
     WinAck { wid: u32 },
     WinCanvasEv { wid: u32, line: String },
-    FetchDone { url: String, result: Result<Vec<u8>, String> },
 }
 
 // ---- how a guest run ends (carried through wasmtime host errors) ----
@@ -359,7 +358,6 @@ fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
             Ev::WinCanvasEv { wid, line } => kern.canvas_event(wid, &line),
             Ev::WinTick => kern.win_tick(),
             Ev::WinAck { wid } => kern.win_ack(wid),
-            Ev::FetchDone { url, result } => kern.fetch_done(&url, result),
         }
     }
 }
@@ -448,21 +446,7 @@ fn run_effects(kern: &mut Kernel, engine: &Arc<Engine>, ev_tx: &Sender<Ev>,
                     let _ = p.send_event(ui::UiMsg::Gone { wid });
                 }
             }
-            Effect::Fetch { url } => {
-                let ev = ev_tx.clone();
-                std::thread::spawn(move || {
-                    let result = (|| -> Result<Vec<u8>, String> {
-                        let resp = ureq::get(&url).timeout(std::time::Duration::from_secs(120))
-                            .call().map_err(|e| format!("GET {}: {}", url, e))?;
-                        let mut body = Vec::new();
-                        use std::io::Read;
-                        resp.into_reader().take(64 << 20).read_to_end(&mut body)
-                            .map_err(|e| e.to_string())?;
-                        Ok(body)
-                    })();
-                    let _ = ev.send(Ev::FetchDone { url, result });
-                });
-            }
+
         }
     }
     }

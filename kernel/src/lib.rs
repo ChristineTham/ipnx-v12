@@ -150,8 +150,6 @@ pub enum Effect {
     ReadDone { token: f64, ok: bool, data: Vec<u8> },
     // Put: the surface streams the edited file back. An ordinary write.
     WriteDone { token: f64, ok: bool, n: u32 },
-    // '#H': the host performs the GET off-thread and answers with FetchDone
-    Fetch { url: String },
     // /dev/snarf: the host clipboard hears writes; reads ask it first
     SnarfSet { text: String },
     SnarfGet,
@@ -211,7 +209,6 @@ enum DevId {
     Ram,
     Host,
     Srv,
-    Web,
     Cons,
     Pipe,
     Dup,
@@ -229,8 +226,6 @@ enum Node {
     Host(std::path::PathBuf),
     SrvRoot,
     SrvName(String),
-    WebRoot,
-    Web(String),
     ConsRoot,
     ConsCons,
     ConsUser,
@@ -558,14 +553,6 @@ type WinR = Rc<RefCell<Win>>;
 
 // srv(3): a posted channel kept alive by name — create /srv/x, write the fd
 // number; opening the name later SHARES the channel itself (JS parity)
-enum WebState {
-    Pending,
-    Done(Result<Vec<u8>, String>),
-}
-struct WebEntry {
-    state: WebState,
-    waiters: Vec<(usize, u64, Completer<RRes>)>, // (n, off, completer)
-}
 
 struct SrvPost {
     qpath: u64,
@@ -664,7 +651,6 @@ struct KState {
     win_dirty: std::collections::HashSet<u32>,
     win_inflight: std::collections::HashSet<u32>,
     srv_posts: HashMap<String, SrvPost>,
-    web: HashMap<String, WebEntry>,
     timers: HashMap<u64, TimerKind>,
     next_token: u64,
     effects: Vec<Effect>,
@@ -1835,36 +1821,6 @@ impl Kernel {
         }
     }
 
-    /// '#H': the host's GET finished — settle the entry, wake the readers
-    pub fn fetch_done(&mut self, url: &str, result: Result<Vec<u8>, String>) {
-        let waiters = {
-            let mut kb = self.k.borrow_mut();
-            match kb.web.get_mut(url) {
-                Some(e) => {
-                    e.state = WebState::Done(result);
-                    std::mem::take(&mut e.waiters)
-                }
-                None => Vec::new(),
-            }
-        };
-        for (n, off, c) in waiters {
-            let r = {
-                let kb = self.k.borrow();
-                match &kb.web.get(url).unwrap().state {
-                    WebState::Done(Ok(body)) => {
-                        let start = (off as usize).min(body.len());
-                        let end = (off as usize + n).min(body.len());
-                        RRes::Data(body[start..end].to_vec())
-                    }
-                    _ => RRes::Data(Vec::new()),   // error: readers see EOF; the
-                                                    // next read reports the error
-                }
-            };
-            c.complete(r);
-        }
-        self.ex.run_until_stalled();
-    }
-
     /// the UI painted this window's last batch: restore its credit
     // the host clipboard answered (None = no bridge: serve our buffer)
     pub fn snarf_done(&self, text: Option<String>) {
@@ -2013,7 +1969,6 @@ impl Kernel {
                 win_dirty: std::collections::HashSet::new(),
                 win_inflight: std::collections::HashSet::new(),
                 srv_posts: HashMap::new(),
-                web: HashMap::new(),
                 timers: HashMap::new(),
                 next_token: 1,
                 effects: Vec::new(),
@@ -2396,7 +2351,6 @@ fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
         '|' => Ok(DN { dev: DevId::Pipe, node: Node::PipeDir { p: pipe_new() }, path: None }),
         'w' => Ok(DN { dev: DevId::Wsys, node: Node::Wsys { kind: WKind::Root, win: None, conn: None, ty: None }, path: None }),
         's' => Ok(DN { dev: DevId::Srv, node: Node::SrvRoot, path: None }),
-        'H' => Ok(DN { dev: DevId::Web, node: Node::WebRoot, path: None }),
         'V' => Ok(DN { dev: DevId::Snap, node: Node::SnapRoot, path: None }),
         'Z' => {
             k.borrow().hostfs_root.clone()
@@ -2410,19 +2364,6 @@ fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
 // walk one name on a CONCRETE (non-union) node
 async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>, KErr> {
     match (&dn.dev, &dn.node) {
-        (DevId::Web, Node::WebRoot) => {
-            // '#H/<hex-of-url>' — webfs's spirit, the demo shim's exact walk
-            if name.len() % 2 != 0 || !name.bytes().all(|b| b.is_ascii_hexdigit()) {
-                return Ok(None);
-            }
-            let bytes: Vec<u8> = (0..name.len()).step_by(2)
-                .map(|i| u8::from_str_radix(&name[i..i + 2], 16).unwrap_or(0)).collect();
-            let url = String::from_utf8_lossy(&bytes).into_owned();
-            if !url.starts_with("http://") && !url.starts_with("https://") {
-                return Ok(None);
-            }
-            Ok(Some(DN { dev: DevId::Web, node: Node::Web(url), path: None }))
-        }
         (DevId::Srv, Node::SrvRoot) => {
             Ok(if k.borrow().srv_posts.contains_key(name) {
                 Some(DN { dev: DevId::Srv, node: Node::SrvName(name.into()), path: None })
@@ -2893,12 +2834,6 @@ async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
             ..Default::default()
         })),
         (DevId::Wsys, Node::Wsys { kind, win, conn, ty }) => Ok(wsys_stat(*kind, win, conn, ty)),
-        (DevId::Web, Node::WebRoot) => Ok(marshal_stat(&StatIn {
-            name: "web", qtype: QTDIR, mode: DMDIR | 0o555, ..Default::default()
-        })),
-        (DevId::Web, Node::Web(_)) => Ok(marshal_stat(&StatIn {
-            name: "get", mode: 0o444, ..Default::default()
-        })),
         (DevId::Srv, Node::SrvRoot) => Ok(marshal_stat(&StatIn {
             name: "srv", qtype: QTDIR, mode: DMDIR | 0o777, ..Default::default()
         })),
@@ -3183,40 +3118,6 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
             let out = s.into_bytes();
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
-        }
-        (DevId::Web, Node::Web(url)) => {
-            enum Now { Data(Vec<u8>), Err(String), Park }
-            let now = {
-                let mut kb = k.borrow_mut();
-                match kb.web.get_mut(&url) {
-                    Some(e) => match &e.state {
-                        WebState::Done(Ok(body)) => {
-                            let start = (off as usize).min(body.len());
-                            let end = (off as usize + n).min(body.len());
-                            Now::Data(body[start..end].to_vec())
-                        }
-                        WebState::Done(Err(m)) => Now::Err(m.clone()),
-                        WebState::Pending => Now::Park,
-                    },
-                    None => Now::Err("not opened".into()),
-                }
-            };
-            match now {
-                Now::Data(d) => {
-                    advance(chan, cur, d.len());
-                    Ok(RRes::Data(d))
-                }
-                Now::Err(m) => Err(m),
-                Now::Park => {
-                    let (c, wt) = oneshot::<RRes>();
-                    k.borrow_mut().web.get_mut(&url).unwrap().waiters.push((n, off, c));
-                    let r = wt.await;
-                    if let RRes::Data(ref d) = r {
-                        advance(chan, cur, d.len());
-                    }
-                    Ok(r)
-                }
-            }
         }
         (DevId::Srv, Node::SrvRoot) => {
             let recs: Vec<Vec<u8>> = {
@@ -3994,14 +3895,6 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                 target.borrow_mut().refs += 1;
                 let fd = fd_alloc(k, pid, target.clone(), None);
                 return Ok(ok(fd));
-            }
-            if let Node::Web(url) = &dn.node {
-                let mut kb = k.borrow_mut();
-                if !kb.web.contains_key(url) {
-                    kb.web.insert(url.clone(), WebEntry { state: WebState::Pending, waiters: Vec::new() });
-                    let u = url.clone();
-                    kb.effects.push(Effect::Fetch { url: u });
-                }
             }
             if let Node::SrvName(nm) = &dn.node {
                 let posted = k.borrow().srv_posts.get(nm.as_str()).and_then(|p| p.chan.clone());
