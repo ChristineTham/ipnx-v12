@@ -19,6 +19,67 @@ When they disagree, one of them has a bug — fix it in the same commit.)
 | Rust (stable) | host | the kernel core and hosts; workspace at the repo root |
 | network, once | — | the CPython wasi build (26 MB), cached in `userspace/build/` |
 
+## Starting on a fresh machine
+
+A fresh clone — a laptop, or a cloud session at claude.ai/code — has the repo
+and nothing else: no toolchain, no reference trees, no built guests. Everything
+it lacks is regenerable, and the setup is best done *by the session itself*.
+Paste this as the first message; it is written to be executed, not read.
+
+```
+Read CLAUDE.md first, then docs/implementation.md and docs/when.md. This is a
+fresh clone of ChristineTham/ipnx-v12. Set it up, prove it is the same system,
+then stop and report. Do not start any phase work.
+
+SETUP — the repo is right but the machine is empty. userspace/VERSIONS records
+the measured toolchain; docs/handbook.md "Prerequisites" says what each is for.
+  - wasi-sdk (GitHub release tag wasi-sdk-NN at the VERSIONS version; pick this
+    machine's arch) and binaryen (tag version_NNN). Untar to
+    ~/.local/opt/wasi-sdk and ~/.local/opt/binaryen, or put them anywhere and
+    export WASI_SDK and BINARYEN.
+  - bison, go, node, rust stable at the VERSIONS versions, from whatever package
+    manager this machine has. mk.sh warns on drift; it never fails the build.
+  - the two Plan 9 reference trees, gitignored, that every claim about Plan 9
+    must be checked against (the commands are in .gitignore):
+      git clone --depth 1 https://github.com/0intro/9legacy plan9
+      git clone --depth 1 https://github.com/plan9foundation/plan9 plan9-stock
+  - bash userspace/mk.sh       (guest binaries; downloads the CPython build once)
+  - cargo build --release -p host
+
+VERIFY — all three must agree, and match the count docs/when.md states. If any
+does not, stop and show me the FAIL lines; do not fix anything.
+  cargo run --release -p host -- userspace/rootfs
+  node demo/supervisor/main-rust.mjs userspace/rootfs
+  bash poc/run.sh                                  (the frozen oracle — never modify poc/)
+
+WORKING RULES — record each as a memory file, then follow them:
+  - When I say something is not working, that outranks "it works for me".
+    Reproduce it before explaining it.
+  - Measure, don't assume. A claim about Plan 9 traces to a file and line in
+    plan9/. A claim about the code traces to a grep or a run you just did.
+  - Never invent vocabulary. If I did not name a thing, it is a gap, not a design.
+    Everything is spec'd, proposed, or gap; do not build what is not endorsed.
+  - Execute against the plan. Find the phase in docs/implementation.md before
+    building; do not append steps — if a decision invalidates an earlier phase,
+    say so and redo it.
+  - README.md and demo/index.md are Christine's own voice. Never rewrite or
+    re-voice them; change only a factual status line, and say which.
+  - The kernel does not grow, and it is a subset of Plan 9's. A design that adds
+    to kernel/ is wrong on sight; do not argue against it on other merits.
+  - Every edit you report must be verified on disk (assert the anchor matched;
+    grep the result). A print statement is not evidence. rc has no `return`.
+  - Commit and push only when I say so. Never deploy. Ask before anything
+    outward-facing.
+
+THEN report: what you installed and the versions, the three suite results, and
+one line on where the plan stands per docs/when.md. Wait for me before starting
+the next phase step.
+```
+
+What a cloud session does **not** inherit: the conversation history and the
+auto-memory of any other machine. The rules above are what that memory held;
+`CLAUDE.md` carries the rest and travels with the repo.
+
 ## Build and run
 
 ```sh
