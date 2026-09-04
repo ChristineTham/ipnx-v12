@@ -21,7 +21,7 @@ use exec::{oneshot, Completer, LocalExec};
 macro_rules! eprintln {
     ($($t:tt)*) => {{ let _ = format_args!($($t)*); }};
 }
-use stat9::{marshal_stat, parse_stat, StatIn, DMDIR, DMSETUID, DMSYMLINK, QTDIR, QTFILE, QTSYMLINK};
+use stat9::{marshal_stat, parse_stat, StatIn, DMDIR, DMSETUID, QTDIR, QTFILE};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
@@ -60,9 +60,6 @@ pub mod t {
     pub const PREAD: i32 = 50;
     pub const PWRITE: i32 = 51;
     pub const NSEC: i32 = 53;
-    pub const LINK: i32 = 60;
-    pub const SYMLINK: i32 = 61;
-    pub const READLINK: i32 = 62;
     pub const ARGS: i32 = 200;
     pub const NOTEGET: i32 = 202;
     pub const AREAD: i32 = 210;
@@ -342,7 +339,6 @@ struct RNode {
     mode: u32,
     atime: u32,
     mtime: u32,
-    symlink: Option<String>,
     ro: bool, // a snapshot node: every write path refuses through ram_access
 }
 type RamRef = Rc<RefCell<RNode>>;
@@ -400,9 +396,6 @@ mod tv {
     pub const STAT: u8 = 124;
     pub const WSTAT: u8 = 126;
     // V12 extension messages, minted in the unused >127 range
-    pub const LINK: u8 = 128;
-    pub const SYMLINK: u8 = 130;
-    pub const READLINK: u8 = 132;
 }
 
 struct ConnSt {
@@ -683,11 +676,6 @@ struct KState {
 }
 
 type K = Rc<RefCell<KState>>;
-
-enum WalkRes {
-    Hit(DN),
-    Redirect(String),
-}
 
 // ---- devwsys implementation ----
 fn wnode(kind: WKind, win: Option<WinR>, conn: Option<DConnR>) -> DN {
@@ -1783,7 +1771,7 @@ impl Kernel {
                                 data: Rc::default(), kids: Vec::new(),
                                 uid: eve.into(), mode: 0o755,
                                 atime: now_secs(), mtime: now_secs(),
-                                symlink: None, ro: false,
+                                ro: false,
                             }));
                             node.borrow_mut().kids.push((kd.name.clone(), n.clone()));
                             n
@@ -1802,7 +1790,7 @@ impl Kernel {
                         data: Rc::new(kd.data.clone()), kids: Vec::new(),
                         uid: eve.into(), mode: 0o755,
                         atime: now_secs(), mtime: now_secs(),
-                        symlink: None, ro: false,
+                        ro: false,
                     }));
                     let mut nb = node.borrow_mut();
                     nb.kids.retain(|(n2, _)| n2 != &kd.name);
@@ -1995,7 +1983,7 @@ impl Kernel {
             let t = Rc::new(RefCell::new(RNode {
                 name: "tmp".into(), qpath: qgen, dir: true, data: Rc::default(),
                 kids: Vec::new(), uid: eve.into(), mode: 0o777, atime: boot,
-                mtime: boot, symlink: None, ro: false,
+                mtime: boot, ro: false,
             }));
             qgen += 1;
             root.borrow_mut().kids.push(("tmp".into(), t));
@@ -2053,7 +2041,7 @@ impl Kernel {
         let argv2 = argv.clone();
         self.ex.spawn(async move {
             let r: Result<(), KErr> = async {
-                let dn = walk(&k, pid, "/bin/init", false).await?;
+                let dn = walk(&k, pid, "/bin/init").await?;
                 let image = Arc::new(read_all(&k, &dn, pid).await?);
                 let mut kb = k.borrow_mut();
                 let p = kb.procs.get_mut(&pid).unwrap();
@@ -2202,7 +2190,7 @@ fn load_seed(s: &Seed, name: &str, eve: &str, boot: u32, qgen: &mut u64) -> RamR
         let node = Rc::new(RefCell::new(RNode {
             name: name.into(), qpath: q, dir: true, data: Rc::default(),
             kids: Vec::new(), uid: eve.into(), mode: 0o755, atime: boot,
-            mtime: boot, symlink: None, ro: false,
+            mtime: boot, ro: false,
         }));
         for k in &s.kids {
             let child = load_seed(k, &k.name, eve, boot, qgen);
@@ -2213,7 +2201,7 @@ fn load_seed(s: &Seed, name: &str, eve: &str, boot: u32, qgen: &mut u64) -> RamR
         Rc::new(RefCell::new(RNode {
             name: name.into(), qpath: q, dir: false, data: Rc::new(s.data.clone()),
             kids: Vec::new(), uid: eve.into(), mode: 0o644, atime: boot,
-            mtime: boot, symlink: None, ro: false,
+            mtime: boot, ro: false,
         }))
     }
 }
@@ -2579,38 +2567,15 @@ async fn dev_walk(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>, KE
     dev_walk_one(k, dn, name, pid).await
 }
 
-async fn symtarget(k: &K, dn: &DN) -> Option<String> {
-    if let Node::Ram(r) = &dn.node {
-        return r.borrow().symlink.clone();
-    }
-    if let Node::Mnt(m) = &dn.node {
-        if m.qtype & 0x02 != 0 {
-            // QTSYMLINK over the wire: ask the server (minted Treadlink)
-            let conn = m.conn.clone();
-            if let Ok(rb) = rpc(k, &conn, tv::READLINK, W9::new().u32(m.fid)).await {
-                return Some(R9::new(&rb).s());
-            }
-        }
-    }
-    None
-}
-
-async fn walk(k: &K, pid: Pid, path: &str, nofollow_last: bool) -> Result<DN, KErr> {
+// A walk is one pass. Plan 9 has no symlink, so there is no redirect and no
+// depth limit to keep — a name resolves or it does not.
+async fn walk(k: &K, pid: Pid, path: &str) -> Result<DN, KErr> {
     let cwd = k.borrow().procs.get(&pid).map(|p| p.cwd.clone()).unwrap_or_else(|| "/".into());
-    let mut full = canon(path, &cwd);
-    for depth in 0.. {
-        if depth > 8 {
-            return Err("too many levels of symlinks".into());
-        }
-        match walk_once(k, pid, &full, nofollow_last).await? {
-            WalkRes::Hit(dn) => return Ok(dn),
-            WalkRes::Redirect(r) => full = canon(&r, &cwd),
-        }
-    }
-    unreachable!()
+    let full = canon(path, &cwd);
+    walk_once(k, pid, &full).await
 }
 
-async fn walk_once(k: &K, pid: Pid, path: &str, nofollow_last: bool) -> Result<WalkRes, KErr> {
+async fn walk_once(k: &K, pid: Pid, path: &str) -> Result<DN, KErr> {
     if path.starts_with('#') {
         let nomnt = k.borrow().procs.get(&pid).map(|p| p.nomnt).unwrap_or(false);
         if nomnt {
@@ -2628,7 +2593,7 @@ async fn walk_once(k: &K, pid: Pid, path: &str, nofollow_last: bool) -> Result<W
                     .ok_or_else(|| format!("'{}' does not exist", path))?;
             }
         }
-        return Ok(WalkRes::Hit(dn));
+        return Ok(dn);
     }
     let (best, list) = {
         let kb = k.borrow();
@@ -2667,33 +2632,15 @@ async fn walk_once(k: &K, pid: Pid, path: &str, nofollow_last: bool) -> Result<W
             }
         }
     };
-    let full_comps: Vec<String> =
-        path.split('/').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
     let rest: Vec<String> =
         path[best.len()..].split('/').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
-    for (i, name) in rest.iter().enumerate() {
+    for name in rest.iter() {
         let next = dev_walk(k, &dn, name, pid).await?
             .ok_or_else(|| format!("'{}' does not exist", path))?;
         dn = next;
-        if i == rest.len() - 1 && nofollow_last {
-            break;
-        }
-        if let Some(target) = symtarget(k, &dn).await {
-            let here = full_comps.len() - rest.len() + i;
-            let base = if target.starts_with('/') {
-                target
-            } else {
-                let mut parts: Vec<&str> = full_comps[..here].iter().map(|s| s.as_str()).collect();
-                parts.push(&target);
-                format!("/{}", parts.join("/"))
-            };
-            let rem = rest[i + 1..].join("/");
-            let redirect = if rem.is_empty() { base } else { format!("{}/{}", base, rem) };
-            return Ok(WalkRes::Redirect(redirect));
-        }
     }
     dn.path = Some(path.to_string());
-    Ok(WalkRes::Hit(dn))
+    Ok(dn)
 }
 
 async fn walk_parent(k: &K, pid: Pid, path: &str) -> Result<(DN, String), KErr> {
@@ -2704,7 +2651,7 @@ async fn walk_parent(k: &K, pid: Pid, path: &str) -> Result<(DN, String), KErr> 
     if base.is_empty() || path.starts_with('#') {
         return Err(format!("bad path '{}'", path));
     }
-    let parent = walk(k, pid, if i == 0 { "/" } else { &path[..i] }, false).await?;
+    let parent = walk(k, pid, if i == 0 { "/" } else { &path[..i] }).await?;
     Ok((parent, base))
 }
 
@@ -2721,7 +2668,7 @@ async fn ns_insert(k: &K, pid: Pid, old: &str, dn: DN, flag: i32) -> Result<(), 
     let mut list = match have {
         Some(l) => l,
         None => {
-            let under = walk(k, pid, old, false).await?; // must exist, per bind(2)
+            let under = walk(k, pid, old).await?; // must exist, per bind(2)
             match (&under.dev, &under.node) {
                 (DevId::Union, Node::Union(l)) => l.as_ref().clone(),
                 _ => vec![MountEl { dn: under, create: false }],
@@ -2827,9 +2774,9 @@ async fn conn_reader(k: K, conn: ConnR) {
 // ---- device I/O ----
 fn ram_stat(node: &RamRef) -> Vec<u8> {
     let n = node.borrow();
-    let qtype = if n.dir { QTDIR } else if n.symlink.is_some() { QTSYMLINK } else { QTFILE };
-    let dm = if n.dir { DMDIR } else if n.symlink.is_some() { DMSYMLINK } else { 0 };
-    let length = if n.dir { 0 } else if let Some(s) = &n.symlink { s.len() as u64 } else { n.data.len() as u64 };
+    let qtype = if n.dir { QTDIR } else { QTFILE };
+    let dm = if n.dir { DMDIR } else { 0 };
+    let length = if n.dir { 0 } else { n.data.len() as u64 };
     marshal_stat(&StatIn {
         name: &n.name, uid: &n.uid, gid: &n.uid, qpath: n.qpath,
         atime: n.atime, mtime: n.mtime, qtype, mode: dm | n.mode, length,
@@ -2846,7 +2793,7 @@ fn snap_tree(n: &RamRef) -> RamRef {
         name: nb.name.clone(), qpath: nb.qpath, dir: nb.dir, data: nb.data.clone(),
         kids: nb.kids.iter().map(|(k2, v)| (k2.clone(), snap_tree(v))).collect(),
         uid: nb.uid.clone(), mode: nb.mode, atime: nb.atime, mtime: nb.mtime,
-        symlink: nb.symlink.clone(), ro: true,
+        ro: true,
     }))
 }
 
@@ -3622,7 +3569,7 @@ fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Re
 // The host decides WHAT to open and WHEN, and renders it — which is the
 // property that matters; the kernel is only the filesystem.
 async fn read_whole(k: &K, pid: Pid, path: &str) -> Result<Vec<u8>, KErr> {
-    let dn = walk(k, pid, path, false).await?;
+    let dn = walk(k, pid, path).await?;
     let chan = Rc::new(RefCell::new(Chan {
         dev: dn.dev, node: dn.node, path: Some(path.to_string()),
         mode: 0, offset: 0, refs: 1,
@@ -3646,7 +3593,7 @@ async fn read_whole(k: &K, pid: Pid, path: &str) -> Result<Vec<u8>, KErr> {
 // Put: the surface hands the edited file back. Truncating, because the buffer
 // IS the file now — not an append.
 async fn write_whole(k: &K, pid: Pid, path: &str, data: &[u8]) -> Result<usize, KErr> {
-    let dn = walk(k, pid, path, false).await?;
+    let dn = walk(k, pid, path).await?;
     open_perm(k, &dn, 1 | OTRUNC, pid).await?;          // OWRITE | OTRUNC
     let chan = Rc::new(RefCell::new(Chan {
         dev: dn.dev, node: dn.node, path: Some(path.to_string()),
@@ -3903,7 +3850,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
             }
             let name = txstr(&tx, 0);
             let old = txstr(&tx, name.len() + 1);
-            let src = walk(k, pid, &name, false).await?; // resolved now, per bind(2)
+            let src = walk(k, pid, &name).await?; // resolved now, per bind(2)
             let cwd = k.borrow().procs.get(&pid).unwrap().cwd.clone();
             let oldc = canon(&old, &cwd);
             ns_insert(k, pid, &oldc, src, a[2]).await?;
@@ -3969,7 +3916,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
             let nm = if name.starts_with('#') { name.clone() } else { canon(&name, &cwd) };
             let mut i = list.iter().position(|el| el.dn.path.as_deref() == Some(nm.as_str()));
             if i.is_none() {
-                let src = walk(k, pid, &name, false).await?;
+                let src = walk(k, pid, &name).await?;
                 i = list.iter().position(|el| el.dn.dev == src.dev && node_eq(&el.dn.node, &src.node));
             }
             let Some(i) = i else {
@@ -3987,7 +3934,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
             let path = txstr(&tx, 0);
             let cwd = k.borrow().procs.get(&pid).unwrap().cwd.clone();
             let full = canon(&path, &cwd);
-            walk(k, pid, &full, false).await?;
+            walk(k, pid, &full).await?;
             k.borrow_mut().procs.get_mut(&pid).unwrap().cwd = full;
             Ok(ok(0))
         }
@@ -4010,7 +3957,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
         }
         OPEN => {
             let path = txstr(&tx, 0);
-            let dn = walk(k, pid, &path, false).await?;
+            let dn = walk(k, pid, &path).await?;
             if let Node::DupFd(target) = &dn.node {
                 target.borrow_mut().refs += 1;
                 let fd = fd_alloc(k, pid, target.clone(), None);
@@ -4077,7 +4024,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
             let perm = a[2] as u32;
             let isdir = perm & DMDIR != 0;
             if !isdir {
-                if let Ok(dn) = walk(k, pid, &cpath, false).await {
+                if let Ok(dn) = walk(k, pid, &cpath).await {
                     // create(2): an existing file opens and truncates
                     if let Node::Mnt(m) = &dn.node {
                         let m2 = if m.ephemeral.get() { m.clone() } else { mnt_clone(k, m).await? };
@@ -4249,7 +4196,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
         }
         STAT => {
             let path = txstr(&tx, 0);
-            let dn = walk(k, pid, &path, a[3] == 1).await?; // a3: lstat's nofollow
+            let dn = walk(k, pid, &path).await?;
             let rec = dev_stat(k, &dn, pid).await?;
             if let Node::Mnt(m) = &dn.node {
                 if m.ephemeral.get() {
@@ -4274,7 +4221,7 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
             let rec = tx[path.len() + 1..(path.len() + 1 + a[2] as usize).min(tx.len())].to_vec();
             let st = parse_stat(&rec).ok_or("bad stat record")?;
             let (parent, base) = walk_parent(k, pid, &path).await?;
-            let dn = walk(k, pid, &path, true).await?;
+            let dn = walk(k, pid, &path).await?;
             if let Node::Mnt(m) = &dn.node {
                 let conn = m.conn.clone();
                 let body = W9::new().u32(m.fid).u16(rec.len() as u16).raw(&rec);
@@ -4543,93 +4490,6 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
                 RRes::Intr => Err("interrupted".into()),
             }
         }
-        LINK => {
-            let old = txstr(&tx, 0);
-            let nu = txstr(&tx, old.len() + 1);
-            let o = walk(k, pid, &old, true).await?; // link the name, not its target
-            let (parent, base) = walk_parent(k, pid, &nu).await?;
-            if let (Node::Mnt(pm), Node::Mnt(om)) = (&parent.node, &o.node) {
-                if !Rc::ptr_eq(&pm.conn, &om.conn) {
-                    return Err("cross-device link".into());
-                }
-                let conn = pm.conn.clone();
-                rpc(k, &conn, tv::LINK, W9::new().u32(pm.fid).u32(om.fid).s(&base)).await?;
-                return Ok(ok(0));
-            }
-            let cred = k.borrow().procs.get(&pid).unwrap().cred.clone();
-            match (&parent.node, &o.node) {
-                (Node::Ram(pr), Node::Ram(onode)) => {
-                    ram_access(k, pr, &cred, 2)?;
-                    if kid(pr, &base).is_some() {
-                        return Err(format!("'{}' already exists", base));
-                    }
-                    if onode.borrow().dir {
-                        return Err("cannot hard-link a directory".into());
-                    }
-                    pr.borrow_mut().kids.push((base, onode.clone()));
-                    Ok(ok(0))
-                }
-                _ => Err("link not supported on this device".into()),
-            }
-        }
-        SYMLINK => {
-            let target = txstr(&tx, 0);
-            let nu = txstr(&tx, target.len() + 1);
-            let (parent, base) = walk_parent(k, pid, &nu).await?;
-            if let Node::Mnt(pm) = &parent.node {
-                let conn = pm.conn.clone();
-                rpc(k, &conn, tv::SYMLINK, W9::new().u32(pm.fid).s(&base).s(&target)).await?;
-                return Ok(ok(0));
-            }
-            let cred = k.borrow().procs.get(&pid).unwrap().cred.clone();
-            if let Node::Ram(pr) = &parent.node {
-                ram_access(k, pr, &cred, 2)?;
-                if kid(pr, &base).is_some() {
-                    return Err(format!("'{}' already exists", base));
-                }
-                let q = {
-                    let mut kb = k.borrow_mut();
-                    let q = kb.qgen;
-                    kb.qgen += 1;
-                    q
-                };
-                let node = Rc::new(RefCell::new(RNode {
-                    name: base.clone(), qpath: q, dir: false, data: Rc::default(),
-                    kids: Vec::new(), uid: cred.euid.clone(), mode: 0o777,
-                    atime: now_secs(), mtime: now_secs(), symlink: Some(target), ro: false,
-                }));
-                pr.borrow_mut().kids.push((base, node));
-                Ok(ok(0))
-            } else {
-                Err("symlink not supported on this device".into())
-            }
-        }
-        READLINK => {
-            let path = txstr(&tx, 0);
-            let dn = walk(k, pid, &path, true).await?;
-            if let Node::Mnt(m) = &dn.node {
-                let conn = m.conn.clone();
-                let rb = rpc(k, &conn, tv::READLINK, W9::new().u32(m.fid)).await?;
-                let target = R9::new(&rb).s();
-                if m.ephemeral.get() {
-                    clunk_fid(k, &conn, m.fid);
-                }
-                let mut bytes = target.into_bytes();
-                let n = bytes.len() as i32;
-                bytes.push(0);
-                return Ok(okd(n, bytes));
-            }
-            if let Node::Ram(r) = &dn.node {
-                if let Some(tg) = r.borrow().symlink.clone() {
-                    let mut bytes = tg.into_bytes();
-                    let n = bytes.len() as i32;
-                    bytes.push(0);
-                    return Ok(okd(n, bytes));
-                }
-                return Err("not a symlink".into());
-            }
-            Err("readlink not supported on this device".into())
-        }
         _ => Err(format!("bad syscall {} (native)", trap)),
     }
 }
@@ -4731,7 +4591,7 @@ fn ram_create(k: &K, parent: &DN, name: &str, perm: u32, isdir: bool,
     let node = Rc::new(RefCell::new(RNode {
         name: name.into(), qpath: q, dir: isdir, data: Rc::default(),
         kids: Vec::new(), uid: cred.euid.clone(), mode: perm & 0o7777,
-        atime: now_secs(), mtime: now_secs(), symlink: None, ro: false,
+        atime: now_secs(), mtime: now_secs(), ro: false,
     }));
     pr.borrow_mut().kids.push((name.into(), node.clone()));
     pr.borrow_mut().mtime = now_secs();
@@ -4956,7 +4816,7 @@ async fn exec_call(k: &K, worker_pid: Pid, pid: Pid, tx: &[u8], argc: i32) -> KR
         o += s.len() + 1;
         argv.push(s);
     }
-    let dn = walk(k, pid, &path, false).await?;
+    let dn = walk(k, pid, &path).await?;
     if let Ok(rec) = dev_stat(k, &dn, pid).await {
         if let Some(st) = parse_stat(&rec) {
             if st.mode & DMDIR != 0 {

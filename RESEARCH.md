@@ -1768,6 +1768,43 @@ decided question is consumed, never re-derived — **then check `plan9/`** — a
 question of fact is measured, never asked. Only what survives both is a
 decision, and only that is worth Christine's time.
 
+### 9.20 The link family removed — and the plan's count was one short (2026-09-04)
+
+P1 step 3, executing the 2026-09-03 decision that `link`/`symlink`/`readlink`
+are unauthorised deviations. Two measurements worth keeping.
+
+**The assertion count was 9 in the plan and is 10 in the suite.** The tenth is
+*"a server without the extension answers Rerror, not a wedge"* — driven by
+`link9("/n/hello/motd", …)` but phrased about `Rerror`, so a grep for
+*link*|*lstat* (which is how P0 counted) does not see it. The floor decision's
+requirement that **a deletion name its assertions** is what caught it: naming
+them forces reading them, and reading them found the one the grep missed.
+165 → **155**, on all three hosts, identical assertion for assertion on the two
+that run the Rust core.
+
+**Acceptance, measured rather than asserted.** 32 traps remain. Every one is in
+`plan9/sys/src/libc/9syscall/sys.h` **at the same number AND under the same
+name** — checked pairwise, not just by number — except the four the substrate
+forces: `ARGS` 200, `NOTEGET` 202, `AREAD` 210, `IOWAIT` 211. The walk
+simplified with the feature: no `WalkRes` enum, no redirect, no eight-deep
+symlink limit, no `symtarget` — **a walk is one pass**, which is what it is in
+a system with no links.
+
+**A caller the suite does not cover, found by reading rather than by running.**
+The WASI shims implemented `path_rename` as **link + unlink** — V10's rule, and
+this system's *definition* of the call (it was stated that way in CLAUDE.md and
+architecture.md). Deleting trap 60 left both shims calling a trap that no
+longer exists, and **the suite stayed green**, because nothing in it renames.
+Deleted features leave callers behind, and green is not evidence they are gone.
+
+The fix is deliberately a **refusal, not a substitution**: `path_rename`,
+`path_link`, `path_symlink` and `path_readlink` answer `NOTSUP` in both shims.
+copy+remove would compile and would mostly work, but it is **a different
+contract** — non-atomic, and atomicity is precisely what callers use `rename`
+for — so substituting it silently would trade a loud failure for a quiet one.
+Where `rename` lives belongs to the **WASI personality**, which
+implementation.md's P2 already carries as an open gap.
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on

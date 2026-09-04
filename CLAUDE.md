@@ -85,7 +85,7 @@ wire 9P at the mount boundary, exportfs serving a guest's namespace
 back out, and the window server: `#w` mints windows, `bind '#w/N' /dev` makes a
 namespace a window, `/dev/draw` is a real per-window file with text (`y i l s` and an
 8×8 font of our own authorship), `win rc` is a shell and `win sam` THE EDITOR in a
-browser window, and the link/symlink family lands as the V12 additions (under review — Plan 9 has no such calls), and **both real userspaces have their
+browser window, and **both real userspaces have their
 real libraries**: `libp9.a` is ~150 files of genuine 4th-edition libc/libbio/libregexp
 over one platform shim (`u.h`), twenty-four real commands and the real `rc` ride it,
 V10 `cat`/`echo` sit in `/v10/bin` on `libv10`, and the kernel carries what rc needs:
@@ -327,8 +327,9 @@ evidence, not a fresh opinion.
   never leave the supervisor; ten are one 9P message each; `mount` is the boundary itself.
   `Twalk` has no syscall, and `seek` is fd-table state, not a message.
 - **Class-B calls return as libc functions, never syscalls** — `chmod`/`fchmod`/`chown`/
-  `fchown`/`utime` collapse into `wstat` (V10 has no `rename`; renaming is `link`+`unlink`
-  in userland). 40 of V10's 68 routines — 59% — are direct or library-only; counts are of
+  `fchown`/`utime` collapse into `wstat` (V10 has no `rename`, and with no `link` either
+  there is nothing to build one from — where `rename` lives is the WASI personality's
+  question, P2's open gap). 40 of V10's 68 routines — 59% — are direct or library-only; counts are of
   routines, not `sysent.c` rows (`lseek`/`seek` and `gtime`/`ftime` pair up).
 - **The lazy fork's resume mechanism and its bound** (RESEARCH §5.2): the child's `exec`
   throws; a hand-assembled `try_table`/`catch_all` guard catches; the supervisor restores
@@ -370,15 +371,20 @@ evidence, not a fresh opinion.
   per-attach identity stamped on wire mounts. Identity.md's D1–D4 are measured and
   dispositioned (D1/D3/D4 closed with `../ipnx` provenance; D2's group implementation
   deferred by design, riding a later milestone).
-- **Links landed as the V12 additions — AND ARE UNDER REVIEW (2026-09-03)**, because
-  **Plan 9 has no link syscall and neither does 9legacy**: refusing links is a design
-  position there, answered by `bind` and `mount`. The kernel is a subset of Plan 9's
-  and the personality is userspace (decision log), so the traps are a candidate for
-  removal and the capability's home is an open question. What landed: kernel traps 60–62 (`lstat` is a stat flag),
-  minted wire types 128/130/132 above every dialect's range (strangers `Rerror`,
-  clients degrade), 9P2000.u's `QTSYMLINK`/`DMSYMLINK` bits, and V10's rule — **the
-  kernel resolves symlinks in the walking process's namespace**, since no server knows
-  the client's namespace.
+- **Links are GONE — removed 2026-09-04 (P1 step 3), and there is no capability to
+  relocate.** They were added as the V12 additions and reviewed out: **Plan 9 has no
+  link operation at any layer** — no `Tlink`/`Rlink`/`Tsymlink` in `fcall.h`, no
+  `syslink` in `port/`, nothing in `9syscall/sys.h` — so refusing links is a design
+  position there, answered by `bind` and `mount`. What left: kernel traps 60–62 and
+  `lstat`'s nofollow flag, the minted wire types 128/130/132, the `QTSYMLINK`/
+  `DMSYMLINK` bits, the walk-time symlink resolution (a walk is now one pass, with no
+  redirect and no depth limit), `cmd/ln.c`, and **ten** suite assertions. Every
+  remaining trap is Plan 9's own number and name but for the four the substrate
+  forces — `ARGS` 200, `NOTEGET` 202, `AREAD` 210, `IOWAIT` 211. **Consequence, and
+  it is a real one:** WASI's `path_rename` was *defined* as link+unlink, so it now
+  answers `NOTSUP` along with `path_link`/`path_symlink`/`path_readlink` — copy+remove
+  is a different contract (not atomic) and was not silently substituted. Where
+  `rename` lives is the WASI personality's question, P2's open gap.
 
 ## The tree (post-declaration, 2026-08-29)
 

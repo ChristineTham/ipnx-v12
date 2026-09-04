@@ -131,7 +131,7 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `close` | A | `close` | |
 | `wait` | A | `await` | status string parsed |
 | `creat` | A | `create` | falls back to `open(OTRUNC)` when it exists |
-| `link` | C | kernel: trap 60, wire type 128 | cross-device refused (EXDEV) |
+| `link` | — | **not provided** | Plan 9 has none at any layer; `bind`/`mount` is the answer |
 | `unlink` | A | `remove` | |
 | `lseek` | A | `seek` | |
 | `chdir` | A | `chdir` | |
@@ -161,7 +161,7 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `kill` | C | write `/proc/n/note` | |
 | `select` | C | personality helper | over multiple procs or a mux server |
 | `setpgrp` | B | `rfork(RFNOTEG)` | |
-| `lstat` | C | `stat` with a nofollow flag | not a new call |
+| `lstat` | — | **not provided** | there are no symlinks to decline to follow |
 | `dup` | A | `dup` | |
 | `pipe` | A | `pipe` | |
 | `times` | B | read `/proc/n/status` | |
@@ -176,8 +176,8 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `ioctl` | C | `ctl` files | libc translation per device class |
 | `sysboot` | D | drop | |
 | `setruid` | C | libc: write `/proc/n/ctl` (identity.md D1) | |
-| `symlink` | C | kernel: trap 61, wire type 130 | qid carries 9P2000.u's QTSYMLINK |
-| `readlink` | C | kernel: trap 62, wire type 132 | |
+| `symlink` | — | **not provided** | as `link` |
+| `readlink` | — | **not provided** | as `link` |
 | `exece` | A | `exec` | |
 | `umask` | C | per-proc field, applied at `create` | in the PoC kernel |
 | `chroot` | B | `rfork(RFCNAMEG)` + `bind` | |

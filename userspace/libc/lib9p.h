@@ -6,8 +6,6 @@ enum {
 	Twalk = 110, Topen = 112, Tcreate = 114, Tread = 116, Twrite = 118,
 	Tclunk = 120, Tremove = 122, Tstat = 124, Twstat = 126,
 	Rerror9 = 107,
-	/* V12 extension messages (>127, unused by 9P2000/.u/.L) */
-	Tlink9 = 128, Tsymlink9 = 130, Treadlink9 = 132,
 	MSIZE9 = 8216,
 	QTDIR9 = 0x80, QTFILE9 = 0x00,
 };

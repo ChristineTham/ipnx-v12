@@ -14,11 +14,14 @@ repository (2026-09-02).
 
 ## The suite
 
-**165 tests, 0 failures** — measured 2026-09-04 on wasmtime, on the Rust core
+**155 tests, 0 failures** — measured 2026-09-04 on wasmtime, on the Rust core
 under Node, and on the frozen oracle, with the two hosts that run the Rust core
-identical assertion for assertion. **Chromium was last measured at 164** on
-2026-09-04, before the pipe device; the browser run takes ~5 minutes against ~1
-under wasmtime and has not been re-run since (RESEARCH §9.16).
+identical assertion for assertion. The count **fell from 165 by design**: P1
+step 3 deleted the ten link assertions with the feature they asserted, which is
+what the floor decision below provides for. **Chromium was last measured at
+164** on 2026-09-04, before the pipe device and before this deletion; the
+browser run takes ~5 minutes against ~1 under wasmtime and has not been re-run
+since (RESEARCH §9.16).
 
 ```
 node demo/supervisor/main-rust.mjs userspace/rootfs   # the Rust kernel core
@@ -44,6 +47,7 @@ different things and both are correct.
 | **P1 step 1** the substrate leaves the kernel's interface | 2026-09-04 |
 | **P1 step 0** the floor decision, recorded | 2026-09-04 |
 | **P1 step 2** the letter table is Plan 9's | 2026-09-04 |
+| **P1 step 3** the link family leaves | 2026-09-04 |
 
 **P1 step 1** (2026-09-04): `AsySnap { snap, data_ptr, sp }` became **`Cont(Vec<u8>)`**
 — opaque bytes the embedding mints at the fork and is handed back at the spawn, never
@@ -78,6 +82,38 @@ hang-up-on-close rule. Full account and the frozen-oracle hazard it exposed:
 
 **The suite is now 165** — the pipe device's own test, self-skipping where the
 device is absent.
+
+**P1 step 3** (2026-09-04): **links are gone.** Kernel traps 60–62, `lstat`'s
+nofollow flag, the minted wire types 128/130/132, the `QTSYMLINK`/`DMSYMLINK`
+bits, the walk-time symlink resolution, `RNode.symlink`, `cmd/ln.c`, and the
+libc and `exportfs` halves. A walk is now **one pass** — no redirect, no depth
+limit — because there is nothing to redirect to. **Acceptance met and
+measured**: 32 traps remain, every one matching Plan 9's `sys.h` **by number
+and by name**, but for the four the substrate forces (`ARGS` 200, `NOTEGET`
+202, `AREAD` 210, `IOWAIT` 211).
+
+**The ten assertions removed** — named here because the floor decision requires
+a deletion to name them, and because **the plan said nine**: the tenth,
+*"a server without the extension answers Rerror, not a wedge"*, is driven by
+`link9` but says neither "link" nor "lstat", so the P0 count missed it.
+
+1. link: a second name for a file
+2. link: a write through either name lands in the one file
+3. link: removing one name leaves the other
+4. symlink: created
+5. symlink: open follows to the target
+6. readlink: the target comes back
+7. lstat sees the link (9 bytes of target); stat sees the file
+8. symlink over the wire (minted Tsymlink)
+9. a symlink read through a mount resolves in the CLIENT's namespace
+10. a server without the extension answers Rerror, not a wedge
+
+**One capability went with them, deliberately.** WASI's `path_rename` was
+*defined* as link+unlink, so it now answers `NOTSUP`, as do `path_link`,
+`path_symlink` and `path_readlink`, in both shims. copy+remove is a different
+contract — not atomic, which is what callers use `rename` for — and was not
+silently substituted. Where `rename` lives is the WASI personality's question,
+which is P2's open gap.
 
 ## Replanned 2026-09-04 — what follows is LEGACY state
 

@@ -16,7 +16,7 @@
 
 const T = { CLOSE: 4, DUP: 5, EXITS: 8, OPEN: 14, SLEEP: 17, CREATE: 22, FD2PATH: 23,
   REMOVE: 25, SEEK: 39, ERRSTR: 41, STAT: 42, FSTAT: 43, PREAD: 50,
-  PWRITE: 51, NSEC: 53, LINK: 60, SYMLINK: 61, READLINK: 62, ARGS: 200 };
+  PWRITE: 51, NSEC: 53, ARGS: 200 };
 const NOCOPY = -1;            // guest-pointer slot when no copy-out is wanted
 const TXSIZE = 65536;
 const OREAD = 0, OWRITE = 1, ORDWR = 2, OTRUNC = 16;
@@ -476,34 +476,16 @@ export function makeWasi(ctx) {
       return sysTx(T.REMOVE, [path], 0, 0, 0, 0, 0) < 0 ? kerrno() : E.success;
     },
     path_remove_directory: (dirfd, ptr, len) => imports.path_unlink_file(dirfd, ptr, len),
-    path_rename: (dirfd, ptr, len, ndirfd, nptr, nlen) => {
-      const from = resolve(dirfd, ptr, len), to = resolve(ndirfd, nptr, nlen);
-      if (from === null || to === null) return E.badf;
-      // V10's rule, alive here: rename is link + unlink in userland
-      if (sysTx(T.LINK, [from, to], 0, 0, 0, 0, 0) < 0) return kerrno();
-      if (sysTx(T.REMOVE, [from], 0, 0, 0, 0, 0) < 0) return kerrno();
-      return E.success;
-    },
-    path_link: (odirfd, oflags, optr, olen, ndirfd, nptr, nlen) => {
-      const from = resolve(odirfd, optr, olen), to = resolve(ndirfd, nptr, nlen);
-      if (from === null || to === null) return E.badf;
-      return sysTx(T.LINK, [from, to], 0, 0, 0, 0, 0) < 0 ? kerrno() : E.success;
-    },
-    path_symlink: (optr, olen, dirfd, nptr, nlen) => {
-      const target = new TextDecoder().decode(m8().subarray(optr, optr + olen));
-      const nu = resolve(dirfd, nptr, nlen);
-      if (nu === null) return E.badf;
-      return sysTx(T.SYMLINK, [target, nu], 0, 0, 0, 0, 0) < 0 ? kerrno() : E.success;
-    },
-    path_readlink: (dirfd, ptr, len, bufP, buflen, outP) => {
-      const path = resolve(dirfd, ptr, len);
-      if (path === null) return E.badf;
-      const n = sysTx(T.READLINK, [path], 0, NOCOPY, Math.min(buflen, 4096), 0, 0);
-      if (n < 0) return kerrno();
-      m8().set(txView().subarray(0, Math.min(n, buflen)), bufP);
-      dv().setUint32(outP, Math.min(n, buflen), true);
-      return E.success;
-    },
+    // The link family left the kernel in P1 step 3 — Plan 9 has no link at any
+    // layer — so these four report unsupported rather than call a trap that is
+    // gone. rename WAS link + unlink (V10's rule, and this system's definition
+    // of the call); copy + remove is a DIFFERENT contract, not atomic, and is
+    // not silently substituted. Where rename lives belongs to the WASI
+    // personality, P2's open gap. Kept in step with hosts/macos/src/wasi.rs.
+    path_rename: () => E.notsup,
+    path_link: () => E.notsup,
+    path_symlink: () => E.notsup,
+    path_readlink: () => E.notsup,
 
     // ---- poll: clock subscriptions sleep on the kernel; fds are ready ----
     poll_oneoff: (inP, outP, nsub, outN) => {

@@ -199,8 +199,6 @@ type may not redeclare one. `/dev/canvas` narrows to genuine drawing
   never consumed. `exportfs` is its mirror in userspace: it relays wire
   requests into real syscalls, so private binds travel and binaries exec
   across the wire. `Tflush` is handled kernel-side; servers never see it.
-- **Symlinks resolve in the walking process's own namespace** — never on the
-  server ([design.md](design.md), links decision).
 - **Notes** are delivered at the syscall boundary; kill rides note
   permissions (V10's euid rule — [identity.md](identity.md)).
 
@@ -213,9 +211,10 @@ A Plan 9-dialect binary is a wasm32 module that:
   `env.setj/longj/sjbuf` (setjmp over asyncify), `env.tsave/tjump/tdrop`
   (libthread contexts), and `guard.rfork` (the lazy-fork guard);
 - **exports** `_start`, called once on the process's own execution context;
-- issues syscalls as Plan 9's trap numbers plus this system's additions
-  (60–62 for the link family; the derived list is
-  [syscalls.md](syscalls.md)); `read`/`write` are `pread`/`pwrite` at
+- issues syscalls as **Plan 9's trap numbers and no others**, but for the four
+  the substrate forces — `ARGS` 200, `NOTEGET` 202, `AREAD` 210, `IOWAIT` 211
+  (the derived list is [syscalls.md](syscalls.md)); `read`/`write` are
+  `pread`/`pwrite` at
   offset −1; strings and buffers cross through a per-process transfer
   buffer; errors are `errstr` strings, never numbers.
 
@@ -231,7 +230,7 @@ Fork obligations, chosen per call site:
 A WASI-dialect binary is selected by its imports: a module importing
 `wasi_snapshot_preview1` (or `wasi_unstable`) gets the WASI shim instead — it
 exports its own memory, fd 3 is the single preopen and it is the namespace
-root, `rename` is link-plus-remove, and the personality is
+root, `rename` is copy-plus-remove (there is no link), and the personality is
 `wasi:cli/command` and nothing more.
 
 **A personality is a libc dialect over this one ABI, and there are two kinds.**
@@ -312,11 +311,12 @@ host is written against this section and judged by the suite.
 
 ## Contract: the wire
 
-- **9P2000, the only version.** Extensions are *minted above every dialect's
-  range*, never squatted: `Tlink`/`Rlink` 128, `Tsymlink` 130, `Treadlink`
-  132. A server without them answers `Rerror` and the client degrades.
-- Reused bit positions from 9P2000.u, not its protocol: `DMSETUID`,
-  `QTSYMLINK`/`DMSYMLINK`.
+- **9P2000, the only version — and there are no extensions.** The `Tlink` 128
+  / `Tsymlink` 130 / `Treadlink` 132 messages were minted here and **removed
+  again** (P1 step 3, 2026-09-04): Plan 9 has no link operation at any layer,
+  so there was nothing for them to carry. A message type above 127 is now
+  unused, as it is upstream.
+- Reused bit positions from 9P2000.u, not its protocol: `DMSETUID`.
 - **Identity crosses at attach**: every wire mount carries the mounting
   process's `uname` in `Tattach`; the server applies its own policy to that
   name ([identity.md](identity.md) — "the namespace unions services; it cannot union

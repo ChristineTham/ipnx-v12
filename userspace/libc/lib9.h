@@ -86,15 +86,10 @@ int   create(char *path, int omode, ulong perm);
 int   remove(char *path);
 int   chmod(char *path, ulong mode);	/* class B: libc over wstat, never a syscall */
 int   chown(char *path, char *uid);
-int   link9(char *old, char *new);	/* the V12 additions */
-int   symlink9(char *target, char *new);
-int   readlink9(char *path, char *buf, int n);
-int   lstat(char *path, uchar *edir, int n);
 
 /* file modes */
 #define DMDIR    0x80000000
 #define DMSETUID 0x00080000	/* 9P2000.u's bit position (docs/identity.md) */
-#define DMSYMLINK 0x02000000	/* ditto */
 
 /* library: strings and prints are the REAL Plan 9 sources (libp9.a);
  * these declarations mirror their ABI for our own commands */

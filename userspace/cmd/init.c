@@ -562,52 +562,6 @@ main(int argc, char *argv[])
 	ok(strstr(buf, "tms none") != nil,
 	   "uid: DMSETUID elevates euid to the image's owner; ruid stays");
 
-	/* Hard links and the symlink family — the V12 additions, and V10's
-	 * resolution rule: a symlink resolves in the CLIENT's namespace. */
-	fd = create("/tmp/orig", OWRITE, 0644);
-	fprint(fd, "one file");
-	close(fd);
-	ok(link9("/tmp/orig", "/tmp/also") == 0, "link: a second name for a file");
-	fd = open("/tmp/also", OWRITE);
-	if(fd >= 0){ seek(fd, 0, 2); fprint(fd, ", two names"); close(fd); }
-	fd = open("/tmp/orig", OREAD);
-	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
-	buf[n > 0 ? n : 0] = 0;
-	close(fd);
-	ok(strcmp(buf, "one file, two names") == 0,
-	   "link: a write through either name lands in the one file");
-	remove("/tmp/also");
-	ok(open("/tmp/orig", OREAD) >= 0, "link: removing one name leaves the other");
-
-	ok(symlink9("/etc/motd", "/tmp/lnk") == 0, "symlink: created");
-	fd = open("/tmp/lnk", OREAD);
-	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
-	buf[n > 0 ? n : 0] = 0;
-	close(fd);
-	ok(strstr(buf, "Saranos") != nil, "symlink: open follows to the target");
-	n = readlink9("/tmp/lnk", buf, sizeof buf);
-	ok(n > 0 && strcmp(buf, "/etc/motd") == 0, "readlink: the target comes back");
-	n = lstat("/tmp/lnk", edir, sizeof edir);
-	i = stat("/tmp/lnk", edir + 256, sizeof edir - 256);
-	ok(n > 0 && i > 0 && statlen(edir) == 9 && statlen(edir + 256) > 9,
-	   "lstat sees the link (9 bytes of target); stat sees the file");
-
-	/* through the wire: create a symlink over the mount; the exporter's
-	 * ramfs holds it, but READING it resolves in THIS namespace — the
-	 * exporter's /etc is the alt view, ours is the real motd */
-	ok(symlink9("/etc/motd", "/n/exp/tmp/wirelnk") == 0,
-	   "symlink over the wire (minted Tsymlink)");
-	fd = open("/n/exp/tmp/wirelnk", OREAD);
-	n = fd >= 0 ? read(fd, buf, sizeof buf - 1) : -1;
-	buf[n > 0 ? n : 0] = 0;
-	close(fd);
-	ok(strstr(buf, "Saranos") != nil,
-	   "a symlink read through a mount resolves in the CLIENT's namespace");
-	ok(link9("/n/hello/motd", "/n/hello/motd2") < 0,
-	   "a server without the extension answers Rerror, not a wedge");
-	remove("/tmp/lnk");
-	remove("/tmp/orig");
-
 	/* The window server: dtest mints a window from #w, paints through its
 	 * /dev/draw, and asserts pixels — headless, the same on every host. */
 	pid = procrfork(RFFDG|RFNAMEG, dtestchild, nil);

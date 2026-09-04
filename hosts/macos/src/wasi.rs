@@ -653,52 +653,36 @@ pub fn link_wasi(linker: &mut Linker<WasiState>) -> Result<(), wasmtime::Error> 
                                       resolve(&caller, ndirfd, nptr as u32, nlen as u32)) else {
             return Ok(e::BADF);
         };
-        // V10's rule, alive here: rename is link + unlink in userland
-        let (r, _) = ksys(&mut caller, tn::LINK, strs(&[&from, &to]), [0; 5])?;
-        if r < 0 {
-            return Ok(kerrno(&mut caller));
-        }
-        let (r, _) = ksys(&mut caller, tn::REMOVE, strs(&[&from]), [0; 5])?;
-        if r < 0 {
-            return Ok(kerrno(&mut caller));
-        }
-        Ok(e::SUCCESS)
+        // rename WAS link + unlink — V10's rule, and this system's definition of
+        // the call. P1 step 3 removed link, so rename has no definition here any
+        // more. copy + remove is NOT the same contract (it is not atomic, and
+        // atomicity is what callers use rename for), so it is not silently
+        // substituted. Where rename lives belongs to the WASI personality, which
+        // is P2's open gap.
+        let _ = (from, to);
+        Ok(e::NOTSUP)
     })?;
     linker.func_wrap(m, "path_link",
         |mut caller: Caller<'_, WasiState>, odirfd: i32, _oflags: i32, optr: i32, olen: i32,
          ndirfd: i32, nptr: i32, nlen: i32| -> Result<i32, wasmtime::Error> {
-        let (Some(from), Some(to)) = (resolve(&caller, odirfd, optr as u32, olen as u32),
-                                      resolve(&caller, ndirfd, nptr as u32, nlen as u32)) else {
-            return Ok(e::BADF);
-        };
-        let (r, _) = ksys(&mut caller, tn::LINK, strs(&[&from, &to]), [0; 5])?;
-        Ok(if r < 0 { kerrno(&mut caller) } else { e::SUCCESS })
+        // No link in the kernel (P1 step 3): Plan 9 has none at any layer.
+        let _ = (odirfd, optr, olen, ndirfd, nptr, nlen);
+        let _ = &caller;
+        Ok(e::NOTSUP)
     })?;
     linker.func_wrap(m, "path_symlink",
         |mut caller: Caller<'_, WasiState>, optr: i32, olen: i32, dirfd: i32, nptr: i32, nlen: i32|
         -> Result<i32, wasmtime::Error> {
-        let target = String::from_utf8_lossy(&read_guest(&caller, optr as u32, olen as u32)).into_owned();
-        let Some(nu) = resolve(&caller, dirfd, nptr as u32, nlen as u32) else {
-            return Ok(e::BADF);
-        };
-        let (r, _) = ksys(&mut caller, tn::SYMLINK, strs(&[&target, &nu]), [0; 5])?;
-        Ok(if r < 0 { kerrno(&mut caller) } else { e::SUCCESS })
+        let _ = (optr, olen, dirfd, nptr, nlen);
+        let _ = &caller;
+        Ok(e::NOTSUP)
     })?;
     linker.func_wrap(m, "path_readlink",
         |mut caller: Caller<'_, WasiState>, dirfd: i32, ptr: i32, len: i32,
          buf_p: i32, buflen: i32, out_p: i32| -> Result<i32, wasmtime::Error> {
-        let Some(path) = resolve(&caller, dirfd, ptr as u32, len as u32) else {
-            return Ok(e::BADF);
-        };
-        let (n, data) = ksys(&mut caller, tn::READLINK, strs(&[&path]),
-                             [0, -1, buflen.min(4096), 0, 0])?;
-        if n < 0 {
-            return Ok(kerrno(&mut caller));
-        }
-        let take = (n as usize).min(buflen as usize).min(data.len());
-        write_guest(&mut caller, buf_p as u32, &data[..take]);
-        write_guest(&mut caller, out_p as u32, &(take as u32).to_le_bytes());
-        Ok(e::SUCCESS)
+        let _ = (dirfd, ptr, len, buf_p, buflen, out_p);
+        let _ = &caller;
+        Ok(e::NOTSUP)
     })?;
 
     linker.func_wrap(m, "poll_oneoff",
