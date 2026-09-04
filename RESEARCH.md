@@ -1634,6 +1634,88 @@ either has it working or lacks the table entry entirely.** The pipe-device
 test therefore gates on `#R` instead, with the reason written at the test.
 Any future test that binds a letter should check the oracle's table first.
 
+### 9.19 The plan audited against the reference — six answers already in the tree, and two claims wrong (2026-09-04)
+
+Prompted by Christine after `#|`: *"You already know the answer. Can you check
+you are not making the same mistakes elsewhere in the plan?"* The `#|` error
+was not a wrong answer but a **wrong category** — a question of fact, asked as
+a question of design. This is the sweep for the rest.
+
+**Answers that are already in `plan9/`, not gaps:**
+
+| the plan says | the reference says |
+|---|---|
+| P1 step 5: pkg's fetch *"needs a userspace `webfs` **or** a local registry"* | **`webfs` is a userspace program Plan 9 ships** — `sys/src/cmd/webfs`, 12 files. Not undesigned |
+| P7: *"`/dev/mouse`, which left with `#w`, comes back as the host's"* | The letter is a fact — `devmouse.c`, **`'m'`** — and it is why architecture.md's lowercase `m` row was doubly wrong: it documented devmnt on **the mouse's letter**. Where the mouse *lives* here is not the reference's to answer; see below |
+| P1 step 3 exposes *"whether links survive as a **capability** in a userspace file server"* | **There is no link operation to relocate.** No `Tlink`/`Rlink`/`Tsymlink` in `sys/include/fcall.h`, no `syslink` in `sys/src/9/port/`, nothing in `9syscall/sys.h`. The capability does not exist in Plan 9 at any layer; the answer is `bind` and `mount`, as devised |
+| P10: *"what the embedding is when it is virtual hardware"* | Partly answered: **Plan 9 already boots over virtio-9p** — `sys/src/9/boot/bootvirtio9p.c` |
+
+**Two of the plan's own claims are wrong, measured:**
+
+- **P2 step 3 says `/boot/boot` "**is rc**".** It is **C** —
+  `sys/src/9/boot/boot.c`. Its `main` picks a boot method, sets the root up,
+  and `execinit()` (line 202) execs `/$cputype/init`.
+- **P2 step 3 puts `newns` in `/boot/boot`.** `/lib/namespace` is read by
+  **`newns(2)`** — `libauth/newns.c:60` — and its callers are `cmd/init.c`,
+  `auth/login.c`, `cmd/cpu.c`, `auth/none.c`. **`newns` belongs to init**, not
+  to boot. Boot attaches the root and execs; init makes the namespace.
+
+**A provenance slip, and the reason the two trees exist.** P2 step 2 cites
+*"`sys/src/cmd/ramfs.c` (907 lines)"*. That is **plan9-stock's** figure;
+**9legacy's is 945**, and the files differ. CLAUDE.md's rule is explicit —
+*"`plan9/` … **Check claims against this one**"* — so the citation was taken
+from the wrong tree.
+
+**Citations that hold, checked:** `devroot.c` is 261 lines exactly, as P2 step
+1 says. `auth.c`'s `userwrite` errors unless the write is exactly `"none"`, as
+P1 step 4 says (the line moved; the function is what matters).
+
+**On `#R`, honestly.** Plan 9 has **no ramfs device** — ramfs is userspace, and
+P2 step 2 is what makes it so here. The placeholder letter really was
+arbitrary, so asking was not wrong; presenting it as *three design options*
+was, because the reference's actual answer is *"this should not be a device at
+all"*, which is a better thing to have said.
+
+**THE OPPOSITE ERROR, MADE IN THIS SAME SWEEP.** The first draft of the table
+above answered [proposals.md](docs/proposals.md)'s *"A shared rasteriser, or
+native per host?"* with drawterm — `libmemdraw`/`libmemlayer` as a portable
+rasteriser, `gui-*` as the only per-platform part. Christine, immediately:
+*"similarly for draw. we said we would replace by `/dev/canvas`."* She is
+right and the finding was struck.
+
+**It contradicts two decisions already taken** (both 2026-09-03, design.md):
+*"`/dev/draw` should be rendered by host. the kernel does not know how to
+draw"* — which makes *"IPNX implements no renderers"* literal — and *"we don't
+use `/dev/draw` — we use `/dev/canvas` … `/dev/draw` is only needed for
+acme."* A shared portable rasteriser is a renderer **inside IPNX**, which is
+the thing those decisions removed. drawterm is not evidence here: it is a
+Plan 9 *terminal*, and this system deliberately does not do what it does.
+
+So the two errors are mirrors, and the sweep committed both:
+
+| | |
+|---|---|
+| **`#\|`** | a question of **fact**, taken to Christine as a question of design |
+| **the rasteriser** | a question already **decided**, re-derived from the reference as if it were fact |
+
+**Two proposals are stale, and by the rewrite rule should already be empty.**
+Christine's rule (2026-09-02): *"The decision itself moves off the proposal —
+so I am reviewing genuine open decisions rather than settled decisions."*
+
+- proposals.md's *"A shared rasteriser, or native per host?"* was **decided the
+  same day it was reframed** — the host renders, natively. It still sits under
+  *"What is still genuinely open"*.
+- proposals.md's *"GAP — where the ramfs goes, and what answers `/` at boot"*
+  asks for a design that **now exists**: implementation.md's P2 steps 1–2 —
+  `#/` as Plan 9's root device, and a userspace root file server. The gap is
+  filled; the block was not emptied.
+
+**The rule this produces, in the order it must be applied.** Before an item in
+the plan is treated as open: **check [design.md](docs/design.md) first** — a
+decided question is consumed, never re-derived — **then check `plan9/`** — a
+question of fact is measured, never asked. Only what survives both is a
+decision, and only that is worth Christine's time.
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on
