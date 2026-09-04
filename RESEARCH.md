@@ -1557,6 +1557,35 @@ for one number, the drift CLAUDE.md's *status in one place* rule exists to stop.
 landing page is hand-maintained; **generating it at build time from a measured
 run is the durable fix**, and is not done.
 
+### 9.17 A fresh Linux machine re-measured (2026-09-04)
+
+The handbook's fresh-machine prompt was executed by a cloud session (x86_64 Linux)
+that started with the repo and nothing else. What it measured:
+
+- **bison 3.8.2 builds the same system as 2.3.** VERSIONS recorded macOS's bison
+  2.3; a Linux package manager supplies 3.8.2 and cannot supply 2.3. With 3.8.2
+  regenerating `grep.y` and rc's `syn.y`, the suite ran **164 PASS / 0 FAIL, exit
+  0, on all three hosts** — wasmtime, the Rust core under Node, and the frozen
+  oracle — with identical PASS sets on the two Rust-core hosts. Per VERSIONS'
+  own rule the record moved only after that run: the line now lists both
+  measured versions, and `mk.sh`'s `vcheck` warns only when the found version
+  matches none of them.
+- **wasi-sdk-34 is the release carrying clang 23.1.0-wasi-sdk**, confirmed from
+  the tarball (`wasi-sdk-34.0-x86_64-linux.tar.gz`); binaryen `version_132`
+  matched directly. Both exact.
+- **The prompt omitted a step the Node harness needs.** `main-rust.mjs` loads
+  `target/wasm32-unknown-unknown/release/browserhost.wasm`, which
+  `cargo build --release -p host` does not produce; the run died with ENOENT
+  before any test. The handbook already named this trap under the proofs
+  (*"a real trap"*), but not in the setup list a session executes. The step is
+  now in the prompt, in Build and run, and in CLAUDE.md's commands.
+- **A cloud session's egress differs from a laptop's.** go.dev, dl.google.com
+  and python.org were denied by policy; github.com (git and release downloads),
+  nodejs.org, static.rust-lang.org and proxy.golang.org were open, and GitHub's
+  *API* was scoped to this repository. The workarounds that held — tags by
+  `git ls-remote`, Go through `GOTOOLCHAIN` and the module proxy — are recorded
+  in the prompt so the next session does not rediscover them.
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on

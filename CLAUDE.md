@@ -159,11 +159,13 @@ The real implementation — the Rust kernel core (`kernel/`, RESEARCH §9.6; OS-
 (`hosts/macos/`), compiled to wasm for the browser (`hosts/browser/` +
 `demo/supervisor/rustkern.mjs` — THE DEMO'S KERNEL since 2026-08-31; the JS demo
 lineage is reference-in-tree), and driven headless by Node
-(`node demo/supervisor/main-rust.mjs userspace/rootfs`) — builds and runs from the
-root Cargo workspace:
+(`node demo/supervisor/main-rust.mjs userspace/rootfs`, which loads
+`target/wasm32-unknown-unknown/release/browserhost.wasm` and so needs the wasm
+build first) — builds and runs from the root Cargo workspace:
 
 ```bash
 cargo run --release -p host -- userspace/rootfs
+cargo build --release --target wasm32-unknown-unknown -p browserhost
 ```
 
 Node ≥ 22 (`worker_threads`, SAB, wasm `try_table` exception handling — the legacy EH

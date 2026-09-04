@@ -13,11 +13,11 @@ ASYNCIFY="forktest forkind forkvm"   # bare forkers; the real rc rule asyncifies
 
 # VERSIONS drift check: the measured findings are version-dependent (six-hats
 # catch, 2026-08-29). Warn — never fail — when the found toolchain differs.
-vcheck() { # vcheck key found
-  exp=$(awk -v k="$1" '$1==k{print $2}' VERSIONS)
-  if [ -n "$exp" ] && [ "$exp" != "$2" ]; then
-    echo "mk.sh: WARNING: $1 is $2, VERSIONS records $exp (findings are version-dependent; re-verify, then update VERSIONS)" >&2
-  fi
+vcheck() { # vcheck key found — VERSIONS may list several measured versions per key
+  exp=$(awk -v k="$1" '$1==k{$1=""; sub(/^ /,""); print}' VERSIONS)
+  [ -z "$exp" ] && return
+  for v in $exp; do [ "$v" = "$2" ] && return; done
+  echo "mk.sh: WARNING: $1 is $2, VERSIONS records $exp (findings are version-dependent; re-verify, then update VERSIONS)" >&2
 }
 vcheck wasi-sdk-clang "$("$SDK/bin/clang" --version | sed -n '1s/clang version \([^ ]*\).*/\1/p')"
 vcheck wasm-opt "$("$BINARYEN/bin/wasm-opt" --version | awk '{print $3}')"

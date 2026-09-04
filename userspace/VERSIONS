@@ -3,10 +3,12 @@
 # version-dependent; mk.sh compares the toolchain it finds against these
 # records and WARNS on drift (it never fails the build). Update a line only
 # after re-running the full suite on all hosts with the new version — and
-# record the re-measurement in RESEARCH.
+# record the re-measurement in RESEARCH. A line may list more than one measured
+# version (space-separated) when the suite is green under each; mk.sh warns only
+# when the found version matches none of them.
 wasi-sdk-clang 23.1.0-wasi-sdk
 wasm-opt 132
-bison 2.3
+bison 2.3 3.8.2
 node v24.20.0
 go go1.27.0
 rustc 1.98.0

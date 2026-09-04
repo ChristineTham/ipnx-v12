@@ -16,7 +16,7 @@ When they disagree, one of them has a bug — fix it in the same commit.)
 | bison | host | regenerates vendored yacc grammars (rc's `syn.y`) |
 | go | host | the `GOOS=wasip1` citizen |
 | Node ≥ 22 | host | `worker_threads`, SAB, `try_table` |
-| Rust (stable) | host | the kernel core and hosts; workspace at the repo root |
+| Rust (stable) + `wasm32-unknown-unknown` target | host | the kernel core and hosts; workspace at the repo root. The wasm32 target builds `browserhost.wasm`, which the Node harness and the browser surface load |
 | network, once | — | the CPython wasi build (26 MB), cached in `userspace/build/` |
 
 ## Starting on a fresh machine
@@ -38,13 +38,22 @@ the measured toolchain; docs/handbook.md "Prerequisites" says what each is for.
     ~/.local/opt/wasi-sdk and ~/.local/opt/binaryen, or put them anywhere and
     export WASI_SDK and BINARYEN.
   - bison, go, node, rust stable at the VERSIONS versions, from whatever package
-    manager this machine has. mk.sh warns on drift; it never fails the build.
+    manager this machine has, plus `rustup target add wasm32-unknown-unknown`.
+    mk.sh warns on drift; it never fails the build. A cloud session may find
+    GitHub's releases API scoped away and go.dev blocked: find a release tag
+    with `git ls-remote --tags` and download it from github.com directly, and
+    fetch Go through the module proxy (`GOTOOLCHAIN=go1.NN.N go version`
+    downloads the toolchain into ~/go/pkg/mod/golang.org/toolchain@…, whose
+    bin/ goes first on PATH).
   - the two Plan 9 reference trees, gitignored, that every claim about Plan 9
     must be checked against (the commands are in .gitignore):
       git clone --depth 1 https://github.com/0intro/9legacy plan9
       git clone --depth 1 https://github.com/plan9foundation/plan9 plan9-stock
   - bash userspace/mk.sh       (guest binaries; downloads the CPython build once)
   - cargo build --release -p host
+  - cargo build --release --target wasm32-unknown-unknown -p browserhost
+    (the kernel as wasm — the Node harness below loads it and dies with ENOENT
+    without it)
 
 VERIFY — all three must agree, and match the count docs/when.md states. If any
 does not, stop and show me the FAIL lines; do not fix anything.
@@ -88,6 +97,8 @@ bash poc/run.sh                            # boot the frozen reference on Node
 bash poc/run.sh -i                         # …to an interactive rc (EOF ends)
 node poc/serve.mjs                         # the same kernel in a page (?i = interactive)
 cargo run --release -p host -- userspace/rootfs  # the Rust core under wasmtime
+cargo build --release --target wasm32-unknown-unknown -p browserhost  # the kernel as wasm, then:
+node demo/supervisor/main-rust.mjs userspace/rootfs  # the Rust core under Node
 ```
 
 Green is: init (pid 1) prints the suite's `PASS` lines — the floor is 131 —
