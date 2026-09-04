@@ -254,7 +254,7 @@ function makeTerm(el) {
 // ---------- emca: panes, tabs, and placement by type ----------
 // A window does not float. It lives in a PANE, and which pane is decided by
 // its TYPE — panes carry kinds (lists, shells, logs), rows and columns split
-// the display, tabs switch between windows of the same type (docs/emca.txt).
+// the display, tabs switch between windows of the same type (docs/emca.md).
 const PANES = {
   left:   document.querySelector("#emcaLeft .paneBody"),
   bottom: document.querySelector("#emcaBottom .paneBody"),
@@ -266,13 +266,13 @@ const tabsEl = document.getElementById("emcaTabs");
 // Nothing about a type is compiled in here; `dir` is the bootstrap floor, and
 // everything else arrives from files. A HINT for placement, never a constraint
 // on capability: any window stays fully editable text wherever it lands.
-const PANE_OF = { ls: "left", shell: "bottom" };   // the floor, and the console
+const PANE_OF = { directory: "left", shell: "bottom" };   // the floor, and the console
 const paneFor = (type) => PANE_OF[type] ?? "main";
 
 // read the registry once the namespace is up. /type is itself a type, so this
 // is the interface learning its own vocabulary from files it could also edit.
 //
-// It no longer reads a `pane` file: named regions are gone (emca.txt PART FIVE),
+// It no longer reads a `pane` file: named regions are gone (emca.md PART FIVE),
 // and placement is a position in the tree emca publishes. The two-region layout
 // below is SCAFFOLDING that M15g replaces with a renderer for that tree — it is
 // left standing only so the surface has something to draw in the meantime.
@@ -298,12 +298,12 @@ function renderTabs() {
   }
   // the LEAF's verbs, at the leaf. acme's column tag had New Cut Paste Snarf
   // Sort Zerox Delcol; every word had a different operand, so every word went
-  // to a different surface (emca.txt). These two are the leaf's own.
+  // to a different surface (emca.md). These two are the leaf's own.
   const grow = document.createElement("span");
   grow.className = "tgrow";
   tabsEl.appendChild(grow);
   for (const [label, title, fn] of [
-    ["New", "a new window in this leaf", () => feedCons("rc /rc/emcaopen edit")],
+    ["New", "a new window in this leaf", () => feedCons("rc /rc/emcaopen text")],
     ["Sort", "sort this leaf by name", () => {
       mainTabs.sort((a, b2) => a.title.localeCompare(b2.title)); renderTabs();
     }],
@@ -487,7 +487,7 @@ async function showContent(gw, path, type) {
   const ents = dirEntries(bytes);
   if (ents) {
     // every LINE is a look target — type drives interactivity, which is what
-    // buys back the single tap for structured output (docs/emca.txt)
+    // buys back the single tap for structured output (docs/emca.md)
     const ul = document.createElement("div");
     ul.style.cssText = "padding:4px 0;font:500 12px/1.5 ui-monospace,Menlo,monospace;";
     for (const e of ents) {
@@ -500,7 +500,7 @@ async function showContent(gw, path, type) {
       a.addEventListener("click", (ev) => {
         ev.preventDefault();
         const full = (path.endsWith("/") ? path : path + "/") + e.name;
-        feedCons(`rc /rc/emcaopen ${e.dir ? "ls" : "edit"} ${full}`);
+        feedCons(`rc /rc/emcaopen ${e.dir ? "directory" : "text"} ${full}`);
       });
       ul.appendChild(a);
     }
@@ -789,7 +789,7 @@ const host = {
   // /dev/window: IPNX declared this window's chrome and the host renders it
   // NATIVELY. Nothing here parses content — that is a path the host opens over
   // 9P. Actions name a side: ipnx: round-trips, host: never leaves the surface.
-  // A WINDOW HAS FOUR PARTS (docs/emca.txt PART FOUR). IPNX declares them; the
+  // A WINDOW HAS FOUR PARTS (docs/emca.md PART FOUR). IPNX declares them; the
   // surface renders them natively, as separate rows — a title carrying the
   // window's identity and its controls, the closed method set as buttons, the
   // user's own free executable text, and the body.
@@ -828,7 +828,7 @@ const host = {
           '<button class="wctl wclose" title="close">\u00d7</button>');
       gw.chromeEl = ch3;
       // collapse and close. NOT maximise: expanded/collapsed is a two-state
-      // machine, and a third state makes four with "normal" (emca.txt).
+      // machine, and a third state makes four with "normal" (emca.md).
       // the collapse control is already live (it is layout, and layout is
       // ours); IPNX only wants to be TOLD, so it can dump and restore a set
       gw.win.div.addEventListener("emca:collapse", (e) =>
@@ -1072,7 +1072,7 @@ const feedCons = (line) => {
 const BIGFONT = "/lib/font/bit/go/regular.13.font";
 // THE TOP SURFACE IS THE SYSTEM'S. Its operand is the system, so the managers
 // live here — and each one is only a typed window onto a filesystem, which is
-// why "adding a manager is adding a file" (docs/emca.txt).
+// why "adding a manager is adding a file" (docs/emca.md).
 for (const b of document.querySelectorAll("#managers button"))
   b.addEventListener("click", () => feedCons(`rc /rc/emcaopen ${b.dataset.open}`));
 // the pane toggles: how the responsive layout is driven by hand. host: side —
@@ -1098,7 +1098,7 @@ function cycleTab(d) {
   selectTab(mainTabs[(i + d + mainTabs.length) % mainTabs.length]);
 }
 
-// ---------- THE KEYBOARD GRAMMAR (emca.txt) ----------
+// ---------- THE KEYBOARD GRAMMAR (emca.md) ----------
 // Keyboard-complete is a stated law (WCAG 2.1.1), and iPad-with-keyboard and
 // Mac are primary surfaces. THE RULE: every floating-bar verb and every toolbar
 // button has a shortcut, and Tab reaches everything. No verb is unreachable.
@@ -1134,7 +1134,7 @@ addEventListener("keydown", (e) => {
       else gw?.putFn?.();
       return;
     case "w": stop(); if (gw) wsys?.winEvent?.(gw.id, "exec Del"); return;   // Del
-    case "n": stop(); feedCons("rc /rc/emcaopen edit"); return;              // New
+    case "n": stop(); feedCons("rc /rc/emcaopen text"); return;              // New
     case "t": stop();                                                        // the tags
       (e.shiftKey ? document.getElementById("globalTag")
                   : gw?.chromeEl?.querySelector(".wtag"))?.focus();

@@ -1,0 +1,14 @@
+inode/system — `/`, and the outermost window.
+
+The TYPE is ordinary. The outermost WINDOW is the special case, and in
+exactly one respect: its chrome belongs to the host — the macOS title
+bar and menu bar, the browser's tab and toolbar, the iPad's furniture.
+Its body is children, like any container, and the tree is untouched.
+
+A nested emca opens its own `/` with this same manager and ORDINARY
+emca chrome, because its parent is an emca window rather than the host.
+
+The manager owns a writable child as well as the composition — layout's
+first entry, `/` itself — rendered as a left pane in the browser and a
+collapsible sidebar on macOS and iPadOS, where collapsing it IS
+`minimise` on that window.

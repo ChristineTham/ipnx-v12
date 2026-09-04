@@ -1,0 +1,10 @@
+inode/directory — a directory's content IS its entries.
+
+So `edit` is the file manager: renaming, moving and deleting are editing
+the listing. There is no file-manager program. Identity comes from the
+qid tracked through the edit stream, not from a visible column, so a
+rename is never mistaken for a delete-plus-create.
+
+Nothing happens until Save; the status line shows the plan continuously
+("pending 3 renames, 1 delete"); and `#V` snapshots make a destructive
+save genuinely reversible.

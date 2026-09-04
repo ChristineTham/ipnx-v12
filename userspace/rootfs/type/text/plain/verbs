@@ -1,0 +1,8 @@
+# <label>  <action>, in one of three forms:
+#   manager:<verb>   ask the manager      host:<verb>  ask the surface
+#   run:<command>    run it, with $file $dir $window set
+# Save is NOT here: emca emits it while the buffer is dirty and withdraws
+# it when clean, because its appearance IS the dirty indicator.
+Revert   manager:revert
+Undo     manager:undo
+Redo     manager:redo

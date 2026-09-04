@@ -1,0 +1,14 @@
+text — the DEFAULT TYPE, and its manager is `edit`.
+
+The type says what the content IS; the manager says what to do with it. `edit`
+renders and edits the text, drives the status line, supplies the toolbar's
+verbs, and gives meaning to Find, Edit and selection for a text file. It lives
+HOST-side — CodeMirror here, Monaco or TextKit elsewhere — which is all that
+"editing is the surface's" ever meant.
+
+The type declares its STATIC verbs only. `Save` is not among them: emca emits
+it while the buffer is dirty and withdraws it when clean, because its
+appearance IS the dirty indicator (acme.c:383, with acme's Put translated).
+
+Undo and Redo are here and nowhere else — available exactly where every
+operation a window offers stays in a buffer emca holds.

@@ -96,7 +96,7 @@ async function hostServe(op) {
 // assertion is M15g, where the surface renders the TREE emca published.
 //
 // The sibling proof, winproof.mjs, deliberately runs with NO emca at all.
-const want = new Map([["ls", "toolbar"], ["edit", "toolbar"]]);
+const want = new Map([["directory", "toolbar"], ["text", "toolbar"]]);
 const got = new Map();
 let done = false;
 
@@ -133,18 +133,18 @@ const host = {
     if (got.size < want.size) return;
     done = true;
 
-    // NOTHING IS UNIVERSAL ON THE TOOLBAR any more (emca.txt): the window
+    // NOTHING IS UNIVERSAL ON THE TOOLBAR any more (emca.md): the window
     // operations moved to the title bar row, and Undo belongs to `edit` alone,
     // because Undo is available exactly where a window's operations stay in a
     // buffer emca holds. So what reaches the surface is exactly the TYPE's list.
     const bad = [];
     for (const v of ["Revert", "Undo", "Redo"])
-      if (!got.get("edit").verbs.includes(v)) bad.push(`edit: ${v} missing from the toolbar`);
-    if (got.get("ls").verbs.length !== 0)
-      bad.push(`ls: expected no verbs of its own, got ${got.get("ls").verbs.join(",")}`);
+      if (!got.get("text").verbs.includes(v)) bad.push(`text: ${v} missing from the toolbar`);
+    if (got.get("directory").verbs.length !== 0)
+      bad.push(`directory: expected no verbs of its own, got ${got.get("directory").verbs.join(",")}`);
     // Save is NOT there — the file is clean, and Save's presence IS the dirty
     // indicator (acme.c:383's rule, kept, with acme's Put translated)
-    if (got.get("edit").verbs.includes("Save"))
+    if (got.get("text").verbs.includes("Save"))
       bad.push("edit: Save is in a clean window's toolbar — the dirty indicator lies");
 
     if (bad.length) {

@@ -1,0 +1,5 @@
+directory — a folder, and its manager is `ls`.
+
+No verbs of its own: Open covers new files, and a trailing slash covers new
+folders, so it needs none. Every line is an Open target, which is how you
+navigate a tree by tapping.

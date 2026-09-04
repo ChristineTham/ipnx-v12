@@ -278,10 +278,6 @@ enum WKind {
     TypeDir,
     RootEvents,
     WContent,
-    WKids,         // the children, as a walkable directory
-    WAlloc,        // allocated, or a tab
-    WParent,       // the containing window's id — the tree reads both ways
-    WAxis,         // how this window arranges them: row, col, or nothing
     WToolbar,
     WTag,
     WUi,
@@ -540,22 +536,11 @@ struct Win {
     mouseparked: Vec<Waiter>,
     cv: Option<Canvas>,
     dead: bool,
-    // THE TREE (emca.txt PART FOUR): a window contains either a body or
-    // child windows. `axis` says how it arranges those children — row means
-    // side by side, col means stacked — and it is 0 for a window holding a
-    // body. Alternation is the invariant: a container's axis is always
-    // perpendicular to its parent's, which is what keeps one layout to one
-    // tree (see split() below).
-    parent: Option<u32>,
-    kids: Vec<u32>,
-    axis: u8,              // 0 none, 1 row (side by side), 2 col (stacked)
-    // ALLOCATION: a parent gives rectangles to some of its children; the rest
-    // appear as tabs. So a tab is not a reduced window — it is a whole window
-    // the parent has not allocated to. minimise(me) moves me out of the
-    // allocation, maximise(me) moves everyone else out, and `premax` is what
-    // makes the second reversible.
-    allocated: bool,
-    premax: Option<Vec<u32>>,
+    // THE TREE IS NOT HERE. A window's place among other windows — parent,
+    // children, axis, allocated-or-tab — belongs to emca, which serves it at
+    // /dev/emca/<n>/ (docs/design.md, 2026-09-03). The kernel supplies a
+    // window's IDENTITY and its raster; it has no opinion about arrangement,
+    // and with no emca running there is no arrangement to have.
     // /dev/window: the control interface's per-window files
     wtype: String,
     content: String,
@@ -737,17 +722,6 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: 
             Some(wnode_ty(WKind::TypeDir, None, Some(name.to_string())))
         }
         // kids/<index> walks to the child at that POSITION — so the tree is
-        // walkable AND its order is visible, which matters because ORDER IS THE
-        // LAYOUT. Naming entries by window id would have lost it, since ls
-        // sorts and sorted ids are not the arrangement. The child's own id is
-        // in its winid file, and it is reachable equally at #w/<type>/<id>.
-        WKind::WKids => {
-            let w = win.clone()?;
-            let i: usize = name.parse().ok()?;
-            let cid = *w.borrow().kids.get(i)?;
-            let c = k.borrow().wins.get(&cid).cloned()?;
-            Some(wnode(WKind::WinDir, Some(c), None))
-        }
         WKind::TypeDir => {
             let t = ty.clone()?;
             if name == "clone" {
@@ -773,10 +747,6 @@ fn wsys_walk(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: 
                 "draw" => WKind::DrawDir,
                 "canvas" => { mkcv(&w); WKind::CvDir }
                 "content" => WKind::WContent,
-                "axis" => WKind::WAxis,
-                "alloc" => WKind::WAlloc,
-                "parent" => WKind::WParent,
-                "kids" => WKind::WKids,
                 "toolbar" => WKind::WToolbar,
                 "tag" => WKind::WTag,
                 "ui" => WKind::WUi,
@@ -845,11 +815,6 @@ fn new_window(k: &K) -> WinR {
         mouseparked: Vec::new(),
         cv: None,
         dead: false,
-        parent: None,
-        kids: Vec::new(),
-        axis: 0,
-        allocated: true,
-        premax: None,
         wtype: String::new(),
         content: String::new(),
         toolbar: String::new(),
@@ -864,167 +829,18 @@ fn new_window(k: &K) -> WinR {
     win
 }
 
-const AX_ROW: u8 = 1;   // children side by side
-const AX_COL: u8 = 2;   // children stacked
-
-/* Split W so that a new window appears alongside it along `axis`.
- *
- * ALTERNATION IS THE INVARIANT: a container's axis is always perpendicular to
- * its parent's, which is what keeps one layout to one tree. It falls out of
- * two cases and needs no flattening pass, because a same-axis container is
- * never created in the first place:
- *
- *   the parent already arranges along this axis -> ADD A SIBLING. W is
- *   already a row (or a column); it gains a neighbour, not an interior.
- *
- *   otherwise -> GIVE W CHILDREN. W stops holding a body and holds two
- *   windows: one inheriting what W held, one new. Which is why "New column
- *   duplicates this window" — the new sibling shows what W showed, and you
- *   retitle it, because the title retargets.
- */
-/* maximise(me): move every sibling out of the parent's allocation, and
- * remember which were in it so pressing again restores them. Reversible in
- * the way minimise is, and for the same reason — this is one operation.
- */
-fn maximise(k: &K, w: &WinR) {
-    let (wid, parent) = { let b = w.borrow(); (b.wid, b.parent) };
-    let p = match parent.and_then(|p| k.borrow().wins.get(&p).cloned()) {
-        Some(p) => p,
-        None => return,          // nothing to maximise within
-    };
-    let (kids, prev) = { let b = p.borrow(); (b.kids.clone(), b.premax.clone()) };
-    match prev {
-        Some(was) => {           // restore the arrangement we put away
-            for cid in &kids {
-                let c = k.borrow().wins.get(cid).cloned();
-                if let Some(c) = c {
-                    c.borrow_mut().allocated = was.contains(cid);
-                }
-            }
-            p.borrow_mut().premax = None;
-        }
-        None => {
-            let mut was = Vec::new();
-            for cid in &kids {
-                let c = k.borrow().wins.get(cid).cloned();
-                if let Some(c) = c {
-                    if c.borrow().allocated { was.push(*cid); }
-                    c.borrow_mut().allocated = *cid == wid;
-                }
-            }
-            p.borrow_mut().premax = Some(was);
-        }
-    }
-    for cid in kids {
-        let c = k.borrow().wins.get(&cid).cloned();
-        if let Some(c) = c { win_chrome(k, &c); }
-    }
-}
-
-/* move `w` into `np` at `at` (or last). Detaches from its old parent first, so
- * a window is never in two kid lists — the tree is a tree.
- */
-fn reparent(k: &K, w: &WinR, np: u32, at: Option<usize>) {
-    let (wid, old) = { let b = w.borrow(); (b.wid, b.parent) };
-    if np == wid { return; }
-    let newp = match k.borrow().wins.get(&np).cloned() { Some(p) => p, None => return };
-    // refuse a cycle: a window may not become a child of its own descendant
-    {
-        let mut up = newp.borrow().parent;
-        while let Some(p) = up {
-            if p == wid { return; }
-            up = k.borrow().wins.get(&p).and_then(|x| x.borrow().parent);
-        }
-    }
-    if let Some(o) = old {
-        let o = k.borrow().wins.get(&o).cloned();
-        if let Some(o) = o { o.borrow_mut().kids.retain(|&c| c != wid); }
-    }
-    w.borrow_mut().parent = Some(np);
-    {
-        let mut pb = newp.borrow_mut();
-        let i = at.unwrap_or(pb.kids.len()).min(pb.kids.len());
-        pb.kids.insert(i, wid);
-    }
-    win_chrome(k, w);
-}
-
-fn split(k: &K, w: &WinR, axis: u8, allocated: bool) {
-    let (wid, parent) = { let b = w.borrow(); (b.wid, b.parent) };
-    let pax = parent.and_then(|p| k.borrow().wins.get(&p).map(|p| p.borrow().axis));
-
-    // a tab has no axis of its own, so it is always a sibling where there is
-    // a parent to be a sibling in
-    if pax == Some(axis) || (!allocated && parent.is_some()) {
-        let p = k.borrow().wins.get(&parent.unwrap()).cloned();
-        if let Some(p) = p {
-            let sib = clone_window(k, w, Some(p.borrow().wid));
-            let s = k.borrow().wins.get(&sib).cloned();
-            if let Some(s) = s { s.borrow_mut().allocated = allocated; }
-            let mut pb = p.borrow_mut();
-            let at = pb.kids.iter().position(|&c| c == wid).map(|i| i + 1).unwrap_or(pb.kids.len());
-            pb.kids.insert(at, sib);
-        }
-        return;
-    }
-    // W becomes a container: its content moves into a first child, and the
-    // duplicate becomes the second.
-    let first = clone_window(k, w, Some(wid));
-    let second = clone_window(k, w, Some(wid));
-    if !allocated {
-        let s = k.borrow().wins.get(&second).cloned();
-        if let Some(s) = s { s.borrow_mut().allocated = false; }
-    }
-    {
-        let mut b = w.borrow_mut();
-        b.axis = axis;
-        b.kids = vec![first, second];
-        b.content = String::new();
-        b.toolbar = String::new();
-        b.tag = String::new();
-    }
-    win_chrome(k, w);
-}
-
-/* a new window carrying the same content, type and tag — the duplicate that
- * New column and New row both make */
-fn clone_window(k: &K, src: &WinR, parent: Option<u32>) -> u32 {
-    let c = new_window(k);
-    {
-        let s = src.borrow();
-        let mut b = c.borrow_mut();
-        b.parent = parent;
-        b.wtype = s.wtype.clone();
-        b.content = s.content.clone();
-        b.toolbar = s.toolbar.clone();
-        b.tag = s.tag.clone();
-    }
-    let (cid, ty) = { let b = c.borrow(); (b.wid, b.wtype.clone()) };
-    if !ty.is_empty() {
-        win_announce(k, format!("new {} {}\n", ty, cid));
-    }
-    win_chrome(k, &c);
-    cid
-}
 
 /* close a window, and everything it holds. acme's colcloseall(): a container
  * is a window, so closing it closes its contents — one rule, not two. Depth
  * first, so a child is never left pointing at a parent that is already gone.
  */
+// CLOSING ONE WINDOW. It used to close what the window held and unlink it
+// from its parent — but the kernel has no tree to walk since M17a2, and emca
+// closes a container's contents itself (docs/design.md, 2026-09-03). What is
+// left is what a window IS to the kernel: a raster, its connections, and a
+// notice.
 fn win_close(k: &K, w: &WinR) {
-    let (wid, kids, parent) = {
-        let b = w.borrow();
-        (b.wid, b.kids.clone(), b.parent)
-    };
-    for cid in kids {
-        let c = k.borrow().wins.get(&cid).cloned();
-        if let Some(c) = c { win_close(k, &c); }
-    }
-    if let Some(p) = parent {
-        if let Some(p) = k.borrow().wins.get(&p).cloned() {
-            p.borrow_mut().kids.retain(|&c| c != wid);
-        }
-    }
+    let wid = w.borrow().wid;
     cv_push(k, w, "close 0");
     w.borrow_mut().dead = true;
     serve_wcons(k, w);
@@ -1334,25 +1150,6 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
             }
             return Ok(RRes::Data(out));
         }
-        // the children, in order — so the tree is `ls`-able and the order,
-        // which is the layout's order, is visible rather than inferred
-        WKind::WKids => {
-            let w = win.as_ref().ok_or("no window")?;
-            let kids: Vec<u32> = w.borrow().kids.clone();
-            let mut skip = off as usize;
-            let mut out = Vec::new();
-            for (i, cid) in kids.iter().enumerate() {
-                let rec = marshal_stat(&StatIn {
-                    name: &i.to_string(), uid: "wsys", gid: "wsys",
-                    qpath: 7600 + *cid as u64, qtype: QTDIR, mode: DMDIR | 0o555,
-                    ..Default::default()
-                });
-                if skip >= rec.len() { skip -= rec.len(); continue; }
-                if out.len() + rec.len() > n { break; }
-                out.extend_from_slice(&rec);
-            }
-            return Ok(RRes::Data(out));
-        }
         WKind::CvCaps => {
             let caps = k.borrow().canvas_caps.clone();
             return Ok(one(format!("{}\n", caps)));
@@ -1394,26 +1191,6 @@ async fn wsys_read(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>
         WKind::WContent => {
             let w = win.as_ref().ok_or("no window")?;
             let s = w.borrow().content.clone();
-            return Ok(one(s));
-        }
-        WKind::WAxis => {
-            let w = win.as_ref().ok_or("no window")?;
-            let s = match w.borrow().axis { 1 => "row\n", 2 => "col\n", _ => "" };
-            return Ok(one(s.to_string()));
-        }
-        // allocated, or a tab — the one bit that decides whether this window
-        // has a rectangle at all, and therefore whether it shows its furniture
-        WKind::WAlloc => {
-            let w = win.as_ref().ok_or("no window")?;
-            let s = if w.borrow().allocated { "allocated\n" } else { "tab\n" };
-            return Ok(one(s.to_string()));
-        }
-        // the tree reads both ways: kids/ walks down, parent names up. A
-        // resize has to re-lay-out the SIBLINGS, so the window that receives
-        // it needs to find the window that allocates.
-        WKind::WParent => {
-            let w = win.as_ref().ok_or("no window")?;
-            let s = match w.borrow().parent { Some(p) => format!("{}\n", p), None => String::new() };
             return Ok(one(s));
         }
         WKind::WToolbar => {
@@ -1648,56 +1425,11 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
                 // NEW ROW / NEW COLUMN. The user states a DIRECTION; whether
                 // that means "give this window children" or "give it a
                 // sibling" is worked out from the parent's axis and never
-                // asked about (emca.txt, Rows and columns).
+                // asked about (emca.md, Rows and columns).
                 // THE PRIMITIVES emca builds a tree with. newcol/newrow/newtab
                 // are the USER's verbs and resolve alternation for them; these
                 // two say what the tree IS, because emca owns the tree and the
                 // kernel stores it.
-                ["axis", a] => {
-                    let v = match *a { "row" => AX_ROW, "col" => AX_COL, _ => 0 };
-                    w.borrow_mut().axis = v;
-                    win_chrome(k, w);
-                }
-                ["newkid"] | ["newkid", _] => {
-                    let tab = t.len() > 2 && t[2] == "tab";
-                    let wid = w.borrow().wid;
-                    let c = new_window(k);
-                    {
-                        let mut b = c.borrow_mut();
-                        b.parent = Some(wid);
-                        b.wtype = w.borrow().wtype.clone();
-                        b.allocated = !tab;
-                    }
-                    let cid = c.borrow().wid;
-                    w.borrow_mut().kids.push(cid);
-                    let ty = c.borrow().wtype.clone();
-                    if !ty.is_empty() { win_announce(k, format!("new {} {}\n", ty, cid)); }
-                    win_chrome(k, &c);
-                }
-                // REPARENT: move this window into another, at a position.
-                // acme files `move` under layout as a gesture, and this is the
-                // verb underneath it — the surface's drag lands here, and so
-                // does a workspace file placing a window it just minted.
-                // Named `reparent` because rio's `move x y` already means
-                // geometry on this same file.
-                ["reparent", np] | ["reparent", np, _] => {
-                    let at: Option<usize> = if t.len() > 2 { t[2].parse().ok() } else { None };
-                    reparent(k, w, np.parse().unwrap_or(0), at);
-                }
-                ["newrow"] => { split(k, w, AX_COL, true); }
-                ["newcol"] => { split(k, w, AX_ROW, true); }
-                // a tab is the same operation with the allocation bit
-                // flipped, which is why it is not a fourth concept
-                ["newtab"] => { split(k, w, AX_ROW, false); }
-                // MINIMISE AND MAXIMISE ARE ONE OPERATION with different
-                // arguments: minimise(me) moves me out of the allocation,
-                // maximise(me) moves everyone else out. Both toggle.
-                ["minimise"] | ["minimize"] => {
-                    let now = { let mut b = w.borrow_mut(); b.allocated = !b.allocated; b.allocated };
-                    let _ = now;
-                    win_chrome(k, w);
-                }
-                ["maximise"] | ["maximize"] => { maximise(k, w); }
                 // THE ALLOCATION emca computed. Distinct from `resize`,
                 // which reallocates a raster — a tree window has no raster,
                 // and allocating one per layout pass would be pure waste.
@@ -1773,7 +1505,7 @@ fn wsys_write(k: &K, kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>,
 }
 
 fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: &Option<String>) -> Vec<u8> {
-    let dir = matches!(kind, WKind::Root | WKind::WinDir | WKind::DrawDir | WKind::ConnDir | WKind::CvDir | WKind::TypeDir | WKind::WKids);
+    let dir = matches!(kind, WKind::Root | WKind::WinDir | WKind::DrawDir | WKind::ConnDir | WKind::CvDir | WKind::TypeDir);
     let name = match kind {
         WKind::Root => "wsys".to_string(),
         WKind::WinDir => win.as_ref().map(|w| w.borrow().wid.to_string()).unwrap_or_default(),
@@ -1800,10 +1532,6 @@ fn wsys_stat(kind: WKind, win: &Option<WinR>, conn: &Option<DConnR>, ty: &Option
         WKind::TypeDir => ty.clone().unwrap_or_else(|| "type".to_string()),
         WKind::RootEvents | WKind::WEvents => "events".to_string(),
         WKind::WContent => "content".to_string(),
-        WKind::WAxis => "axis".to_string(),
-        WKind::WAlloc => "alloc".to_string(),
-        WKind::WParent => "parent".to_string(),
-        WKind::WKids => "kids".to_string(),
         WKind::WToolbar => "toolbar".to_string(),
         WKind::WTag => "tag".to_string(),
         WKind::WUi => "ui".to_string(),

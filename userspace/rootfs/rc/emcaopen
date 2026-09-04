@@ -3,7 +3,7 @@
 # THE REGISTRY DOES THE WORK, and what little is left here is deliberately
 # little: mint a window of the type, and say which file it is on. Everything
 # else — the toolbar, the tag, the placement — belongs to emca, which learns
-# of the window from the device and furnishes it (docs/emca.txt PART SIX).
+# of the window from the device and furnishes it (docs/emca.md PART SIX).
 #
 # With emca not running this still opens a window: it lands in its type's
 # default pane, bare. That is the degrades-correctly property, and it is why

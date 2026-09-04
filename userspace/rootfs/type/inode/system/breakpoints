@@ -1,0 +1,6 @@
+# How many columns at a given width, measured in CHARACTERS — the
+# 72-column measure keeps WCAG 1.4.4 by construction.
+# columns   minimum width
+1     0
+2     144
+3     216

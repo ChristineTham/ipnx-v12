@@ -10,7 +10,7 @@
  *     tracked by offset so the user's own text is never disturbed. This is
  *     acme.c:383's rebuildauto, kept.
  *   - the CORE VERBS. Core verbs are emca's; extra verbs are the type's
- *     (emca.txt) — so the toolbar a window shows is emca's set merged with
+ *     (emca.md) — so the toolbar a window shows is emca's set merged with
  *     whatever /type/<t>/window declares.
  *   - DIRTY STATE, which is what makes Put appear. The paper's rule: Put is
  *     in the tag only while the window is dirty, and its appearance IS the
@@ -28,6 +28,7 @@
 #include <u.h>
 #include <libc.h>
 #include <thread.h>
+#include "../libc/lib9p.h"	/* M17a1: emca serves its windows over wire 9P */
 
 enum {
 	STACK = 8192,
@@ -36,6 +37,7 @@ enum {
 	BMAX = 65536,		/* a buffer, allocated when a file is opened */
 	LMAX = 1024,		/* an event line */
 	MAXBUF = 16,
+	MAXKIDS = 32,		/* M17a2: emca holds the tree, so the bound lives here */
 	MROOT = 0, MWIN = 1, MGONE = 2,
 };
 
@@ -67,6 +69,38 @@ struct Win {
 				 * formats emca cannot parse */
 	Buf *buf;
 	int evfd;
+
+	/* M17a2 — THE TREE, held here rather than read from the kernel on
+	 * every question. emca is the window manager, so the relationships
+	 * between windows are its state; the kernel is being removed from
+	 * this entirely (docs/window.md). These mirror the device today and
+	 * become authoritative when it goes.
+	 */
+	int parent;		/* the window that allocates this one; -1 at the root */
+	int kid[MAXKIDS];	/* children, IN ORDER — order is the layout */
+	int nkid;
+	int axis;		/* 1 row, 2 col, 0 for a window holding a body.
+				 * Alternation is the invariant: always
+				 * perpendicular to the parent's. */
+	int allocated;		/* given a rectangle; otherwise it is a TAB */
+	int premax[MAXKIDS];	/* which of MY kids were allocated before a
+				 * maximise — the memory that makes it a
+				 * toggle rather than a one-way door */
+	int npremax;
+	int maxed;
+
+	/* M17a1 — what the CONTRACT says a window reports (docs/window.md).
+	 * emca serves these; today it also still tells the kernel, and the
+	 * suite compares the two. When the device goes, only this remains.
+	 */
+	long rx, ry, rw, rh;	/* the CONTENT rectangle — chrome subtracted */
+	long minw, minh;	/* what the manager said it needs ... */
+	long natw, nath;	/* ... and what it would like */
+	char role[16];		/* look, edit, manage, shell, properties */
+	char title[NMAX];	/* emca OWNS this; the manager may only look */
+	char status[128];	/* the status line — consequential, not visible elsewhere */
+	char verbs[NMAX];	/* the toolbar, as pushtoolbar computed it */
+	int dirty;
 };
 
 typedef struct Msg Msg;
@@ -81,7 +115,7 @@ static Win wins[MAXWIN];
 static Buf bufs[MAXBUF];
 static int rootfd;
 
-/* NOTHING IS UNIVERSAL ON THE TOOLBAR (emca.txt, "The window toolbar, by
+/* NOTHING IS UNIVERSAL ON THE TOOLBAR (emca.md, "The window toolbar, by
  * type"). Not Save — a shell has nothing to save. Not Revert — a shell does
  * not. Not even Undo, which belongs to `edit` alone, because Undo is available
  * exactly where every operation a window offers stays in a buffer emca holds,
@@ -263,6 +297,14 @@ pushtoolbar(Win *w)
 		}
 	}
 	wfile(w, "toolbar", out, o);
+
+	/* M17a1 — the same list IS the contract's `verbs` (docs/window.md).
+	 * Stashing what was just computed keeps one merge rule: a second
+	 * implementation here is a second answer waiting to disagree.
+	 */
+	if(o > (long)sizeof w->verbs - 1) o = sizeof w->verbs - 1;
+	memmove(w->verbs, out, o);
+	w->verbs[o] = 0;
 }
 
 /* the tag bar is the SCRATCH region only — everything after the bar. The
@@ -350,6 +392,15 @@ rootreader(void *v)
 /* adopt a window someone else minted. emca has no privilege — it learns of
  * the window from the DEVICE, exactly as the surface does.
  */
+static void wctlf(int, char*, ...);
+static void treelink(int, int, int, int);
+static void treeunlink(int);
+static int nkids(int, int*);
+static void dodel(Win*);
+static void setcontent(Win*, char*);
+static void srvpost(void);
+static void srvunpost(void);
+
 static void
 adopt(char *type, int wid)
 {
@@ -365,6 +416,10 @@ adopt(char *type, int wid)
 	w->used = 1;
 	w->wid = wid;
 	w->evfd = -1;
+	w->parent = -1;		/* until the tree says otherwise */
+	w->nkid = 0;
+	w->axis = 0;		/* a body, not a container, until it divides */
+	w->allocated = 1;
 	strncpy(w->type, type, sizeof w->type - 1);
 
 	/* A window is minted BEFORE its content is known, so nothing is read
@@ -395,6 +450,11 @@ setcontent(Win *w, char *path)
 	char *slash, *rest;
 	char keep[NMAX];
 	long hl, kl;
+
+	/* emca owns the title and the manager may only look at it — so it is
+	 * set HERE, where emca learns what the window holds, and nowhere else */
+	strncpy(w->title, path, sizeof w->title - 1);
+	w->title[sizeof w->title - 1] = 0;
 
 	/* the CONTEXT: every command in this window resolves against it */
 	strncpy(w->dir, path, sizeof w->dir - 1);
@@ -427,6 +487,20 @@ setcontent(Win *w, char *path)
 static void
 drop(Win *w)
 {
+	int i;
+
+	/* a window that has gone leaves the tree FIRST — otherwise emca goes on
+	 * allocating space to a window that is not there, and a parent's kid
+	 * list outlives its kids. Its own children are orphaned rather than
+	 * destroyed: the kernel's win_close is recursive and will announce each
+	 * one in turn, so each unlinks itself as its notice arrives. */
+	for(i = 0; i < w->nkid; i++){
+		Win *c = winof(w->kid[i]);
+		if(c != nil) c->parent = -1;
+	}
+	w->nkid = 0;
+	treeunlink(w->wid);
+
 	if(w->evfd >= 0) close(w->evfd);
 	bufput(w->buf);
 	w->used = 0;
@@ -488,11 +562,24 @@ dozerox(Win *w)
 	/* the root events file announces it; adopt() will share the buffer */
 }
 
+/* CLOSING A CONTAINER CLOSES WHAT IT HOLDS — acme's own colcloseall(): a
+ * column IS a window, so this is one rule and not two. The kernel did this
+ * recursion while it held the tree; it holds no tree now, so the recursion
+ * came here with the state. Depth first, because a parent's `delete` must not
+ * strand the children it was holding.
+ */
 static void
 dodel(Win *w)
 {
 	char p[NMAX];
-	int fd;
+	int kids[MAXKIDS], nk, i, fd;
+
+	nk = nkids(w->wid, kids);
+	for(i = 0; i < nk; i++){
+		Win *c = winof(kids[i]);
+		if(c != nil) dodel(c);
+	}
+	treeunlink(w->wid);
 
 	snprint(p, sizeof p, "/dev/window/%s/%d/wctl", w->type, w->wid);
 	fd = open(p, OWRITE);
@@ -520,7 +607,7 @@ static void
 verb(Win *w, char *label)
 {
 	/* emca uses the era's names; acme's port keeps Snarf, Put and Get,
-	 * because renaming acme's buttons would be changing acme (emca.txt) */
+	 * because renaming acme's buttons would be changing acme (emca.md) */
 	if(strcmp(label, "Save") == 0) doput(w);
 	else if(strcmp(label, "Revert") == 0) doget(w);
 	else if(strcmp(label, "Reset") == 0) doreset(w->wid);
@@ -620,7 +707,7 @@ resolve(Win *w, char *s, char *out, int max)
 
 /* Is this range an ADDRESS? sam's forms, unchanged — what changes is that
  * emca now REPORTS the judgement instead of silently acting on it, which is
- * the whole of "the bar SHOWS the choice" (emca.txt).
+ * the whole of "the bar SHOWS the choice" (emca.md).
  */
 static int
 isaddr(char *s)
@@ -691,7 +778,7 @@ dolook(Win *w, char *sel)
 	close(fd);
 }
 
-/* ---- THE SIZING HEURISTIC (emca.txt, "Sizing: automatic, content-aware") ----
+/* ---- THE SIZING HEURISTIC (emca.md, "Sizing: automatic, content-aware") ----
  *
  * acme's coladd() shrinks the victim to min(half its height, THE SPACE ITS
  * CONTENT OCCUPIES) — content-aware, not fractional, which is where
@@ -703,18 +790,17 @@ dolook(Win *w, char *sel)
  * content has a lot of slack, a full one has none.
  *
  * The unit is device-independent pixels with a text cell reported alongside
- * (emca.txt); until the surface reports one (M15d) these are the defaults.
+ * (emca.md); until the surface reports one (M15d) these are the defaults.
  */
 enum {
 	FURN = 3,			/* title, tag line, status: three lines */
 	MINCOLS = 20, MINLINES = 1,
 	NATCOLS = 80, NATLINES = 10,
 	LEAFCOLS = 72,			/* the classic measure: what a leaf needs */
-	MAXKIDS = 32,
 };
 
 /* THE UNIT IS DEVICE-INDEPENDENT PIXELS, and the host reports THE TEXT CELL in
- * the same unit (emca.txt, "The unit, and why it is not characters"). The
+ * the same unit (emca.md, "The unit, and why it is not characters"). The
  * character rule survives as arithmetic — a leaf is LEAFCOLS * cellw — so
  * raising the reader's text size enlarges the reported cell and the
  * breakpoints move for free, which is WCAG 1.4.4 holding by construction.
@@ -734,41 +820,156 @@ wread(int wid, char *file, char *out, long max)
 	return rfile(p, out, max);
 }
 
+/* ── M17a2: THE TREE IS EMCA'S ────────────────────────────────────────────
+ *
+ * These four answered by reading the kernel's window device until 2026-09-03.
+ * They now answer from emca's own `Win` records, which is what "the window
+ * manager owns the relationships between windows" means in code: a window's
+ * IDENTITY is still minted by `#w/<type>/clone` (that is the raster side, and
+ * it moves to the host in M17a3), but a window's PLACE among other windows is
+ * decided here and stored here.
+ *
+ * THE KERNEL HAS NO TREE AT ALL as of 2026-09-03 — no parent, no kids, no
+ * axis, no allocation, and none of the verbs that changed them. Nothing here
+ * mirrors anywhere; this is the only copy. emca serves it at /dev/emca/<n>/
+ * for tools, and a manager's own /dev/window/ shows none of it, because a
+ * manager has no business seeing the arrangement it sits in.
+ */
 static int
 naxis(int wid)
 {
-	char b[32];
-
-	if(wread(wid, "axis", b, sizeof b) <= 0) return 0;
-	if(strncmp(b, "row", 3) == 0) return 1;
-	if(strncmp(b, "col", 3) == 0) return 2;
-	return 0;
+	Win *w = winof(wid);
+	return w != nil ? w->axis : 0;
 }
 
 static int
 nallocated(int wid)
 {
-	char b[32];
-
-	if(wread(wid, "alloc", b, sizeof b) <= 0) return 1;
-	return strncmp(b, "tab", 3) != 0;
+	Win *w = winof(wid);
+	return w != nil ? w->allocated : 1;
 }
 
-/* kids are named by POSITION and the indexes are contiguous, so probing beats
- * parsing stat records — and it is the same fact that makes order visible */
+/* kids are held IN ORDER, because the order IS the layout */
 static int
 nkids(int wid, int *out)
 {
-	char p[NMAX], b[32];
+	Win *w = winof(wid);
 	int i;
 
-	for(i = 0; i < MAXKIDS; i++){
-		snprint(p, sizeof p, "kids/%d/winid", i);
-		if(wread(wid, p, b, sizeof b) <= 0) break;
-		out[i] = atoi(b);
-	}
-	return i;
+	if(w == nil) return 0;
+	for(i = 0; i < w->nkid; i++)
+		out[i] = w->kid[i];
+	return w->nkid;
 }
+
+/* ── and the three operations that change it ──────────────────────────────
+ * Each updates emca FIRST and then tells the kernel, never the reverse: emca
+ * is the one deciding, so a mirror that failed must not be able to change
+ * what emca believes.
+ */
+static void
+treeaxis(int wid, int ax)
+{
+	Win *w = winof(wid);
+
+	if(w != nil) w->axis = ax;
+}
+
+static void
+treeunlink(int wid)
+{
+	Win *w, *pw;
+	int i, j;
+
+	if((w = winof(wid)) == nil) return;
+	if((pw = winof(w->parent)) != nil){
+		for(i = 0; i < pw->nkid; i++)
+			if(pw->kid[i] == wid){
+				for(j = i; j + 1 < pw->nkid; j++)
+					pw->kid[j] = pw->kid[j + 1];
+				pw->nkid--;
+				break;
+			}
+	}
+	w->parent = -1;
+}
+
+/* MINT A CHILD. The two halves of "new window" come from different places
+ * now, and that split IS M17a2: `#w/<type>/clone` supplies the IDENTITY —
+ * it is the raster surface, and it moves to the host in M17a3 — while the
+ * PLACE the window takes in the tree is decided here.
+ *
+ * clone returns the id synchronously, so emca adopts it on the spot rather
+ * than waiting for the `new` announcement to come back round the message
+ * loop; the announcement then finds the window already known and skips.
+ */
+static void adopt(char*, int);
+
+static int
+treemint(char *type, char *content)
+{
+	char p[NMAX], b[32];
+	int kid, fd;
+
+	snprint(p, sizeof p, "/dev/window/%s/clone", type);
+	if(rfile(p, b, sizeof b) <= 0) return -1;
+	if((kid = atoi(b)) <= 0) return -1;
+	if(winof(kid) == nil) adopt(type, kid);
+	if(content != nil && *content){
+		/* a split's children INHERIT the content, which is what makes
+		 * "New column" a duplicate rather than an empty pane */
+		snprint(p, sizeof p, "/dev/window/%s/%d/content", type, kid);
+		if((fd = open(p, OWRITE|OTRUNC)) >= 0){
+			write(fd, content, strlen(content));
+			close(fd);
+		}
+	}
+	return kid;
+}
+
+static int
+treenewkid(int parent, char *type, int tab)
+{
+	int kid;
+
+	if((kid = treemint(type, nil)) < 0) return -1;
+	treelink(parent, kid, -1, !tab);
+	return kid;
+}
+
+/* `at` < 0 appends. Order is the layout, so a position is not decoration. */
+static void
+treelink(int parent, int wid, int at, int allocated)
+{
+	Win *w, *pw;
+	int i;
+
+	if((w = winof(wid)) == nil || (pw = winof(parent)) == nil) return;
+
+	/* TWO REFUSALS, and a tree without them is not a tree. A window may
+	 * not be its own parent, and it may not become a child of its own
+	 * descendant — either would make a cycle, and the layout walk would
+	 * then never terminate. The kernel refused both; so must emca, or the
+	 * guarantee moved out with the state and did not arrive.
+	 */
+	if(parent == wid) return;
+	for(i = pw->parent; i > 0; ){
+		Win *up = winof(i);
+		if(i == wid) return;
+		i = up != nil ? up->parent : -1;
+	}
+
+	treeunlink(wid);
+	if(pw->nkid >= MAXKIDS) return;
+	if(at < 0 || at > pw->nkid) at = pw->nkid;
+	for(i = pw->nkid; i > at; i--)
+		pw->kid[i] = pw->kid[i - 1];
+	pw->kid[at] = wid;
+	pw->nkid++;
+	w->parent = parent;
+	w->allocated = allocated;
+}
+
 
 /* INTRINSIC SIZE FOR A PICTURE. emca does not render an image, but it must
  * know how much room to ask for, so it reads the DIMENSIONS OUT OF THE HEADER
@@ -943,7 +1144,16 @@ static void
 setrect(int wid, long x, long y, long w, long h)
 {
 	char p[NMAX], line[128];
+	Win *ww;
 	int fd;
+
+	/* M17a1 — emca DECIDED this rectangle, so emca keeps it. Telling the
+	 * kernel is what still happens; being asked for it is what emca now
+	 * answers itself, and that asymmetry is the whole move.
+	 */
+	if((ww = winof(wid)) != nil){
+		ww->rx = x; ww->ry = y; ww->rw = w; ww->rh = h;
+	}
 
 	snprint(p, sizeof p, "/dev/window/%d/wctl", wid);
 	fd = open(p, OWRITE);
@@ -1049,10 +1259,8 @@ relayout(int wid)
 static int
 parentof(int wid)
 {
-	char b[32];
-
-	if(wread(wid, "parent", b, sizeof b) <= 0) return 0;
-	return atoi(b);
+	Win *w = winof(wid);
+	return w != nil && w->parent > 0 ? w->parent : 0;
 }
 
 static void
@@ -1086,7 +1294,7 @@ wctlf(int wid, char *fmt, ...)
 	close(fd);
 }
 
-/* THE ROOT WINDOW'S CONVENTION (emca.txt PART FIVE). The root is the screen —
+/* THE ROOT WINDOW'S CONVENTION (emca.md PART FIVE). The root is the screen —
  * the window with no parent — and it divides ITSELF. What it divides into is a
  * CONVENTION it follows, not a structure the system knows about: nothing
  * downstream can tell these columns from any others, because there is no pane
@@ -1108,7 +1316,7 @@ hoist(int from, int to)
 
 	nk = nkids(from, kids);
 	for(i = 0; i < nk; i++)
-		wctlf(kids[i], "reparent %d", to);
+		treelink(to, kids[i], -1, nallocated(kids[i]));
 }
 
 static void
@@ -1138,26 +1346,113 @@ convention(int wid)
 		for(i = 0; i < nk; i++)
 			hoist(kids[i], wid);
 		nk = nkids(wid, kids);
-		for(i = 0; i < nk; i++)
+		for(i = 0; i < nk; i++){
+			treeunlink(kids[i]);
 			wctlf(kids[i], "delete");
-		wctlf(wid, "axis col");
+		}
+		treeaxis(wid, 2);
 	} else {
-		if(naxis(wid) != 1) wctlf(wid, "axis row");
+		if(naxis(wid) != 1) treeaxis(wid, 1);
 		nk = nkids(wid, kids);
 		/* CROSSING A BREAKPOINT RESTRUCTURES, IT DOES NOT DESTROY. Grow
 		 * by adding columns; shrink by emptying the surplus into the last
 		 * survivor first, so no window is lost to a window being resized.
 		 */
-		for(i = nk; i < want; i++)
-			wctlf(wid, "newkid");
+		for(i = nk; i < want; i++){
+			Win *pw = winof(wid);
+			treenewkid(wid, pw != nil ? pw->type : "root", 0);
+		}
 		if(nk > want){
 			for(i = want; i < nk; i++)
 				hoist(kids[i], kids[want - 1]);
-			for(i = want; i < nk; i++)
+			for(i = want; i < nk; i++){
+				treeunlink(kids[i]);
 				wctlf(kids[i], "delete");
+			}
 		}
 	}
 	relayout(wid);
+}
+
+/* SPLIT: this window gains a sibling under a container on `ax`. acme's
+ * coladd is the shape — the window being split keeps its content and the new
+ * one starts empty — and a TAB is the same operation with the allocation bit
+ * cleared, which is why `newtab` is not a third verb's worth of code.
+ */
+static void
+dosplit(Win *w, int ax, int allocated)
+{
+	char *content;
+	Win *pw;
+	int p, sib, first, second, at, i;
+
+	content = w->buf != nil ? w->buf->path : nil;
+	p = parentof(w->wid);
+	pw = winof(p);
+
+	/* A SIBLING, where there is a parent already dividing on this axis —
+	 * and a tab is ALWAYS a sibling wherever there is a parent to be one
+	 * in, because a tab has no axis of its own. */
+	if((pw != nil && pw->axis == ax) || (!allocated && pw != nil)){
+		if((sib = treemint(w->type, content)) < 0) return;
+		at = -1;
+		for(i = 0; i < pw->nkid; i++)
+			if(pw->kid[i] == w->wid){ at = i + 1; break; }
+		treelink(p, sib, at, allocated);
+		relayout(p);
+		return;
+	}
+
+	/* OTHERWISE W BECOMES A CONTAINER: its content moves into a first
+	 * child and the duplicate becomes the second, so the window the person
+	 * was looking at is still there — it is just now one of two. */
+	if((first = treemint(w->type, content)) < 0) return;
+	if((second = treemint(w->type, content)) < 0) return;
+	treeaxis(w->wid, ax);
+	treelink(w->wid, first, -1, 1);
+	treelink(w->wid, second, -1, allocated);
+	setcontent(w, "");		/* a container holds windows, not content */
+	relayout(w->wid);
+}
+
+/* MAXIMISE: everyone else leaves the allocation, and pressing it again puts
+ * them back. It toggles on the SIBLINGS, not on the window — which is what
+ * makes it the same operation as minimise with the argument inverted.
+ */
+static void
+domaximise(Win *w)
+{
+	Win *pw, *s;
+	int i, j, p, was;
+
+	if((p = parentof(w->wid)) == 0) return;	/* nothing to maximise within */
+	if((pw = winof(p)) == nil) return;
+
+	if(pw->maxed){
+		/* PUT THE ARRANGEMENT BACK exactly as it was — which is why the
+		 * parent remembers a LIST and not a flag. Restoring by rule
+		 * rather than by memory would silently allocate windows the
+		 * person had minimised themselves. */
+		for(i = 0; i < pw->nkid; i++){
+			if((s = winof(pw->kid[i])) == nil) continue;
+			was = 0;
+			for(j = 0; j < pw->npremax; j++)
+				if(pw->premax[j] == pw->kid[i]) was = 1;
+			s->allocated = was;
+		}
+		pw->maxed = 0;
+		pw->npremax = 0;
+	} else {
+		pw->npremax = 0;
+		for(i = 0; i < pw->nkid; i++){
+			if((s = winof(pw->kid[i])) == nil) continue;
+			if(s->allocated && pw->npremax < MAXKIDS)
+				pw->premax[pw->npremax++] = pw->kid[i];
+			s->allocated = pw->kid[i] == w->wid;
+		}
+		pw->maxed = 1;
+	}
+	relayout(p);
 }
 
 /* Reset: rebuild the root from its convention. DESTRUCTIVE of structure, which
@@ -1174,9 +1469,11 @@ doreset(int wid)
 	 * what brings back columns someone closed.
 	 */
 	nk = nkids(wid, kids);
-	for(i = 0; i < nk; i++)
+	for(i = 0; i < nk; i++){
+		treeunlink(kids[i]);
 		wctlf(kids[i], "delete");
-	wctlf(wid, "axis none");
+	}
+	treeaxis(wid, 0);
 	convention(wid);
 }
 
@@ -1250,6 +1547,48 @@ onwinline(Win *w, char *line)
 	}
 	if(strcmp(line, "fit") == 0){ dofit(w->wid); return; }
 	if(strcmp(line, "reset") == 0){ doreset(w->wid); return; }
+
+	/* ── M17a2: THE TREE VERBS ARRIVE HERE, because the tree is emca's ──
+	 *
+	 * These used to be written straight to the kernel's `wctl`, which is
+	 * the surface talking PAST the window manager — the same coupling the
+	 * rectangle had (RESEARCH §9.9). A tree the kernel mutates is a tree
+	 * emca does not know, so the door has to be emca's own.
+	 *
+	 * newrow/newcol/newtab are ONE operation with two parameters — the
+	 * axis to split on, and whether the new window is allocated or a tab.
+	 * That is the kernel's own reading of them and it survives the move.
+	 */
+	if(strncmp(line, "reparent ", 9) == 0){	/* reparent <parent> [<at>] */
+		char *q = line + 9;
+		int np, at = -1;
+		while(*q == ' ') q++;
+		np = atoi(q);
+		if((q = strchr(q, ' ')) != nil) at = atoi(q + 1);
+		treelink(np, w->wid, at, w->allocated);
+		relayout(np);
+		return;
+	}
+	/* DELETE IS A TREE VERB when the window is a container, because closing
+	 * one closes what it holds — and that recursion is emca's since the
+	 * kernel stopped holding a tree. Written to the kernel's wctl it would
+	 * close this window and strand its children. */
+	if(strcmp(line, "delete") == 0){ dodel(w); return; }
+	if(strcmp(line, "newcol") == 0){ dosplit(w, 1, 1); return; }
+	if(strcmp(line, "newrow") == 0){ dosplit(w, 2, 1); return; }
+	if(strcmp(line, "newtab") == 0){ dosplit(w, 1, 0); return; }
+	if(strcmp(line, "minimise") == 0 || strcmp(line, "minimize") == 0){
+		/* minimise(me) moves ME out of the allocation; maximise(me)
+		 * moves everyone else out. One operation, two arguments —
+		 * which is why there is no third concept here either. */
+		w->allocated = !w->allocated;
+		relayout(parentof(w->wid));
+		return;
+	}
+	if(strcmp(line, "maximise") == 0 || strcmp(line, "maximize") == 0){
+		domaximise(w);
+		return;
+	}
 	/* the surface decoded something emca could not parse — video,
 	 * PostScript, a format it does not know — and says how big it is */
 	if(strncmp(line, "size ", 5) == 0){
@@ -1367,7 +1706,7 @@ onwinline(Win *w, char *line)
 	USED(sp);
 }
 
-/* THE WORKSPACE VERBS (emca.txt's toolbar table: Putall Dump Load Exit). Their
+/* THE WORKSPACE VERBS (emca.md's toolbar table: Putall Dump Load Exit). Their
  * operand is the workspace, so they arrive on the workspace's own events file —
  * the exact parallel of a window verb arriving on that window's.
  */
@@ -1480,6 +1819,7 @@ doexit(void)
 	for(i = 0; i < MAXWIN; i++)
 		if(wins[i].used)
 			dodel(&wins[i]);
+	srvunpost();		/* a posted channel outliving its server is a door onto nothing */
 	threadexitsall(nil);
 }
 
@@ -1493,7 +1833,7 @@ onrootline(char *line)
 
 	while(*line == ' ') line++;
 	/* the workspace's own verbs — operand is the workspace, so they arrive
-	 * here rather than on any window (emca.txt: operand determines surface)
+	 * here rather than on any window (emca.md: operand determines surface)
 	 */
 	if(strcmp(line, "Putall") == 0){ doputall(); return; }
 	if(strcmp(line, "Dump") == 0){ dodump(); return; }
@@ -1555,6 +1895,7 @@ threadmain(int argc, char **argv)
 
 	mc = chancreate(sizeof(Msg*), 8);
 	threadcreate(rootreader, nil, STACK);
+	srvpost();		/* M17a1: emca serves its windows as files */
 
 	for(;;){
 		if(recv(mc, &m) < 0) break;
@@ -1579,4 +1920,420 @@ threadmain(int argc, char **argv)
 		free(m);
 	}
 	threadexitsall(nil);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+ * M17a1 — EMCA IS A FILE SERVER.
+ *
+ * docs/window.md: "The manager interface is a file interface. emca serves one
+ * directory per window, and a manager reads and writes files in it." Until
+ * now emca was a CLIENT of the kernel's window device — it posted messages
+ * and read the tree back. That is the wrong way round: the window manager
+ * owns windows, so the window manager serves them.
+ *
+ * The tree is two levels and the qid is arithmetic rather than a table:
+ *
+ *     /              the set
+ *     /<n>/          one window, named by its id
+ *     /<n>/{rect,size,verbs,status,dirty,type,role,title,events,ctl}
+ *
+ *     qpath = 0 for the root, (wid+1)*NQF + file for everything else,
+ *     so walk, stat and read all decode a qid by division. No node table
+ *     can drift out of step with the window table this way.
+ *
+ * What this does NOT do yet is take the tree (M17a2) or the raster (M17a3).
+ * Both sides answer today and the suite compares them; that is what makes
+ * the next two moves verifiable rather than hopeful.
+ * ═══════════════════════════════════════════════════════════════════════ */
+
+enum {
+	NQF = 32,		/* qid stride: files per window, a power of two */
+	Qroot = 0,
+	Qwin = 0,		/* the window's own directory */
+	Qrect, Qsize, Qverbs, Qstatus, Qdirty,
+	Qtype, Qrole, Qtitle, Qevents, Qctl,
+	/* THE TREE (design.md, 2026-09-03). Served in the TOOL view only: a
+	 * manager's own /dev/window/ gains nothing, so no manager can see the
+	 * arrangement it sits in, and the contract is untouched. */
+	Qparent, Qaxis, Qalloc, Qwinid,
+	Qkids,			/* the kids DIRECTORY */
+	Qmax,
+	NSFID = 64,
+};
+
+static char *qnames[] = {
+	nil, "rect", "size", "verbs", "status", "dirty",
+	"type", "role", "title", "events", "ctl",
+	"parent", "axis", "alloc", "winid", "kids",
+};
+
+static int sfid[NSFID], sfq[NSFID];	/* fid -> qid path */
+static uchar smsg[MSIZE9], sout[MSIZE9];
+static int srvfd = -1;
+
+#define QWID(q)  (((q) / NQF) - 1)	/* which window a qid names */
+#define QFILE(q) ((q) % NQF)		/* which of its files */
+#define SQTYPE(q) (((q) == Qroot || QFILE(q) == Qwin || QFILE(q) == Qkids) ? QTDIR9 : QTFILE9)
+
+static int
+sfind(int fid, int alloc)
+{
+	int i, free_ = -1;
+
+	for(i = 0; i < NSFID; i++){
+		if(sfid[i] == fid) return i;
+		if(sfid[i] == -1 && free_ < 0) free_ = i;
+	}
+	if(alloc && free_ >= 0){
+		sfid[free_] = fid;
+		return free_;
+	}
+	return -1;
+}
+
+/* the CONTENT of one file, rendered from emca's own state. Every answer here
+ * is something emca decided or was told — nothing is fetched from the kernel,
+ * which is the point of the exercise.
+ */
+static int
+sread(int q, char *out, int max)
+{
+	Win *w;
+	int f, i, n;
+
+	f = QFILE(q);
+	if((w = winof(QWID(q))) == nil) return -1;
+	switch(f){
+	case Qrect:   return snprint(out, max, "%ld %ld %ld %ld\n", w->rx, w->ry, w->rw, w->rh);
+	case Qsize:   return snprint(out, max, "%ld %ld %ld %ld\n", w->minw, w->minh, w->natw, w->nath);
+	case Qstatus: return snprint(out, max, "%s\n", w->status);
+	case Qdirty:  return snprint(out, max, "%d\n", w->dirty);
+	case Qtype:   return snprint(out, max, "%s\n", w->type);
+	case Qrole:   return snprint(out, max, "%s\n", w->role[0] ? w->role : "look");
+	case Qtitle:  return snprint(out, max, "%s\n", w->title);
+	case Qverbs:
+		/* one verb per line, the same grammar as /type/<x>/verbs —
+		 * because it IS that list, with the core verbs merged in */
+		n = strlen(w->verbs);
+		if(n > max) n = max;
+		memmove(out, w->verbs, n);
+		return n;
+	case Qwinid:  return snprint(out, max, "%d\n", w->wid);
+	case Qparent: return w->parent > 0 ? snprint(out, max, "%d\n", w->parent) : 0;
+	/* EMPTY means "holds a body, not children" — the kernel's own
+	 * convention, kept verbatim so nothing is invented while moving */
+	case Qaxis:   return w->axis == 0 ? 0
+			: snprint(out, max, "%s\n", w->axis == 1 ? "row" : "col");
+	case Qalloc:  return snprint(out, max, "%s\n", w->allocated ? "allocated" : "tab");
+	case Qevents: return 0;		/* a stream: nothing buffered, no EOF */
+	case Qctl:    return 0;		/* write-only in effect */
+	}
+	return -1;
+}
+
+static uchar *
+spstat(uchar *p, int q, char *asname)
+{
+	uchar *sz = p;
+	char nm[32];
+	int f, isdir;
+
+	f = QFILE(q);
+	isdir = SQTYPE(q) == QTDIR9;
+	if(asname != nil) strncpy(nm, asname, sizeof nm - 1);
+	else if(q == Qroot) strcpy(nm, "/");
+	else if(f == Qwin) snprint(nm, sizeof nm, "%d", QWID(q));
+	else strncpy(nm, qnames[f], sizeof nm - 1);
+	nm[sizeof nm - 1] = 0;
+
+	p = put16(p, 0);
+	p = put16(p, 0); p = put32(p, 0);
+	p = putqid(p, isdir ? QTDIR9 : QTFILE9, q + 1);
+	p = put32(p, isdir ? (0x80000000|0755) : 0666);
+	p = put32(p, 0); p = put32(p, 0);
+	p = put64(p, 0);
+	p = putstr(p, nm);
+	p = putstr(p, "emca"); p = putstr(p, "emca"); p = putstr(p, "emca");
+	put16(sz, p - sz - 2);
+	return p;
+}
+
+/* walk ONE name from q; -1 if it is not there. Two levels, so this is two
+ * cases and no recursion. */
+static int
+swalk1(int q, char *name)
+{
+	Win *w;
+	int i;
+
+	if(q == Qroot){
+		if(strcmp(name, "..") == 0) return Qroot;
+		if((w = winof(atoi(name))) == nil) return -1;
+		return (w->wid + 1) * NQF + Qwin;
+	}
+	/* inside kids/: the name is a POSITION and walking it lands on that
+	 * child's OWN directory — so the tree is navigable with no second
+	 * vocabulary, and `kids/0/parent` is the same file as `<child>/parent` */
+	if(QFILE(q) == Qkids){
+		if(strcmp(name, "..") == 0) return (QWID(q) + 1) * NQF + Qwin;
+		if((w = winof(QWID(q))) == nil) return -1;
+		i = atoi(name);
+		if(name[0] < '0' || name[0] > '9' || i < 0 || i >= w->nkid) return -1;
+		return (w->kid[i] + 1) * NQF + Qwin;
+	}
+	if(QFILE(q) != Qwin) return -1;
+	if(strcmp(name, "..") == 0) return Qroot;
+	for(i = Qrect; i < Qmax; i++)
+		if(strcmp(name, qnames[i]) == 0)
+			return (QWID(q) + 1) * NQF + i;
+	return -1;
+}
+
+/* a directory read: the set of windows at the root, the ten files inside one.
+ * Offsets are honoured the cheap way — regenerate and skip — because these
+ * directories are tens of entries, never thousands.
+ */
+/* A directory read: the window set at the root, the ten files inside one.
+ * Offsets are honoured by REGENERATING and skipping — these directories hold
+ * tens of entries, never thousands, so the cost is nothing and the code has
+ * no cursor to keep in step with a window table that changes underneath it.
+ * read(5)'s rule that a record is never split is what the budget check is for.
+ */
+static uchar *
+sreaddir(uchar *p, int q, uvlong off, uint count)
+{
+	uchar *st, tmp[512];
+	uvlong seen = 0;
+	uint used = 0;
+	int i, n;
+
+	for(i = 0; ; i++){
+		if(q == Qroot){
+			if(i >= MAXWIN) break;
+			if(!wins[i].used) continue;
+			st = spstat(tmp, (wins[i].wid + 1) * NQF + Qwin, nil);
+		} else if(QFILE(q) == Qkids){
+			/* POSITIONS, in order — `ls` sorts, so the listing IS
+			 * the arrangement. The qid is the child's own
+			 * directory; only the NAME is positional. */
+			Win *pw = winof(QWID(q));
+			char pos[16];
+			if(pw == nil || i >= pw->nkid) break;
+			snprint(pos, sizeof pos, "%d", i);
+			st = spstat(tmp, (pw->kid[i] + 1) * NQF + Qwin, pos);
+		} else {
+			if(Qrect + i >= Qmax) break;
+			st = spstat(tmp, (QWID(q) + 1) * NQF + Qrect + i, nil);
+		}
+		n = st - tmp;
+		if(seen < off){ seen += n; continue; }	/* before the offset */
+		if(used + n > count) break;		/* never split a record */
+		memmove(p, tmp, n);
+		p += n;
+		used += n;
+	}
+	return p;
+}
+
+static void
+srvthread(void *v)
+{
+	int fd, type, tag, fid, nfid, nf, nq, q, i, n9;
+	uchar *p, *b;
+	uint n, count;
+	uvlong off;
+	char nm[NMAX], buf[BMAX/8];
+	Win *w;
+
+	fd = (int)(uintptr)v;
+	for(i = 0; i < NSFID; i++) sfid[i] = -1;
+
+	for(;;){
+		n = read9msg(fd, smsg);
+		if(n == 0 || (long)n < 0) break;
+		type = smsg[4];
+		tag = get16(smsg + 5);
+		p = sout + 7;
+		b = smsg + 7;
+
+		switch(type){
+		case Tversion:
+			p = put32(p, MSIZE9);
+			p = putstr(p, "9P2000");
+			send9msg(fd, type + 1, tag, sout, p);
+			break;
+		case Tattach:
+			fid = get32(b);
+			if((nf = sfind(fid, 1)) < 0){ send9err(fd, tag, "no fids", sout); break; }
+			sfq[nf] = Qroot;
+			p = putqid(p, QTDIR9, Qroot + 1);
+			send9msg(fd, type + 1, tag, sout, p);
+			break;
+		case Twalk:
+			/* fid[4] newfid[4] nwname[2] nwname*(wname[s]) */
+			fid = get32(b); b += 4;
+			nfid = get32(b); b += 4;
+			nq = get16(b); b += 2;
+			if((nf = sfind(fid, 0)) < 0){ send9err(fd, tag, "bad fid", sout); break; }
+			q = sfq[nf];
+			p = put16(p, 0);			/* nwqid, patched below */
+			for(i = 0; i < nq; i++){
+				n9 = get16(b); b += 2;
+				if(n9 >= (int)sizeof nm) n9 = sizeof nm - 1;
+				memmove(nm, b, n9); nm[n9] = 0; b += n9;
+				if((q = swalk1(q, nm)) < 0) break;
+				p = putqid(p, SQTYPE(q), q + 1);
+			}
+			put16(sout + 7, i);
+			/* a walk that got the whole way BINDS newfid; a partial one
+			 * binds nothing, which is walk(5)'s rule and the reason a
+			 * failed walk leaves the client's old fid intact */
+			if(i == nq && (n9 = sfind(nfid, 1)) >= 0)
+				sfq[n9] = q;
+			send9msg(fd, type + 1, tag, sout, p);
+			break;
+		case Topen:
+			fid = get32(b);
+			if((nf = sfind(fid, 0)) < 0){ send9err(fd, tag, "bad fid", sout); break; }
+			q = sfq[nf];
+			p = putqid(p, SQTYPE(q), q + 1);
+			p = put32(p, MSIZE9 - 24);
+			send9msg(fd, type + 1, tag, sout, p);
+			break;
+		case Tread:
+			fid = get32(b); b += 4;
+			off = get64(b); b += 8;
+			count = get32(b);
+			if((nf = sfind(fid, 0)) < 0){ send9err(fd, tag, "bad fid", sout); break; }
+			q = sfq[nf];
+			if(count > MSIZE9 - 24) count = MSIZE9 - 24;
+			if(SQTYPE(q) == QTDIR9){
+				b = sreaddir(p + 4, q, off, count);
+				put32(p, b - (p + 4));
+				send9msg(fd, type + 1, tag, sout, b);
+			} else {
+				n9 = sread(q, buf, sizeof buf);
+				if(n9 < 0){ send9err(fd, tag, "gone", sout); break; }
+				if(off >= (uvlong)n9) n9 = 0;
+				else { n9 -= off; memmove(buf, buf + off, n9); }
+				if((uint)n9 > count) n9 = count;
+				p = put32(p, n9);
+				memmove(p, buf, n9); p += n9;
+				send9msg(fd, type + 1, tag, sout, p);
+			}
+			break;
+		case Twrite:
+			fid = get32(b); b += 4;
+			off = get64(b); b += 8;
+			count = get32(b); b += 4;
+			if((nf = sfind(fid, 0)) < 0){ send9err(fd, tag, "bad fid", sout); break; }
+			q = sfq[nf];
+			if(count >= sizeof buf) count = sizeof buf - 1;
+			memmove(buf, b, count); buf[count] = 0;
+			if((w = winof(QWID(q))) == nil){ send9err(fd, tag, "gone", sout); break; }
+			switch(QFILE(q)){
+			case Qsize:
+				w->minw = strtol(buf, &b, 10); w->minh = strtol((char*)b, &b, 10);
+				w->natw = strtol((char*)b, &b, 10); w->nath = strtol((char*)b, &b, 10);
+				break;
+			case Qstatus:
+				strncpy(w->status, buf, sizeof w->status - 1);
+				if((b = (uchar*)strchr(w->status, '\n')) != nil) *b = 0;
+				break;
+			case Qdirty:
+				w->dirty = atoi(buf);
+				break;
+			case Qctl:
+				/* window-level requests: a child INFORMS its parent,
+				 * which acts — so these route into emca's own verbs */
+				if(strncmp(buf, "close", 5) == 0) dodel(w);
+				else if(strncmp(buf, "duplicate", 9) == 0) dozerox(w);
+				break;
+			default:
+				send9err(fd, tag, "read-only", sout);
+				goto next;
+			}
+			p = put32(p, count);
+			send9msg(fd, type + 1, tag, sout, p);
+			break;
+		case Tclunk:
+		case Tremove:
+			fid = get32(b);
+			if((nf = sfind(fid, 0)) >= 0) sfid[nf] = -1;
+			send9msg(fd, Tclunk + 1, tag, sout, p);
+			break;
+		case Tstat:
+			fid = get32(b);
+			if((nf = sfind(fid, 0)) < 0){ send9err(fd, tag, "bad fid", sout); break; }
+			/* Rstat is nstat[2] then the record: put16 ADVANCES, so the
+			 * record goes at p+2 and nstat is patched at p itself */
+			b = spstat(p + 2, sfq[nf], nil);
+			put16(p, b - (p + 2));
+			send9msg(fd, type + 1, tag, sout, b);
+			break;
+		default:
+			send9err(fd, tag, "emca: unsupported", sout);
+			break;
+		}
+	next:;
+	}
+	close(fd);
+}
+
+/* THE /srv NAME IS THE EXTERNAL DOOR, NOT THE MANAGER'S DOOR.
+ *
+ * A manager reaches its window at `/dev/window/` in its OWN namespace, which
+ * emca mounts for it — no name, no id, nothing global (docs/window.md). That
+ * is rio's shape and it has no collision to have. This post exists for
+ * everything OUTSIDE emca's process tree: a window tool, a debugger, the
+ * suite.
+ *
+ * And it MUST be instance-unique, because `#s` is one table for the whole
+ * kernel (kernel/src/lib.rs, `srv_posts`) while every other name a process
+ * sees is namespace-local. emca NESTS by design, so a fixed name is a
+ * collision by construction rather than a hypothetical — the second emca
+ * would silently fail to post and serve a door nobody could find.
+ *
+ * `<user>.<pid>` is the Plan 9 answer and it is already in this tree: the real
+ * acme posts `/srv/acme.%s.%d` (acme.c:321). Same convention, same reason.
+ */
+static char srvname[64];
+
+static void
+srvunpost(void)
+{
+	if(srvname[0] != 0){
+		remove(srvname);
+		srvname[0] = 0;
+	}
+}
+
+static void
+srvpost(void)
+{
+	int fd[2], sfd;
+	char b[32];
+	char *u;
+
+	if(pipe(fd) < 0) return;
+	u = getuser();
+	snprint(srvname, sizeof srvname, "/srv/emca.%s.%d",
+		u != nil && *u ? u : "none", getpid());
+	if((sfd = create(srvname, OWRITE, 0600)) < 0){
+		/* no /srv bound at all: serve anyway. The no-srv case is not a
+		 * special case — a nested emca whose parent gave it no /srv
+		 * still has managers, and they never needed this door.
+		 */
+		srvname[0] = 0;
+		close(fd[1]);
+		srvfd = fd[0];
+		threadcreate(srvthread, (void*)(uintptr)fd[0], STACK);
+		return;
+	}
+	snprint(b, sizeof b, "%d", fd[1]);
+	write(sfd, b, strlen(b));
+	close(sfd);
+	close(fd[1]);
+	srvfd = fd[0];
+	threadcreate(srvthread, (void*)(uintptr)fd[0], STACK);
 }

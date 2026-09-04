@@ -1,0 +1,5 @@
+# These sit on the GLOBAL toolbar or the host menu bar, because the
+# outermost window's content is the system.
+Halt        manager:halt
+Reboot      manager:reboot
+New Shell   manager:newshell

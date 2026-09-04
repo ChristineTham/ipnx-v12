@@ -1,0 +1,6 @@
+# Specialises inode/directory, so look and edit (the listing) come by
+# inheritance. This type ADDS manage — the system as a running thing.
+look
+edit
+properties
+manage

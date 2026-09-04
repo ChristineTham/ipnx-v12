@@ -1,0 +1,6 @@
+pkg — a window onto /pkg, with NO MANAGER YET.
+
+Its `ns` constructs the namespace, so the window opens and its contents are
+readable. It declares no verbs, and that is deliberate: a verb needs a manager
+to give it meaning, and pressing one with nothing behind it is the defect this
+registry is supposed to prevent. The verbs return when the manager does.

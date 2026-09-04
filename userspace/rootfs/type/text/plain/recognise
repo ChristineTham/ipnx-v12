@@ -1,0 +1,4 @@
+# One rule per line, tried in the pipeline's order. First match wins.
+# text/plain is the FALLBACK: it claims anything nothing else claimed,
+# so it can never fail. See docs/type.md.
+fallback

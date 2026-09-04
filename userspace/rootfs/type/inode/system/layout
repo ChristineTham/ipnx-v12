@@ -1,0 +1,18 @@
+# Which windows exist at startup, and where.
+#
+# Each line is a PATH — the type is inferred from content and the role
+# derived from permissions, so a layout never says what a thing is.
+# Indentation NESTS; the axis is not stated because alternation already
+# determines it. `tabs` is the only keyword: its children share one
+# rectangle.
+#
+# A role may be appended when the derived default is not what you meant.
+# `manage` on an executable RUNS it, and the window is `shell` on the
+# resulting channel — which is the whole of "open a terminal".
+
+/                       manage
+tabs
+    /etc/motd
+    /rc/tour
+    /home/README
+/bin/rc                 manage

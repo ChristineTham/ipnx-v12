@@ -1,0 +1,47 @@
+# emcaopen <path> [role] — open a window on a path.
+#
+# ONE argument, because everything else is derived: the TYPE from
+# recognition (the path, then the content) and the ROLE from
+# permissions. The old form took a type first, which was right when a
+# caller chose the type and is wrong now that content decides it.
+#
+# `role` is the single override. `manage` on an executable RUNS it, and
+# the window is `shell` on the resulting channel — which is the whole of
+# "open a terminal". See docs/type.md.
+p=$1
+role=$2
+if(~ $#p 0){
+	echo 'usage: emcaopen <path> [role]' >[1=2]
+	exit usage
+}
+if(! test -e $p){
+	echo 'emcaopen: no such file: '^$p >[1=2]
+	exit nofile
+}
+
+# ── recognition, in pipeline order. Stops at the first match; never
+# ── reads a stream, because reading one consumes it.
+t=()
+if(test -d $p) t=inode/directory
+if(~ $p /) t=inode/system
+if(~ $#t 0) t=text/plain            # the fallback claims what nothing else did
+
+# ── the role, derived from permissions unless one was given
+if(~ $#role 0){
+	role=look
+	if(test -w $p) role=edit
+}
+
+r=/type/$t
+if(! test -d $r){
+	echo 'emcaopen: no such type: '^$t >[1=2]
+	exit notype
+}
+if(! grep -s '^'^$role'$' $r/managers){
+	echo 'emcaopen: '^$t^' offers no '^$role^' role' >[1=2]
+	exit norole
+}
+
+w=`{cat '#w/'^$t^'/clone'}
+echo -n $p > '#w/'^$t^'/'^$w^'/content'
+echo $w

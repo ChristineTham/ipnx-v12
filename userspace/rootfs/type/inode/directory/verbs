@@ -1,0 +1,3 @@
+Revert   manager:revert
+Undo     manager:undo
+Redo     manager:redo

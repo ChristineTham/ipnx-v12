@@ -228,7 +228,7 @@ Wrap host:toggle-wrap' > $wp/toolbar
 	wct=`{cat $wp/content}
 	wtg=`{cat $wp/tag}
 	# the type in the path is validated, not decoration: a wrong type misses
-	wbad=`{cat '#w/edit/'^$wtid^'/content' >[2]/dev/null}
+	wbad=`{cat '#w/text/'^$wtid^'/content' >[2]/dev/null}
 	# and the same window still answers on its plain number — nothing broke
 	wnum=`{cat '#w/'^$wtid^'/content'}
 	# CONTENT IS AN EVENT, not a sample: a window is minted before its file is
@@ -252,14 +252,14 @@ if not echo PASS '/dev/window: no control interface on this host — skipped'
 # the registry. This is what "adding a manager is adding a file" means, and the
 # test is that a manager APPEARS from files alone, with no manager program.
 tyok=`{cat /type/proc/ns >[2]/dev/null}
-tycw=`{cat '#w/ls/clone' >[2]/dev/null}
+tycw=`{cat '#w/directory/clone' >[2]/dev/null}
 if(! ~ $"tyok '' && ! ~ $"tycw ''){
 	# the chrome a type declares, and the namespace it constructs
 	typw=`{cat /type/proc/window}
 	tynn=`{cat /type/proc/ns}
 	# opening through the registry: the caller knows nothing about the type
-	tyw=`{rc /rc/emcaopen ls /usr/kitty}
-	tyct=`{cat '#w/ls/'^$tyw^'/content'}
+	tyw=`{rc /rc/emcaopen directory /usr/kitty}
+	tyct=`{cat '#w/directory/'^$tyw^'/content'}
 	# a type declares only what is EXTRA. The core verbs are emca's, so no
 	# type may name one — a type that redeclared Put would make the dirty
 	# indicator lie, since Put's presence IS the indicator.
@@ -281,18 +281,56 @@ if not echo PASS '/type: no registry on this host — skipped'
 # emca has NO PRIVILEGE. It learns of a window from the device, exactly as the
 # surface does, and everything below is driven by writing the window's `events`
 # file — which is the surface's voice. So this test IS a surface, in rc.
-fn emwait {	# emwait <file> <pattern> — bounded; emca is another process
+fn kidwait {	# kidwait <windir> <n> — bounded; the tree is emca's now, so
+		# a tree verb is a MESSAGE and its effect is not instant
+	wdone=no
 	for(i in 1 2 3 4 5 6 7 8){
-		if(~ `{cat $1 >[2]/dev/null} $2) return
-		sleep 1
+		if(~ $wdone no){
+			if(~ `{ls $1/kids >[2]/dev/null | wc -l} $2) wdone=yes
+			if(~ $wdone no) sleep 1
+		}
 	}
 }
-emok=`{cat '#w/edit/clone' >[2]/dev/null}
+fn allocwait {	# allocwait <windir> <n> <want> — settle on one kid's alloc bit
+	wdone=no
+	for(i in 1 2 3 4 5 6 7 8){
+		if(~ $wdone no){
+			if(~ `{cat $1/kids/$2/alloc >[2]/dev/null} $3) wdone=yes
+			if(~ $wdone no) sleep 1
+		}
+	}
+}
+# RC HAS NO `return` AND NO `break` (Plan 9 rc's Builtin[] table, plan9.c:40 —
+# cd, whatis, eval, exec, exit, shift, wait, ., finit, flag, rfork, and nothing
+# else). The old form of these helpers called `return`, which rc looked for as
+# /bin/return, did not find, and reported — so EVERY wait ran its full eight
+# seconds whether or not the condition had been met, and printed an error each
+# time. A flag is the idiom that works.
+fn emwait {	# emwait <file> <pattern> — bounded; emca is another process
+	wdone=no
+	for(i in 1 2 3 4 5 6 7 8){
+		if(~ $wdone no){
+			if(~ `{cat $1 >[2]/dev/null} $2) wdone=yes
+			if(~ $wdone no) sleep 1
+		}
+	}
+}
+emok=`{cat '#w/text/clone' >[2]/dev/null}
 if(! ~ $"emok ''){
 	echo -n hello > /tmp/emca.txt
+	# /srv must exist BEFORE emca starts: emca posts its file server there
+	# (M17a1). And there is exactly ONE emca for the whole suite — a second
+	# one competes for /dev/window/events, which is a QUEUE, so the two
+	# would each see half the events and neither would hold the whole set.
+	bind '#s' /srv >[2]/dev/null
 	emca &
-	emw=`{rc /rc/emcaopen edit /tmp/emca.txt}
-	emd=/dev/window/edit/$emw
+	# THE TREE IS EMCA'S (design.md, 2026-09-03), so the tree is read from
+	# emca. One mount, here, and every block below reads /dev/emca/<n>/.
+	sleep 1
+	for(s in `{ls /srv >[2]/dev/null}) if(~ $s /srv/emca.*) emsrv=$s
+	if(! ~ $"emsrv '') mount $emsrv /dev/emca >[2]/dev/null
+	emw=`{rc /rc/emcaopen text /tmp/emca.txt}
+	emd=/dev/window/text/$emw
 	emwait $emd/toolbar '*Revert*'
 	# THE TOOLBAR IS THE TYPE'S, and nothing on it is universal — not Save,
 	# not Revert, not even Undo, which belongs to `edit` alone because Undo is
@@ -314,8 +352,8 @@ if(! ~ $"emok ''){
 	emp3=`{grep '^Save' $emd/toolbar | wc -l}
 	# an `ls` window declares NO verbs of its own — Open covers new files and
 	# a trailing slash covers new folders, so it needs none
-	eml=`{rc /rc/emcaopen ls /usr/kitty}
-	emlt=`{cat /dev/window/ls/$eml/toolbar >[2]/dev/null}
+	eml=`{rc /rc/emcaopen directory /usr/kitty}
+	emlt=`{cat /dev/window/directory/$eml/toolbar >[2]/dev/null}
 	# and Del closes, through the same door the surface uses
 	echo 'exec Del' > $emd/events
 	emwait $emd/toolbar ''
@@ -325,7 +363,7 @@ if(! ~ $"emok ''){
 }
 if not echo PASS 'emca: no window control interface on this host — skipped'
 
-# M15b — THE TREE (emca.txt PART FOUR). A window contains either a body or
+# M15b — THE TREE (emca.md PART FOUR). A window contains either a body or
 # child windows, and `axis` says how it arranges them: row is side by side,
 # col is stacked. The tree is WALKABLE — kids/<id> is a directory — so the
 # structure IS the filesystem rather than a description of one.
@@ -335,29 +373,35 @@ if not echo PASS 'emca: no window control interface on this host — skipped'
 # DIRECTION and emca works out from the parent's axis whether that means a
 # sibling or children — which is the answer to "we may start with a window
 # with rows, and then we create a column".
-trok=`{cat /dev/window/edit/clone >[2]/dev/null}
+trok=`{cat /dev/window/text/clone >[2]/dev/null}
 if(! ~ $"trok ''){
-	trd=/dev/window/edit/$trok
-	tr0=`{cat $trd/axis}			# a window holding a body has no axis
-	echo newcol > $trd/wctl
-	tr1=`{cat $trd/axis}			# no parent, so it BECOMES a row
-	trk=`{ls $trd/kids | sed 's:.*/::'}
-	trc=$trd/kids/$trk(1)
+	trd=/dev/window/text/$trok
+	tre=/dev/emca/$trok		# THE TREE IS EMCA'S — axis, kids, parent
+	tr0=`{cat $tre/axis}			# a window holding a body has no axis
+	echo newcol > /dev/window/$trok/events
+	kidwait $tre 2
+	tr1=`{cat $tre/axis}			# no parent, so it BECOMES a row
+	trk=`{ls $tre/kids | sed 's:.*/::'}
+	trc=$tre/kids/$trk(1)
 	trcax=`{cat $trc/axis}			# and its children are leaves
 	# the parent already arranges along row, so newcol ADDS A SIBLING —
 	# the child is already a column and gains a neighbour, not an interior
-	echo newcol > $trc/wctl
-	trk2=`{ls $trd/kids | sed 's:.*/::'}
+	kwid=`{cat $trc/winid}
+	echo newcol > /dev/window/$kwid/events
+	kidwait $tre 3
+	trk2=`{ls $tre/kids | sed 's:.*/::'}
 	trcax2=`{cat $trc/axis}
 	# perpendicular to the parent, so newrow GIVES IT CHILDREN
-	echo newrow > $trc/wctl
+	kwid=`{cat $trc/winid}
+	echo newrow > /dev/window/$kwid/events
+	kidwait $trc 2
 	trcax3=`{cat $trc/axis}
 	trg=`{ls $trc/kids | sed 's:.*/::'}
 	# CLOSING A CONTAINER CLOSES WHAT IT HOLDS — acme's colcloseall(), and
 	# one rule rather than two, because a column is a window. Deleting the
 	# root of this subtree must take all six windows with it.
-	echo delete > $trd/wctl
-	trgone=`{ls $trd/kids >[2]/dev/null}
+	echo delete > /dev/window/$trok/events
+	trgone=`{ls $tre/kids >[2]/dev/null}
 	if(~ $"tr0 '' && ~ $"tr1 row && ~ $#trk 2 && ~ $"trcax '' && ~ $#trk2 3 && ~ $"trcax2 '' && ~ $"trcax3 col && ~ $#trg 2 && ~ $#trgone 0) echo PASS 'the tree: kids are walkable, alternation decides — same axis adds a SIBLING, perpendicular gives CHILDREN — and closing a container closes what it holds'
 	if not fails=bad
 }
@@ -370,28 +414,48 @@ if not echo PASS 'the tree: no window control interface on this host — skipped
 # parent has not allocated to, never a reduced one. New tab is the same
 # operation again with the allocation bit flipped, which is why it is not a
 # fourth concept beside row and column.
-alok=`{cat /dev/window/edit/clone >[2]/dev/null}
+alok=`{cat /dev/window/text/clone >[2]/dev/null}
 if(! ~ $"alok ''){
-	ald=/dev/window/edit/$alok
-	echo newcol > $ald/wctl
-	echo newcol > $ald/kids/0/wctl
+	ald=/dev/window/text/$alok
+	ale=/dev/emca/$alok		# THE TREE IS EMCA'S
+	echo newcol > /dev/window/$alok/events
+	kidwait $ald 2
+	kw=$ale/kids/0/winid
+	kwid=`{cat $kw}
+	echo newcol > /dev/window/$kwid/events
+	kidwait $ald 3
 	# kids are named by POSITION, because order IS the layout and ls sorts —
 	# naming them by window id would have hidden the arrangement
-	alix=`{ls $ald/kids | sed 's:.*/::'}
+	alix=`{ls $ale/kids | sed 's:.*/::'}
 	alid=()
-	for(i in 0 1 2){ x=`{cat $ald/kids/$i/winid}; alid=($alid $x) }
-	al0=`{cat $ald/kids/0/alloc}^' '^`{cat $ald/kids/1/alloc}^' '^`{cat $ald/kids/2/alloc}
-	echo maximise > $ald/kids/0/wctl
-	al1=`{cat $ald/kids/0/alloc}^' '^`{cat $ald/kids/1/alloc}^' '^`{cat $ald/kids/2/alloc}
-	echo maximise > $ald/kids/0/wctl
-	al2=`{cat $ald/kids/0/alloc}^' '^`{cat $ald/kids/1/alloc}^' '^`{cat $ald/kids/2/alloc}
-	echo minimise > $ald/kids/1/wctl
-	al3=`{cat $ald/kids/1/alloc}
-	echo minimise > $ald/kids/1/wctl
-	al4=`{cat $ald/kids/1/alloc}
-	echo newtab > $ald/kids/0/wctl
-	al5=`{cat $ald/kids/1/alloc}
-	echo delete > $ald/wctl
+	for(i in 0 1 2){ x=`{cat $ale/kids/$i/winid}; alid=($alid $x) }
+	al0=`{cat $ale/kids/0/alloc}^' '^`{cat $ale/kids/1/alloc}^' '^`{cat $ale/kids/2/alloc}
+	kw=$ale/kids/0/winid
+	kwid=`{cat $kw}
+	echo maximise > /dev/window/$kwid/events
+	allocwait $ald 1 tab
+	al1=`{cat $ale/kids/0/alloc}^' '^`{cat $ale/kids/1/alloc}^' '^`{cat $ale/kids/2/alloc}
+	kw=$ale/kids/0/winid
+	kwid=`{cat $kw}
+	echo maximise > /dev/window/$kwid/events
+	allocwait $ald 1 allocated
+	al2=`{cat $ale/kids/0/alloc}^' '^`{cat $ale/kids/1/alloc}^' '^`{cat $ale/kids/2/alloc}
+	kw=$ale/kids/1/winid
+	kwid=`{cat $kw}
+	echo minimise > /dev/window/$kwid/events
+	allocwait $ald 1 tab
+	al3=`{cat $ale/kids/1/alloc}
+	kw=$ale/kids/1/winid
+	kwid=`{cat $kw}
+	echo minimise > /dev/window/$kwid/events
+	allocwait $ald 1 allocated
+	al4=`{cat $ale/kids/1/alloc}
+	kw=$ale/kids/0/winid
+	kwid=`{cat $kw}
+	echo newtab > /dev/window/$kwid/events
+	kidwait $ald 4
+	al5=`{cat $ale/kids/1/alloc}
+	echo delete > /dev/window/$alok/events
 	if(~ $"alix '0 1 2' && ~ $"al0 'allocated allocated allocated' && ~ $"al1 'allocated tab tab' && ~ $"al2 'allocated allocated allocated' && ~ $"al3 tab && ~ $"al4 allocated && ~ $"al5 tab) echo PASS 'allocation: minimise and maximise are ONE operation — one moves me out, the other moves everyone else out, both reversible — and New tab is the same again with the allocation bit flipped'
 	if not fails=bad
 }
@@ -409,7 +473,7 @@ if not echo PASS 'allocation: no window control interface on this host — skipp
 # This is the strongest assertion in the milestone, and it exists only because
 # EMCA OWNS THE GEOMETRY: a test can resize a tree from rc and read the exact
 # allocation back.
-ftok=`{cat /dev/window/edit/clone >[2]/dev/null}
+ftok=`{cat /dev/window/text/clone >[2]/dev/null}
 if(! ~ $"ftok ''){
 	fw=/dev/window/$ftok
 	echo -n one-line > /tmp/fit.small
@@ -419,32 +483,39 @@ if(! ~ $"ftok ''){
 	femca=`{cat $fw/toolbar}
 }
 if(! ~ $"femca ''){
+	fe=/dev/emca/$ftok		# THE TREE IS EMCA'S
 	echo 'rect 0 0 1200 800' > $fw/wctl
-	echo newrow > $fw/wctl
-	emwait $fw/kids/1/toolbar '*Snarf*'
-	echo -n /tmp/fit.small > $fw/kids/0/content
-	echo -n /tmp/fit.big > $fw/kids/1/content
-	emwait $fw/kids/1/content /tmp/fit.big
+	echo newrow > /dev/window/$ftok/events
+	kidwait $fe 2
+	# a child is NAMED through emca's tree and then addressed by id: the
+	# kernel has no kids to walk, and content and toolbar are still its
+	# files until M17a3 takes the raster
+	fk0=`{cat $fe/kids/0/winid}
+	fk1=`{cat $fe/kids/1/winid}
+	emwait /dev/window/$fk1/toolbar '*Snarf*'
+	echo -n /tmp/fit.small > /dev/window/$fk0/content
+	echo -n /tmp/fit.big > /dev/window/$fk1/content
+	emwait /dev/window/$fk1/content /tmp/fit.big
 	sleep 1
 	echo fit > $fw/events
-	emwait $fw/kids/0/wctl '0 0 1200 72 *'
-	f1=`{cat $fw/kids/0/wctl}
-	f2=`{cat $fw/kids/1/wctl}
+	emwait $fe/kids/0/rect '0 0 1200 72'
+	f1=`{cat $fe/kids/0/rect}
+	f2=`{cat $fe/kids/1/rect}
 	# FIT IS IDEMPOTENT — press it twice and nothing moves
 	echo fit > $fw/events
 	sleep 1
-	f3=`{cat $fw/kids/0/wctl}
+	f3=`{cat $fe/kids/0/rect}
 	# a USER RESIZE is an override, honoured until Fit drops it, which is
 	# what keeps "resizing is optional and by taste" true
-	echo 'resize 1200 300' > $fw/kids/0/events
-	emwait $fw/kids/0/wctl '0 0 1200 300 *'
-	f4=`{cat $fw/kids/0/wctl}
-	f5=`{cat $fw/kids/1/wctl}
+	echo 'resize 1200 300' > /dev/window/$fk0/events
+	emwait $fe/kids/0/rect '0 0 1200 300'
+	f4=`{cat $fe/kids/0/rect}
+	f5=`{cat $fe/kids/1/rect}
 	echo fit > $fw/events
-	emwait $fw/kids/0/wctl '0 0 1200 72 *'
-	f6=`{cat $fw/kids/0/wctl}
-	echo delete > $fw/wctl
-	if(~ $"f1 '0 0 1200 72 current visible' && ~ $"f2 '0 72 1200 728 current visible' && ~ $"f3 $"f1 && ~ $"f4 '0 0 1200 300 current visible' && ~ $"f5 '0 300 1200 500 current visible' && ~ $"f6 $"f1) echo PASS 'sizing: content-aware after acme'^''''^'s coladd — a 1200x800 column splits 72/728 between a one-line file and a 720-line one; Fit is idempotent; a resize overrides until Fit drops it'
+	emwait $fe/kids/0/rect '0 0 1200 72'
+	f6=`{cat $fe/kids/0/rect}
+	echo delete > /dev/window/$ftok/events
+	if(~ $"f1 '0 0 1200 72' && ~ $"f2 '0 72 1200 728' && ~ $"f3 $"f1 && ~ $"f4 '0 0 1200 300' && ~ $"f5 '0 300 1200 500' && ~ $"f6 $"f1) echo PASS 'sizing: content-aware after acme'^''''^'s coladd — a 1200x800 column splits 72/728 between a one-line file and a 720-line one; Fit is idempotent; a resize overrides until Fit drops it'
 	if not fails=bad
 }
 if not echo PASS 'sizing: no emca on this host — skipped'
@@ -458,7 +529,7 @@ if not echo PASS 'sizing: no emca on this host — skipped'
 # columns at all. The character rule survives as ARITHMETIC, so doubling the
 # reader's text size doubles every measure and the breakpoints move for free:
 # WCAG 1.4.4 holding by construction rather than by testing.
-gtok=`{cat /dev/window/edit/clone >[2]/dev/null}
+gtok=`{cat /dev/window/text/clone >[2]/dev/null}
 if(! ~ $"gtok ''){
 	gw=/dev/window/$gtok
 	echo -n one-line > /tmp/geo.small
@@ -468,40 +539,44 @@ if(! ~ $"gtok ''){
 	gemca=`{cat $gw/toolbar}
 }
 if(! ~ $"gemca ''){
-	echo newrow > $gw/wctl
-	emwait $gw/kids/1/toolbar '*Snarf*'
-	echo -n /tmp/geo.small > $gw/kids/0/content
-	echo -n /tmp/geo.big > $gw/kids/1/content
-	emwait $gw/kids/1/content /tmp/geo.big
+	ge=/dev/emca/$gtok		# THE TREE IS EMCA'S
+	echo newrow > /dev/window/$gtok/events
+	kidwait $ge 2
+	gk0=`{cat $ge/kids/0/winid}
+	gk1=`{cat $ge/kids/1/winid}
+	emwait /dev/window/$gk1/toolbar '*Snarf*'
+	echo -n /tmp/geo.small > /dev/window/$gk0/content
+	echo -n /tmp/geo.big > /dev/window/$gk1/content
+	emwait /dev/window/$gk1/content /tmp/geo.big
 	sleep 1
 	# the surface reports its viewport AND its text cell — only the surface
 	# knows the cell, since it depends on the rendered font and the reader's
 	# text-size setting, both of which are the surface's half
 	echo 'resize 1200 800 8 18' > $gw/events
-	emwait $gw/kids/0/wctl '0 0 1200 72 *'
-	g1=`{cat $gw/kids/0/wctl}
+	emwait $ge/kids/0/rect '0 0 1200 72'
+	g1=`{cat $ge/kids/0/rect}
 	# the SAME viewport with a DOUBLED cell: every measure doubles with it
 	echo 'resize 1200 800 16 36' > $gw/events
-	emwait $gw/kids/0/wctl '0 0 1200 144 *'
-	g2=`{cat $gw/kids/0/wctl}
-	g3=`{cat $gw/kids/1/wctl}
+	emwait $ge/kids/0/rect '0 0 1200 144'
+	g2=`{cat $ge/kids/0/rect}
+	g3=`{cat $ge/kids/1/rect}
 	# and a PICTURE is sized from its header, never from a decode: emca.svg
 	# declares viewBox="0 0 240 120", so 120 plus three lines of furniture
 	echo 'resize 1200 900 8 18' > $gw/events
 	sleep 1
-	echo -n /usr/kitty/emca.svg > $gw/kids/1/content
-	emwait $gw/kids/1/content /usr/kitty/emca.svg
+	echo -n /usr/kitty/emca.svg > /dev/window/$gk1/content
+	emwait /dev/window/$gk1/content /usr/kitty/emca.svg
 	sleep 1
 	echo fit > $gw/events
 	sleep 1
-	g4=`{cat $gw/kids/0/wctl}
+	g4=`{cat $ge/kids/0/rect}
 	# a format emca cannot parse is corrected by the surface, which HAS
 	# decoded it — so layout never blocks and emca is never wrong for long
-	echo 'size 400 600' > $gw/kids/1/events
-	emwait $gw/kids/0/wctl '0 0 1200 159 *'
-	g5=`{cat $gw/kids/0/wctl}
-	echo delete > $gw/wctl
-	if(~ $"g1 '0 0 1200 72 current visible' && ~ $"g2 '0 0 1200 144 current visible' && ~ $"g3 '0 144 1200 656 current visible' && ~ $"g4 '0 0 1200 399 current visible' && ~ $"g5 '0 0 1200 159 current visible') echo PASS 'geometry: the host reports viewport AND text cell — doubling the cell doubles every measure (72 -> 144), and a picture is sized from its header, corrected by the surface for what emca cannot parse'
+	echo 'size 400 600' > /dev/window/$gk1/events
+	emwait $ge/kids/0/rect '0 0 1200 159'
+	g5=`{cat $ge/kids/0/rect}
+	echo delete > /dev/window/$gtok/events
+	if(~ $"g1 '0 0 1200 72' && ~ $"g2 '0 0 1200 144' && ~ $"g3 '0 144 1200 656' && ~ $"g4 '0 0 1200 399' && ~ $"g5 '0 0 1200 159') echo PASS 'geometry: the host reports viewport AND text cell — doubling the cell doubles every measure (72 -> 144), and a picture is sized from its header, corrected by the surface for what emca cannot parse'
 	if not fails=bad
 }
 if not echo PASS 'geometry: no emca on this host — skipped'
@@ -519,34 +594,37 @@ if(! ~ $"rtok ''){
 	remca=`{cat $rd/toolbar}
 }
 if(! ~ $"remca ''){
+	re=/dev/emca/$rtok		# THE TREE IS EMCA'S
 	echo 'resize 400 800 8 18' > $rd/events
 	sleep 1
-	rk1=`{ls $rd/kids | sed 's:.*/::'}
-	ra1=`{cat $rd/axis}
+	rk1=`{ls $re/kids | sed 's:.*/::'}
+	ra1=`{cat $re/axis}
 	echo 'resize 1800 800 8 18' > $rd/events
 	sleep 1
-	rk2=`{ls $rd/kids | sed 's:.*/::'}
-	rw2=`{cat $rd/kids/0/wctl}
+	rk2=`{ls $re/kids | sed 's:.*/::'}
+	rw2=`{cat $re/kids/0/rect}
 	# a window living in the last column must SURVIVE the column going away
-	echo 'reparent '^$rtok^' 0' > /dev/window/$rtok/wctl
-	rv=`{cat /dev/window/edit/clone >[2]/dev/null}
-	echo 'reparent '^`{cat $rd/kids/2/winid} > /dev/window/$rv/wctl
+	echo 'reparent '^$rtok^' 0' > /dev/window/$rtok/events
+	rv=`{cat /dev/window/text/clone >[2]/dev/null}
+	rpar=`{cat $re/kids/2/winid}
+	echo 'reparent '^$rpar > /dev/window/$rv/events
 	echo -n /etc/motd > /dev/window/$rv/content
 	sleep 1
 	echo 'resize 1200 800 8 18' > $rd/events
 	sleep 1
-	rk3=`{ls $rd/kids | sed 's:.*/::'}
-	rsurv=`{cat /dev/window/$rv/parent}
+	rk3=`{ls $re/kids | sed 's:.*/::'}
+	rsurv=`{cat /dev/emca/$rv/parent}
 	# closing a column leaves a valid tree; Reset brings it back
-	echo delete > $rd/kids/1/wctl
+	rdel=`{cat $re/kids/1/winid}
+	echo delete > /dev/window/$rdel/events
 	sleep 1
-	rk4=`{ls $rd/kids | sed 's:.*/::'}
+	rk4=`{ls $re/kids | sed 's:.*/::'}
 	echo reset > $rd/events
-	emwait $rd/axis row
+	emwait $re/axis row
 	sleep 1
-	rk5=`{ls $rd/kids | sed 's:.*/::'}
-	echo delete > $rd/wctl
-	if(~ $"ra1 col && ~ $#rk1 0 && ~ $#rk2 3 && ~ $"rw2 '0 0 600 800 current visible' && ~ $#rk3 2 && ! ~ $"rsurv '' && ~ $#rk4 1 && ~ $#rk5 2) echo PASS 'the root window: it divides ITSELF by convention — one column at small, three at large — a shrink hoists windows out of the columns it removes rather than losing them, closing a column leaves a valid tree, and Reset rebuilds'
+	rk5=`{ls $re/kids | sed 's:.*/::'}
+	echo delete > /dev/window/$rtok/events
+	if(~ $"ra1 col && ~ $#rk1 0 && ~ $#rk2 3 && ~ $"rw2 '0 0 600 800' && ~ $#rk3 2 && ! ~ $"rsurv '' && ~ $#rk4 1 && ~ $#rk5 2) echo PASS 'the root window: it divides ITSELF by convention — one column at small, three at large — a shrink hoists windows out of the columns it removes rather than losing them, closing a column leaves a valid tree, and Reset rebuilds'
 	if not fails=bad
 }
 if not echo PASS 'the root window: no emca on this host — skipped'
@@ -554,7 +632,7 @@ if not echo PASS 'the root window: no emca on this host — skipped'
 
 # proc(3)'s args file: the data was always in the proc record and nothing could
 # read it, so nothing could NAME a running command — which the status line's
-# "running commands with tap-to-kill" needs (emca.txt).
+# "running commands with tap-to-kill" needs (emca.md).
 sleep 4 &
 pgargs=`{cat /proc/$apid/args >[2]/dev/null}
 if(! ~ $"pgargs ''){
@@ -869,6 +947,120 @@ if(test -f /rc/tour){
 	rc /rc/tour > /tmp/tour.out >[2] /dev/null
 	if(~ `{grep -c '^tour: complete' /tmp/tour.out} 1 && ~ `{grep -c '^result: horses for COURSES' /tmp/tour.out} 1) echo PASS 'the tour runs end to end, sam edit verified (rc /rc/tour)'; if not fails=bad
 }
+
+# M17c — the MIME-shaped registry (docs/type.md). Self-skips if the
+# rootfs predates it, so one rootfs still serves the frozen oracle.
+if(test -d /type/text/plain){
+	tok=ok
+	# every type carries the three files the syntax defines
+	for(ty in text/plain inode/directory inode/system){
+		for(fl in recognise managers verbs)
+			if(! test -f /type/^$ty^/^$fl) tok=bad
+	}
+	# text/plain is the FALLBACK — it claims what nothing else did, so
+	# its rule is exactly that and it can never fail
+	if(! ~ `{grep -v '^#' /type/text/plain/recognise | grep .} fallback) tok=bad
+	# a directory is recognised by the QID, free and certain, with
+	# nothing read; `/` by its exact PATH
+	if(! ~ `{grep -v '^#' /type/inode/directory/recognise | grep .} 'qid dir') tok=bad
+	if(! ~ `{grep -v '^#' /type/inode/system/recognise | grep .} 'path /') tok=bad
+	# inode/system SPECIALISES inode/directory: it offers the listing's
+	# roles by inheritance and ADDS manage
+	if(! grep -s '^manage$' /type/inode/system/managers) tok=bad
+	if(grep -s '^manage$' /type/inode/directory/managers) tok=bad
+	# the system's verbs are the system's — Halt, Reboot, New Shell
+	if(! ~ `{grep -c 'Halt|Reboot|New Shell' /type/inode/system/verbs} 3) tok=bad
+	# Save is NOT declared: emca emits it while dirty, because its
+	# appearance IS the dirty indicator
+	if(grep -s '^Save' /type/text/plain/verbs) tok=bad
+	if(~ $tok ok) echo PASS 'M17c: the registry is MIME-shaped — text/plain falls back, a directory is known by its qid and / by its path, inode/system adds manage, and Save is declared nowhere'
+	if not fails=bad
+}
+
+# M17c — the layout declares the demo's shape: paths only, indentation
+# nests, `tabs` the one keyword
+if(test -f /type/inode/system/layout){
+	lok=ok
+	l=`{grep -v '^#' /type/inode/system/layout | grep .}
+	# every line is a path or the one keyword
+	if(! ~ `{grep -v '^#' /type/inode/system/layout | grep . | grep -c '^[ 	]*(/|tabs)'} 6) lok=bad
+	# the three editors are grouped as tabs, and rc is not
+	if(! grep -s '^tabs$' /type/inode/system/layout) lok=bad
+	if(! grep -s '^/bin/rc' /type/inode/system/layout) lok=bad
+	# a shell needs no special case: manage on an executable runs it
+	if(! ~ `{grep -c '^/bin/rc[ 	]+manage' /type/inode/system/layout} 1) lok=bad
+	if(~ $lok ok) echo PASS 'M17c: the layout is paths and one keyword — the demo shape comes from a file, and a shell window is manage on an executable'
+	if not fails=bad
+}
+
+# ── M17a1 — EMCA IS A FILE SERVER ──────────────────────────────────────────
+# docs/window.md: "The manager interface is a file interface. emca serves one
+# directory per window, and a manager reads and writes files in it." Until now
+# emca was a CLIENT of the kernel's window device; the window manager owning
+# windows means the window manager SERVES them.
+#
+# What this pins is the contract's ten files, answered out of emca's own state
+# — and, crucially, that THE RECTANGLE EMCA SERVES IS THE ONE THE KERNEL HOLDS.
+# That equality is what makes M17a2 (the tree moving) a deletion rather than a
+# rewrite: two answers agree today, so one of them can go.
+sok=ok
+# emca's door is INSTANCE-QUALIFIED — /srv/emca.<user>.<pid>, acme's own
+# convention (acme.c:321) — because `#s` is one table for the whole kernel
+# while every other name a process sees is namespace-local. So the name is
+# DISCOVERED, never assumed: a test that hardcoded it would be asserting the
+# collision back into existence.
+# ONE MOUNT, made where emca starts. A second mount of the same posted channel
+# is a second Tversion on a connection srv(3) SHARES — the protocol says that
+# resets it, and emca's server keeps one fid table, so two clients on one
+# channel is not a thing it can serve. The suite therefore mounts once.
+if(! ~ $"emsrv ''){
+	echo -n hello > /tmp/srv.txt
+	sw=`{rc /rc/emcaopen text /tmp/srv.txt}
+	emwait /dev/emca/$sw/title /tmp/srv.txt
+
+	# the ten contract files, plus the five the TREE adds now that the tree
+	# is emca's — parent, axis, alloc, winid, kids. A manager's own
+	# /dev/window/ gains none of them; this is the TOOL view.
+	snf=`{ls /dev/emca/$sw | wc -l}
+
+	# emca answers these itself: nothing here is fetched from the kernel
+	sty=`{cat /dev/emca/$sw/type}
+	sro=`{cat /dev/emca/$sw/role}
+	sti=`{cat /dev/emca/$sw/title}
+
+	# ...and a manager WRITES what it reports, per the contract's other half
+	echo '3 matches' > /dev/emca/$sw/status
+	sst=`{cat /dev/emca/$sw/status}
+	echo 1 > /dev/emca/$sw/dirty
+	sdy=`{cat /dev/emca/$sw/dirty}
+
+	# THE EQUALITY THAT GATES M17a2: emca DECIDED this rectangle, so emca
+	# can answer for it — and the kernel's copy says the same thing.
+	#
+	# Note which path drives it. A `rect` written straight to the kernel's
+	# wctl is the surface talking PAST emca, and emca never learns; a
+	# `resize` on the window's events is the surface talking TO emca, which
+	# decides and then tells the kernel. The second is the contract's
+	# direction, and the first is precisely the coupling M17a2 removes.
+	echo 'resize 900 600' > /dev/window/$sw/events
+	emwait /dev/emca/$sw/rect '0 0 900 600'
+	srect=`{cat /dev/emca/$sw/rect}
+	skrect=`{cat /dev/window/$sw/wctl}
+
+	if(! ~ $"sty text) sok=bad
+	if(! ~ $"sro look) sok=bad
+	if(! ~ $"sti /tmp/srv.txt) sok=bad
+	if(! ~ $"sst '3 matches') sok=bad
+	if(! ~ $"sdy 1) sok=bad
+	if(! ~ $"snf 15) sok=bad
+	if(! ~ $"srect '0 0 900 600') sok=bad
+	# the name carries user AND pid, so a nested emca cannot collide
+	if(! ~ $"emsrv /srv/emca.*.*) sok=bad
+	if(! ~ $"skrect '0 0 900 600 '*) sok=bad
+	if(~ $sok ok) echo PASS 'M17a1: emca SERVES its windows — ten contract files per window over 9P at an instance-qualified door, type/role/title from emca''s own state, status and dirty written back, and the rectangle emca serves is the one the kernel holds'
+	if not fails=bad
+}
+if not echo PASS 'M17a1: no emca posted on this host — file server skipped'
 
 if(~ $fails ok) echo rc: tests done
 if not echo rc: TESTS FAILED

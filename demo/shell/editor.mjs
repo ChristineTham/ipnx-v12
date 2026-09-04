@@ -1,5 +1,5 @@
 // editor.mjs — the surface's half of a text window (docs/window.md,
-// docs/emca.txt: "editing is the surface's").
+// docs/emca.md: "editing is the surface's").
 //
 // IPNX hands over a PATH; the surface opens it, edits it with a real editor
 // component, and streams it back on Put. Everything that is INPUT lives here —
@@ -13,7 +13,7 @@
 // this is the mirror.
 //
 // The verbs do NOT live here. They are on the window's toolbar, with the tag
-// line supplying their argument (emca.txt PART FOUR) — which is why this file
+// line supplying their argument (emca.md PART FOUR) — which is why this file
 // no longer carries a floating bar, a closed verb set, or a snapshotted range.
 // What crosses from here is the buffer, the selection, and the keyboard's road
 // to the same verbs the toolbar shows.

@@ -1,0 +1,11 @@
+text/plain — the DEFAULT type, and the fallback.
+
+Recognition can never fail here: whatever nothing else claimed is text.
+That is the Unix answer, and it is why a binary opens as bytes rather
+than as an error — though not as an editable one: content that is not
+valid UTF-8 renders with escapes and opens read-only, because the danger
+was never display but round-tripping.
+
+Roles: look, edit, properties. No shell (a store is not a channel) and
+no manage (it does not run) — though text/x-python inherits these and
+ADDS manage, because a Python file is text and runnable.

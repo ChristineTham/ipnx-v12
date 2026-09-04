@@ -100,7 +100,7 @@ body {
 #menubar select { background: #1a1d24; color: #cfd6e4; border: 1px solid #2a2f3a;
   border-radius: 4px; font: inherit; font-size: 12px; margin-left: 14px; padding: 1px 4px; }
 
-/* ---- emca: the surface (docs/emca.txt) ------------------------------
+/* ---- emca: the surface (docs/emca.md) ------------------------------
    Panes carry kinds, rows and columns split the display, tabs switch
    between windows of the same type. No floating windows: a window lives
    in a pane, and which pane is decided by its TYPE.                    */
@@ -169,7 +169,7 @@ body { display: flex; flex-direction: column;
              font: inherit; }
 #emcaStatus #status { flex: 0 0 auto; color: #7b8b9b; }
 
-/* ---- the window, in four parts (docs/emca.txt PART FOUR) --------------
+/* ---- the window, in four parts (docs/emca.md PART FOUR) --------------
    title + controls · toolbar · tag bar · body. Separate rows, because they
    are separate things: identity, the closed method set, the user's own
    free executable text, and the content.                              */
@@ -198,7 +198,7 @@ body { display: flex; flex-direction: column;
 .ewin.collapsed .wtoolbar, .ewin.collapsed .wtag, .ewin.collapsed .wbody { display: none; }
 .ewin.collapsed { position: relative; inset: auto; }
 
-/* resize comes free from split dividers (emca.txt): no window is dragged */
+/* resize comes free from split dividers (emca.md): no window is dragged */
 .divider { flex: 0 0 5px; background: #0b1219; }
 .divider.vert { cursor: col-resize; }
 .divider.horz { cursor: row-resize; flex-basis: 5px; }
