@@ -63,6 +63,11 @@ ABI. The conformance suite binds all three.
 
   | dev | serves |
   |---|---|
+  | `/` | **devroot** — a fixed, read-only table of empty mount points for a
+        namespace to bind over (`devroot.c`'s `rootreset`). Writes and creates
+        are refused; Plan 9's `rootwrite` is `error(Egreg)`. Ours omits Plan 9's
+        `boot` (the boot path's name is an open gap, and `/boot` is the
+        loader's) and `net`/`net.alt` (there is no `/net` yet) |
   | `M` | **devmnt** — the mount driver, the only wire-9P marshal. **Not
         attachable by name**: Plan 9's `mntattach` takes an internal struct
         rather than a user spec (`devmnt.c`), so the driver is reached only

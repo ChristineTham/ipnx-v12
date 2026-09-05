@@ -206,6 +206,7 @@ type ChanR = Rc<RefCell<Chan>>;
 
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum DevId {
+    Root,
     Ram,
     Host,
     Srv,
@@ -226,6 +227,8 @@ enum Node {
     Host(std::path::PathBuf),
     SrvRoot,
     SrvName(String),
+    RootDir,
+    RootEnt(String),
     ConsRoot,
     ConsCons,
     ConsUser,
@@ -289,7 +292,8 @@ fn node_eq(a: &Node, b: &Node) -> bool {
         (Node::SnapRoot, Node::SnapRoot) => true,
         (Node::SnapCtl, Node::SnapCtl) => true,
         (Node::Host(x), Node::Host(y)) => x == y,
-        (Node::ConsRoot, Node::ConsRoot)
+        (Node::RootDir, Node::RootDir)
+        | (Node::ConsRoot, Node::ConsRoot)
         | (Node::ConsCons, Node::ConsCons)
         | (Node::ConsUser, Node::ConsUser)
         | (Node::ConsHostowner, Node::ConsHostowner)
@@ -299,6 +303,7 @@ fn node_eq(a: &Node, b: &Node) -> bool {
         | (Node::EnvRoot, Node::EnvRoot) => true,
         (Node::PipeDir { p: x }, Node::PipeDir { p: y }) => Rc::ptr_eq(x, y),
         (Node::Pipe { p: x, end: e1 }, Node::Pipe { p: y, end: e2 }) => Rc::ptr_eq(x, y) && e1 == e2,
+        (Node::RootEnt(x), Node::RootEnt(y)) => x == y,
         (Node::EnvVar(x), Node::EnvVar(y)) => x == y,
         (Node::Mnt(x), Node::Mnt(y)) => Rc::ptr_eq(x, y),
         _ => false,
@@ -2328,9 +2333,24 @@ fn canon(path: &str, cwd: &str) -> String {
     format!("/{}", out.join("/"))
 }
 
+// '#/' — devroot(3), and P2's one addition to the kernel. A FIXED, READ-ONLY
+// table of empty mount points, as plan9/sys/src/9/port/devroot.c's rootreset()
+// builds them: directories with nothing in them, for a namespace to bind over.
+// Writes are refused — Plan 9's rootwrite is `error(Egreg)`, whose text is the
+// famous placeholder "jmk added reentrancy for threads"; the behaviour is what
+// matters and the message here says what happened.
+//
+// Two of Plan 9's entries are deliberately absent. `boot`: what this system's
+// boot path is CALLED is an open gap (implementation.md P2 step 3), and
+// `/boot` is the loader's name (design.md 2026-09-04). `net` and `net.alt`:
+// there is no /net here yet, and a mount point for something that does not
+// exist is not a subset, it is a promise.
+const ROOTDIRS: [&str; 8] = ["bin", "dev", "env", "fd", "mnt", "proc", "root", "srv"];
+
 fn attach(k: &K, spec: &str) -> Result<DN, KErr> {
     let letter = spec.chars().nth(1).unwrap_or(' ');
     match letter {
+        '/' => Ok(DN { dev: DevId::Root, node: Node::RootDir, path: None }),
         'c' => Ok(DN { dev: DevId::Cons, node: Node::ConsRoot, path: None }),
         'e' => Ok(DN { dev: DevId::Env, node: Node::EnvRoot, path: None }),
         'd' => Ok(DN { dev: DevId::Dup, node: Node::DupRoot, path: None }),
@@ -2397,6 +2417,9 @@ async fn dev_walk_one(k: &K, dn: &DN, name: &str, pid: Pid) -> Result<Option<DN>
                 DN { dev: DevId::Ram, node: Node::Ram(root.clone()), path: None }
             }))
         }
+        (DevId::Root, Node::RootDir) => Ok(ROOTDIRS.iter().find(|d| **d == name).map(|d| DN {
+            dev: DevId::Root, node: Node::RootEnt((*d).into()), path: None,
+        })),
         (DevId::Cons, Node::ConsRoot) => Ok(match name {
             "cons" => Some(Node::ConsCons),
             "user" => Some(Node::ConsUser),
@@ -2524,17 +2547,15 @@ async fn walk_once(k: &K, pid: Pid, path: &str) -> Result<DN, KErr> {
         if nomnt {
             return Err("'#' names disallowed (RFNOMNT)".into());
         }
-        let slash = path.find('/');
-        let spec = match slash {
-            Some(i) => &path[..i],
-            None => path,
-        };
-        let mut dn = attach(k, spec)?;
-        if let Some(i) = slash {
-            for name in path[i + 1..].split('/').filter(|s| !s.is_empty()) {
-                dn = dev_walk(k, &dn, name, pid).await?
-                    .ok_or_else(|| format!("'{}' does not exist", path))?;
-            }
+        // The device letter is the ONE character after '#' — Plan 9's own
+        // parse, and the only one that admits '#/', where the letter IS a
+        // slash (devroot.c's `'/'`). Splitting at the first '/' instead would
+        // read '#/' as the bare '#'.
+        let cut = path.len().min(2);
+        let mut dn = attach(k, &path[..cut])?;
+        for name in path[cut..].split('/').filter(|s| !s.is_empty()) {
+            dn = dev_walk(k, &dn, name, pid).await?
+                .ok_or_else(|| format!("'{}' does not exist", path))?;
         }
         return Ok(dn);
     }
@@ -2780,6 +2801,16 @@ async fn dev_stat(k: &K, dn: &DN, pid: Pid) -> Result<Vec<u8>, KErr> {
             name: "ctl", uid: "eve", gid: "eve", mode: 0o666, ..Default::default()
         })),
         (DevId::Host, Node::Host(hp)) => host_stat_bytes(k, hp).await,
+        (DevId::Root, n) => {
+            let name = match n {
+                Node::RootDir => "#/",
+                Node::RootEnt(nm) => nm.as_str(),
+                _ => return Err("no stat".into()),
+            };
+            Ok(marshal_stat(&StatIn {
+                name, qtype: QTDIR, mode: DMDIR | 0o555, ..Default::default()
+            }))
+        }
         (DevId::Cons, n) => {
             let (name, dir) = match n {
                 Node::ConsRoot => ("/", true),
@@ -2974,6 +3005,24 @@ async fn dev_read_async(k: &K, chan: &ChanR, n: usize, off_in: u64, pid: Pid) ->
                 let end = (off as usize + n).min(d.data.len());
                 d.data[start..end].to_vec()
             };
+            advance(chan, cur, out.len());
+            Ok(RRes::Data(out))
+        }
+        (DevId::Root, Node::RootEnt(_)) => {
+            advance(chan, cur, 0);
+            Ok(RRes::Data(Vec::new()))   // an empty mount point, and nothing else
+        }
+        (DevId::Root, Node::RootDir) => {
+            let mut skip = off as usize;
+            let mut out = Vec::new();
+            for d in ROOTDIRS {
+                let rec = marshal_stat(&StatIn {
+                    name: d, qtype: QTDIR, mode: DMDIR | 0o555, ..Default::default()
+                });
+                if skip >= rec.len() { skip -= rec.len(); continue; }
+                if out.len() + rec.len() > n { break; }
+                out.extend_from_slice(&rec);
+            }
             advance(chan, cur, out.len());
             Ok(RRes::Data(out))
         }
@@ -3401,6 +3450,8 @@ fn dev_write_sync(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid) -> Re
             }
             data.len()
         }
+        // rootwrite: `error(Egreg)` — this device is never written.
+        (DevId::Root, _) => return Err("write on the root device".into()),
         (DevId::Cons, Node::ConsNull) => data.len(),
         // userwrite (plan9/sys/src/9/port/auth.c): "anyone can become none",
         // and nothing else — the only identity change a process may make to

@@ -14,7 +14,7 @@ repository (2026-09-02).
 
 ## The suite
 
-**150 tests, 0 failures** — measured 2026-09-04 on wasmtime, on the Rust core
+**151 tests, 0 failures** — measured 2026-09-04 on wasmtime, on the Rust core
 under Node, and on the frozen oracle, with the two hosts that run the Rust core
 identical assertion for assertion. The count **fell from 165 by design**: P1
 step 3 deleted the ten link assertions and step 4 six of the nine uid ones,
@@ -51,6 +51,7 @@ different things and both are correct.
 | **P1 step 3** the link family leaves | 2026-09-04 |
 | **P1 step 4** identity narrows to Plan 9's | 2026-09-04 |
 | **P1 step 5** `#H` leaves; fetching is not the kernel's | 2026-09-04 |
+| **P2 step 1** `#/`, Plan 9's root device | 2026-09-04 |
 
 **P1 step 1** (2026-09-04): `AsySnap { snap, data_ptr, sp }` became **`Cont(Vec<u8>)`**
 — opaque bytes the embedding mints at the fork and is handed back at the spawn, never
@@ -167,6 +168,24 @@ because the suite's `pkg` test already used an offline local registry.
   from the page and was fetched through `#H`. P2 step 5 is where the demo's
   packages come from a local registry instead; until then that one capability
   is missing from the live site.
+
+**P2 step 1** (2026-09-04): **`#/` exists** — devroot(3), and the plan's one
+authorised addition to the kernel. A fixed, read-only table of empty mount
+points, as `plan9/sys/src/9/port/devroot.c`'s `rootreset()` builds them:
+`bin dev env fd mnt proc root srv`. Writes and creates are refused
+(Plan 9's `rootwrite` is `error(Egreg)`). Two of Plan 9's entries are
+deliberately absent — `boot`, because what this system's boot path is *called*
+is still an open gap and `/boot` is the loader's name; and `net`/`net.alt`,
+because there is no `/net` yet and a mount point for something that does not
+exist is a promise, not a subset.
+
+**It is not the live root yet.** Nothing binds over it until P2 step 2 (the
+userspace root file server) and step 3 (the boot path). This step adds the
+device and proves it; the switchover is the next two steps, and the net shrink
+the plan predicts arrives with step 2, when `#R` and `#V` leave.
+
+The suite is **151**: one assertion added with the feature, self-skipping where
+`#/` is absent.
 
 ## Replanned 2026-09-04 — what follows is LEGACY state
 

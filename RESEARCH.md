@@ -1881,6 +1881,54 @@ deployed demo's own registry, which is served over http from the page and is
 therefore the one live capability this step costs until P2 step 5 makes the
 demo's registry local.
 
+### 9.23 `#/` added — and two parsing facts the reference forced (2026-09-04)
+
+P2 step 1, the plan's one authorised addition to the kernel. `#/` is
+devroot(3): a fixed, read-only table of empty mount points, built exactly as
+`plan9/sys/src/9/port/devroot.c`'s `rootreset()` builds them —
+
+> ```c
+> addrootdir("bin");  addrootdir("dev");   addrootdir("env");
+> addrootdir("fd");   addrootdir("mnt");   addrootdir("net");
+> addrootdir("net.alt");  addrootdir("proc");  addrootdir("root");
+> addrootdir("srv");
+> ```
+
+— minus `net`/`net.alt`, because there is no `/net` here yet, and minus `boot`,
+because the boot path's *name* is an open gap and `/boot` is the loader's
+(design.md 2026-09-04). Writes are refused: Plan 9's `rootwrite` is
+`error(Egreg)`, whose string, for the record, is the famous placeholder
+**"jmk added reentrancy for threads"** (`port/error.h:44`) — the behaviour is
+what was ported, not the joke.
+
+**The device-path parse had to change, and the reference is why.** `walk_once`
+split a `#` path at the FIRST `/`, so the spec was everything before it. For
+every letter this system had, that is the same as taking one character — and
+for `#/` it is not: the letter *is* a slash, so `#/` parsed as the bare `#`
+and attached nothing. Plan 9's own rule is simply that the device letter is
+the one character after `#`, so that is what the walk does now. **A device
+this system did not have exposed a parse that was accidentally right.**
+
+**And an rc parsing fact, measured the hard way** (three failed probes, worth
+the note): in the real rc,
+
+```
+echo A=$"a
+b=`{...}
+```
+
+is a **syntax error at the `b=` line** — `$"var` at end of line followed by an
+assignment does not parse. Writing `echo A is $"a` instead is fine. This is
+vendored rc behaving as vendored rc does; it cost three iterations to see
+because the error names the *following* line, not the offending one.
+
+**One more suite-writing constraint, related to §9.21's.** A failed redirect's
+diagnostic (`rc: can't open: create not supported on this device`) goes to
+**rc's own stderr**, not to the redirection the command was given, so
+`>[2=1]` does not capture it and it lands in the middle of the suite's output.
+The assertion uses `mkdir`, which reports its own error to fd 2 and *is*
+capturable. **Test a refusal through a command that owns its error message.**
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on

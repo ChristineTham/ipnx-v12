@@ -74,6 +74,26 @@ if(~ `{cat /tmp/samf} 'SAM TEST LINE') echo PASS 'sam-today holds the ancestor'^
 # M4, hostfs ('#Z'): a host directory as files — create, write, read back,
 # stat length, remove, all against the real disk. Self-skips where the host
 # offers no '#Z' (the frozen oracle, the browser).
+# The root device ('#/'), devroot(3): an attach gives a FIXED, READ-ONLY table
+# of empty mount points — directories with nothing in them, for a namespace to
+# bind over. Plan 9's rootreset() builds exactly this; ours omits `boot` (the
+# boot path's name is an open gap, and /boot is the loader's) and `net`/`net.alt`
+# (there is no /net yet). Writes and creates are refused: rootwrite is
+# error(Egreg). Self-skips where the device is absent.
+mkdir -p /n/rt
+rt=`{bind '#/' /n/rt >[2=1]; echo $status}
+if(~ $"rt ''){
+	rtl=`{ls /n/rt}
+	rtm=`{ls /n/rt/mnt}
+	# a command that reports its OWN error, so the refusal is capturable: rc's
+	# diagnostic for a failed redirect goes to rc's stderr, not the redirected
+	# fd, and would land in the middle of this suite's output
+	rtw=`{mkdir /n/rt/newdir >[2=1]}
+	rtb=`{ls /n/rt/bin}
+	if(~ $"rtl '/n/rt/bin /n/rt/dev /n/rt/env /n/rt/fd /n/rt/mnt /n/rt/proc /n/rt/root /n/rt/srv' && ~ $"rtm '' && ~ $"rtw *'not supported'* && ~ $"rtb '') echo PASS 'the root device: a fixed read-only table of empty mount points, and it refuses to be written'; if not fails=bad
+}
+if not echo PASS 'the root device: no #/ on this host — skipped'
+
 # The pipe device ('#|'): pipe(3) says an attach allocates two cross-connected
 # streams, data and data1, and that pipe(2) IS an attach of this device. So the
 # device is the mechanism and the syscall is a user of it — every pipeline in
