@@ -483,6 +483,65 @@ The digest is **pinned in the declaration**, which is what makes the whole thing
 auditable: `cat /pkg/python` tells you what will be fetched, what it must hash
 to, and what it will bind. Nothing is discovered at install time.
 
+### Content that is a TREE — one digest over a manifest
+
+*Endorsed by Christine, 2026-09-15. The gap this closes was in the sketch
+above: its `fetch` line points a single digest at `/store/python/3.14`, which
+is a **directory** — and nothing said how one digest becomes 539 files.*
+
+```
+/pkg/python
+    tree   python/3.14/manifest  <sha256>  /store/python/3.14
+    bind   /store/python/3.14/bin  /bin
+    env    PYTHONHOME /store/python/3.14
+```
+
+**The digest pins the manifest; the manifest pins every file.** The manifest is
+`sha256sum`'s own output —
+
+```
+e3b0c442…  bin/python
+a3f1d29e…  lib/python3.14/os.py
+```
+
+— so authoring one is a command that already exists, not a format invented
+here. Entry paths are relative to the manifest's own directory on the registry
+side and to the store entry on the store side, which is what makes the two
+trees the same tree.
+
+**The audit chain stays closed.** `cat /pkg/python` still names one digest and
+still discovers nothing at install time; `cat /store/python/3.14/manifest`
+names the rest. The declaration stays a page rather than 539 lines nobody
+reads — and *"539 lines is not an audit anyone reads"* is the property the
+format exists for, so a shape that destroys it fails on its own terms.
+
+**The manifest is fetched first, verified, and then kept in the store** at
+`<entry>/manifest`. Both halves are load-bearing: verified first, because
+nothing else may be believed on its word; kept, because `pkg verify` must
+re-check all 539 **offline, from the store, with the registry unreachable** —
+which is the plane test applied to verification rather than to installation.
+One consequence, stated rather than discovered: `manifest` is the single name
+a tree may not itself contain at its root, and an entry claiming it is refused.
+
+**And an entry names a place inside the store entry — nothing else.** The
+digest proves the manifest is the one the packager published; it does not make
+its paths benign, and the manifest is the half of the audit nobody reads line
+by line. An absolute path, or one carrying `..`, is refused on install and on
+verify alike: *a digest authenticates bytes, it does not authorise what they
+say.*
+
+**Why a manifest rather than an archive.** An archive — one fetched blob,
+unpacked — would also give one digest, and it is what every other system does.
+It loses on the measured constraint and on the property above:
+
+| | manifest | archive |
+|---|---|---|
+| memory | streams file by file; nothing is ever held | 12 MB materialised, then unpacked, inside a **16 MB** guest ([RESEARCH §9.24](../RESEARCH.md)) |
+| the store | holds the tree, once | holds the archive *and* the tree, or discards the thing the digest names |
+| granularity | every file carries its own digest, so `verify` names the altered file | the digest covers the blob; a changed file is detectable but not nameable |
+| new vocabulary | none — `sha256sum` already emits this | an archive format, and an unpacker to go with it |
+
+
 ### Immutability, and why it is enforceable
 
 **A store entry never changes after verification** — otherwise the digest lies

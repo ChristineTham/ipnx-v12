@@ -240,14 +240,24 @@ store entry still measures the source's exact byte count**, which is what makes
 *"reinstalling is free"* a fact. A defect the suite caught on the way is in
 [RESEARCH §9.26](../RESEARCH.md) — a refused install must leave nothing behind.
 
+**And the TREE form landed** (2026-09-15, [design.md](design.md) decision 122):
+`pkg` has a fourth verb, `tree <manifest> <sha256> <dst>`, for content that is
+a **directory** — the gap raised on 2026-09-04 and endorsed rather than
+invented. The digest pins the **manifest**; the manifest, `sha256sum`'s own
+output, pins every file. Not an archive: an archive would materialise 12 MB and
+unpack it inside a 16 MB guest, and could not *name* the altered file. Asserted
+directly: a two-file tree installs from one pinned digest, the bound binary
+runs, the registry is then **deleted**, and `pkg verify` still re-checks every
+file from the store — then one tampered byte comes back `ALTERED` by name. A
+second assertion refuses a manifest entry that climbs out of the store entry:
+*a digest authenticates bytes, it does not authorise what they say.*
+
 **Still to do for step 5:** Go and Python actually move out of the rootfs seed.
-That needs (a) the host to expose a store directory — `#Z` is rooted at the
-rootfs or a temp dir today, so this is host plumbing; and (b) **a gap raised,
-not invented**: Python's stdlib is **539 files** and type.md's `fetch` names a
-*file*. One pinned digest covering a manifest is the shape that keeps the audit
-readable, and it is not in the spec. Measured: without python, its stdlib and
+What remains is **host plumbing** — `#Z` is rooted at the rootfs dir or a
+per-boot temp dir, so there is nowhere for a store to live across boots. Both
+mechanisms the move needs now exist. Measured: without python, its stdlib and
 the Go binaries the rootfs is **3.4 MB** against a 16 MB ceiling — so all three
-must move, and the stdlib is the one that needs the tree form.
+must move, and the stdlib is what the tree form was for.
 
 **The measurement that framed it** (2026-09-04, [RESEARCH §9.25](../RESEARCH.md)).
 The plan's step 5 cites `type.md` for *"`/pkg/<name>/<version>` subtrees"* — but

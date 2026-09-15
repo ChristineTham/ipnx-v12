@@ -251,8 +251,9 @@ compiles against it (a GNU/glibc personality, a musl personality, a BSD
 personality). The port personality is where the adaptation lives: the source
 is never patched to match IPNX; the environment is built to match the source.
 The same construction dissolves the package layer's two classic problems:
-versions coexist under `/pkg/<name>/<version>` and namespaces choose, so
-there is no dependency solver at the OS layer; and a conflict — a name about
+versions coexist under `/store/<name>/<version>` — which the declarations in
+`/pkg` name and **bind**, never copy (pkg v2, 2026-09-04) — and namespaces
+choose, so there is no dependency solver at the OS layer; and a conflict — a name about
 to be bound over DIFFERENT bytes — is checkable at install, and pkg refuses
 it (identical bytes are idempotent; deliberate shadowing remains expressible
 through union order). Per-process installs follow: an `rfork n` child that

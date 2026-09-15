@@ -2052,19 +2052,82 @@ ordering: **apply from the registry's copy, and record only once it has
 worked.** Where the record IS the state, writing the record before the work is
 a lie waiting for the work to fail.
 
-**GAP, raised rather than invented: a package whose content is a TREE.** Python's
-stdlib is **539 files, 12 MB**. type.md's `fetch` names a file, and 539 fetch
-lines is not an audit anyone reads — it defeats the property the format exists
-for (*"`cat /pkg/python` tells you what will be fetched, what it must hash to,
-and what it will bind"*). The shape that would keep it is **one pinned digest
-covering a manifest that pins the rest**, which is what v1's `kind tree` did by
-another route. **That is not in the spec, so it is not built here.**
+**The gap raised here was endorsed and built — §9.27 below.**
 
 **Measured, for the step this unblocks:** without `bin/python` (29.1 MB),
 `lib/python3.14` (12 MB) and the two Go binaries (5 MB), the rootfs is
 **3.4 MB** — comfortably under the 16 MB guest ceiling, where 15 MB would not
 have been. So moving all three matters, and the stdlib is the one that needs
 the tree form.
+
+### 9.27 The tree form — one digest over a manifest (2026-09-15)
+
+**Raised as a gap on 2026-09-04, endorsed on 2026-09-15** (*"yes, create a tree
+form"*), which is the order the rule requires: undesigned work is proposed, not
+invented. [design.md](docs/design.md) decision 122 carries the decision;
+[type.md](docs/type.md) carries the format.
+
+**The gap, stated precisely.** type.md's declaration sketch points a single
+`fetch` digest at `/store/python/3.14` — a **directory** — and never said how
+one digest becomes many files. Measured: CPython's stdlib is **539 files,
+12 MB** (§9.24). 539 `fetch` lines would satisfy the letter of the format and
+destroy the property it exists for: *"`cat /pkg/python` tells you what will be
+fetched"* is not true of a file nobody reads.
+
+**What was built.** A fourth verb in `cmd/pkg.c`:
+
+```
+tree  <manifest>  <sha256>  /store/python/3.14
+```
+
+The digest pins the **manifest**; the manifest pins every file. The manifest is
+`sha256sum`'s own output — `<hex>  <path>`, one per line — which is why no
+format was invented: `sha256sum bin/python lib/python3.14/os.py …` *is* the
+authoring command, and `cmd/sha256sum.c` already printed that shape for its
+named-file case.
+
+**Three properties are load-bearing, and all three are asserted:**
+
+- **The manifest is verified before it is read.** It is fetched into the store
+  through the same streaming sink as any other entry, hashed on the way, and
+  the pinned digest checked before a single entry is believed. A mismatch
+  removes it. Nothing is trusted on its own word.
+- **The manifest is kept in the store**, at `<entry>/manifest`. This is what
+  lets `pkg verify` re-check all 539 files **offline, from the store, with the
+  registry unreachable** — the plane test applied to verification rather than
+  to installation. The suite proves it by `rm -r`-ing the registry between
+  install and verify.
+
+**Why not an archive**, which is what every other system does. It loses on the
+constraint measured in §9.24 before it loses on anything else:
+
+| | manifest | archive |
+|---|---|---|
+| memory | streams file by file; nothing held | 12 MB materialised then unpacked, inside a **16 MB** guest |
+| the store | holds the tree, once | holds the archive *and* the tree |
+| granularity | per-file digests — `verify` **names** the altered file | the digest covers the blob; a change is detectable, not nameable |
+| vocabulary | none invented — `sha256sum` emits it | an archive format, plus an unpacker |
+
+**The cost, stated rather than discovered:** `manifest` is the one name a tree
+may not contain at its root, and an entry claiming it is refused with that
+sentence.
+
+**A hole closed before it shipped, and the asymmetry that creates it.** The
+pinned digest proves the manifest is the one the packager published; it does
+**not** make the manifest's paths benign. And the manifest is precisely the
+half of the audit nobody reads line by line — that is the whole reason it
+exists. So an entry reading `../../bin/rc` would have been fetched and written
+outside the store entry, digest-verified and all. `pkg` now refuses any entry
+that is absolute, empty, or carries a `..` component, on install **and** on
+verify, and the suite asserts the refusal records nothing. *A digest
+authenticates bytes; it does not authorise what they say.*
+
+**One engineering note.** The declaration reader was byte-at-a-time — a syscall
+per byte, which is nothing for a five-line declaration and 40,000 syscalls for
+a 539-entry manifest. It is now a buffered reader that **carries its own
+buffer** rather than using a static one, because `apply()` reads a declaration
+while `dotree()` reads a manifest: the two are nested, and a shared buffer
+would have interleaved them.
 
 ## 10. Licensing
 

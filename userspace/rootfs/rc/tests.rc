@@ -1022,6 +1022,41 @@ echo bind -a /tmp/store2/echo/9.9/bin /bin >> /tmp/reg2/echo
 pkc=`{pkg -r /tmp/reg2 install echo >[2=1]}
 if(~ $"pkc *CONFLICT* && ~ `{pkg list} '') echo PASS 'pkg: same name, different bytes — the install is refused'; if not fails=bad
 
+# pkg(1), the TREE form (endorsed 2026-09-15): content that is a DIRECTORY
+# rather than a file — Python's stdlib is 539 files — pins ONE digest in the
+# declaration, the MANIFEST's, and the manifest pins every file. So the audit
+# chain stays closed while the declaration stays a page. The manifest is
+# sha256sum's own output, so authoring one is a command that already exists.
+mkdir -p /tmp/treg/tree/bin /tmp/treg/tree/lib /tmp/tstore
+cp /bin/echo /tmp/treg/tree/bin/ptree
+echo 'a stdlib file' > /tmp/treg/tree/lib/mod.txt
+@{cd /tmp/treg/tree; sha256sum bin/ptree lib/mod.txt} > /tmp/treg/tree/manifest
+tmd=`{sha256sum < /tmp/treg/tree/manifest}
+echo tree tree/manifest $tmd /tmp/tstore/ptree/1.0 > /tmp/treg/ptree
+echo bind -a /tmp/tstore/ptree/1.0/bin /bin >> /tmp/treg/ptree
+pkg -r /tmp/treg install ptree > /dev/null
+trr=`{ptree tree bound and running}
+trl=`{cat /tmp/tstore/ptree/1.0/lib/mod.txt}
+# the manifest travels INTO the store, so verify re-checks every file offline,
+# with the registry gone — which is the whole reason it is kept there
+rm -r /tmp/treg
+trv=`{pkg verify ptree}
+# and one altered byte in the store is named, not merely suspected
+echo tampered > /tmp/tstore/ptree/1.0/lib/mod.txt
+tra=`{pkg verify ptree >[2=1]}
+pkg remove ptree > /dev/null
+if(~ $trr 'tree bound and running' && ~ $trl 'a stdlib file' && ~ $"trv *clean* && ~ $"tra *ALTERED*) echo PASS 'pkg: a tree is one pinned digest over a manifest that pins the rest — verified from the store with the registry gone'; if not fails=bad
+
+# and a manifest entry names a place INSIDE the store entry: the pinned digest
+# proves the manifest is the one the packager published, not that its paths are
+# benign — and the manifest is the half of the audit nobody reads line by line
+mkdir -p /tmp/treg2/m
+echo '0000000000000000000000000000000000000000000000000000000000000000  ../escape' > /tmp/treg2/m/manifest
+bmd=`{sha256sum < /tmp/treg2/m/manifest}
+echo tree m/manifest $bmd /tmp/tstore/esc/1.0 > /tmp/treg2/esc
+tre=`{pkg -r /tmp/treg2 install esc >[2=1]}
+if(~ $"tre *'not a path inside the store entry'* && ~ `{pkg list} '') echo PASS 'pkg: a manifest entry that climbs out of the store entry is refused, and records nothing'; if not fails=bad
+
 # dev environments are processes (design 2026-08-29): an rfork n subshell
 # installs its own package; the parent never sees it — venv with no venv
 penv=`{rc -c 'rfork n; pkg -r /tmp/reg install pecho > /dev/null; pecho env-private'}

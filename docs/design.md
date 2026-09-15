@@ -10,7 +10,7 @@ system *is* is [architecture.md](architecture.md); what is *built* is
 
 ## Decisions — the log
 
-**121 decisions, 2026-08-26 to 2026-09-04.** Each entry states the
+**122 decisions, 2026-08-26 to 2026-09-15.** Each entry states the
 decision and the constraint that forced it. **Dated entries keep the words they
 were written with** — reopening one requires new evidence, not a fresh opinion.
 
@@ -23,6 +23,7 @@ says what was replaced and by what.*
 
 | date | decision |
 |---|---|
+| 2026-09-15 | A package whose content is a TREE is ONE DIGEST OVER A MANIFEST, not an archive |
 | 2026-09-02 | emca is the WINDOW MANAGER; a type manager is what is IN a window |
 | 2026-09-02 | emca NESTS, and nesting is another view of the system |
 | 2026-09-02 | `su` becomes one line, because the flat `/home` makes it a namespace act |
@@ -147,6 +148,38 @@ says what was replaced and by what.*
 
 </details>
 
+
+- **(2026-09-15) A PACKAGE WHOSE CONTENT IS A *TREE* IS ONE PINNED DIGEST OVER
+  A MANIFEST — NOT AN ARCHIVE.** Christine, endorsing a shape that was
+  **raised as a gap rather than invented**: *"yes, create a tree form"*.
+
+  **The constraint that forced it.** [type.md](type.md)'s own sketch points a
+  single `fetch` digest at `/store/python/3.14` — a **directory** — and never
+  said how one digest becomes many files. Measured: CPython's stdlib is **539
+  files, 12 MB** ([RESEARCH §9.24](../RESEARCH.md)). Declaring 539 `fetch`
+  lines would satisfy the letter of the format and destroy the property it
+  exists for — *"`cat /pkg/python` tells you what will be fetched"* is not true
+  of a 539-line file nobody reads.
+
+  | | |
+  |---|---|
+  | **chosen** | a fourth verb, `tree <manifest> <sha256> <dst>`. The digest pins the **manifest**; the manifest — `sha256sum`'s own output — pins every file |
+  | not chosen | an archive: one fetched blob, unpacked into the store |
+
+  **Why not the archive, which is what everyone else does.** It loses on the
+  measured constraint before it loses on anything else: 12 MB materialised and
+  then unpacked inside a **16 MB** guest, with the store holding the archive
+  *and* the tree. The manifest streams file by file and holds nothing. It also
+  keeps per-file digests, so `verify` **names** the altered file rather than
+  reporting that something changed — and it invents no vocabulary, because
+  `sha256sum` already emits exactly this.
+
+  **The manifest is verified before it is read, and kept in the store.**
+  Verified first because nothing may be believed on its own word; kept because
+  `pkg verify` must re-check every file **offline, from the store, with the
+  registry unreachable** — the plane test applied to verification rather than
+  to installation. The cost, stated rather than discovered: `manifest` is the
+  one name a tree may not contain at its root.
 
 - **(2026-09-04) `/store` IS SERVED BY A USERSPACE FILE SERVER OVER A HOST
   DIRECTORY — VERIFICATION LIVES IN IPNX.** Christine, choosing between the two
