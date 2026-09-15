@@ -1985,6 +1985,47 @@ a responsibility from the kernel into a process inherits *that process's*
 limits. "Userspace" is not a location, it is a budget — and the budget wants
 measuring before the move is scheduled, not after it is attempted.
 
+### 9.25 P2 step 5 measured before building — the plan cites a spec that says something else (2026-09-04)
+
+Step 5 reads: *"the `pkg` design is spec'd ([type.md](docs/type.md)):
+`/pkg/<name>/<version>` subtrees, bind-to-install, `/lib/pkg/registries`."*
+**type.md does not say that.** It was replaced on 2026-09-02, and the plan's
+sentence describes what `cmd/pkg.c` implements — pkg **v1** — rather than what
+the spec it cites accepted the same day.
+
+| | `cmd/pkg.c` today (v1) | `docs/type.md`, accepted 2026-09-02 |
+|---|---|---|
+| `/pkg/<name>` | a **directory** holding the installed bytes | a **declaration file** — *"a list of bindings plus commands"* |
+| where bytes live | copied into `/pkg/<name>/<version>/bin/` | **`/store/<name>/<version>/`**, fetched once, verified, immutable |
+| install | fetch + **copy** + bind the copy | fetch into the store if absent, then **bind from it** |
+| remove | delete the subtree | **an unbind** — *"the entry survives, so re-installing is free"* |
+
+**Why the difference decides whether step 5 can do its job.** Step 2 needs the
+tree small enough for a userspace server to hold (§9.24: 49 MB against a 16 MB
+guest ceiling). Under **v1, `pkg install python` copies 29 MB into the tree** —
+the seed shrinks and the running tree does not, so the root server is no better
+off. Only **bind-from-store** helps, because the bytes stay on the host and are
+bound, never held. **The plan's own step 5, as written, cannot unblock the
+step 2 it is supposed to unblock.**
+
+**`#Z` is available where it needs to be**, measured from the suite's own
+hostfs assertion: it passes under wasmtime *and* under the Rust core on Node;
+only the frozen oracle self-skips. So a host-backed `/store` works on both
+hosts that run the kernel. (A real browser needs a backing store for `#Z` —
+OPFS or the loaded blob — and `#H` is gone as of P1 step 5, so it cannot fetch
+either. That is the browser surface's problem, P5/P6, not this step's.)
+
+**One genuine ambiguity in the spec itself, and it is not mine to settle.**
+type.md's paragraph *"DECIDED at the stated lean — who serves `/store`"* then
+states **no lean**: it weighs *host storage behind `#Z`* (simpler; the host owns
+integrity) against *a userspace file server over a host directory* (integrity in
+IPNX, one more process) and stops. The neighbouring visibility paragraph does
+state its lean (*"I propose visible and read-only"*), so the omission reads as
+an editing slip rather than a deliberate blank. **Both options keep the bytes
+on the host**, so §9.24's arithmetic is satisfied either way — but only if the
+server **streams** rather than holds, which is the same lesson as §9.24:
+*userspace is a budget, not a location.*
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on

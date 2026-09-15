@@ -219,6 +219,16 @@ Nothing new was named — `/namespace` is `/profile`/`/pkg`/`/template`'s one
 format, settled 2026-09-02. *Instantiate once, boot many times*: an
 instantiated `/` may be modified and saved back as a new template.
 
+**P2 step 5 is measured but NOT started** (2026-09-04, [RESEARCH §9.25](../RESEARCH.md)).
+The plan's step 5 cites `type.md` for *"`/pkg/<name>/<version>` subtrees"* — but
+that is what `cmd/pkg.c` implements (**pkg v1**), not what type.md accepted on
+2026-09-02: **`/pkg/<name>` is a declaration file** and the bytes live in
+**`/store/<name>/<version>`**, bound and never copied. The distinction decides
+whether the step works: under v1, `pkg install python` **copies 29 MB into the
+tree**, so the seed shrinks and the running tree does not — and step 2's root
+server is no better off. The plan cell is corrected; the build waits on one
+decision (below).
+
 ## Replanned 2026-09-04 — what follows is LEGACY state
 
 The plan was rewritten in three layers with the demo as a milestone
