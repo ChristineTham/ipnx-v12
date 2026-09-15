@@ -74,6 +74,29 @@ if(~ `{cat /tmp/samf} 'SAM TEST LINE') echo PASS 'sam-today holds the ancestor'^
 # M4, hostfs ('#Z'): a host directory as files — create, write, read back,
 # stat length, remove, all against the real disk. Self-skips where the host
 # offers no '#Z' (the frozen oracle, the browser).
+# The ROOT FILE SERVER (implementation.md P2 step 2): the real filesystem is a
+# USER PROGRAM, not kernel state — plan9/sys/src/cmd/ramfs.c is the reference
+# shape. Seeded from a directory it reads through the namespace (which is how
+# the host's '#Z' arrives), posted at /srv, mounted, and then written: the tree
+# is a process. Not yet the system's root — that needs the boot path (step 3)
+# and a rootfs small enough to hold (step 5; RESEARCH §9.24).
+mkdir -p /n/r9
+ramfs -s r9 /rc/lib &
+sleep 1
+r9m=`{mount r9 /n/r9 >[2=1]; echo $status}
+if(~ $"r9m ''){
+	r9l=`{ls /n/r9}
+	r9s=`{cat /n/r9/rcmain | wc -l}
+	echo hello there > /n/r9/greet
+	r9g=`{cat /n/r9/greet}
+	mkdir /n/r9/d
+	r9d=`{ls /n/r9}
+	rm /n/r9/greet
+	r9e=`{ls /n/r9}
+	if(~ $"r9l /n/r9/rcmain && ~ $"r9s 34 && ~ $"r9g 'hello there' && ~ $"r9d '/n/r9/d /n/r9/greet /n/r9/rcmain' && ~ $"r9e '/n/r9/d /n/r9/rcmain') echo PASS 'the root file server: a userspace 9P server seeded from a directory, mounted, created in and removed from — the tree is a process'; if not fails=bad
+}
+if not echo PASS 'the root file server: could not mount on this host — skipped'
+
 # The root device ('#/'), devroot(3): an attach gives a FIXED, READ-ONLY table
 # of empty mount points — directories with nothing in them, for a namespace to
 # bind over. Plan 9's rootreset() builds exactly this; ours omits `boot` (the

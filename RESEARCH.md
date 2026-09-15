@@ -1929,6 +1929,43 @@ diagnostic (`rc: can't open: create not supported on this device`) goes to
 The assertion uses `mkdir`, which reports its own error to fd 2 and *is*
 capturable. **Test a refusal through a command that owns its error message.**
 
+### 9.24 The root file server fits; the rootfs does not (2026-09-04)
+
+P2 step 2 builds `userspace/cmd/ramfs.c` — the real filesystem as a user
+program, after `plan9/sys/src/cmd/ramfs.c` (945 lines in 9legacy). It works:
+seeded from a directory read through the namespace, posted at `/srv`, mounted,
+and then created in, written to, read back and removed from. **The tree is a
+process**, which is the property the step exists to establish, and the
+assertion passes on the frozen oracle as well, because nothing in it needs a
+kernel feature the oracle lacks.
+
+**And it cannot yet be the system's root, for a reason that is arithmetic.**
+
+| | |
+|---|---|
+| the rootfs on disk | **49 MB** |
+| `bin/python` | 29.1 MB |
+| `bin/gotest` + `bin/gohello` | 5.0 MB |
+| a guest's linear-memory ceiling | **16 MB** (`hosts/macos/src/main.rs`: `max_pages = 256.max(min_pages + 32)`) |
+
+A userspace server that *holds* the tree cannot hold this tree — it is three
+times the ceiling, and two thirds of it is one file. Raising the ceiling is the
+wrong answer twice over: it would put a 50 MB allocation in every host, and
+browsers budget wasm memory per tab (§9.4's third finding — ~100 guests
+exhausted Chrome's budget at much smaller sizes).
+
+**The right answer is already in the plan, one step later.** P2 step 5 makes Go
+and Python **packages** rather than rootfs residents. After that the base tree
+is ~15 MB and the question is live again. So **step 2's deletions depend on
+step 5**, and the plan does not say so — its step 2 lists only step 1 as a
+dependency. Recorded here and marked in the plan rather than resequenced,
+because the ordering is Christine's to change.
+
+**The general form, which is worth more than the instance:** a step that moves
+a responsibility from the kernel into a process inherits *that process's*
+limits. "Userspace" is not a location, it is a budget — and the budget wants
+measuring before the move is scheduled, not after it is attempted.
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on

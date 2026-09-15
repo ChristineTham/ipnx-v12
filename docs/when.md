@@ -14,7 +14,7 @@ repository (2026-09-02).
 
 ## The suite
 
-**151 tests, 0 failures** — measured 2026-09-04 on wasmtime, on the Rust core
+**152 tests, 0 failures** — measured 2026-09-04 on wasmtime, on the Rust core
 under Node, and on the frozen oracle, with the two hosts that run the Rust core
 identical assertion for assertion. The count **fell from 165 by design**: P1
 step 3 deleted the ten link assertions and step 4 six of the nine uid ones,
@@ -52,6 +52,7 @@ different things and both are correct.
 | **P1 step 4** identity narrows to Plan 9's | 2026-09-04 |
 | **P1 step 5** `#H` leaves; fetching is not the kernel's | 2026-09-04 |
 | **P2 step 1** `#/`, Plan 9's root device | 2026-09-04 |
+| **P2 step 2** *part* — the root file server exists | 2026-09-04 |
 
 **P1 step 1** (2026-09-04): `AsySnap { snap, data_ptr, sp }` became **`Cont(Vec<u8>)`**
 — opaque bytes the embedding mints at the fork and is handed back at the spawn, never
@@ -186,6 +187,27 @@ the plan predicts arrives with step 2, when `#R` and `#V` leave.
 
 The suite is **151**: one assertion added with the feature, self-skipping where
 `#/` is absent.
+
+**P2 step 2, the BUILD half** (2026-09-04): **`userspace/cmd/ramfs.c`** — the
+real filesystem as a **user program**, 9P2000 on fd 0 or posted at `/srv`,
+with `plan9/sys/src/cmd/ramfs.c` as the reference shape. It holds a tree in
+memory, seeds from a directory it reads through the namespace (which is how
+the host's `#Z` arrives), and serves walk / open / create / read / write /
+clunk / remove / stat. Proved through a real mount: seeded from `/rc/lib`,
+`cat` reads the seeded file at its true length, a file is created and written
+and read back, `mkdir` adds a directory, `rm` takes one away. **It passes on
+the frozen oracle too**, because it uses no kernel feature the oracle lacks.
+
+**The DELETE half — `#R`, `#V`, `ram_*`, `snap_*` — is NOT done, and is gated
+on two things, one of them newly measured:**
+
+- **Step 3, the boot path.** Nothing attaches the root server before `init`
+  runs, and what that program is *called* is still an open gap.
+- **Step 5, and this is the new one (RESEARCH §9.24).** The rootfs is **49 MB**
+  — `bin/python` alone is 29 MB — and a guest's linear memory is capped at
+  **16 MB** by the host. A userspace server *cannot hold the rootfs* until Go
+  and Python leave it and become packages, which is P2 step 5. **The plan's
+  step 2 therefore depends on step 5**, which the plan does not say.
 
 ## Replanned 2026-09-04 — what follows is LEGACY state
 
