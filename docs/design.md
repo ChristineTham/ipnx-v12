@@ -10,7 +10,7 @@ system *is* is [architecture.md](architecture.md); what is *built* is
 
 ## Decisions — the log
 
-**119 decisions, 2026-08-26 to 2026-09-04.** Each entry states the
+**120 decisions, 2026-08-26 to 2026-09-04.** Each entry states the
 decision and the constraint that forced it. **Dated entries keep the words they
 were written with** — reopening one requires new evidence, not a fresh opinion.
 
@@ -72,6 +72,7 @@ says what was replaced and by what.*
 | 2026-09-02 | A manager's window is at `/dev/window/`, not directly in `/dev` |
 | 2026-09-03 | A move out of the kernel runs both answers and asserts they agree |
 | 2026-09-03 | A posted service name must be instance-qualified, because `#s` is global |
+| 2026-09-04 | `/` is a project instantiated from the SYSTEM TEMPLATE — `/template/system` |
 | 2026-09-04 | `/boot` is the loader's name and is not available — the boot path needs one |
 | 2026-09-04 | The suite's floor is what passes on the PURE kernel |
 | 2026-09-04 | Replanned: three layers, the demo a milestone, the code legacy |
@@ -145,6 +146,41 @@ says what was replaced and by what.*
 
 </details>
 
+
+- **(2026-09-04) `/` IS A PROJECT INSTANTIATED FROM THE *SYSTEM TEMPLATE*, AND
+  THE BOOT PATH IS THAT TEMPLATE'S CONFIGURATION — `/template/system`.**
+  Christine, closing the gap the previous entry opened: *"we are talking about
+  the system default namespace and profile. Since this is exactly what a
+  template is (specifies a namespace) the system boot path is the template
+  configuration file for `/` (think of `/` as a 'project' that has been
+  instantiated from the 'system' template which should live in
+  `/template/system`)."*
+
+  **It needs no new vocabulary, which is the whole of why it is right.** The
+  gap asked for a *name*; the answer is that the thing already has one, because
+  it is an instance of a mechanism this system already specifies. Every piece
+  was settled on 2026-09-02:
+
+  | already decided | what it means here |
+  |---|---|
+  | `/profile`, `/pkg` and `/template` are **one format, three registries** — *a list of bindings plus commands* | the boot namespace is a template's binding list. `/lib/namespace`'s own header already half-claimed this |
+  | a template **assembles a project's world**, its commands running **at instantiate** | booting *is* instantiating, and `init`/`rc` is the command that runs in the result |
+  | a template is a **directory** — declaration **plus a skeleton** | the system's skeleton is the small editable tree; `path /template/*` already recognises it |
+  | **bind what stays shared, copy what becomes yours** | the bulk — Go, Python, the stdlib — is *bound* from the store as packages, never copied |
+
+  **And it dissolves a measured obstacle by accident.** RESEARCH §9.24 found
+  that a userspace root file server cannot hold the 49 MB rootfs against a
+  16 MB guest ceiling. Under this reading it never had to: a template's
+  skeleton is the *editable* part, and the 34 MB of Go, Python and stdlib are
+  packages that **bind** from the store. The size problem and the naming
+  problem had one answer.
+
+  **What is settled:** the name, the shape, and the format. **What is not:** the
+  bootstrap ordering — what reads `/template/system` before `/` exists to read
+  it from. Plan 9 answers the same question with files compiled into the kernel
+  image at `#/boot`; the equivalent here is an open question and P2 step 3's
+  remaining work. Naming it did not answer it, and the two should not be
+  conflated again.
 
 - **(2026-09-04) `/boot` IS THE LOADER'S NAME AND IS NOT AVAILABLE — THE BOOT
   PATH NEEDS A NAME, AND THAT IS A GAP.** Christine, on P2 step 3: *"`/boot/boot`

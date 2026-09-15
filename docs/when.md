@@ -209,6 +209,14 @@ on two things, one of them newly measured:**
   and Python leave it and become packages, which is P2 step 5. **The plan's
   step 2 therefore depends on step 5**, which the plan does not say.
 
+**The boot path's name is settled** (2026-09-04, [design.md](design.md)): `/` is
+a **project instantiated from the system template**, and the boot path is that
+template's configuration — **`/template/system`**. Nothing new was named; the
+thing turned out to be an instance of `/profile`/`/pkg`/`/template`'s one
+format, settled 2026-09-02. **What remains open in P2 step 3 is the bootstrap
+ordering**, not the name: what reads `/template/system` before `/` exists to
+read it from.
+
 ## Replanned 2026-09-04 — what follows is LEGACY state
 
 The plan was rewritten in three layers with the demo as a milestone

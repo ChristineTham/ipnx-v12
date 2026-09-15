@@ -1961,6 +1961,17 @@ step 5**, and the plan does not say so — its step 2 lists only step 1 as a
 dependency. Recorded here and marked in the plan rather than resequenced,
 because the ordering is Christine's to change.
 
+> **ANSWERED THE SAME DAY, and not by resequencing** (design.md 2026-09-04).
+> `/` is a **project instantiated from the system template**, `/template/system`.
+> A template is *declaration plus a skeleton*, and the skeleton is the
+> **editable** part — while the bulk binds from the store as packages, by the
+> rule already settled on 2026-09-02: *bind what stays shared, copy what
+> becomes yours*. So the 34 MB of Go, Python and stdlib were never the root
+> server's to hold. **The size problem and the boot path's naming problem had
+> one answer**, which is the strongest evidence either was framed correctly.
+> The dependency on step 5 stands — the packages must actually move — but it is
+> a sequencing fact now, not a design obstacle.
+
 **The general form, which is worth more than the instance:** a step that moves
 a responsibility from the kernel into a process inherits *that process's*
 limits. "Userspace" is not a location, it is a budget — and the budget wants
