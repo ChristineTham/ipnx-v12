@@ -231,10 +231,23 @@ IPNX owns rather than promised by the host. It **streams**: every read is a
 (and is verifiably unchanged after the attempt), a new entry is created and
 reads back at full length. Passes on all three hosts.
 
-**Still to do for step 5:** `cmd/pkg.c` from v1 to the spec'd shape —
-`/pkg/<name>` a declaration file, bytes in `/store`, install a **bind**, remove
-an **unbind** — then Go and Python move out of the rootfs seed. Only then does
-step 2's delete half become possible.
+**Also landed** (2026-09-04): **`cmd/pkg.c` is v2** — `/pkg/<name>` a
+declaration file (`fetch` / `bind` / `env`, the spec's verbs over
+`/lib/namespace`'s little language), bytes in `/store`, install a **bind**,
+remove an **unbind**. `ls /pkg` *is* `pkg list`; the `.installed` database is
+gone. Asserted directly: after `pkg remove`, the declaration is gone and **the
+store entry still measures the source's exact byte count**, which is what makes
+*"reinstalling is free"* a fact. A defect the suite caught on the way is in
+[RESEARCH §9.26](../RESEARCH.md) — a refused install must leave nothing behind.
+
+**Still to do for step 5:** Go and Python actually move out of the rootfs seed.
+That needs (a) the host to expose a store directory — `#Z` is rooted at the
+rootfs or a temp dir today, so this is host plumbing; and (b) **a gap raised,
+not invented**: Python's stdlib is **539 files** and type.md's `fetch` names a
+*file*. One pinned digest covering a manifest is the shape that keeps the audit
+readable, and it is not in the spec. Measured: without python, its stdlib and
+the Go binaries the rootfs is **3.4 MB** against a 16 MB ceiling — so all three
+must move, and the stdlib is the one that needs the tree form.
 
 **The measurement that framed it** (2026-09-04, [RESEARCH §9.25](../RESEARCH.md)).
 The plan's step 5 cites `type.md` for *"`/pkg/<name>/<version>` subtrees"* — but

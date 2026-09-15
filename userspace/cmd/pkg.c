@@ -1,29 +1,45 @@
-/* pkg: the ipnx package manager, v1 (design.md 2026-08-29).
+/* pkg: the ipnx package manager, v2 (docs/type.md, accepted 2026-09-02).
  *
- * A package is a subtree under /pkg/<name>/<version>; installing BINDS it —
- * the union directory is the merge mechanism, the namespace is the
- * installation record (fork shares the namespace group, so a bind made here
- * lands in the invoking shell). No database: /pkg/.installed lists installs,
- * each package keeps a .digests manifest, and every fetched byte is
- * sha256-verified against the registry's published digest — refusal on
- * mismatch, as pip already practises.
+ * A PACKAGE IS A DECLARATION, not a directory of bytes. `/pkg/<name>` is a
+ * file — "a list of bindings plus commands" — and the bytes it names live in
+ * `/store/<name>/<version>`, fetched once, verified against a digest pinned in
+ * the declaration, and BOUND. So:
  *
- * Registries are trees of files. A LOCAL tree only, for now: '#H' left the
- * kernel (P1 step 5) and the userspace webfs that replaces it is not written,
- * so an http(s) base is refused with an error that says so.
- *   <base>/index          lines: name version kind url sha256
- *     kind bin:  url is one wasm; lands at <pkgroot>/bin/<name>
- *     kind tree: url is a manifest — lines: relpath url sha256
- *   <pkgroot>/meta        optional; lines: bind [-a|-b|-c] src dst
- *                         (src relative to the package root); default when
- *                         absent: bind -a <pkgroot>/bin /bin
- * Relative urls join the registry base, so one index serves a same-origin
- * mirror, a local tree (the suite's offline registry), or absolute URLs.
+ *   install   materialise into the store if absent, verify, then bind
+ *   remove    an UNBIND. The store entry survives, so reinstalling is free
+ *             and rollback costs nothing
+ *   list      `ls /pkg`. The declarations ARE the record — no database
  *
- *   pkg install name[@version]     pkg list
+ * A declaration, and `cat /pkg/python` is the whole audit:
+ *
+ *   fetch  <src>  <sha256>  /store/python/3.14/bin/python
+ *   bind   [-a|-b] /store/python/3.14/bin  /bin
+ *   env    PYTHONHOME /store/python/3.14
+ *
+ * The three verbs are type.md's. The little language is /lib/namespace's —
+ * one format across /profile, /pkg and /template (decision log 2026-09-02),
+ * so nothing new had to be designed.
+ *
+ * Immutability is not enforced here: `/store` is served by storefs, which
+ * refuses to rewrite an existing entry. pkg pins and checks the digest; the
+ * store's server keeps the bytes honest afterwards. Both are IPNX programs,
+ * which is the point of the 2026-09-04 decision.
+ *
+ * Registries are trees of files, LOCAL ONLY for now: '#H' left the kernel
+ * (P1 step 5) and the userspace webfs that replaces it is not written, so an
+ * http(s) base is refused with an error that says so. `<base>/<name>` is the
+ * declaration; a relative `fetch` source joins the base.
+ *
+ *   pkg install name               pkg list
  *   pkg remove name                pkg verify name
  *   pkg -r <base> ...              use one registry instead of
  *                                  /lib/pkg/registries
+ *
+ * GAP, raised rather than invented: a package whose content is a TREE. Python's
+ * stdlib is 539 files, and type.md names `fetch` for a file only. Declaring 539
+ * fetch lines is not an audit anyone reads. The shape that keeps the property —
+ * one pinned digest covering a manifest that pins the rest — is not in the spec,
+ * so it is not built here.
  */
 #include "lib9.h"
 
@@ -162,6 +178,14 @@ getline9(int fd, char *line, int max)	/* one line, byte at a time (index files a
 	return i;
 }
 
+/* a stat record's own length: size[2], little-endian, plus the two bytes it
+ * does not count. lib9's stat accessors read fields, not the frame. */
+static uint
+reclen(uchar *e)
+{
+	return (e[0] | (e[1] << 8)) + 2;
+}
+
 static int
 fields(char *line, char **f, int max)
 {
@@ -179,13 +203,14 @@ fields(char *line, char **f, int max)
 	return n;
 }
 
+
 /* ---- the registry list ---- */
 
 static int
 eachbase(int idx, char *base, int max)	/* idx'th registry base, or -1 */
 {
 	char line[LINELEN], *f[4];
-	int fd, n, i = 0;
+	int fd, i = 0;
 
 	if(forcebase){
 		if(idx > 0)
@@ -211,248 +236,203 @@ eachbase(int idx, char *base, int max)	/* idx'th registry base, or -1 */
 	return -1;
 }
 
-/* ---- bookkeeping: /pkg/.installed — "name version" per line ---- */
+/* ---- declarations ---- */
 
-static void
-recordinstall(char *name, char *ver)
+static char *
+decl(char *name)			/* /pkg/<name> */
 {
-	char line[LINELEN];
-	int fd;
+	static char p[LINELEN];
 
-	mkdirs("/pkg/.installed");
-	fd = open("/pkg/.installed", ORDWR);
-	if(fd < 0)
-		fd = create("/pkg/.installed", ORDWR, 0644);
-	if(fd < 0)
-		return;
-	while(getline9(fd, line, sizeof line) >= 0)
-		;
-	fprint(fd, "%s %s\n", name, ver);
-	close(fd);
+	snprint(p, sizeof p, "/pkg/%s", name);
+	return p;
 }
 
 static int
-findinstall(char *name, char *ver, int max, int removeit)
+opensource(char *base, char *src, char *full, int max)
 {
-	char line[LINELEN], *f[4], *all, *out, *p, *nl;
-	int fd, found = 0;
-	long len, cap;
-
-	fd = open("/pkg/.installed", OREAD);
-	if(fd < 0)
-		return 0;
-	/* slurp with a growing buffer: no fixed package-count cap */
-	cap = 4096;
-	len = 0;
-	all = malloc(cap);
-	for(;;){
-		long r;
-		if(len + 512 > cap){
-			char *g = malloc(cap * 2);
-			memmove(g, all, len);
-			free(all);
-			all = g;
-			cap *= 2;
-		}
-		r = read(fd, all + len, cap - len - 1);
-		if(r <= 0)
-			break;
-		len += r;
+	if(strncmp(src, "http://", 7) == 0 || strncmp(src, "https://", 8) == 0){
+		fprint(2, "pkg: %s: http sources need a userspace webfs "
+		          "('#H' left the kernel); use a local path\n", src);
+		exits("nofetch");
 	}
-	close(fd);
-	all[len] = 0;
-	out = removeit ? malloc(len + 1) : nil;
-	if(out)
-		out[0] = 0;
-	for(p = all; p && *p; p = nl){
-		long ll;
-		nl = strchr(p, '\n');
-		if(nl)
-			*nl++ = 0;
-		ll = strlen(p);
-		if(ll == 0)
-			continue;
-		strecpy(line, line + sizeof line, p);
-		if(fields(line, f, 4) >= 2 && strcmp(f[0], name) == 0){
-			if(ver)
-				strecpy(ver, ver + max, f[1]);
-			found = 1;
-			if(removeit)
-				continue;	/* filtered out of the rewrite */
-		}
-		if(out){
-			strcat(out, p);
-			strcat(out, "\n");
-		}
-		USED(ll);
-	}
-	if(removeit && found && out){
-		fd = create("/pkg/.installed", OWRITE, 0644);
-		if(fd >= 0){
-			write(fd, out, strlen(out));
-			close(fd);
-		}
-	}
-	free(all);
-	if(out)
-		free(out);
-	return found;
+	if(src[0] == '/')
+		strecpy(full, full + max, src);
+	else
+		snprint(full, max, "%s/%s", base, src);
+	return open(full, OREAD);
 }
 
-/* ---- meta: bind lines, or the default bin bind ---- */
-
+/* fetch one file into the store, unless it is already there. The digest is
+ * checked either way: a store entry that no longer hashes to what the
+ * declaration pinned is a false claim, and saying so is the whole point. */
 static void
-applymeta(char *root)
+dofetch(char *base, char *src, char *want, char *dst)
 {
-	char path[LINELEN], line[LINELEN], src[LINELEN], *f[6];
-	int fd, n, flag, bound = 0;
+	char full[LINELEN], got[65];
+	int sfd, fd;
+	vlong n;
 
-	snprint(path, sizeof path, "%s/meta", root);
-	fd = open(path, OREAD);
+	fd = open(dst, OREAD);
 	if(fd >= 0){
-		while(getline9(fd, line, sizeof line) >= 0){
-			if(line[0] == '#')
-				continue;
-			n = fields(line, f, 6);
-			if(n < 3 || strcmp(f[0], "bind") != 0)
-				continue;
+		close(fd);
+		if(hashfile(dst, got) == 0 && cistrcmp(got, want) == 0)
+			return;			/* already in the store, and honest */
+		fprint(2, "pkg: %s: store entry does not match the pinned digest\n", dst);
+		exits("digest");
+	}
+	sfd = opensource(base, src, full, sizeof full);
+	if(sfd < 0){
+		fprint(2, "pkg: %s: %r\n", full);
+		exits("fetch");
+	}
+	n = sink(sfd, dst, got);
+	close(sfd);
+	if(cistrcmp(got, want) != 0){
+		fprint(2, "pkg: %s: sha256 mismatch\n\twant %s\n\tgot  %s\n", full, want, got);
+		remove(dst);
+		exits("digest");
+	}
+	print("pkg: fetched %s (%lld bytes) into %s\n", src, n, dst);
+}
+
+/* "a name that would bind over different bytes is refused" (design 2026-08-29):
+ * nothing global to corrupt, and nothing silently shadowed by accident. */
+static void
+conflictcheck(char *src, char *dst)
+{
+	uchar edir[512];
+	char name[128], a[LINELEN], b[LINELEN], da[65], db[65];
+	int fd, n;
+
+	fd = open(src, OREAD);
+	if(fd < 0)
+		return;
+	while((n = read(fd, edir, sizeof edir)) > 0){
+		uchar *e = edir, *end = edir + n;
+
+		while(e < end){
+			uint rec = reclen(e);
+
+			if(rec < 2 || e + rec > end)
+				break;
+			statname(e, name, sizeof name);
+			snprint(a, sizeof a, "%s/%s", src, name);
+			snprint(b, sizeof b, "%s/%s", dst, name);
+			if(hashfile(b, db) == 0 && hashfile(a, da) == 0
+			&& cistrcmp(da, db) != 0){
+				fprint(2, "pkg: CONFLICT: %s already resolves to different bytes\n", b);
+				close(fd);
+				exits("conflict");
+			}
+			e += rec;
+		}
+	}
+	close(fd);
+}
+
+/* run a declaration's lines. `act` 0 = install (fetch, bind, env),
+ * 1 = verify (check digests only), 2 = remove (unbind only). */
+static void
+apply(char *declpath, char *base, int act)
+{
+	char line[LINELEN], *f[6], envp[LINELEN];
+	int fd, n, flag, bad = 0;
+
+	fd = open(declpath, OREAD);
+	if(fd < 0){
+		fprint(2, "pkg: %s: %r\n", declpath);
+		exits("notfound");
+	}
+	while(getline9(fd, line, sizeof line) >= 0){
+		if(line[0] == '#' || line[0] == 0)
+			continue;
+		n = fields(line, f, 6);
+		if(n < 3)
+			continue;
+		if(strcmp(f[0], "fetch") == 0){
+			if(act == 0)
+				dofetch(base, f[1], f[2], f[3]);
+			else if(act == 1){
+				char got[65];
+
+				if(hashfile(f[3], got) != 0){
+					print("pkg: MISSING %s\n", f[3]);
+					bad++;
+				} else if(cistrcmp(got, f[2]) != 0){
+					print("pkg: ALTERED %s\n", f[3]);
+					bad++;
+				}
+			}
+		} else if(strcmp(f[0], "bind") == 0){
 			flag = 0;
-			if(n == 4){
+			if(f[1][0] == '-'){
 				if(strcmp(f[1], "-a") == 0) flag = MAFTER;
 				else if(strcmp(f[1], "-b") == 0) flag = MBEFORE;
 				f[1] = f[2]; f[2] = f[3];
 			}
-			if(f[1][0] == '.')
-				snprint(src, sizeof src, "%s%s", root, f[1]+1);
-			else
-				strecpy(src, src + sizeof src, f[1]);
-			if(bind(src, f[2], flag) < 0)
-				fprint(2, "pkg: bind %s %s failed: %r\n", src, f[2]);
-			else{
-				print("pkg: bound %s onto %s\n", src, f[2]);
-				bound++;
+			if(act == 0){
+				conflictcheck(f[1], f[2]);
+				if(bind(f[1], f[2], flag) < 0)
+					fprint(2, "pkg: bind %s %s: %r\n", f[1], f[2]);
+			} else if(act == 2){
+				if(unmount(f[1], f[2]) < 0)
+					fprint(2, "pkg: unmount %s %s: %r\n", f[1], f[2]);
+			}
+		} else if(strcmp(f[0], "env") == 0 && act == 0){
+			int efd;
+
+			snprint(envp, sizeof envp, "/env/%s", f[1]);
+			efd = create(envp, OWRITE, 0644);
+			if(efd >= 0){
+				write(efd, f[2], strlen(f[2]));
+				close(efd);
 			}
 		}
-		close(fd);
 	}
-	if(!bound){
-		snprint(src, sizeof src, "%s/bin", root);
-		fd = open(src, OREAD);
-		if(fd >= 0){
-			close(fd);
-			if(bind(src, "/bin", MAFTER) < 0)
-				fprint(2, "pkg: bind %s /bin failed: %r\n", src);
-			else
-				print("pkg: bound %s onto /bin\n", src);
-		}
+	close(fd);
+	if(act == 1){
+		if(bad)
+			exits("verify");
+		print("pkg: %s verifies clean\n", declpath);
 	}
 }
 
 /* ---- install ---- */
 
 static void
-fetchone(char *base, char *url, char *dst, char *want, int fdig)
+install(char *name)
 {
-	char got[65];
-	int sfd;
-	vlong n;
+	char base[LINELEN], from[LINELEN], dig[65];
+	int i, sfd, fd;
 
-	sfd = fetchopen(base, url);
-	if(sfd < 0){
-		fprint(2, "pkg: cannot fetch %s: %r\n", url);
-		exits("fetch");
-	}
-	n = sink(sfd, dst, got);
-	close(sfd);
-	if(cistrcmp(got, want) != 0){
-		fprint(2, "pkg: sha256 MISMATCH for %s\n  want %s\n  got  %s\n", url, want, got);
-		remove(dst);
-		exits("digest");
-	}
-	print("pkg:   %s (%lld bytes, sha256 verified)\n", dst, n);
-	if(fdig >= 0)
-		fprint(fdig, "%s %s\n", got, dst);
-}
-
-static void
-install(char *spec)
-{
-	char *name, *wantver = nil;
-	char base[LINELEN], line[LINELEN], root[LINELEN], dst[LINELEN], dig[LINELEN], v[64];
-	char *f[8];
-	int i, fd, n, fdig;
-
-	name = strdup(spec);
-	{ char *at = strchr(name, '@'); if(at){ *at = 0; wantver = at + 1; } }
-	if(findinstall(name, v, sizeof v, 0)){
-		print("pkg: %s %s is already installed\n", name, v);
+	fd = open(decl(name), OREAD);
+	if(fd >= 0){
+		close(fd);
+		print("pkg: %s is already installed\n", name);
 		return;
 	}
 	for(i = 0; eachbase(i, base, sizeof base) == 0; i++){
-		fd = fetchopen(base, "index");
-		if(fd < 0)
+		snprint(from, sizeof from, "%s/%s", base, name);
+		sfd = open(from, OREAD);
+		if(sfd < 0)
 			continue;
-		while(getline9(fd, line, sizeof line) >= 0){
-			if(line[0] == '#')
-				continue;
-			n = fields(line, f, 8);
-			if(n < 5 || strcmp(f[0], name) != 0)
-				continue;
-			if(wantver && strcmp(f[1], wantver) != 0)
-				continue;
-			print("pkg: installing %s %s from %s\n", name, f[1], base);
-			snprint(root, sizeof root, "/pkg/%s/%s", name, f[1]);
-			snprint(dig, sizeof dig, "%s/.digests", root);
-			mkdirs(dig);
-			fdig = create(dig, OWRITE, 0644);
-			if(strcmp(f[2], "bin") == 0){
-				char existing[LINELEN], have[65];
-				snprint(existing, sizeof existing, "/bin/%s", name);
-				if(hashfile(existing, have) == 0 && cistrcmp(have, f[4]) != 0){
-					fprint(2, "pkg: CONFLICT — /bin/%s already exists with different\n", name);
-					fprint(2, "     content (namespace doctrine: same name, different bytes\n");
-					fprint(2, "     is a collision; same bytes would be idempotent).\n");
-					fprint(2, "     have %s\n     pkg  %s\n", have, f[4]);
-					exits("conflict");
-				}
-				snprint(dst, sizeof dst, "%s/bin/%s", root, name);
-				fetchone(base, f[3], dst, f[4], fdig);
-			} else if(strcmp(f[2], "tree") == 0){
-				char mpath[LINELEN], mline[LINELEN], *mf[4];
-				int mfd, sfd2;
-				char got[65];
-				snprint(mpath, sizeof mpath, "%s/.manifest", root);
-				sfd2 = fetchopen(base, f[3]);
-				if(sfd2 < 0){ fprint(2, "pkg: no manifest %s: %r\n", f[3]); exits("fetch"); }
-				sink(sfd2, mpath, got);
-				close(sfd2);
-				if(cistrcmp(got, f[4]) != 0){
-					fprint(2, "pkg: manifest sha256 MISMATCH for %s\n", name);
-					exits("digest");
-				}
-				mfd = open(mpath, OREAD);
-				while(getline9(mfd, mline, sizeof mline) >= 0){
-					if(mline[0] == '#' || fields(mline, mf, 4) < 3)
-						continue;
-					snprint(dst, sizeof dst, "%s/%s", root, mf[0]);
-					fetchone(base, mf[1], dst, mf[2], fdig);
-				}
-				close(mfd);
-			} else {
-				fprint(2, "pkg: unknown kind '%s'\n", f[2]);
-				exits("kind");
-			}
-			if(fdig >= 0)
-				close(fdig);
-			close(fd);
-			recordinstall(name, f[1]);
-			applymeta(root);
-			print("pkg: installed %s %s\n", name, f[1]);
-			return;
+		close(sfd);
+		/* Apply from the REGISTRY's copy, and record only once it has
+		 * worked: a refused install must leave nothing behind, or
+		 * `pkg list` lies about what is installed. */
+		apply(from, base, 0);
+		mkdirs(decl(name));
+		sfd = open(from, OREAD);
+		if(sfd < 0){
+			fprint(2, "pkg: %s: %r\n", from);
+			exits("record");
 		}
-		close(fd);
+		sink(sfd, decl(name), dig);	/* the declaration IS the record */
+		close(sfd);
+		print("pkg: installed %s\n", name);
+		return;
 	}
-	fprint(2, "pkg: '%s' not found in any registry\n", spec);
+	fprint(2, "pkg: '%s' not found in any registry\n", name);
 	exits("notfound");
 }
 
@@ -461,81 +441,37 @@ install(char *spec)
 static void
 list(void)
 {
-	char line[LINELEN];
-	int fd;
+	uchar edir[512];
+	char name[128];
+	int fd, n;
 
-	fd = open("/pkg/.installed", OREAD);
+	fd = open("/pkg", OREAD);
 	if(fd < 0)
 		return;
-	while(getline9(fd, line, sizeof line) >= 0)
-		print("%s\n", line);
-	close(fd);
-}
+	while((n = read(fd, edir, sizeof edir)) > 0){
+		uchar *e = edir, *end = edir + n;
 
-static void
-verify(char *name)
-{
-	char v[64], dig[LINELEN], line[LINELEN], got[65], *f[4];
-	uchar buf[CHUNK], sum[32];
-	SHA256state st;
-	int fd, dfd, n, bad = 0;
+		while(e < end){
+			uint rec = reclen(e);
 
-	if(!findinstall(name, v, sizeof v, 0)){
-		fprint(2, "pkg: %s is not installed\n", name);
-		exits("notfound");
-	}
-	snprint(dig, sizeof dig, "/pkg/%s/%s/.digests", name, v);
-	fd = open(dig, OREAD);
-	if(fd < 0){
-		fprint(2, "pkg: %s has no digest manifest\n", name);
-		exits("nodigests");
-	}
-	while(getline9(fd, line, sizeof line) >= 0){
-		if(fields(line, f, 4) < 2)
-			continue;
-		dfd = open(f[1], OREAD);
-		if(dfd < 0){ print("pkg: MISSING %s\n", f[1]); bad++; continue; }
-		sha256init(&st);
-		while((n = read(dfd, buf, sizeof buf)) > 0)
-			sha256update(&st, buf, n);
-		close(dfd);
-		sha256final(&st, sum);
-		hex(sum, 32, got);
-		if(cistrcmp(got, f[0]) != 0){ print("pkg: ALTERED %s\n", f[1]); bad++; }
+			if(rec < 2 || e + rec > end)
+				break;
+			print("%s\n", statname(e, name, sizeof name));
+			e += rec;
+		}
 	}
 	close(fd);
-	if(bad)
-		exits("verify");
-	print("pkg: %s %s verifies clean\n", name, v);
 }
 
 static void
 removepkg(char *name)
 {
-	char v[64], dig[LINELEN], line[LINELEN], src[LINELEN], *f[4];
-	int fd;
-
-	if(!findinstall(name, v, sizeof v, 0)){
-		fprint(2, "pkg: %s is not installed\n", name);
-		exits("notfound");
+	apply(decl(name), "", 2);		/* unbind; the store entry survives */
+	if(remove(decl(name)) < 0){
+		fprint(2, "pkg: %s: %r\n", decl(name));
+		exits("remove");
 	}
-	snprint(src, sizeof src, "/pkg/%s/%s/bin", name, v);
-	unmount(src, "/bin");	/* best effort; meta binds fall away with the tree */
-	snprint(dig, sizeof dig, "/pkg/%s/%s/.digests", name, v);
-	fd = open(dig, OREAD);
-	if(fd >= 0){
-		while(getline9(fd, line, sizeof line) >= 0)
-			if(fields(line, f, 4) >= 2)
-				remove(f[1]);
-		close(fd);
-	}
-	remove(dig);
-	snprint(line, sizeof line, "/pkg/%s/%s/.manifest", name, v);
-	remove(line);
-	snprint(line, sizeof line, "/pkg/%s/%s/meta", name, v);
-	remove(line);
-	findinstall(name, nil, 0, 1);
-	print("pkg: removed %s %s (binds fall away; empty dirs remain until reboot)\n", name, v);
+	print("pkg: removed %s (an unbind; the store entry stays)\n", name);
 }
 
 int
@@ -548,7 +484,7 @@ main(int argc, char *argv[])
 		i += 2;
 	}
 	if(i >= argc){
-		fprint(2, "usage: pkg [-r base] install name[@ver] | list | remove name | verify name\n");
+		fprint(2, "usage: pkg [-r base] install name | list | remove name | verify name\n");
 		exits("usage");
 	}
 	if(strcmp(argv[i], "install") == 0 && i+1 < argc)
@@ -556,11 +492,11 @@ main(int argc, char *argv[])
 	else if(strcmp(argv[i], "list") == 0)
 		list();
 	else if(strcmp(argv[i], "verify") == 0 && i+1 < argc)
-		verify(argv[i+1]);
+		apply(decl(argv[i+1]), "", 1);
 	else if(strcmp(argv[i], "remove") == 0 && i+1 < argc)
 		removepkg(argv[i+1]);
 	else{
-		fprint(2, "usage: pkg [-r base] install name[@ver] | list | remove name | verify name\n");
+		fprint(2, "usage: pkg [-r base] install name | list | remove name | verify name\n");
 		exits("usage");
 	}
 	exits(nil);

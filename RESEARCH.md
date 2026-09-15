@@ -2026,6 +2026,46 @@ on the host**, so §9.24's arithmetic is satisfied either way — but only if th
 server **streams** rather than holds, which is the same lesson as §9.24:
 *userspace is a budget, not a location.*
 
+### 9.26 pkg v2 — the declaration is the record, and a refused install must leave nothing (2026-09-04)
+
+`cmd/pkg.c` moved from v1 (a directory of copied bytes under
+`/pkg/<name>/<version>`) to what type.md accepted on 2026-09-02: **`/pkg/<name>`
+is a declaration file**, the bytes live in `/store`, install is a **bind** and
+remove an **unbind**. The three verbs are the spec's — `fetch`, `bind`, `env` —
+over `/lib/namespace`'s little language, so nothing new was designed.
+
+**Two properties are now observable that v1 could only claim:**
+
+- **`ls /pkg` IS `pkg list`.** v1 kept a `/pkg/.installed` database; v2 does not,
+  because the declarations *are* the record. One fewer thing to disagree.
+- **Remove is an unbind, and the store entry survives** — asserted directly:
+  after `pkg remove`, `pkg list` is empty and the store file still measures the
+  source's exact byte count. That is what makes *"reinstalling is free and
+  rollback costs nothing"* a fact rather than a promise.
+
+**A defect the suite caught, worth recording because the fix is a rule.** The
+first v2 wrote the declaration to `/pkg/<name>` and *then* applied it. A refused
+install — the conflict case, *"a name that would bind over different bytes"* —
+therefore left the declaration behind, and `pkg list` reported a package that
+was never installed. The conflict assertion failed on exactly that. The fix is
+ordering: **apply from the registry's copy, and record only once it has
+worked.** Where the record IS the state, writing the record before the work is
+a lie waiting for the work to fail.
+
+**GAP, raised rather than invented: a package whose content is a TREE.** Python's
+stdlib is **539 files, 12 MB**. type.md's `fetch` names a file, and 539 fetch
+lines is not an audit anyone reads — it defeats the property the format exists
+for (*"`cat /pkg/python` tells you what will be fetched, what it must hash to,
+and what it will bind"*). The shape that would keep it is **one pinned digest
+covering a manifest that pins the rest**, which is what v1's `kind tree` did by
+another route. **That is not in the spec, so it is not built here.**
+
+**Measured, for the step this unblocks:** without `bin/python` (29.1 MB),
+`lib/python3.14` (12 MB) and the two Go binaries (5 MB), the rootfs is
+**3.4 MB** — comfortably under the 16 MB guest ceiling, where 15 MB would not
+have been. So moving all three matters, and the stdlib is the one that needs
+the tree form.
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on
