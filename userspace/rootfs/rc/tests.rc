@@ -74,6 +74,32 @@ if(~ `{cat /tmp/samf} 'SAM TEST LINE') echo PASS 'sam-today holds the ancestor'^
 # M4, hostfs ('#Z'): a host directory as files — create, write, read back,
 # stat length, remove, all against the real disk. Self-skips where the host
 # offers no '#Z' (the frozen oracle, the browser).
+# The STORE's file server (docs/type.md, decided 2026-09-04): /store holds
+# fetched content, and its one load-bearing property is IMMUTABILITY — "a store
+# entry never changes after verification, otherwise the digest lies and every
+# declaration referencing it becomes a false claim". The spec calls that "a
+# one-line rule rather than a convention"; storefs is where the line lives, and
+# it is a USERSPACE server precisely so the rule is enforced by a program IPNX
+# owns rather than promised by the host. It STREAMS: every read is a pread
+# straight through, because a guest caps at 16MB and one package is 29MB.
+mkdir -p /n/st /tmp/backing
+echo 'verified bytes' > /tmp/backing/entry
+storefs -s st /tmp/backing &
+sleep 1
+stm=`{mount st /n/st >[2=1]; echo $status}
+if(~ $"stm ''){
+	str=`{cat /n/st/entry}
+	# cp owns its error message, so the refusal is capturable — rc's own
+	# diagnostic for a failed redirect would land in this suite's output
+	stw=`{cp /bin/echo /n/st/entry >[2=1]}
+	sts=`{cat /n/st/entry}
+	stn=`{cp /bin/echo /n/st/fresh >[2=1]}
+	sta=`{cat /n/st/fresh | wc -c}
+	stb=`{cat /bin/echo | wc -c}
+	if(~ $"str 'verified bytes' && ~ $"stw *immutable* && ~ $"sts 'verified bytes' && ~ $"stn '' && ~ $"sta $"stb) echo PASS 'the store: an existing entry refuses to be rewritten, a new one is created and streams through at full length'; if not fails=bad
+}
+if not echo PASS 'the store: could not mount storefs on this host — skipped'
+
 # The ROOT FILE SERVER (implementation.md P2 step 2): the real filesystem is a
 # USER PROGRAM, not kernel state — plan9/sys/src/cmd/ramfs.c is the reference
 # shape. Seeded from a directory it reads through the namespace (which is how

@@ -10,7 +10,7 @@ system *is* is [architecture.md](architecture.md); what is *built* is
 
 ## Decisions — the log
 
-**120 decisions, 2026-08-26 to 2026-09-04.** Each entry states the
+**121 decisions, 2026-08-26 to 2026-09-04.** Each entry states the
 decision and the constraint that forced it. **Dated entries keep the words they
 were written with** — reopening one requires new evidence, not a fresh opinion.
 
@@ -72,6 +72,7 @@ says what was replaced and by what.*
 | 2026-09-02 | A manager's window is at `/dev/window/`, not directly in `/dev` |
 | 2026-09-03 | A move out of the kernel runs both answers and asserts they agree |
 | 2026-09-03 | A posted service name must be instance-qualified, because `#s` is global |
+| 2026-09-04 | `/store` is served by a USERSPACE file server — verification lives in IPNX |
 | 2026-09-04 | `/` is a project instantiated from `/template/system`; BOOT READS `/namespace`, and the host does it |
 | 2026-09-04 | `/boot` is the loader's name and is not available — the boot path needs one |
 | 2026-09-04 | The suite's floor is what passes on the PURE kernel |
@@ -146,6 +147,34 @@ says what was replaced and by what.*
 
 </details>
 
+
+- **(2026-09-04) `/store` IS SERVED BY A USERSPACE FILE SERVER OVER A HOST
+  DIRECTORY — VERIFICATION LIVES IN IPNX.** Christine, choosing between the two
+  [type.md](type.md) had weighed without stating a lean (its heading claimed a
+  decision; the paragraph made none — an editing slip, found by reading the
+  spec before building against it).
+
+  | | |
+  |---|---|
+  | **chosen** | a **userspace file server** over a host directory: `storefs` reads it through `#Z` and serves `/store` over 9P |
+  | not chosen | host storage bound in directly — simpler, but the host would own the integrity guarantee |
+
+  **What it buys, in the spec's own terms:** *"a store entry never changes after
+  verification"* becomes a rule a program **we own** enforces rather than a
+  promise the host makes, and *"a name that would bind over different bytes is
+  refused"* stays checkable at install. The design says trust lives in IPNX;
+  this keeps it there.
+
+  **What it costs:** one process at boot — and a hard constraint measured
+  first: it **streams and never holds**, because a guest's linear memory caps
+  at 16 MB while one package is 29 MB ([RESEARCH §9.24](../RESEARCH.md)).
+  *Userspace is a budget, not a location.*
+
+  **Independent of the choice**, and the bulk of the work either way: `cmd/pkg.c`
+  moves from **v1** (a directory of copied bytes under `/pkg/<name>/<version>`)
+  to the shape type.md accepted on 2026-09-02 — **`/pkg/<name>` a declaration
+  file**, bytes in `/store`, install a **bind**, remove an **unbind**
+  ([RESEARCH §9.25](../RESEARCH.md)).
 
 - **(2026-09-04) `/` IS A PROJECT INSTANTIATED FROM `/template/system` — AND
   BOOT READS `/namespace`, THE INSTANCE'S OWN CONFIGURATION, NOT THE TEMPLATE.

@@ -14,7 +14,7 @@ repository (2026-09-02).
 
 ## The suite
 
-**152 tests, 0 failures** — measured 2026-09-04 on wasmtime, on the Rust core
+**153 tests, 0 failures** — measured 2026-09-04 on wasmtime, on the Rust core
 under Node, and on the frozen oracle, with the two hosts that run the Rust core
 identical assertion for assertion. The count **fell from 165 by design**: P1
 step 3 deleted the ten link assertions and step 4 six of the nine uid ones,
@@ -219,7 +219,24 @@ Nothing new was named — `/namespace` is `/profile`/`/pkg`/`/template`'s one
 format, settled 2026-09-02. *Instantiate once, boot many times*: an
 instantiated `/` may be modified and saved back as a new template.
 
-**P2 step 5 is measured but NOT started** (2026-09-04, [RESEARCH §9.25](../RESEARCH.md)).
+**P2 step 5 is UNDER WAY — `storefs` landed, `pkg` v2 has not.**
+
+**Landed** (2026-09-04): **`userspace/cmd/storefs.c`**, the store's file server.
+`/store` is served by a **userspace** program over a host directory — decided
+2026-09-04, [design.md](design.md) — so the spec's one load-bearing rule,
+*"a store entry never changes after verification"*, is enforced by a program
+IPNX owns rather than promised by the host. It **streams**: every read is a
+`pread` straight through, because a guest caps at 16 MB and one package is
+29 MB. Proved through a real mount: an existing entry refuses to be rewritten
+(and is verifiably unchanged after the attempt), a new entry is created and
+reads back at full length. Passes on all three hosts.
+
+**Still to do for step 5:** `cmd/pkg.c` from v1 to the spec'd shape —
+`/pkg/<name>` a declaration file, bytes in `/store`, install a **bind**, remove
+an **unbind** — then Go and Python move out of the rootfs seed. Only then does
+step 2's delete half become possible.
+
+**The measurement that framed it** (2026-09-04, [RESEARCH §9.25](../RESEARCH.md)).
 The plan's step 5 cites `type.md` for *"`/pkg/<name>/<version>` subtrees"* — but
 that is what `cmd/pkg.c` implements (**pkg v1**), not what type.md accepted on
 2026-09-02: **`/pkg/<name>` is a declaration file** and the bytes live in

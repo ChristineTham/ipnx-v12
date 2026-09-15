@@ -528,7 +528,20 @@ digest is pinned in the declaration.
 > is the safest default and costs little, since a declaration you deleted was a
 > decision you made.
 
-> **DECIDED at the stated lean, 2026-09-02 — who serves `/store`.** It must be immutable-after-write,
+> **DECIDED 2026-09-04 — `/store` IS SERVED BY A USERSPACE FILE SERVER over a
+> host directory.** Christine, choosing between the two this paragraph had
+> weighed without stating a lean: **verification lives inside IPNX**, not in a
+> promise the host makes. `storefs` reads the host's directory through `#Z` and
+> serves `/store` over 9P, so *"a store entry never changes after verification"*
+> is a rule a program we own enforces, and *"a name that would bind over
+> different bytes is refused"* is checkable at install rather than debuggable
+> afterwards. It costs one process at boot, and it **streams** — it must never
+> hold the bytes, because a guest's linear memory caps at 16 MB and one package
+> is 29 MB ([RESEARCH §9.24](../RESEARCH.md)).
+>
+> The original weighing, kept because it is what the decision chose between:
+>
+> **2026-09-02.** It must be immutable-after-write,
 > reachable by every process that binds from it, and durable across boots — so
 > it is either host storage behind `#Z` (durable, but the host owns the
 > integrity guarantee) or a userspace file server over a host directory
