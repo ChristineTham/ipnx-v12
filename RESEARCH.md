@@ -1971,6 +1971,14 @@ because the ordering is Christine's to change.
 > one answer**, which is the strongest evidence either was framed correctly.
 > The dependency on step 5 stands — the packages must actually move — but it is
 > a sequencing fact now, not a design obstacle.
+>
+> **And the bootstrap ordering went the same way.** Boot reads **`/namespace`**
+> — the instantiated `/`'s own configuration, not the template — and **the host
+> reads it**, because the host already owns the storage. So the third thing
+> this step looked blocked on was not a problem either: no kernel addition, no
+> `#/boot` equivalent, nothing to carry inside the kernel. Three obstacles, one
+> answer, and the answer was a distinction already in the specs — **a template
+> is a proto thing, and the instance is what runs.**
 
 **The general form, which is worth more than the instance:** a step that moves
 a responsibility from the kernel into a process inherits *that process's*

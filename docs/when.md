@@ -209,13 +209,15 @@ on two things, one of them newly measured:**
   and Python leave it and become packages, which is P2 step 5. **The plan's
   step 2 therefore depends on step 5**, which the plan does not say.
 
-**The boot path's name is settled** (2026-09-04, [design.md](design.md)): `/` is
-a **project instantiated from the system template**, and the boot path is that
-template's configuration — **`/template/system`**. Nothing new was named; the
-thing turned out to be an instance of `/profile`/`/pkg`/`/template`'s one
-format, settled 2026-09-02. **What remains open in P2 step 3 is the bootstrap
-ordering**, not the name: what reads `/template/system` before `/` exists to
-read it from.
+**P2 step 3 is fully specified** (2026-09-04, [design.md](design.md)), name and
+ordering both. `/` is a **project instantiated from `/template/system`**, and
+**boot reads `/namespace`** — the instance's own configuration, living in `/`
+because `/` *is* the project. **The template is not consulted at boot**, and
+**the host reads `/namespace` and creates the rest of `/` from it**: no kernel
+addition, no `#/boot` equivalent, because the host already owns the storage.
+Nothing new was named — `/namespace` is `/profile`/`/pkg`/`/template`'s one
+format, settled 2026-09-02. *Instantiate once, boot many times*: an
+instantiated `/` may be modified and saved back as a new template.
 
 ## Replanned 2026-09-04 — what follows is LEGACY state
 

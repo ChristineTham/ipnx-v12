@@ -72,7 +72,7 @@ says what was replaced and by what.*
 | 2026-09-02 | A manager's window is at `/dev/window/`, not directly in `/dev` |
 | 2026-09-03 | A move out of the kernel runs both answers and asserts they agree |
 | 2026-09-03 | A posted service name must be instance-qualified, because `#s` is global |
-| 2026-09-04 | `/` is a project instantiated from the SYSTEM TEMPLATE — `/template/system` |
+| 2026-09-04 | `/` is a project instantiated from `/template/system`; BOOT READS `/namespace`, and the host does it |
 | 2026-09-04 | `/boot` is the loader's name and is not available — the boot path needs one |
 | 2026-09-04 | The suite's floor is what passes on the PURE kernel |
 | 2026-09-04 | Replanned: three layers, the demo a milestone, the code legacy |
@@ -147,9 +147,9 @@ says what was replaced and by what.*
 </details>
 
 
-- **(2026-09-04) `/` IS A PROJECT INSTANTIATED FROM THE *SYSTEM TEMPLATE*, AND
-  THE BOOT PATH IS THAT TEMPLATE'S CONFIGURATION — `/template/system`.**
-  Christine, closing the gap the previous entry opened: *"we are talking about
+- **(2026-09-04) `/` IS A PROJECT INSTANTIATED FROM `/template/system` — AND
+  BOOT READS `/namespace`, THE INSTANCE'S OWN CONFIGURATION, NOT THE TEMPLATE.
+  THE HOST READS IT.** Christine, closing the gap the previous entry opened: *"we are talking about
   the system default namespace and profile. Since this is exactly what a
   template is (specifies a namespace) the system boot path is the template
   configuration file for `/` (think of `/` as a 'project' that has been
@@ -163,9 +163,9 @@ says what was replaced and by what.*
 
   | already decided | what it means here |
   |---|---|
-  | `/profile`, `/pkg` and `/template` are **one format, three registries** — *a list of bindings plus commands* | the boot namespace is a template's binding list. `/lib/namespace`'s own header already half-claimed this |
+  | `/profile`, `/pkg` and `/template` are **one format, three registries** — *a list of bindings plus commands* | `/namespace` is that format, and `/lib/namespace`'s own header already half-claimed this |
   | a template **assembles a project's world**, its commands running **at instantiate** | booting *is* instantiating, and `init`/`rc` is the command that runs in the result |
-  | a template is a **directory** — declaration **plus a skeleton** | the system's skeleton is the small editable tree; `path /template/*` already recognises it |
+  | a template is a **directory** — declaration **plus a skeleton** | the system's skeleton is the small editable tree, **copied into `/` at instantiation**; `path /template/*` already recognises it |
   | **bind what stays shared, copy what becomes yours** | the bulk — Go, Python, the stdlib — is *bound* from the store as packages, never copied |
 
   **And it dissolves a measured obstacle by accident.** RESEARCH §9.24 found
@@ -175,12 +175,36 @@ says what was replaced and by what.*
   packages that **bind** from the store. The size problem and the naming
   problem had one answer.
 
-  **What is settled:** the name, the shape, and the format. **What is not:** the
-  bootstrap ordering — what reads `/template/system` before `/` exists to read
-  it from. Plan 9 answers the same question with files compiled into the kernel
-  image at `#/boot`; the equivalent here is an open question and P2 step 3's
-  remaining work. Naming it did not answer it, and the two should not be
-  conflated again.
+  **THE TEMPLATE IS NOT CONSULTED AT BOOT — and this session had it wrong
+  before she corrected it.** Her second statement: *"`/template/system` is the
+  template. The `/` namespace is a 'project' instantiated from that template.
+  Once instantiated, it can be modified, and saved as new template. You should
+  not be consulting `/template` at boot, the template configuration file is
+  stored in the `/` folder itself. So you should be reading `/namespace` or
+  equivalent — that can be done by the host, and used to create the rest of
+  `/`."*
+
+  So the sequence is **instantiate once, boot many times**:
+
+  | | |
+  |---|---|
+  | `/template/system` | the **template** — a proto `/`. Read when a system is *instantiated*, and never again |
+  | **`/namespace`** | the **instance's own** configuration, living in `/` because `/` is the project. This is what boot reads |
+  | modify, then save | an instantiated `/` can be changed and **saved back as a new template** — which is what makes the split worth having |
+
+  **And this answers the bootstrap ordering, which the first entry left open:
+  the HOST reads `/namespace` and creates the rest of `/` from it.** No kernel
+  addition, no `#/boot` equivalent, no chicken-and-egg: the host already owns
+  the storage, so reading one file out of it before anything else exists is
+  something it can simply do. Plan 9 needed files compiled into the kernel
+  image because its kernel had to find a file server; here the host *is* the
+  storage and hands the namespace over.
+
+  **The error worth recording**, because it is the same shape as the `/boot`
+  one: the first draft had boot reading `/template/system/namespace` — the
+  template — which would have made every boot a re-instantiation and left an
+  instantiated `/` unable to diverge from its template at all. A template is a
+  **proto** thing; consulting it at boot confuses the mould with the casting.
 
 - **(2026-09-04) `/boot` IS THE LOADER'S NAME AND IS NOT AVAILABLE — THE BOOT
   PATH NEEDS A NAME, AND THAT IS A GAP.** Christine, on P2 step 3: *"`/boot/boot`
