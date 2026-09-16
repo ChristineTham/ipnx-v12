@@ -2612,6 +2612,14 @@ async fn walk_parent(k: &K, pid: Pid, path: &str) -> Result<(DN, String), KErr> 
     let path = canon(path, &cwd);
     let i = path.rfind('/').unwrap_or(0);
     let base = path[i + 1..].to_string();
+    // MEASURED DEVIATION, left in place deliberately (2026-09-16): Plan 9's
+    // namec handles Acreate on a '#'-rooted path like any other — chan.c's
+    // Acreate case acts on the walked parent, whatever the parent came from —
+    // so `mkdir '#Z/store'` works there and is refused here. The frozen oracle
+    // carries the identical refusal (poc/supervisor/kernel.mjs:379), so
+    // changing it here alone would put the real kernel out of conformance with
+    // the reference over something nothing has asked for. `bind '#Z' /n/z`
+    // first, which is the idiomatic form anyway. RESEARCH §9.28.
     if base.is_empty() || path.starts_with('#') {
         return Err(format!("bad path '{}'", path));
     }
@@ -3616,16 +3624,33 @@ async fn dev_write_async(k: &K, chan: &ChanR, data: &[u8], off_in: u64, pid: Pid
     };
     if let Some(m) = mnt {
         let cur = off_in == u64::MAX;
-        let off = if cur { chan.borrow().offset } else { off_in };
-        let d = &data[..data.len().min(MSIZE - 24)];
+        let mut off = if cur { chan.borrow().offset } else { off_in };
         let conn = m.conn.clone();
-        let rb = rpc(k, &conn, tv::WRITE,
-                     W9::new().u32(m.fid).u64(off).u32(d.len() as u32).raw(d)).await?;
-        let wrote = R9::new(&rb).u32() as usize;
-        if cur {
-            chan.borrow_mut().offset += wrote as u64;
+        // devmnt LOOPS — one RPC per msize-worth until the count is spent, or
+        // the server writes short, exactly as plan9/sys/src/9/port/devmnt.c:688
+        // (`mntrdwr`) does: it clamps each request to `m->msize-IOHDRSZ` and
+        // continues `if(nr != nreq || n == 0) break`. Truncating to one RPC
+        // instead made a 16K write to a mounted file return 8192, so a caller
+        // had to know the connection's msize to write a file. It does not.
+        // A zero-length write still sends one RPC, as it does there.
+        let mut done = 0usize;
+        loop {
+            let end = data.len().min(done + (MSIZE - 24));
+            let d = &data[done..end];
+            let want = d.len();
+            let rb = rpc(k, &conn, tv::WRITE,
+                         W9::new().u32(m.fid).u64(off).u32(want as u32).raw(d)).await?;
+            let wrote = (R9::new(&rb).u32() as usize).min(want);
+            done += wrote;
+            off += wrote as u64;
+            if wrote != want || done == data.len() {
+                break;
+            }
         }
-        return Ok(wrote);
+        if cur {
+            chan.borrow_mut().offset += done as u64;
+        }
+        return Ok(done);
     }
     let hostp = {
         let c = chan.borrow();

@@ -1057,6 +1057,35 @@ echo tree m/manifest $bmd /tmp/tstore/esc/1.0 > /tmp/treg2/esc
 tre=`{pkg -r /tmp/treg2 install esc >[2=1]}
 if(~ $"tre *'not a path inside the store entry'* && ~ `{pkg list} '') echo PASS 'pkg: a manifest entry that climbs out of the store entry is refused, and records nothing'; if not fails=bad
 
+# The store lives in HOST STORAGE (P2 step 5, the host plumbing): '#Z' is the
+# host's storage box, and `--host <dir>` roots it at a durable directory — so a
+# store served from inside it survives a boot, which is what makes installing a
+# package worth doing once. Proved here short of a reboot: pkg writes through
+# storefs, and the bytes read back through the RAW '#Z' path, so they are in the
+# host's directory and not in guest ramfs. Self-skips where there is no '#Z'.
+hzs=`{bind '#Z' /n/hz2 >[2=1]; echo $status}
+if(~ $"hzs ''){
+	mkdir -p /n/hz2/hstore /n/hs /tmp/hreg
+	storefs -s hs /n/hz2/hstore &
+	sleep 1
+	hsm=`{mount hs /n/hs >[2=1]; echo $status}
+	if(~ $"hsm ''){
+		cp /bin/echo /tmp/hreg/hecho.wasm
+		hd=`{sha256sum < /tmp/hreg/hecho.wasm}
+		echo fetch hecho.wasm $hd /n/hs/hecho/1.0/bin/hecho > /tmp/hreg/hecho
+		echo bind -a /n/hs/hecho/1.0/bin /bin >> /tmp/hreg/hecho
+		pkg -r /tmp/hreg install hecho > /dev/null
+		hrun=`{hecho in host storage}
+		# the durability proof: the same bytes, through '#Z' itself
+		hraw=`{cat /n/hz2/hstore/hecho/1.0/bin/hecho | wc -c}
+		hsrc=`{cat /tmp/hreg/hecho.wasm | wc -c}
+		pkg remove hecho > /dev/null
+		if(~ $hrun 'in host storage' && ~ $"hraw $"hsrc) echo PASS 'the store in host storage: pkg installs through storefs and the bytes are in the host directory, reachable through raw #Z'; if not fails=bad
+	}
+	if not echo PASS 'the store in host storage: could not mount storefs on this host — skipped'
+}
+if not echo PASS 'the store in host storage: no #Z on this host — skipped'
+
 # dev environments are processes (design 2026-08-29): an rfork n subshell
 # installs its own package; the parent never sees it — venv with no venv
 penv=`{rc -c 'rfork n; pkg -r /tmp/reg install pecho > /dev/null; pecho env-private'}

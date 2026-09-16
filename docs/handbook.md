@@ -101,6 +101,19 @@ cargo build --release --target wasm32-unknown-unknown -p browserhost  # the kern
 node demo/supervisor/main-rust.mjs userspace/rootfs  # the Rust core under Node
 ```
 
+**`--host <dir>` gives `#Z` a durable home** (both the wasmtime host and the
+Node one; the browser is already durable). Without it `#Z` is a per-boot temp
+directory that leaves nothing behind, which is what the suite wants and what a
+persistent `/store` cannot use:
+
+```bash
+cargo run --release -p host -- userspace/rootfs --host ~/ipnx-storage
+```
+
+Inside the guest, `bind '#Z' /n/z` first — a `#`-rooted path can be walked and
+read but not created in ([RESEARCH §9.28](../RESEARCH.md) records why, and that
+it is a measured deviation from Plan 9 left in place deliberately).
+
 Green is: init (pid 1) prints the suite's `PASS` lines — the floor is 131 —
 and exits 0. Any other exit is a failure even if PASS lines appeared.
 

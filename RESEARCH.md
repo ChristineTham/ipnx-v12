@@ -2129,6 +2129,65 @@ buffer** rather than using a static one, because `apply()` reads a declaration
 while `dotree()` reads a manifest: the two are nested, and a shared buffer
 would have interleaved them.
 
+### 9.28 The host plumbing for `/store` — and a defect it exposed (2026-09-16)
+
+**What the step needed.** `/store` must survive a boot, or `pkg install` is
+worth doing once per boot rather than once. `#Z` was rooted at the rootfs dir
+(`--live`) or a per-boot temp dir, so there was nowhere for it to live.
+
+**The change is entirely host-side, and the kernel proves it.** `set_hostfs`
+takes the directory and **discards it** — *"the HOST keeps the real root"* — so
+the kernel only ever sees root-relative paths. `--host <dir>` therefore adds a
+durable `#Z` root to `hosts/macos/src/main.rs` and `demo/supervisor/main-rust.mjs`
+with **no kernel change at all**. The browser was already durable (OPFS or a
+picked directory). No host knows the name `store`: what goes inside the
+directory is IPNX's business, which is what keeps the host a storage box.
+
+**Measured, not asserted — two boots:**
+
+```
+$ ... --host /tmp/ipnxstore -i   <<< "bind '#Z' /n/z; echo persisted > /n/z/store/demo/proof"
+$ ... --host /tmp/ipnxstore -i   <<< "bind '#Z' /n/z; cat /n/z/store/demo/proof"
+persisted-across-boots
+```
+
+A separate boot of the host read back what the first one wrote. The suite
+proves the rest short of a reboot: `pkg` installs through `storefs` and the
+bytes read back through the **raw `#Z` path**, so they are in the host's
+directory and not in guest ramfs.
+
+**A KERNEL DEFECT THIS EXPOSED, and `pkg`'s strictness is what caught it.**
+The first run failed with `pkg: short write on /n/hs/hecho/1.0/bin/hecho`.
+Measured: `MSIZE` is **8216** (8192 data + IOHDRSZ), `pkg`'s `sink` writes in
+**16384**-byte chunks, and our `devmnt` write did **one** RPC clamped to
+`MSIZE-24` and returned the short count. Plan 9 does not:
+`plan9/sys/src/9/port/devmnt.c:688` (`mntrdwr`) **loops** — it clamps each
+request to `m->msize-IOHDRSZ` and continues until `if(nr != nreq || n == 0)
+break`. So a 16 KB write to a mounted file is written whole there, and a caller
+never needs to know the connection's msize. Ours now loops the same way, with a
+zero-length write still sending one RPC as it does there.
+
+`pkg` was **left strict** — it still treats a short write as fatal. A program
+that loops would have papered over the kernel bug and the suite would have
+stayed green. The strictness is the detector.
+
+**The frozen oracle keeps the v0 shortcut** (`poc/supervisor/mnt9p.mjs`: one
+RPC, `data.subarray(0, MSIZE-24)`), so this property cannot be asserted there —
+the assertion that covers it self-skips on the oracle anyway, for the
+independent reason that the oracle has no `#Z`.
+
+**A SECOND DEVIATION, MEASURED AND DELIBERATELY LEFT.** `mkdir '#Z/store'` is
+refused with *"bad path"* while `cat '#Z/store/demo/proof'` works: `walk_parent`
+rejects **every** `#`-rooted path for create. Plan 9 does not — `namec`'s
+`Acreate` case (`plan9/sys/src/9/port/chan.c:1540`) acts on the walked parent
+whatever the parent came from, so `create("#s/foo")` is ordinary there. It is
+**not** fixed here, for a reason that is about governance rather than code: the
+frozen oracle carries the identical refusal
+(`poc/supervisor/kernel.mjs:379`), so changing the real kernel alone would put
+it out of conformance with the reference over something nothing asked for, and
+the workaround — `bind '#Z' /n/z` first — is the idiomatic Plan 9 form anyway.
+One line each side if Christine wants them aligned. Recorded rather than done.
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on

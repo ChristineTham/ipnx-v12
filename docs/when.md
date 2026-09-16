@@ -252,12 +252,28 @@ file from the store — then one tampered byte comes back `ALTERED` by name. A
 second assertion refuses a manifest entry that climbs out of the store entry:
 *a digest authenticates bytes, it does not authorise what they say.*
 
+**And the host plumbing landed** (2026-09-16, [RESEARCH §9.28](../RESEARCH.md)):
+`--host <dir>` roots `#Z` at a **durable** directory on both the wasmtime host
+and the Node one (the browser was already durable — OPFS or a picked folder),
+so `/store` has somewhere to live across a boot. **No kernel changed**:
+`set_hostfs` takes the directory and discards it, because the host keeps the
+real root. Measured across two separate boots of the host — the second read
+back what the first wrote — and asserted in the suite short of a reboot: `pkg`
+installs through `storefs` and the bytes read back through the raw `#Z` path,
+so they are in the host's directory and not in guest ramfs.
+
+**A kernel defect that exposed** — `devmnt`'s write did one RPC and returned a
+short count, so a 16 KB write to a mounted file wrote 8192. Plan 9's `mntrdwr`
+loops (`devmnt.c:688`); ours now does too. `pkg` was left strict about short
+writes deliberately: it is the detector that caught this.
+
 **Still to do for step 5:** Go and Python actually move out of the rootfs seed.
-What remains is **host plumbing** — `#Z` is rooted at the rootfs dir or a
-per-boot temp dir, so there is nowhere for a store to live across boots. Both
-mechanisms the move needs now exist. Measured: without python, its stdlib and
-the Go binaries the rootfs is **3.4 MB** against a 16 MB ceiling — so all three
-must move, and the stdlib is what the tree form was for.
+Every mechanism that needs now exists — the store, its server, the declaration
+format, the tree form, and somewhere durable to put it. What remains is the
+**move itself**, and it reaches into the boot path (step 3): the seed drops the
+binaries and the boot namespace binds them back from the store. Measured:
+without python, its stdlib and the Go binaries the rootfs is **3.4 MB** against
+a 16 MB ceiling.
 
 **The measurement that framed it** (2026-09-04, [RESEARCH §9.25](../RESEARCH.md)).
 The plan's step 5 cites `type.md` for *"`/pkg/<name>/<version>` subtrees"* — but

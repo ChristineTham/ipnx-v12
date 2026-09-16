@@ -231,9 +231,33 @@ fn host_now_ms() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
 }
 
+/// The first non-flag argument, skipping any flag's VALUE. Before `--host`
+/// existed every flag was a bare word, so `args[1]` was the rootfs — it is not
+/// once a flag takes an argument, and `host -i` already read "-i" as the tree.
+fn positional(args: &[String]) -> Option<String> {
+    let mut i = 1;
+    while i < args.len() {
+        if args[i] == "--host" {
+            i += 2;                     // the flag and the directory it names
+            continue;
+        }
+        if args[i].starts_with('-') {
+            i += 1;
+            continue;
+        }
+        return Some(args[i].clone());
+    }
+    None
+}
+
+/// `--host <dir>`: the DURABLE directory '#Z' serves.
+fn hostdir(args: &[String]) -> Option<String> {
+    args.iter().position(|a| a == "--host").and_then(|i| args.get(i + 1)).cloned()
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let rootdir = args.get(1).cloned().unwrap_or_else(|| "userspace/rootfs".into());
+    let rootdir = positional(&args).unwrap_or_else(|| "userspace/rootfs".into());
     let interactive = args.iter().any(|a| a == "-i");
     let app_mode = args.iter().any(|a| a == "--app");
     let verbose = std::env::var("KDBG").is_ok();
@@ -267,11 +291,25 @@ fn kernel_world(rootdir: &str, interactive: bool, verbose: bool, app_mode: bool,
     let live = args.iter().any(|a| a == "--live");
     let seed = load_seed(std::path::Path::new(&rootdir), "/").expect("rootfs seed");
     let mut kern = Kernel::new(&seed, "kitty");
-    // M4: '#Z' serves a host directory. --live points it at the rootfs dir
-    // itself AND makes it the implicit root — boot from the real tree,
-    // writes persist. Otherwise a per-boot temp dir backs '#Z' so the
-    // suite's hostfs test has something real to exercise.
-    let host_root = if live {
+    // M4: '#Z' serves a host directory. Three sources, in this order:
+    //
+    //   --host <dir>  a DURABLE directory — the host's storage box, and the
+    //                 only one of the three that survives a boot. This is
+    //                 what gives '/store' somewhere to live, so that
+    //                 `pkg install python` is worth doing once (P2 step 5).
+    //   --live        the rootfs dir itself, which ALSO becomes the implicit
+    //                 root — boot from the real tree, writes persist.
+    //   (neither)     a per-boot temp dir, so the suite's hostfs test has
+    //                 something real to exercise and leaves nothing behind.
+    //
+    // The host creates the directory and nothing else: what goes INSIDE it is
+    // IPNX's business, not the host's, so `store` is a name this file does not
+    // know. The host stays a storage box.
+    let host_root = if let Some(d) = hostdir(&args) {
+        let p = std::path::PathBuf::from(&d);
+        std::fs::create_dir_all(&p).unwrap_or_else(|e| panic!("--host {}: {}", d, e));
+        std::fs::canonicalize(&p).unwrap_or_else(|e| panic!("--host {}: {}", d, e))
+    } else if live {
         std::fs::canonicalize(&rootdir).expect("rootdir")
     } else {
         let t = std::env::temp_dir().join(format!("ipnx-z-{}", std::process::id()));

@@ -109,6 +109,13 @@ kernel speaks root-relative paths; **the host owns the real root and the
 canonicalise-under-root check**, which is why the security property lives on
 the side that can enforce it.
 
+**Which directory that is, is the host's to choose, and the kernel cannot
+tell** — `set_hostfs` takes the path and discards it (`kernel/src/lib.rs`: *"the
+HOST keeps the real root"*). So `--host <dir>` names a **durable** directory and
+`/store` gains somewhere to live across a boot without a line of kernel
+changing (2026-09-16). What goes *inside* that directory is IPNX's business,
+not the host's: no host knows the name `store`.
+
 Nothing else in the table may be invented on this reasoning. The exception is
 the *machine* being different, not the system being different, and that is a
 single boundary rather than a licence.

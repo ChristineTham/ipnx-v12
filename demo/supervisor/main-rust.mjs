@@ -10,8 +10,15 @@ import { dirname, join } from "node:path";
 import { boot } from "./rustkern.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
-const rootdir = process.argv[2] ?? join(here, "..", "..", "userspace", "rootfs");
-const interactive = process.argv.includes("-i");
+const argv = process.argv.slice(2);
+// `--host <dir>` takes a VALUE, so the rootfs is the first word that is
+// neither a flag nor a flag's argument — `argv[0]` was enough only while every
+// flag was a bare word.
+const hi = argv.indexOf("--host");
+const hostdir = hi >= 0 ? argv[hi + 1] : null;
+const rootdir = argv.find((a, i) => !a.startsWith("-") && !(hi >= 0 && i === hi + 1))
+  ?? join(here, "..", "..", "userspace", "rootfs");
+const interactive = argv.includes("-i");
 
 function loadSeed(dir, name = "/") {
   const st = fs.statSync(dir);
@@ -21,8 +28,14 @@ function loadSeed(dir, name = "/") {
   return { name, dir: false, data: new Uint8Array(fs.readFileSync(dir)) };
 }
 
-// '#Z' over node:fs, rooted in a per-run temp dir (the suite's hostfs test)
-const zroot = fs.mkdtempSync(join(os.tmpdir(), "ipnx-z-"));
+// '#Z' over node:fs. `--host <dir>` names a DURABLE directory — the host's
+// storage box, which is what gives '/store' somewhere to live across a boot
+// (P2 step 5). Without it, a per-run temp dir, so the suite's hostfs test has
+// something real to exercise and leaves nothing behind. What goes INSIDE the
+// directory is IPNX's business: `store` is a name this file does not know.
+const zroot = hostdir
+  ? (fs.mkdirSync(hostdir, { recursive: true }), fs.realpathSync(hostdir))
+  : fs.mkdtempSync(join(os.tmpdir(), "ipnx-z-"));
 const at = (rel) => {
   const p = rel ? join(zroot, rel) : zroot;
   const probe = fs.existsSync(p) ? p : dirname(p);
