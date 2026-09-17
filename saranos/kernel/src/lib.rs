@@ -1,78 +1,73 @@
-//! The IPNX kernel — an original implementation of Plan 9's architecture.
+//! The IPNX kernel — a SUBSET of Plan 9's kernel, containing process
+//! orchestration.
 //!
-//! It runs as an ordinary userspace process on each platform. Processes are
-//! WebAssembly instances and `exec` is instantiation. Every process has its own
-//! namespace, and every non-process syscall resolves through it. 9P is the only
-//! IPC: devices present the file interface as function calls, and exactly one
-//! driver marshals wire 9P at mount boundaries.
+//! That sentence is the whole specification, and both halves bind. **Subset**:
+//! nothing here is invented. Every call is one of Plan 9's 51, every device
+//! letter is one of Plan 9's, every flag has Plan 9's value and meaning; where
+//! this kernel differs from Plan 9's it does so by LACKING something, never by
+//! adding. **Process orchestration**: processes, the three tables they own,
+//! the namespace, and the channels between them. Everything a system does
+//! beyond that is done BY processes, talking to each other — so a console, a
+//! clock, a store, a window system are all file servers in userspace, and none
+//! of them is the kernel's business.
 //!
-//! **The kernel is a pure state machine: syscalls in, effects out.** It does no
-//! I/O, owns no threads, and knows nothing about the platform underneath. Every
-//! act that touches the world outside — a byte to a console, a file read, a
-//! process instantiated — leaves as an [`Effect`] for the host to perform and
-//! answer. That is what lets one kernel serve a terminal, a browser tab and a
-//! hypervisor without a line of it changing.
-//!
-//! **The kernel does not grow.** It handles process orchestration and nothing
-//! else; anything else belongs to the host or to userspace. A change that adds
-//! to it is wrong before it is weighed.
+//! The test of a proposed change is not whether it is useful. It is whether
+//! Plan 9 has it, and whether orchestrating processes requires it.
 
 pub mod dev;
 pub mod ninep;
 pub mod ns;
+pub mod proc;
 
-/// A process id. Pid 1 is `init`, as it is everywhere.
-pub type Pid = u32;
+pub use proc::{Fd, Pid};
 
-/// What the kernel asks the host to do.
+/// The calls this kernel answers — a subset of Plan 9's, named as Plan 9 names
+/// them.
 ///
-/// This list is SHORT and it is meant to stay short. Every variant is something
-/// no kernel can do for itself on any substrate — not something convenient to
-/// push outwards. Adding one is a claim that the kernel has grown, and has to
-/// be argued as one.
-///
-/// **There is no variant for a device, and there will not be.** The host owns
-/// the machine, so what the host owns arrives as FILES IT SERVES and the kernel
-/// mounts — the console, the clock, randomness, storage, all the same case,
-/// none of them an effect. The alternative is a variant per file: Plan 9's `#c`
-/// alone serves `cons`, `time`, `random` and `reboot`, so that road adds four
-/// before it reaches a second device. 9P is the only IPC, and this is what that
-/// rule is for.
+/// What is absent is as deliberate as what is present. There is no call for
+/// drawing, for time, for randomness or for fetching: those are reads and
+/// writes on files that userspace processes serve. There is no `link`, because
+/// Plan 9 has none at any layer and answers the need with `bind` and `mount`.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Effect {
-    /// Instantiate a process image. `exec` is instantiation, and only the host
-    /// holds the engine that can do it.
-    Spawn { tag: u64, pid: Pid, path: String, args: Vec<String> },
-    /// A process has ended and the host may reclaim it.
-    Reap { pid: Pid, status: String },
-    /// Bytes out on a channel the host holds — one end of a 9P connection to
-    /// something the host serves, or a process's own mailbox. This is
-    /// transport, not knowledge: the kernel says which channel and what bytes,
-    /// and nothing here knows what is on the other side.
-    Send { tag: u64, chan: u32, data: Vec<u8> },
-    /// Stop.
-    Shutdown { status: i32 },
+pub enum Call {
+    // processes
+    Rfork { flags: i32 },
+    Exec { path: String, args: Vec<String> },
+    Exits { status: String },
+    Await,
+    Sleep { ms: u64 },
+    Alarm { ms: u64 },
+    Notify,
+    Noted { how: i32 },
+    Rendezvous { tag: u64, val: u64 },
+
+    // the namespace
+    Bind { name: String, old: String, flag: i32 },
+    Mount { fd: Fd, afd: Fd, old: String, flag: i32, aname: String },
+    Unmount { name: Option<String>, old: String },
+    Chdir { path: String },
+
+    // channels
+    Open { path: String, mode: i32 },
+    Create { path: String, mode: i32, perm: u32 },
+    Close { fd: Fd },
+    Pread { fd: Fd, n: usize, off: i64 },
+    Pwrite { fd: Fd, data: Vec<u8>, off: i64 },
+    Seek { fd: Fd, off: i64, whence: i32 },
+    Dup { old: Fd, new: Fd },
+    Pipe,
+    Remove { path: String },
+    Stat { path: String },
+    Fstat { fd: Fd },
+    Wstat { path: String, edir: Vec<u8> },
+    Fwstat { fd: Fd, edir: Vec<u8> },
+    Fversion { fd: Fd, msize: u32, version: String },
+    Errstr,
 }
 
-/// The host's answer to an [`Effect`].
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Reply {
-    Ok { tag: u64 },
-    /// Bytes in from a channel the host holds. Same shape as `Send`, same
-    /// ignorance: the kernel does not know what served them.
-    Bytes { tag: u64, chan: u32, data: Vec<u8> },
-    Err { tag: u64, msg: String },
-}
-
-/// The kernel's state.
-///
-/// It is single-threaded and owns no synchronisation: a host that wants
-/// parallelism runs processes in parallel and hands their syscalls here one at
-/// a time. That is a constraint on hosts, and a simplification worth its price.
+/// The kernel.
 pub struct Kernel {
-    next_pid: Pid,
-    next_tag: u64,
-    out: Vec<Effect>,
+    pub procs: proc::Procs,
 }
 
 impl Default for Kernel {
@@ -83,46 +78,7 @@ impl Default for Kernel {
 
 impl Kernel {
     pub fn new() -> Self {
-        Kernel { next_pid: 1, next_tag: 1, out: Vec::new() }
-    }
-
-    /// Take the effects produced since the last call. A host drains this after
-    /// every syscall and after every reply it delivers.
-    pub fn take_effects(&mut self) -> Vec<Effect> {
-        std::mem::take(&mut self.out)
-    }
-
-    fn tag(&mut self) -> u64 {
-        let t = self.next_tag;
-        self.next_tag += 1;
-        t
-    }
-
-    /// Boot: instantiate pid 1. The namespace it starts with is the host's to
-    /// supply — the host owns the storage, so reading the instance's own
-    /// configuration before anything else exists is something only it can do.
-    pub fn boot(&mut self, path: &str, args: &[&str]) -> Pid {
-        let pid = self.next_pid;
-        self.next_pid += 1;
-        let tag = self.tag();
-        self.out.push(Effect::Spawn {
-            tag,
-            pid,
-            path: path.to_string(),
-            args: args.iter().map(|s| s.to_string()).collect(),
-        });
-        pid
-    }
-
-    /// Bytes out on a host-held channel.
-    pub fn send(&mut self, chan: u32, data: &[u8]) -> u64 {
-        let tag = self.tag();
-        self.out.push(Effect::Send { tag, chan, data: data.to_vec() });
-        tag
-    }
-
-    pub fn shutdown(&mut self, status: i32) {
-        self.out.push(Effect::Shutdown { status });
+        Kernel { procs: proc::Procs::new() }
     }
 }
 
@@ -131,53 +87,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn boot_instantiates_pid_one() {
-        let mut k = Kernel::new();
-        let pid = k.boot("/bin/init", &[]);
-        assert_eq!(pid, 1);
-        match &k.take_effects()[..] {
-            [Effect::Spawn { pid: 1, path, .. }] => assert_eq!(path, "/bin/init"),
-            other => panic!("expected one Spawn, got {other:?}"),
-        }
+    fn a_kernel_begins_with_pid_one() {
+        let k = Kernel::new();
+        assert_eq!(k.procs.count(), 1);
     }
 
     #[test]
-    fn the_kernel_does_no_io_it_only_asks() {
-        // Everything touching the world leaves as an effect. If this test ever
-        // needs a file handle or a socket to pass, the kernel has grown.
-        let mut k = Kernel::new();
-        k.send(3, b"hello");
-        k.shutdown(0);
-        match &k.take_effects()[..] {
-            [Effect::Send { chan: 3, data, .. }, Effect::Shutdown { status: 0 }] => {
-                assert_eq!(data, b"hello")
-            }
-            other => panic!("expected Send then Shutdown, got {other:?}"),
+    fn the_call_list_is_plan_nines_and_nothing_else() {
+        // Plan 9's syscall names, from plan9/sys/src/libc/9syscall/sys.h. A
+        // call here that is not in that file is an invention; a name for
+        // drawing, time, randomness, fetching or a store means someone put a
+        // file server in the kernel.
+        let plan9 = [
+            "ERRSTR", "BIND", "CHDIR", "CLOSE", "DUP", "ALARM", "EXEC", "EXITS", "FSESSION",
+            "FAUTH", "FSTAT", "SEGBRK", "MOUNT", "OPEN", "OSEEK", "SLEEP", "STAT", "RFORK",
+            "PIPE", "CREATE", "BRK_", "REMOVE", "WSTAT", "FWSTAT", "NOTIFY", "NOTED",
+            "SEGATTACH", "SEGDETACH", "SEGFREE", "SEGFLUSH", "RENDEZVOUS", "UNMOUNT", "WAIT",
+            "SEMACQUIRE", "SEMRELEASE", "SEEK", "FVERSION", "AWAIT", "PREAD", "PWRITE",
+            "TSEMACQUIRE", "NSEC",
+        ];
+        let ours = [
+            "RFORK", "EXEC", "EXITS", "AWAIT", "SLEEP", "ALARM", "NOTIFY", "NOTED",
+            "RENDEZVOUS", "BIND", "MOUNT", "UNMOUNT", "CHDIR", "OPEN", "CREATE", "CLOSE",
+            "PREAD", "PWRITE", "SEEK", "DUP", "PIPE", "REMOVE", "STAT", "FSTAT", "WSTAT",
+            "FWSTAT", "FVERSION", "ERRSTR",
+        ];
+        for c in ours {
+            assert!(plan9.contains(&c), "{c} is not one of Plan 9's calls");
         }
+        assert!(ours.len() < plan9.len(), "a subset is smaller than what it subsets");
     }
 
     #[test]
-    fn no_effect_names_a_device() {
-        // The guard on the rule above. The host owns the machine and serves it
-        // as files; a variant named for the console, the clock, randomness or
-        // storage means someone reached for an effect where a mount belongs.
-        // Plan 9's own #c serves cons, time, random and reboot, so the first
-        // such variant invites four.
-        let names = ["Spawn", "Reap", "Send", "Shutdown"];
-        for forbidden in ["Console", "Timer", "Clock", "Random", "Host", "Draw", "Store"] {
-            assert!(
-                !names.contains(&forbidden),
-                "{forbidden} is a device, and a device is a file server, not an effect"
-            );
+    fn the_kernel_has_no_call_for_what_a_file_server_does() {
+        // The guard on "everything else is communication between userspace
+        // processes". A console, a clock, a store, a window system are
+        // processes; reaching them is open/read/write and nothing more.
+        let ours = format!("{:?}", Call::Pipe) + &format!("{:?}", Call::Await);
+        for forbidden in ["Draw", "Time", "Nsec", "Random", "Fetch", "Store", "Window", "Console"] {
+            assert!(!ours.contains(forbidden), "{forbidden} belongs to a file server");
         }
-        assert_eq!(names.len(), 4, "the effect list grew; argue it, do not widen it");
-    }
-
-    #[test]
-    fn effects_are_drained_not_accumulated() {
-        let mut k = Kernel::new();
-        k.send(1, b"a");
-        assert_eq!(k.take_effects().len(), 1);
-        assert!(k.take_effects().is_empty());
     }
 }
