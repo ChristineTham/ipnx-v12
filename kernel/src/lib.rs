@@ -34,8 +34,12 @@
 //! *"`/dev/draw` should be rendered by host. the kernel does not know how to
 //! draw."*
 
+use dev::Dev as _;
+
 pub mod chan;
 pub mod dev;
+pub mod devroot;
+pub mod namec;
 pub mod ninep;
 pub mod ns;
 pub mod proc;
@@ -91,17 +95,55 @@ pub enum Call {
 /// The kernel.
 pub struct Kernel {
     pub procs: proc::Procs,
-}
-
-impl Default for Kernel {
-    fn default() -> Self {
-        Self::new()
-    }
+    pub tab: namec::Devtab,
 }
 
 impl Kernel {
-    pub fn new() -> Self {
-        Kernel { procs: proc::Procs::new() }
+    /// Boot: the kernel carries a root (`#/`, devroot) holding the files the
+    /// first process needs, and pid 1 starts with that as its `slash`. This is
+    /// Plan 9's arrangement — the kernel has just enough of a root to start
+    /// something, and that something mounts the real file server.
+    pub fn new(root: devroot::Root) -> Result<Kernel, String> {
+        let mut tab = namec::Devtab::new();
+        let mut root = root;
+        let slash = root.attach("")?;
+        tab.add(Box::new(root));
+        Ok(Kernel { procs: proc::Procs::new(slash), tab })
+    }
+
+    /// `exec`'s first two acts, and they are Plan 9's: resolve the name through
+    /// the calling process's namespace with `Aopen`/`OEXEC`
+    /// (`sysproc.c:302` — `tc = namec(file, Aopen, OEXEC, 0)`), then read the
+    /// image.
+    ///
+    /// What it does NOT do is start anything. In Plan 9 the rest of `sysexec`
+    /// builds segments and returns into the new text; here a process is a
+    /// WebAssembly instance, and instantiating one is the machine-dependent
+    /// half. That half is **not designed and not built** — see the plan's P1.
+    pub fn exec_image(&mut self, pid: Pid, path: &str) -> Result<Vec<u8>, String> {
+        let p = self.procs.get(pid).ok_or("no such process")?;
+        let (slash, dot, ns) = (p.slash.clone(), p.dot.clone(), p.ns.clone());
+        let ns = ns.borrow();
+        let mut c = namec::namec(
+            &mut self.tab,
+            &ns,
+            &slash,
+            &dot,
+            path,
+            namec::A::Open,
+            chan::mode::OEXEC,
+        )?;
+        let d = self.tab.get(c.dev).ok_or("no such device")?;
+        let mut image = Vec::new();
+        loop {
+            let got = d.read(&mut c, 8192, image.len() as u64)?;
+            if got.is_empty() {
+                break;
+            }
+            image.extend_from_slice(&got);
+        }
+        d.close(&mut c);
+        Ok(image)
     }
 }
 
@@ -109,10 +151,48 @@ impl Kernel {
 mod tests {
     use super::*;
 
-    #[test]
-    fn a_kernel_begins_with_pid_one() {
-        let k = Kernel::new();
-        assert_eq!(k.procs.count(), 1);
+    fn booted() -> Kernel {
+        let mut root = devroot::Root::new();
+        root.addbootfile("init", b"an image".to_vec());
+        Kernel::new(root).unwrap()
     }
 
+    #[test]
+    fn a_kernel_begins_with_pid_one() {
+        assert_eq!(booted().procs.count(), 1);
+    }
+
+    #[test]
+    fn exec_resolves_through_the_namespace_and_reads_the_image() {
+        let mut k = booted();
+        assert_eq!(k.exec_image(1, "/init").unwrap(), b"an image");
+    }
+
+    #[test]
+    fn exec_of_a_name_that_is_not_there_fails() {
+        let mut k = booted();
+        assert!(k.exec_image(1, "/nothing").is_err());
+    }
+
+    /// Not a conformance claim — a guard on THIS kernel against the mistake
+    /// its author kept making: a call Plan 9 does not have, or one that does
+    /// what a file server should.
+    #[test]
+    fn every_call_we_answer_is_one_of_plan_nines() {
+        let plan9 = "ERRSTR BIND CHDIR CLOSE DUP ALARM EXEC EXITS FSESSION FAUTH FSTAT \
+             SEGBRK MOUNT OPEN READ OSEEK SLEEP STAT RFORK WRITE PIPE CREATE BRK_ REMOVE \
+             WSTAT FWSTAT NOTIFY NOTED SEGATTACH SEGDETACH SEGFREE SEGFLUSH RENDEZVOUS \
+             UNMOUNT WAIT SEMACQUIRE SEMRELEASE SEEK FVERSION AWAIT PREAD PWRITE \
+             TSEMACQUIRE NSEC";
+        for c in "RFORK EXEC EXITS AWAIT SLEEP ALARM NOTIFY NOTED RENDEZVOUS BIND MOUNT \
+             UNMOUNT CHDIR OPEN CREATE CLOSE PREAD PWRITE SEEK DUP PIPE REMOVE STAT FSTAT \
+             WSTAT FWSTAT FVERSION ERRSTR"
+            .split_whitespace()
+        {
+            assert!(plan9.split_whitespace().any(|p| p == c), "{c} is not a Plan 9 syscall");
+            for forbidden in ["DRAW", "TIME", "RANDOM", "FETCH", "STORE", "WINDOW", "CONSOLE"] {
+                assert_ne!(c, forbidden, "{c} is a file server's job");
+            }
+        }
+    }
 }

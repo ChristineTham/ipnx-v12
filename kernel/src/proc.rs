@@ -97,7 +97,12 @@ pub struct Proc {
     pub ns: Rc<RefCell<Ns>>,
     pub fds: Rc<RefCell<Fds>>,
     pub env: Rc<RefCell<HashMap<String, String>>>,
-    pub cwd: String,
+    /// `up->slash` and `up->dot`. Plan 9 holds both as CHANNELS, not as text —
+    /// a name is resolved from a channel, so the process's idea of "/" and "."
+    /// is a channel too. An earlier version here kept `cwd` as a String, which
+    /// is the same mistake as keying the namespace by path.
+    pub slash: Chan,
+    pub dot: Chan,
     /// Set once the process has exited; `await` reports it and reaps.
     pub status: Option<String>,
     /// `RFNOWAIT`: the parent abandoned it, so no wait record is kept.
@@ -105,14 +110,15 @@ pub struct Proc {
 }
 
 impl Proc {
-    fn root(pid: Pid) -> Proc {
+    fn root(pid: Pid, slash: Chan) -> Proc {
         Proc {
             pid,
             ppid: 0,
             ns: Rc::new(RefCell::new(Ns::new())),
             fds: Rc::new(RefCell::new(Fds::default())),
             env: Rc::new(RefCell::new(HashMap::new())),
-            cwd: "/".to_string(),
+            dot: slash.clone(),
+            slash,
             status: None,
             waited: true,
         }
@@ -125,17 +131,12 @@ pub struct Procs {
     next: Pid,
 }
 
-impl Default for Procs {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Procs {
-    /// A fresh table with pid 1 in it, as every system has.
-    pub fn new() -> Self {
+    /// A fresh table with pid 1 in it. It takes the channel that is pid 1's
+    /// root, because a process without one cannot resolve a name at all.
+    pub fn new(slash: Chan) -> Self {
         let mut tab = HashMap::new();
-        tab.insert(1, Proc::root(1));
+        tab.insert(1, Proc::root(1, slash));
         Procs { tab, next: 2 }
     }
 
@@ -173,7 +174,8 @@ impl Procs {
             ns,
             fds,
             env,
-            cwd: parent.cwd.clone(),
+            slash: parent.slash.clone(),
+            dot: parent.dot.clone(),
             status: None,
             waited: flags & rf::NOWAIT != 0,
         };

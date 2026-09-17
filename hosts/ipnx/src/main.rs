@@ -1,4 +1,15 @@
-use ipnx_kernel::Kernel;
+//! `ipnx` — Saranos on a terminal.
+//!
+//! What the embedding is for, in Christine's words:
+//!
+//! > *"Only saranos knows about the host… I am a macOS app. I have a screen, a
+//! > keyboard and a mouse. I will serve these as virtual devices to the IPNX
+//! > kernel, which I am going to start."*
+//!
+//! So it starts the kernel and serves the machine; it does not answer for
+//! devices the kernel holds, because the kernel holds none of the machine's.
+
+use ipnx_kernel::{devroot::Root, Kernel};
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
@@ -8,16 +19,29 @@ fn main() {
         return;
     }
 
-    // The host gives the kernel a machine to run on and then gets out of the
-    // way. What it does NOT do is answer for devices: a console, a clock, a
-    // store are file servers in userspace, reached by processes over 9P, and
-    // the kernel has no call that names any of them.
-    //
-    // Next: instantiation. `exec` resolves a path through the process's
-    // namespace, reads the image, and the engine turns it into a running
-    // process. That engine is the host's, and it is the only thing here the
-    // kernel cannot do for itself.
-    let k = Kernel::new();
-    eprintln!("ipnx: kernel up, {} process", k.procs.count());
-    eprintln!("ipnx: no engine yet — exec is the next piece of work");
+    // The kernel carries a root holding what the first process needs. There is
+    // no userspace yet, so there is nothing real to put in it.
+    let mut root = Root::new();
+    root.addbootfile("init", b"# the first process, when there is one\n".to_vec());
+
+    let mut k = match Kernel::new(root) {
+        Ok(k) => k,
+        Err(e) => {
+            eprintln!("ipnx: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    match k.exec_image(1, "/init") {
+        Ok(image) => eprintln!("ipnx: resolved /init through the namespace, {} bytes", image.len()),
+        Err(e) => {
+            eprintln!("ipnx: /init: {e}");
+            std::process::exit(1);
+        }
+    }
+
+    // And here it stops. Turning an image into a running process is the
+    // machine-dependent half of exec — segments and the MMU in Plan 9, module
+    // instantiation here — and it is a deviation that has not been approved.
+    eprintln!("ipnx: no engine: instantiating a process is not designed yet");
 }

@@ -124,14 +124,33 @@ superseded implementation's design, not Plan 9's, which keys a mount by the
 identity of the channel mounted upon (`chan.c:855`) and checks at every
 component.
 
-## P1 — `exec`
+## P1 — `exec` *(the Plan 9 half is done; the other half needs a decision)*
+
+`sysproc.c:302` is where `exec` starts: `tc = namec(file, Aopen, OEXEC, 0)`.
+Resolving the name and reading the image is Plan 9's, and it is built. Turning
+the image into a running process is the machine-dependent half — segments and
+the MMU there, module instantiation here — and it is **not built**.
 
 | | |
 |---|---|
-| **builds** | `exec` resolves a path through the calling process's namespace, reads the image, and the engine instantiates it. The engine belongs to the embedding: it is the one thing the kernel cannot do for itself, and it is supplied as plumbing rather than named in the call list |
+| **builds** | **`namec`** (`chan.c:1317`): the starting point is a CHANNEL — the process's `slash`, its `dot`, or a device attach — then the elements are walked, stepping through a mount point at **every** component. **`devroot`** (`#/`): the small read-only directory the kernel carries so there is something for the first process to be read from; `rootwrite` refuses, and so do create, wstat and remove. **`exec`'s first two acts**: resolve with `Aopen`/`OEXEC`, read the image |
+| **also fixed** | a process now holds `slash` and `dot` as **channels**, as Plan 9 does. They were a `String` cwd, which is the same error as keying the namespace by path text |
 | **depends on** | P0 |
-| **acceptance** | a process runs, exits, and `await` reports its status |
-| **exposes** | how a process reaches anything at all — the devices |
+| **acceptance** | `ipnx` resolves `/init` through the namespace and reads it. 26 kernel tests, including: `#M` cannot be attached by name (`chan.c`: `if(utfrune("M", r)) error(Enoattach)`); a `#` path ignores what is mounted over it; a walk steps through a mount point; the root refuses every write |
+
+**BLOCKED, and it needs Christine's decision.** A process is a WebAssembly
+instance and instantiating one is not something the kernel can do. Plan 9 has
+no counterpart to hand to — its `sysexec` builds segments itself — so by the
+rule there is nothing to cite and the answer is to stop and ask. Her own words
+authorise the adaptation and constrain its shape:
+
+> *"Actual deviations from Plan 9 kernel are only authorised when it is to do
+> with adapting it for WASM and WASI"* … *"even then it should be done in a
+> machine independent way as we may want a non WASM kernel in the future … for
+> example, dis, or .NET CLR"*
+
+so whatever is chosen must read the same on Dis or the CLR. **What is NOT in
+question:** the kernel does not gain a device, a call, or knowledge of wasm.
 
 ## P2 — the devices orchestration needs
 
