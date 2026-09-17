@@ -6,7 +6,7 @@ is argued in [design.md](design.md); the *evidence* lives in
 [RESEARCH.md](../RESEARCH.md); the *sequence* is [implementation.md](implementation.md);
 the *practice* is [handbook.md](handbook.md); the *deployments and namespace map*
 are [platforms.md](platforms.md); *who a user is* — [identity.md](identity.md);
-the *history* is [poc.md](poc.md). This document carries no rationale and no
+This document carries no rationale and no
 chronology — if a sentence would start with "because," it belongs elsewhere and
 appears here as a link. It changes only when a contract changes, in the same
 commit as the change.
@@ -38,8 +38,6 @@ kernel/            the kernel core (Rust): pure state machine — syscalls in,
                    effects out — with its own single-threaded async executor
 hosts/macos/       embeds the core over wasmtime/Cranelift; threads as processes
 hosts/{oci,ipados,browser}/   the same contract, per implementation.md milestones
-poc/supervisor/    the FROZEN JS twin of core + host: the reference
-                   implementation and conformance oracle
 userspace/         the userspace (graduated at M0): libcs, vendored sources
                    (verbatim), commands, citizens, the rootfs seed, mk.sh,
                    VERSIONS (the measured toolchain, drift-warned)
@@ -51,173 +49,52 @@ ABI. The conformance suite binds all three.
 
 ## The kernel's shape
 
-- **A process** is: a pid, a parent, credentials (uname/ruid pair —
-  [identity.md](identity.md)), a namespace, an fd table, a wait queue, a note queue.
-- **The namespace** is a per-process mount map walked by longest matching
-  prefix. An entry is a **union list** (`bind -a/-b/-c` order); walks try
-  elements in order, directory reads concatenate integrally, creates land in
-  the element carrying MCREATE. Flagless `rfork` **shares** the parent's
-  namespace object; `RFNAMEG` copies it; `RFCNAMEG` starts it empty.
-- **The Dev table** — in-process devices, selected by `#` letter, presenting
-  the file interface as function calls:
+- **A process** is: a pid, a parent, a namespace, an fd table, a wait queue, a
+  note queue.
+- **`Chan`** is the object everything acts on. A walk produces one, an fd holds
+  one, a mount point is one, and every device operation takes one. Plan 9's
+  `struct Chan` (`portdat.h`), minus what a kernel without hardware has no use
+  for.
+- **The namespace** is a per-process table of mount points, and **a mount point
+  is a FILE, not a path**: Plan 9 keys it by the identity of the channel
+  mounted upon — `findmount(Chan**, Mhead**, int type, int dev, Qid qid)`,
+  `chan.c:855` — and a walk checks for a mount at **every component**. A bind
+  is therefore visible through every path that reaches the file. An entry is a
+  **union list** (`MREPL`/`MBEFORE`/`MAFTER`); walks try elements in order,
+  creates land in the element carrying `MCREATE`, and a union with none refuses
+  creates. Flagless `rfork` **shares** the namespace; `RFNAMEG` copies;
+  `RFCNAMEG` starts it empty — the same three-way rule the fd table and the
+  environment follow.
+- **The Dev table** is `struct Dev` (`portdat.h`): `attach walk stat open
+  create close read write remove wstat`. Omitted from it are `reset`, `init`,
+  `shutdown` and `power` (hardware lifecycle), `bread`/`bwrite` (the block fast
+  path) and `config`.
 
-  | dev | serves |
+**THE DEVICE LETTERS ARE PLAN 9'S, AND THERE IS NO EXCEPTION.** A device exists
+here only if Plan 9 has one, means the same by it, and spells it with the same
+letter. Seven, each because orchestrating processes requires it:
+
+  | dev | why the kernel has it |
   |---|---|
-  | `/` | **devroot** — a fixed, read-only table of empty mount points for a
-        namespace to bind over (`devroot.c`'s `rootreset`). Writes and creates
-        are refused; Plan 9's `rootwrite` is `error(Egreg)`. Ours omits Plan 9's
-        `boot` (the boot path's name is an open gap, and `/boot` is the
-        loader's) and `net`/`net.alt` (there is no `/net` yet) |
-  | `M` | **devmnt** — the mount driver, the only wire-9P marshal. **Not
-        attachable by name**: Plan 9's `mntattach` takes an internal struct
-        rather than a user spec (`devmnt.c`), so the driver is reached only
-        through `mount()`, and the letter is absent from the attach table for
-        that reason |
-  | `R` | the root ramfs (seeded at boot; V10 permission enforcement).
-        **Temporary and not Plan 9's** — it held `M` until 2026-09-04 and
-        leaves with `#V` when a userspace root file server replaces it |
-  | `c` | the console — `/dev/cons` (there is no `/dev/tty`) |
-  | `\|` | **devpipe** — each attach allocates two cross-connected streams,
-        `data` and `data1` (`pipe(3)`). **`pipe(2)` is an attach of this
-        device**, not a second mechanism: the syscall attaches, walks to both
-        names and opens them, exactly as Plan 9's `syspipe` does. A queue
-        hangs up when an end that was *open* closes, never because an end was
-        never walked to |
-  | `p` | `/proc` — status, ctl (identity transitions), notes, wait |
-  | `e` | `/env` |
-  | `w` | the window server — `#w/clone` mints windows; a window is a
-        directory (`cons ctl mouse wctl label rgb draw/…` and, on hosts
-        with canvas v0, `canvas/…` — the display device; **the v0 name
-        "display protocol" was itself the error**, 9P being the only
-        protocol, and canvas narrows to drawing in the design
-        ([canvas.md](canvas.md))) a namespace can `bind` over `/dev` |
-  | `d` | `/fd` — dup by open |
-  | `s` | `/srv` — a posted fd's channel, kept alive by name |
+  | `/` | **devroot** — a namespace starts somewhere. A fixed table of empty mount points to bind over; writes refused, as `rootwrite` refuses them |
+  | `\|` | **devpipe** — two processes talk when neither serves the other. `pipe(2)` IS an attach of this device, not a second mechanism |
+  | `s` | **devsrv** — a posted channel kept alive by name, so a process that did not inherit it can find a server |
+  | `M` | **devmnt** — the mount driver, and the only place wire 9P is marshalled. Not attachable by name: `mntattach` takes an internal struct, so it is reached only through `mount()` |
+  | `p` | **devproc** — processes as files. The kernel holds that state, so the kernel serves it |
+  | `d` | **devdup** — a process's own descriptors as files |
+  | `e` | **devenv** — the environment group, which `rfork`'s `ENVG` and `CENVG` exist to share, copy or clear |
 
-**THE DEVICE LETTERS ARE PLAN 9'S, AND `#Z` IS THE ONE EXCEPTION.** A device
-exists in this kernel only if Plan 9 has it, means the same thing by it, and
-uses the same letter (`plan9/sys/src/9/port/dev*.c`; the audit is
-[RESEARCH §9.13](../RESEARCH.md)). **`#Z` — host files — has no Plan 9
-equivalent, and it is kept deliberately.**
+**What is NOT here, and why it is not an omission.** `#c` cons: Plan 9 has it
+because its kernel drives a uart and a screen, and this one drives nothing — a
+console is a file server. `#i` draw, `#m` mouse: the same, and emca is
+userspace entirely. Any letter Plan 9 lacks — a fetcher, a versioning layer,
+host files — is not a device at all; it is a file server, which is what Plan 9
+would have made it.
 
-Its justification is **Inferno's `emu`**, which is where this project's hosting
-architecture comes from. A Plan 9 kernel reaches a disk through `#S`; a hosted
-kernel has no disk, and the storage it does have belongs to the process it runs
-inside. `#Z` is that boundary made a device, so it is reached the way every
-other resource is — by walking a name — rather than by a special call. The
-kernel speaks root-relative paths; **the host owns the real root and the
-canonicalise-under-root check**, which is why the security property lives on
-the side that can enforce it.
-
-**Which directory that is, is the host's to choose, and the kernel cannot
-tell** — `set_hostfs` takes the path and discards it (`kernel/src/lib.rs`: *"the
-HOST keeps the real root"*). So `--host <dir>` names a **durable** directory and
-`/store` gains somewhere to live across a boot without a line of kernel
-changing (2026-09-16). What goes *inside* that directory is IPNX's business,
-not the host's: no host knows the name `store`.
-
-Nothing else in the table may be invented on this reasoning. The exception is
-the *machine* being different, not the system being different, and that is a
-single boundary rather than a licence.
-  | `Z` | hostfs — a host directory as files, canonicalise-prefix guarded (native) |
-  | `V` | the versioning layer — `#V/ctl` takes `snap [name]` / `del name`;
-        `#V/<name>/…` walks the frozen root read-only; restore is a `bind`
-        (native + demo hosts; the frozen oracle self-skips) |
-
-**`#w` is the window control interface (landed 2026-08-31)**, bound at
-`/dev/window` by `/lib/namespace` and specified in full in
-[window.md](window.md). Root: `clone` mints (reading it returns the number) and
-`events` parks, one line per lifecycle change — `new <type> <n>`,
-`content <type> <n> <path>`, `del <n>`; and `pin` carries the workspace's
-pinned range, which emca declares and the surface shows in its status line.
-Per window, under `<type>/<n>/`:
-`content` (the PATH the surface opens over 9P — **IPNX implements no
-renderers**), `toolbar` (one control per line, `<label> <action>`, where the
-action names the side that performs it: `ipnx:` round-trips, `host:` never
-leaves the surface), `tag`, `verbs` (which of the closed RANGE verb set applies to the live
-selection — emca's answer to a `select` event), `ui`, `events` (the surface's
-voice), and `wctl`
-(rio's file — `rect`, `move`, `resize`, `mouse`, `delete`; its reads are
-unchanged, because real Plan 9 programs parse them, and the eight tree verbs
-left with the tree). The plain `#w/<n>` path still resolves — the type
-segment was added additively.
-
-**emca serves its own windows as files (landed 2026-09-03 as the legacy a1 step, refactored under P4 step 1).** The
-manager interface is a file interface ([window.md](window.md)), and emca now
-implements it: a 9P2000 server over a pipe posted with srv(3), two levels deep
-— the window set, then one directory per window holding `rect`, `size`,
-`verbs`, `status`, `dirty`, `type`, `role`, `title`, `events` and `ctl`. Every
-answer comes from **emca's own state**: the rectangle it decided, the title it
-owns, the verb list it already computed for the window's toolbar.
-
-Both interfaces answer today, deliberately — `#w` above and emca's server here
-— and **the suite asserts they agree on a window's rectangle**. That equality is
-what makes the tree's move (the legacy a2 step, now P4 step 1) a deletion rather than a rewrite.
-
-**Two doors, and only one of them is the interface.** A manager reaches its
-window at `/dev/window/` in **its own namespace**, which emca mounts for it —
-no name, no window id, nothing global. That is rio's shape and it is what
-[window.md](window.md) specifies. The **posted** name is the external door
-only — a window tool, a debugger, the suite — and it is
-**`/srv/emca.<user>.<pid>`**, removed on exit.
-
-> **It must be qualified because `#s` is GLOBAL**: `srv_posts` is one map for
-> the whole kernel, while every other name a process sees is namespace-local.
-> emca nests, so a fixed name is a collision by construction. The `<user>.<pid>`
-> form is Plan 9's own — the real acme posts `/srv/acme.%s.%d`. **Nothing
-> discovers emca by a fixed name; the suite lists `/srv` and matches.**
-
-**The TREE IS EMCA'S, and the kernel has none (the legacy a2 step, 2026-09-03; now P4 step 1).** Which window is whose child, in
-what order, on what axis, allocated or tabbed — all of it is decided in emca
-and stored there. The kernel supplies **identity** only: `#w/<type>/clone`
-mints a window and returns its number, which is the raster half and moves to
-the host after the demo (the raster is not on its path). **Tree verbs — `newcol`, `newrow`, `newtab`, `minimise`,
-`maximise`, `reparent` — arrive on a window's `events`, which is emca's door**;
-written to the kernel's `wctl` they would be the surface talking past the
-window manager, and emca would not learn. emca serves the tree at
-**`/dev/emca/<n>/`** — `parent`, `axis`, `alloc`, `winid` and `kids/<i>/`,
-positional because order IS the layout and `ls` sorts. Walking into `kids/<i>/`
-reaches that child's own directory. **A manager's `/dev/window/` shows none of
-it**: a manager has no business seeing the arrangement it sits in. With no emca
-running there is no tree, which is correct — no window manager, no arrangement
-— and a window still opens bare in its type's default pane.
-
-Not yet served, and owned by P4: `body`; **a blocking read on `rect`, which
-is what makes a read *be* resize**; `/dev/window/` bound per manager so no
-window id appears in a manager's namespace; and `ctl`'s minimise and maximise.
-
-
-Three invariants hold across it. **The type is in the path**, and it is
-validated, not decoration. **Content is an event, not a sample**: a window is
-minted before its file is known, so the write announces itself. **Any program
-may mint** — the device announces, and both halves watch — so `emca` needs no
-privilege and a window opens with no emca running at all.
-
-`/type` is the registry both halves read: a directory per window type holding
-`ns`, optional `cmd`, `window` and `pane`, each a small file, so a field is
-separately editable, greppable and bindable and a personal override is a union
-element. A type declares only what is EXTRA — the core verbs are emca's and a
-type may not redeclare one. `/dev/canvas` narrows to genuine drawing
-([canvas.md](canvas.md)).
-
-- **Blocking without blocking**: the dispatcher is async end to end. A device
-  read may *park* (complete later); in the Rust core a parked operation is a
-  completion the executor resumes, and **first-completion-wins is the
-  interrupt semantics** — a note winning the race is how a blocked call gets
-  interrupted.
-- **devmnt** speaks 9P2000 per connection with tagged demultiplexing, and
-  **clones a fid (`Twalk`, no names) before every open** so an attach fid is
-  never consumed. `exportfs` is its mirror in userspace: it relays wire
-  requests into real syscalls, so private binds travel and binaries exec
-  across the wire. `Tflush` is handled kernel-side; servers never see it.
-- **Notes** are delivered at the syscall boundary; kill rides note permissions
-  — the writer must be `eve` or the target's own user.
-- **Identity is one name per process**, Plan 9's `char *user`, with `eve` the
-  machine's owner. Permission is `devpermcheck`: the owner is tested against
-  the owner bits, **`eve` against the GROUP bits** (it is not omnipotent), and
-  everyone else against the other bits. A process may become `"none"` through
-  `#c/user` and may not come back; `#c/hostowner` is eve-only and renames the
-  machine's owner. There is no euid, no ruid, no setuid.
+> **Every deviation from this needs Christine's approval, and the default
+> answer is no.** A structure can be Plan 9's in vocabulary and something else
+> in mechanism, so the test is a counterpart in `plan9/` at file and line — not
+> whether the deviation can be argued for.
 
 ## Contract: the guest ABI
 
@@ -296,36 +173,29 @@ Binaries carry no `.wasm` extension: `exec` walks the caller's namespace for
 the path and instantiates the bytes it finds — a freshly built module is
 indistinguishable from a shipped one.
 
-## Contract: the host
+## Contract: the embedding
 
-A host embeds the kernel and provides exactly this, in its platform's terms
-(Workers + SharedArrayBuffer in JS; threads in Rust — either way, **a process
-gets an execution context; the kernel never blocks**):
+> **UNAPPROVED — this boundary is a deviation from Plan 9 and needs Christine's
+> decision.** Plan 9's kernel has no host: it drives hardware. Everything in
+> this section exists because this kernel does not, so none of it can be
+> settled by argument here. What the section may state is what is FORCED and
+> what is merely convenient, so the decision has something to act on.
 
-- **The mailbox**: per-process shared cells the guest sleeps on
-  (`Atomics.wait`-shaped); the host wakes it with the result. Plus the
-  transfer buffer for byte-carrying calls, with a copy-out discipline for the
-  traps that return data.
-- **exec** as module instantiation on a fresh context; **forka** as memory
-  snapshot, fresh context over the copy, both sides rewound; **the guard** as
-  a frame that catches the child's exec/exit and returns the pid (a host
-  function natively; hand-assembled wasm in the JS reference). The snapshot
-  and whatever else is needed to resume inside it are **the host's own**: they
-  cross the kernel as an **opaque continuation** (`Cont`), minted at the fork
-  and handed back at the spawn, which the kernel never inspects. A substrate
-  with no linear memory and no stack pointer mints something else and the
-  kernel does not change.
-- **Console** wiring for `#c` (stdio, a DOM window, a terminal view); **the
-  clock** — the host stamps the current time into the kernel before every
-  entry, because the kernel never asks an OS for the time and under a
-  hypervisor or on bare hardware there is none to ask; and the effect seam
-  outward: the core emits effects (console output, window presentation), the
-  host performs them.
-- **Presentation is optional** — a headless host is legal and complete; the
-  suite reads windows back through `rgb`, not through a screen.
+**Forced.** A process is a WebAssembly instance, and `exec` is instantiation —
+so something must hold an engine, and the kernel cannot. That is the whole of
+what is unarguable.
 
-`poc/supervisor/` is the frozen executable statement of this contract; a new
-host is written against this section and judged by the suite.
+**Not forced, and not decided.** How the kernel reaches that engine; whether a
+fork's resumable state crosses the kernel and in what form; how bytes move
+between a process and a server the embedding holds. Earlier drafts of this
+section specified all three — an effect list, an opaque continuation, console
+wiring for `#c`, a clock stamped in before every entry. All of it was invented
+here and has been removed from the code.
+
+**What is settled, because it follows from rules that are:** the embedding owns
+no device. A console, a clock, storage and randomness are **file servers**,
+reached by processes over 9P, because 9P is the only IPC and the kernel holds
+no driver.
 
 ## Contract: the wire
 
@@ -341,22 +211,19 @@ host is written against this section and judged by the suite.
 
 ## Contract: the conformance suite
 
-- **A snapshot is a tree; restore is a bind.** `#V` freezes the ram root by
-  structural clone — data buffers shared, copied only when the live side next
-  writes (COW); a snapshot node refuses every write through the one
-  `ram_access` gate, **eve included**, and `wstat` is refused with it. The
-  `#V` listing carries `ctl` plus one directory per snapshot; snapshots are
-  kernel-resident and die with the boot (persistence is M4's remaining
-  storage question). Rollback of a subtree is `bind '#V/<name>/dir' /dir`;
-  a boot-time rollback is the same line in `/lib/namespace`.
-- **The 131 are the permanent floor.** `init` (pid 1) runs the suite from the
-  rootfs; *a host is real when init exits 0*. The frozen reference must stay
-  green forever: `bash poc/run.sh`.
-- **The suite only grows**, and new tests **self-skip by probing the
-  namespace** for the features they need, so one rootfs serves every host
-  including the frozen oracle. Tests land in the same commit as the feature.
-- Assertions are about **semantics, not one host's layout** (raster tests
-  assert inked bands, not pixel positions).
+- **It measures one thing: have we reached functional equivalence with the
+  demo?** It is a checklist of what the system can DO, and it starts almost
+  entirely unreached. That is its purpose — it is a distance, and it shrinks as
+  phases land.
+- **Equivalence is in features, not mechanism and not presentation.** The
+  surface will look very different, so no check may be wired to tabs, panes,
+  placement or chrome. The rebuild is free to reach any line by another route.
+- **It is not there to lock the design.** A test asserting "the call list is a
+  subset" freezes a decision rather than measuring a system; guards of that
+  kind are unit tests of the code they guard.
+- **Moving a line to reached is a claim that a person can do that thing** — not
+  that code exists, not that a unit test passes. The harness fails if a line is
+  marked reached with no check behind it.
 
 ## Contract: what is trusted
 

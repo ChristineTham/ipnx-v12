@@ -55,7 +55,7 @@ Two structural notes the table depends on:
 reserved slot, **40 live calls**. V12 runs only recompiled binaries, so the superseded
 slots are dropped entirely.
 
-| slot | call | class | 9P message | PoC v0 | note |
+| slot | call | class | 9P message | note |
 |---|---|---|---|---|---|
 | 0 | `sysr1` | drop | — | — | reserved |
 | 1 | `_errstr` | drop | — | — | superseded by 41 |
@@ -179,7 +179,7 @@ part of the uid-model design task; "drop" means no expression in V12.
 | `symlink` | — | **not provided** | as `link` |
 | `readlink` | — | **not provided** | as `link` |
 | `exece` | A | `exec` | |
-| `umask` | C | per-proc field, applied at `create` | in the PoC kernel |
+| `umask` | C | per-proc field, applied at `create` | not implemented |
 | `chroot` | B | `rfork(RFCNAMEG)` + `bind` | |
 | `rmdir` | A | `remove` | |
 | `mkdir` | A | `create(DMDIR)` | |

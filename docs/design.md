@@ -9,6 +9,21 @@ system *is* is [architecture.md](architecture.md); what is *built* is
 [personas.md](personas.md).
 
 ## Decisions — the log
+> **2026-09-17 — THE IMPLEMENTATION WAS REBUILT FROM SCRATCH, AND PART OF THIS
+> LOG IS NOW HISTORY.** Entries below are kept with the words they were written
+> with, because a log is not retroactively renamed. But some of them decided
+> things about an implementation that no longer exists, and a few recorded
+> mechanisms that were **inventions rather than Plan 9's** — `#H` fetch, `#V`
+> versioning, `#Z` host files, an effect list at the embedding boundary, a
+> namespace keyed by path text. Those are struck in fact: none is in the
+> system, and none may return.
+>
+> **Read a dated entry as a record of what was decided then, not as an
+> instruction now.** Where an entry and [architecture.md](architecture.md)
+> disagree, architecture.md is the system. Every deviation from Plan 9 needs
+> Christine's approval, and the default answer is no.
+
+
 
 **122 decisions, 2026-08-26 to 2026-09-15.** Each entry states the
 decision and the constraint that forced it. **Dated entries keep the words they

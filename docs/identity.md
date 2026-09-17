@@ -34,13 +34,13 @@ sits. The mechanism was decided 2026-08-26; the identity architecture
 2026-08-29 (both in the [decision log](design.md)). The rest of the set:
 why — [design.md](design.md); what — [architecture.md](architecture.md);
 how — [handbook.md](handbook.md); when — [implementation.md](implementation.md);
-where — [platforms.md](platforms.md); was — [poc.md](poc.md). Who the system
+where — [platforms.md](platforms.md). Who the system
 is **for** — the other half of who — is [personas.md](personas.md).*
 
 *The mechanism is the item APE called impossible — "setting the userid,
 groupid, effective userid and effective groupid do not do anything useful. The concept is
 impossible to simulate in Plan 9." — and the single item the plan said decides whether
-V10 compatibility is real or approximate. The mechanism below is implemented in the PoC
+V10 compatibility is real or approximate. The mechanism below is not yet implemented
 and exercised by its acceptance tests; the numbered deferrals at the end are measurements
 against V10 source, to be taken in the parent repository when the personality's libc is
 built.*
@@ -232,7 +232,7 @@ question no longer gates it).
   credential, same ctl vehicle) is unchanged.
 - **D3 — closed, and the default stands.** V10's non-root owner cannot give a file away
   (`chown1` requires the uid to be unchanged for non-root; `accowner` + root gates the
-  rest), so the PoC's eve-only chown **is** V10 semantics for the uid half; non-root gid
+  rest), so an eve-only chown **is** V10 semantics for the uid half; non-root gid
   changes within membership arrive with D2.
 - **D4 — closed.** A created file takes the creator's effective uid and gid
   (`os/iget.c:314`), not the directory's — matching what ramfs already does.

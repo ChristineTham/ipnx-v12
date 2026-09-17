@@ -341,12 +341,6 @@ evidence, not a fresh opinion.
 
 ## The tree (post-declaration, 2026-08-29)
 
-**`poc/` IS SUPERSEDED — DO NOT READ IT, IMPLEMENT IT, OR REFER TO IT**
-(Christine, 2026-09-17): *"Its design has been completely superseded by the new
-design. If you refer to POC, you are repeating mistakes we want to avoid."* It
-is an artifact of how this started, nothing is checked against it, and the
-target is **functional equivalence to the demo**.
-
 The implementation lives at the top level: `kernel/`
 (the Rust core), `hosts/macos/` (wasmtime host; the workspace root is `Cargo.toml`),
 with `hosts/{oci,ipados,browser}/` scaffolded per implementation.md's milestones. The
@@ -397,11 +391,22 @@ sequenced by
   `drawmsgs`, 364 in `draw.rs`), and none of it is process orchestration. the legacy a1
   and a2 steps removed the tree by this reasoning without the rule being written
   down; the rest follows the same way.
+- **EVERY DEVIATION FROM PLAN 9 NEEDS CHRISTINE'S APPROVAL, AND THE DEFAULT
+  ANSWER IS NO** (her rule, 2026-09-17). Not "is it defensible", not "is it
+  forced by the substrate", not "would Dis need it too" — those are arguments
+  for putting to her, not tests to pass on your own. **Find the counterpart in
+  `plan9/` by file and line. If there is none, stop and ask.**
+
+  This is not about names alone. A structure can be Plan 9's in vocabulary and
+  something else in mechanism: the namespace here was keyed by path text and
+  resolved by longest prefix, while Plan 9 keys a mount by the identity of the
+  channel mounted upon (`chan.c:855`, `findmount`) and checks at every
+  component. Same word, different system.
+
 - **NEVER INVENT WORDS** (Christine's rule, restated 2026-09-17). Not for a
   thing she has not named, and not a second word for a thing already named —
-  a directory in this tree was called a *"conformance oracle"* here, and the
-  coinage came back as jargon in every reply until she asked what it meant. Say
-  what a thing is. Search the reference first: the boot script was reported as a gap when
+  a coinage that went into this file came back as jargon in every reply until
+  she asked what it meant. Say what a thing is. Search the reference first: the boot script was reported as a gap when
   `plan9/sys/src/cmd/init.c:178` already names it `/rc/bin/termrc`.
 
 - **SPEC'D, PROPOSED or GAP — triage before building** (Christine's rule,
