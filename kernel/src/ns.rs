@@ -9,6 +9,7 @@
 //! `bind -b` are how two directories become one name. Walks try the elements in
 //! order; a create lands in the element that accepts creates, and in no other.
 
+use crate::chan::Chan;
 use std::collections::HashMap;
 
 /// Where in the union a new element goes, and whether it may take creates.
@@ -23,23 +24,25 @@ pub enum Bind {
     After,
 }
 
-/// One element of a union: a server, and whether creates may land in it.
+/// One element of a union: the channel a mount point resolves to, and whether
+/// creates may land in it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Element {
-    /// What this element resolves to. A server's identity is the host's
-    /// business; the namespace only needs to tell elements apart.
-    pub target: String,
-    /// `MCREATE` — a create in this directory lands here. At most one element
-    /// of a union should carry it, and the first that does wins.
+    /// The channel this element resolves to — the served file's root, as
+    /// `attach` or a walk produced it.
+    pub chan: Chan,
+    /// `MCREATE` — a create in this directory lands here. The first element
+    /// carrying it wins; a union with none refuses creates, which is how a
+    /// read-only union is expressed without a read-only flag.
     pub create: bool,
 }
 
 impl Element {
-    pub fn new(target: &str) -> Self {
-        Element { target: target.to_string(), create: false }
+    pub fn new(chan: Chan) -> Self {
+        Element { chan, create: false }
     }
-    pub fn creatable(target: &str) -> Self {
-        Element { target: target.to_string(), create: true }
+    pub fn creatable(chan: Chan) -> Self {
+        Element { chan, create: true }
     }
 }
 
@@ -75,7 +78,7 @@ impl Ns {
             }
             Some(t) => {
                 if let Some(list) = self.mounts.get_mut(&at) {
-                    list.retain(|e| e.target != t);
+                    list.retain(|e| e.chan.path != t);
                     if list.is_empty() {
                         self.mounts.remove(&at);
                     }
@@ -158,22 +161,29 @@ pub fn clean(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dev::DevId;
+
+    fn el(name: &str) -> Chan {
+        let mut c = Chan::attach(DevId::Root, 0);
+        c.path = name.to_string();
+        c
+    }
 
     #[test]
     fn unmount_removes_one_element_and_the_rest_stand() {
         let mut ns = Ns::new();
-        ns.bind("/bin", Element::new("a"), Bind::Replace);
-        ns.bind("/bin", Element::new("b"), Bind::After);
+        ns.bind("/bin", Element::new(el("a")), Bind::Replace);
+        ns.bind("/bin", Element::new(el("b")), Bind::After);
         ns.unmount("/bin", Some("a"));
         let (els, _) = ns.resolve("/bin/x").unwrap();
         assert_eq!(els.len(), 1);
-        assert_eq!(els[0].target, "b");
+        assert_eq!(els[0].chan.path, "b");
     }
 
     #[test]
     fn unmount_with_no_name_clears_the_mount_point() {
         let mut ns = Ns::new();
-        ns.bind("/bin", Element::new("a"), Bind::Replace);
+        ns.bind("/bin", Element::new(el("a")), Bind::Replace);
         ns.unmount("/bin", None);
         assert!(ns.resolve("/bin/x").is_none());
     }
@@ -181,11 +191,10 @@ mod tests {
     #[test]
     fn a_namespace_is_copied_not_shared_when_it_is_copied() {
         let mut parent = Ns::new();
-        parent.bind("/bin", Element::new("system"), Bind::Replace);
+        parent.bind("/bin", Element::new(el("system")), Bind::Replace);
         let mut child = parent.clone();
-        child.bind("/bin", Element::new("mine"), Bind::Before);
+        child.bind("/bin", Element::new(el("mine")), Bind::Before);
         assert_eq!(parent.resolve("/bin/x").unwrap().0.len(), 1);
         assert_eq!(child.resolve("/bin/x").unwrap().0.len(), 2);
     }
-
 }

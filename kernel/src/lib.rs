@@ -14,11 +14,13 @@
 //! The test of a proposed change is not whether it is useful. It is whether
 //! Plan 9 has it, and whether orchestrating processes requires it.
 
+pub mod chan;
 pub mod dev;
 pub mod ninep;
 pub mod ns;
 pub mod proc;
 
+pub use chan::Chan;
 pub use proc::{Fd, Pid};
 
 /// The calls this kernel answers — a subset of Plan 9's, named as Plan 9 names

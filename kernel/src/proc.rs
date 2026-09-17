@@ -6,6 +6,7 @@
 //! each other; so what is here is Plan 9's `rfork`, `exec`, `exits` and
 //! `await`, and the tables they act on.
 
+use crate::chan::Chan;
 use crate::ns::Ns;
 use std::collections::HashMap;
 use std::rc::Rc;
@@ -30,15 +31,6 @@ pub mod rf {
     pub const CFDG: i32 = 1 << 12;
 }
 
-/// An open file. What it refers to is a channel; the kernel cares that it has
-/// an offset and that closing the last reference closes the channel.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Chan {
-    /// What this channel talks to. A name here, a mount or device behind it.
-    pub target: String,
-    pub offset: u64,
-}
-
 /// A process's file descriptors. Shared or copied per `rfork`, which is why it
 /// sits behind a reference rather than inside `Proc`.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -59,11 +51,11 @@ impl Fds {
         (self.slots.len() - 1) as Fd
     }
     pub fn get(&self, fd: Fd) -> Option<&Rc<RefCell<Chan>>> {
-        self.slots.get(fd as usize)?.as_ref()
+        self.slots.get(fd as usize).and_then(|s| s.as_ref())
     }
     pub fn close(&mut self, fd: Fd) -> bool {
         match self.slots.get_mut(fd as usize) {
-            Some(s @ Some(_)) => {
+            Some(s) if s.is_some() => {
                 *s = None;
                 true
             }
@@ -233,7 +225,7 @@ mod tests {
     #[test]
     fn dup_to_a_named_slot_and_to_the_lowest_free_one() {
         let mut f = Fds::default();
-        let a = f.add(Chan { target: "cons".into(), offset: 0 });
+        let a = f.add(Chan::attach(crate::dev::DevId::Root, 0));
         assert_eq!(f.dup(a, 9), Some(9));
         assert!(f.close(a));
         assert_eq!(f.dup(9, -1), Some(0), "the lowest free slot");
@@ -242,7 +234,7 @@ mod tests {
     #[test]
     fn a_dup_shares_the_offset_it_does_not_copy_it() {
         let mut f = Fds::default();
-        let a = f.add(Chan { target: "f".into(), offset: 0 });
+        let a = f.add(Chan::attach(crate::dev::DevId::Root, 0));
         let b = f.dup(a, -1).unwrap();
         f.get(a).unwrap().borrow_mut().offset = 42;
         assert_eq!(f.get(b).unwrap().borrow().offset, 42);

@@ -78,14 +78,15 @@ final state; design resumes after it. **Don't overengineer.**
 
 ---
 
-## P0 — the kernel's core *(done)*
+## P0 — the kernel's core *(done, rebuilt 2026-09-17)*
 
 | | |
 |---|---|
-| **builds** | the 9P2000 codec, the only place the wire exists; the namespace — mount table, longest-prefix walk, unions, `MCREATE`; Plan 9's device letters; the process table with `rfork`'s share/copy/clear, `await`, `RFNOWAIT` |
+| **builds** | **`Chan`** — the object everything acts on, since a walk produces one, an fd holds one and a mount point is one; the **device table**, which is Plan 9's `struct Dev` (`attach walk stat open create close read write remove wstat`); the **namespace** over channels — longest-prefix walk, unions, the create element; the **process table** with `rfork`'s share/copy/clear; the **9P codec**, the only place the wire exists |
+| **the device letters** | `#/` root, `#\|` pipe, `#s` srv, `#M` mnt, `#p` proc, `#d` dup, `#e` env — seven, each because orchestrating processes needs it. **`#c` cons is absent**: Plan 9 has it because its kernel drives a uart and a screen; this one drives nothing, so a console is a file server |
 | **depends on** | — |
-| **acceptance** | the codec, the namespace, the device letters and `rfork`'s three-way rule are tested where they live. Nothing on the demo's checklist is reached yet, and P0 was never going to reach any of it |
-| **exposes** | `exec` needs an engine, and the kernel cannot hold one |
+| **acceptance** | the codec, the namespace, the device letters and `rfork`'s rule are tested where they live. Nothing on the demo's checklist is reached, and P0 was never going to reach any of it |
+| **exposes** | no device is implemented yet, and `exec` needs an engine |
 
 ## P1 — `exec`
 
