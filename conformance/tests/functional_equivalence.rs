@@ -122,25 +122,34 @@ fn demo() -> Vec<Behaviour> {
 }
 
 #[test]
-fn distance_to_the_demo() {
+fn functional_equivalence_with_the_demo() {
     let all = demo();
     let reached = all.iter().filter(|b| b.state == State::Reached).count();
 
     println!("\n  functional equivalence to the demo: {reached} of {}\n", all.len());
     for b in &all {
         let mark = if b.state == State::Reached { "x" } else { " " };
-        println!("  [{mark}] {:<52} {}", b.what, b.state);
+        println!("  [{mark}] {:<58} {}", b.what, b.state);
     }
     println!();
 
-    // Each behaviour claimed as reached must be demonstrated by the check its
-    // `how` describes. None is claimed yet, so there is nothing to run — and
-    // when one is, this is where the running goes. A line moved to `Reached`
-    // without a check here is a claim with nothing behind it.
+    // A behaviour claimed as reached must be demonstrated by the check its
+    // `how` describes. A line moved here without one is a claim with nothing
+    // behind it.
     for b in all.iter().filter(|b| b.state == State::Reached) {
-        panic!(
-            "'{}' is claimed reached but has no check wired up here ({})",
-            b.what, b.how
-        );
+        panic!("'{}' is claimed reached but has no check wired up ({})", b.what, b.how);
     }
+
+    // AND THE SUITE FAILS UNTIL IT IS CONFORMANT. This is not pessimism; it is
+    // what the word means. An earlier version of this file printed "0 of 12"
+    // and then reported `ok`, so `cargo test` was green while the system did
+    // nothing at all — the same false signal the suite exists to prevent.
+    //
+    // For day-to-day work run the unit tests: `cargo test -p ipnx-kernel`.
+    assert_eq!(
+        reached,
+        all.len(),
+        "not conformant: {reached} of {} behaviours reached",
+        all.len()
+    );
 }

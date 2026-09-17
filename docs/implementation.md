@@ -29,7 +29,10 @@ what it **depends on**, its **acceptance**, and the **gaps it exposes**.
 Nothing undesigned is built.
 
 **The conformance suite** (`conformance/`) answers one question: **have we
-reached functional equivalence with the demo?** It is a checklist of what a
+reached functional equivalence with the demo?** It **fails until we have** —
+that is what the word means, and an earlier version reported `ok` while
+measuring 0 of 12, which is the false signal a suite exists to prevent. Use
+`cargo test -p ipnx-kernel` for day-to-day work. It is a checklist of what a
 person can DO, taken from the demo itself, and it starts almost entirely
 unreached — that is the point, because it is a distance and it shrinks as
 phases land.
@@ -97,7 +100,7 @@ final state; design resumes after it. **Don't overengineer.**
 | **builds** | **`Chan`** — a walk produces one, an fd holds one, a mount point is one, and every device operation takes one; the **device table**, Plan 9's `struct Dev`; the **namespace**, keyed as Plan 9 keys it; the **process table** with `rfork`'s share/copy/clear; the **9P codec**, the only place the wire exists |
 | **the letters** | `#/` `#\|` `#s` `#M` `#p` `#d` `#e` — seven, each part of how processes are made, connected or named. `#c`, `#i`, `#m` are **absent**: Plan 9 has them because its kernel drives hardware and this one drives none |
 | **depends on** | — |
-| **acceptance** | the codec, the namespace, the device letters and `rfork`'s rule are tested where they live. Nothing on the demo's checklist is reached — P0 was never going to reach any of it |
+| **acceptance** | 14 unit tests of the structures, where they live. **P0 does not pass conformance and cannot**: not one of the twelve behaviours is reachable without `exec`, a device and a userspace. The suite FAILS, and that is correct |
 | **exposes** | no device is implemented, and `exec` needs something to instantiate a process |
 
 **Where the machine goes instead**, and this is hers too:
