@@ -34,8 +34,10 @@ person can DO, taken from the demo itself, and it starts almost entirely
 unreached — that is the point, because it is a distance and it shrinks as
 phases land.
 
-Equivalence is in **features, not mechanism**: nothing in the suite says how a
-thing is done, and the rebuild is free to reach any of it by another route. It
+Equivalence is in **features, not mechanism, and not presentation**: nothing
+in the suite says how a thing is done or how it looks. The new surface will be
+very different, so a check wired to tabs, panes or placement would hold the
+rebuild to the design it exists to replace. It
 is **not** there to lock the design — the design is argued in the documents,
 and a test asserting "the call list is a subset" would freeze a decision rather
 than measure a system. Guards of that kind are unit tests of the code they

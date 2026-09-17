@@ -48,71 +48,75 @@ struct Behaviour {
     how: &'static str,
 }
 
-/// The demo, as a list of things a person can do.
+/// The demo's FEATURES — what the system can do, with no claim about how any
+/// of it looks.
+///
+/// The new surface will look very different, so nothing here says "on the
+/// left", "as a tab" or "below". Those are the current demo's presentation,
+/// and wiring conformance to them would hold the rebuild to a design it is
+/// meant to replace. What survives the surface changing is the capability.
 fn demo() -> Vec<Behaviour> {
     use State::*;
     vec![
-        // The CLI — typing `ipnx` in a terminal.
         Behaviour {
-            what: "type `ipnx` and get an rc prompt",
+            what: "the system boots and gives you a shell",
             state: Pending("P5"),
-            how: "start it, and a prompt appears",
+            how: "start it; a shell takes what you type and answers",
         },
         Behaviour {
-            what: "run `ls` and see your files",
+            what: "list a directory",
             state: Pending("P5"),
-            how: "type it at the prompt; the names appear",
+            how: "the names it holds come back",
         },
         Behaviour {
-            what: "`cat /etc/motd`",
+            what: "read a file's contents",
             state: Pending("P5"),
-            how: "expect the file's text",
+            how: "the text comes back",
         },
         Behaviour {
-            what: "pipe two commands together",
+            what: "run a command, and pipe one into another",
             state: Pending("P3"),
-            how: "`ls | wc -l` at the prompt; expect a count",
+            how: "the second sees what the first wrote",
         },
         Behaviour {
             what: "run a Go program",
             state: Pending("P6"),
-            how: "a Go program runs and prints what it printed before",
+            how: "it runs and prints what it printed before",
         },
         Behaviour {
             what: "run Python",
             state: Pending("P6"),
-            how: "Python starts, imports from its library, and computes",
-        },
-        // The website — the page at christham.net/ipnx-v12.
-        Behaviour {
-            what: "open the page and have the system boot in seconds",
-            state: Pending("P7"),
-            how: "open it; it is usable within seconds",
+            how: "it starts, imports from its library, and computes",
         },
         Behaviour {
-            what: "see your home listed on the left",
-            state: Pending("P7"),
-            how: "the listing window shows the names the home directory holds",
+            what: "a package becomes available without installing anything into the tree",
+            state: Pending("P6"),
+            how: "the program runs afterwards; the tree is no bigger than before",
         },
         Behaviour {
-            what: "open a file and have it appear as a tab",
-            state: Pending("P7"),
-            how: "click a name; a tab appears carrying its text",
+            what: "processes have their own namespaces and do not disturb each other",
+            state: Pending("P2"),
+            how: "one changes what a name means; the other still sees the old one",
         },
         Behaviour {
-            what: "type at the rc running below",
+            what: "the windowing system can show several things at once and act on them",
             state: Pending("P7"),
-            how: "keystrokes reach the shell and its output comes back",
+            how: "more than one is open; acting on one leaves the others alone",
         },
         Behaviour {
-            what: "the toolbar and status line behave as the type declares",
+            what: "what you can do with a thing depends on what it is",
             state: Pending("P7"),
-            how: "the verbs offered differ by what the window holds",
+            how: "two kinds of content offer different actions",
         },
         Behaviour {
-            what: "the toolchains become available without a reload or a wait",
+            what: "the whole system runs in a browser as well as a terminal",
             state: Pending("P7"),
-            how: "the page is usable first; the toolchains work later in the same session",
+            how: "the same userspace, reached through a page",
+        },
+        Behaviour {
+            what: "a language toolchain becomes usable during a session, not before it",
+            state: Pending("P7"),
+            how: "the system is usable first; the toolchain works later in the same session",
         },
     ]
 }
