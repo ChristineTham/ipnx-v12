@@ -2,7 +2,7 @@
 
 **Role: the *where*.** Two maps — the deployment forms the one kernel runs in,
 and the canonical namespace a booted system presents — plus the **deployment
-review ledger** that capability doctrine #5 ([design.md](design.md),
+review ledger** that capability doctrine #5 ([design.md](archive/design-log-claude-written.md),
 2026-08-29) mandates: the deployment story is re-examined periodically with
 the same honesty as the code, and this file is where those reviews land, dated.
 How to build and run each form: [handbook.md](handbook.md). What a host must
@@ -12,7 +12,7 @@ provide: [architecture.md](architecture.md).
 
 One kernel, one rootfs, one suite — per platform, only the host shim and the
 engine change (the engine matrix is a dated decision in
-[design.md](design.md)). **Amended 2026-08-31**: each form below is also a
+[design.md](archive/design-log-claude-written.md)). **Amended 2026-08-31**: each form below is also a
 **surface of `emca`**, the shell of **Saranos** — the user-experience layer
 named 2026-08-31, sitting on IPNX (kernel and userspace); see
 [emca.md](emca.md) —
@@ -239,7 +239,7 @@ Sustained daily use is still ahead of the evidence.
 
 **What this round changes about the bet**: three of the wave's four forms
 are now built and one is in the field. The canvas decision and the
-compatibility goodbye (design.md 2026-08-30) re-aim every form's product
+compatibility goodbye (archive/design-log-claude-written.md 2026-08-30) re-aim every form's product
 surface at `/dev/canvas` — the demo's tty and raster windows are now
 declared interim, which raises a named near-term risk: the shipped demo
 shows yesterday's surface while M5 builds tomorrow's. Accepted, because

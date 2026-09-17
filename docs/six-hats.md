@@ -28,7 +28,7 @@ Take the whole project as the subject and pass through the hats in order:
 | 🔵 **Blue** (closing) | dispositions and cadence |
 
 What a session catches lands as dispositions: **adopted** → the
-[decision log](design.md) and the [plan](implementation.md); **parked** →
+[decision log](archive/design-log-claude-written.md) and the [plan](implementation.md); **parked** →
 named in the log so the next session re-asks. The reading goes in
 [reviews/](reviews/), never here. De Bono's Six Thinking Hats (the 1985 book;
 [the method](https://www.debonogroup.com/services/core-programs/six-thinking-hats/),
@@ -37,7 +37,7 @@ perspectives over the same subject in sequence — facts, feelings, risks,
 value, alternatives, process — so nothing hides in a blind spot. It complements
 [design-thinking.md](design-thinking.md): design thinking asks *who is this
 for and what do they need*; the hats ask *what are we not seeing*.  what a session catches lands as dispositions
-(adopted → the [decision log](design.md) and the
+(adopted → the [decision log](archive/design-log-claude-written.md) and the
 [plan](implementation.md); parked → named here so the next session re-asks).
 The rituals share one cadence — see the closing blue hat.
 

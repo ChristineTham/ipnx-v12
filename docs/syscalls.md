@@ -7,7 +7,7 @@
 > from the personality inward guarantees the personality ends up in the kernel.
 > The list must be derived from **Plan 9's subset outward**; what a personality
 > needs beyond it is the personality's problem, in userspace. See
-> [design.md](design.md) 2026-09-03 and [implementation.md](implementation.md)
+> [design.md](archive/design-log-claude-written.md) 2026-09-03 and [implementation.md](implementation.md)
 > P1 step 3. **The V10 disposition table below is still useful evidence — it is the
 > conclusion "therefore the kernel gains a trap" that does not follow.**
 

@@ -7,7 +7,7 @@ honour this and nothing more**; the tiled implementation we built is
 [surface.md](surface.md), and the types themselves are [type.md](type.md).
 
 *Derived with Christine on 2026-09-02; the decisions are dated in
-[design.md](design.md). The kernel is not party to any of it.*
+[design.md](archive/design-log-claude-written.md). The kernel is not party to any of it.*
 
 ## The contract in one line
 

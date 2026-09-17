@@ -14,7 +14,7 @@ ran — the method, the definitions, the ideas including the rejected ones, the
 rederived scope and its reconciliation with the standing decisions, and the
 documentation review — so the next iteration starts from evidence rather than
 memory. Scope *changes* land where scope lives: the
-[decision log](design.md).
+[decision log](archive/design-log-claude-written.md).
 
 ## The method, adapted and cited
 

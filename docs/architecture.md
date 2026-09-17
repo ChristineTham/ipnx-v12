@@ -2,7 +2,7 @@
 
 **Role: the *what*.** What the system is, present tense — invariants and
 contracts. The *why* behind every shape here
-is argued in [design.md](design.md); the *evidence* lives in
+is argued in [design.md](archive/design-log-claude-written.md); the *evidence* lives in
 [RESEARCH.md](../RESEARCH.md); the *sequence* is [implementation.md](implementation.md);
 the *practice* is [handbook.md](handbook.md); the *deployments and namespace map*
 are [platforms.md](platforms.md); *who a user is* — [identity.md](identity.md);
@@ -29,7 +29,7 @@ present the file interface as function calls, and exactly one driver marshals
 wire 9P at mount boundaries. Userspaces are libc dialects over the one kernel:
 Plan 9's own (`lib9`), the V10 exhibit (`libv10`), a WASI shim, and a measured
 modern personality to come. (The full statement and its derivation:
-[design.md](design.md).)
+[design.md](archive/design-log-claude-written.md).)
 
 ## The component map
 
@@ -144,7 +144,7 @@ through union order). Per-process installs follow: an `rfork n` child that
 pkg-installs has its own package set — coexisting development environments
 are processes, with no activation machinery.
 Both kinds are ordinary userspace over the unchanged kernel — the design's
-porting inversion ([design.md](design.md), 2026-08-29). The demo's in-tab `cc`
+porting inversion ([design.md](archive/design-log-claude-written.md), 2026-08-29). The demo's in-tab `cc`
 compiles stock C against a wasi-libc/POSIX port environment, the first
 instance.
 
@@ -232,7 +232,7 @@ no driver.
   what its namespace resolves. There is no second barrier: on hosted rungs
   the host OS process stands behind the engine, on the microVM rung nothing
   does — a runtime escape there is a whole-system escape, recorded plainly
-  ([design.md](design.md), OCI decision).
+  ([design.md](archive/design-log-claude-written.md), OCI decision).
 - **Trusted**: the kernel (both implementations), the host shims, the build
   toolchain's output.
 - **Untrusted by construction**: every guest (its authority is its
@@ -253,4 +253,4 @@ Per-host internals (how a shim spawns threads or paints), window *policy*
 personality's surface (measured against its benchmarks when built —
 [implementation.md](implementation.md) M10), and on-disk formats (**the system
 never learns one** — durability is always another filesystem reached through
-9P or a host device; [design.md](design.md), storage invariant).
+9P or a host device; [design.md](archive/design-log-claude-written.md), storage invariant).

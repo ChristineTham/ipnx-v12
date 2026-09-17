@@ -17,7 +17,7 @@ threw away?**
 | where it runs | [platforms.md](platforms.md) — *where* |
 | what is built | [when.md](when.md) — *when* |
 | the plan | [implementation.md](implementation.md) — *how* |
-| what was decided, and what forced it | [design.md](design.md) |
+| what was decided, and what forced it | [design.md](archive/design-log-claude-written.md) |
 
 ## The statement, once
 
@@ -37,7 +37,7 @@ No VAX. No disk image. No emulator. No POSIX, no systemd, no sediment.
 *Moved here from design.md 2026-09-02: these sections answer "why this
 component, and why this shape", which is the* why *question applied to each
 part. The decisions themselves — dated, with the constraint that forced each —
-remain in [design.md](design.md).*
+remain in [design.md](archive/design-log-claude-written.md).*
 
 ## Why the kernel's architecture is Plan 9's and not V10's
 

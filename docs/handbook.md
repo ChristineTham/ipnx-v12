@@ -57,7 +57,7 @@ them:
 ## Where things are written down
 
 - A **finding** goes in [RESEARCH.md](../RESEARCH.md), with provenance.
-- A **decision** goes in [design.md](design.md), dated.
+- A **decision** goes in [design.md](archive/design-log-claude-written.md), dated.
 - A **contract change** lands in [architecture.md](architecture.md) in the same
   commit as the code, because that document is present-tense by rule.
 - **Build status** goes in [when.md](when.md) and nowhere else.

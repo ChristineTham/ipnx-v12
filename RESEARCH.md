@@ -9,7 +9,7 @@ source citations, measured tables with dates. It is what the *why* and the
 and a claim elsewhere that contradicts it is wrong.
 
 *Begun 2026-08-26 and **living** — the evidence base behind
-[docs/design.md](docs/design.md). Findings land here as they are established, with their
+[docs/design.md](docs/archive/design-log-claude-written.md). Findings land here as they are established, with their
 provenance; decisions and scope stay in the plan.*
 
 *It is written to be self-contained. Measurements taken against the Research Unix V10 tree
@@ -1763,7 +1763,7 @@ so I am reviewing genuine open decisions rather than settled decisions."*
   filled; the block was not emptied.
 
 **The rule this produces, in the order it must be applied.** Before an item in
-the plan is treated as open: **check [design.md](docs/design.md) first** — a
+the plan is treated as open: **check [design.md](docs/archive/design-log-claude-written.md) first** — a
 decided question is consumed, never re-derived — **then check `plan9/`** — a
 question of fact is measured, never asked. Only what survives both is a
 decision, and only that is worth Christine's time.
@@ -2064,7 +2064,7 @@ the tree form.
 
 **Raised as a gap on 2026-09-04, endorsed on 2026-09-15** (*"yes, create a tree
 form"*), which is the order the rule requires: undesigned work is proposed, not
-invented. [design.md](docs/design.md) decision 122 carries the decision;
+invented. [design.md](docs/archive/design-log-claude-written.md) decision 122 carries the decision;
 [type.md](docs/type.md) carries the format.
 
 **The gap, stated precisely.** type.md's declaration sketch points a single
@@ -2192,7 +2192,7 @@ One line each side if Christine wants them aligned. Recorded rather than done.
 
 **`/lib/namespace` is now `/namespace`.** `/` is a PROJECT instantiated from
 `/template/system`, so the file boot reads is the **instance's own**
-configuration and lives in `/` because `/` is the project ([design.md](docs/design.md)
+configuration and lives in `/` because `/` is the project ([design.md](docs/archive/design-log-claude-written.md)
 2026-09-04). `init` reads it through `newns()`; the host put it there, which is
 the whole answer to the bootstrap ordering.
 
@@ -2715,7 +2715,7 @@ will tell you what is needed, rather than me guessing on your behalf."*
 [Homebrew Formula Cookbook](https://docs.brew.sh/Formula-Cookbook)
 
 **What the measurement decided** (disposition in the decision log,
-[design.md](docs/design.md), 2026-09-02): **four of the five reasons a package
+[design.md](docs/archive/design-log-claude-written.md), 2026-09-02): **four of the five reasons a package
 is a folder elsewhere are compensations for MUTATION**, and this system does not
 mutate —
 

@@ -37,7 +37,7 @@
 > it; it is superseded in scope, not yet in code.
 
 
-The contract for the 2026-08-30 canvas decision (design.md: six kinds, four
+The contract for the 2026-08-30 canvas decision (archive/design-log-claude-written.md: six kinds, four
 clauses, the tripwire). **v0 is measured**: every element below is justified
 by one of the four benchmarks — console-today, acme-today, rio-today, one
 plot — and everything none of them demanded is absent. Dated simplifications

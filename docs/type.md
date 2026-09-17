@@ -260,7 +260,7 @@ emca.
 - **up:** `insert`, `delete`, `select`, `dirty`, `seq <n> <hash>`
 - **down:** `content`, `toolbar`, `tag`
 - **`put`**, which notifies emca that the manager wrote the file and emca should
-  re-read — *one writer per file*, settled in [design.md](design.md)
+  re-read — *one writer per file*, settled in [design.md](archive/design-log-claude-written.md)
 
 That is a manager over a file, declaring what it did and being told what to
 show.
@@ -338,7 +338,7 @@ reader is not left wondering whether they were forgotten.*
 pipeline must stop after signal 2 for channels, or classifying would consume
 the first bytes of a conversation.
 
-**Settled since this was written (design.md):** `run:` substitutes
+**Settled since this was written (archive/design-log-claude-written.md):** `run:` substitutes
 **environment variables**, not a templating syntax — emca sets `$file`, `$dir`
 and `$window`, and the selection needs none because `|` already pipes it.
 

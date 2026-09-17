@@ -150,7 +150,7 @@ compatibility, the performance-first HPC user. **No Windows host** stands,
 until a persona demands it with evidence.
 
 When one of these asks, the answer is a pointer to the refusals in
-[design.md](design.md), not a roadmap promise.
+[design.md](archive/design-log-claude-written.md), not a roadmap promise.
 
 > **OPEN — the phone form factor has no valid answer right now** (2026-09-02).
 > It was refused on the extrinsic ground that no persona's journey included a

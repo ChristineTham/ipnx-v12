@@ -44,7 +44,7 @@ recording because it is what the rule is for:
 (emptied 2026-09-04). The question outlived its answer by a day: *"the host
 renders `/dev/draw`; the kernel does not know how to draw"* and *"we don't use
 `/dev/draw` — we use `/dev/canvas`"*, both 2026-09-03 in
-[design.md](design.md). There is no rasteriser inside IPNX to place, so the
+[design.md](archive/design-log-claude-written.md). There is no rasteriser inside IPNX to place, so the
 two horns never pulled against each other. Left standing here, it invited
 exactly the mistake it got: being re-derived from Plan 9's own drawterm, whose
 portable `libmemdraw` is a renderer in precisely the place those decisions
@@ -76,7 +76,7 @@ so a fixed name collides the moment emca nests) and everything proposed on
 2026-09-02 — the manager interface, the `/type` file syntax, `properties`,
 `pkg`/`template`/`project`, `/store`, `inode/system`'s layout, the `shell` type
 and `inode/directory`'s listing. All of it moved into the specs; the reasoning
-is dated in [design.md](design.md).
+is dated in [design.md](archive/design-log-claude-written.md).
 
 *A proposal is written here, reviewed, and then **leaves**. Adding to this file
 instead of emptying it is how stale blocks accumulate and how a reader ends up

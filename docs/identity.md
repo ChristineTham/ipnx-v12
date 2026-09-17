@@ -21,7 +21,7 @@
 > hypervisor or a Raspberry Pi there is nothing to invert toward, and the
 > mechanism would remain without its justification.** The model below is
 > coherent and may well be right *as a personality* — the question reopened is
-> whether any of it belongs in the kernel. See [design.md](design.md)
+> whether any of it belongs in the kernel. See [design.md](archive/design-log-claude-written.md)
 > 2026-09-03 and [implementation.md](implementation.md) P1.
 
 **Role: a *what* — the identity model.** What a user *is* inside the
@@ -31,8 +31,8 @@ implements them. Who the system is *for* is [personas.md](personas.md).
 *Role: the **who** — what a "user" is in this system (person, role, agent,
 network person), the kernel's credential mechanism, `su`, and where the profile
 sits. The mechanism was decided 2026-08-26; the identity architecture
-2026-08-29 (both in the [decision log](design.md)). The rest of the set:
-why — [design.md](design.md); what — [architecture.md](architecture.md);
+2026-08-29 (both in the [decision log](archive/design-log-claude-written.md)). The rest of the set:
+why — [design.md](archive/design-log-claude-written.md); what — [architecture.md](architecture.md);
 how — [handbook.md](handbook.md); when — [implementation.md](implementation.md);
 where — [platforms.md](platforms.md). Who the system
 is **for** — the other half of who — is [personas.md](personas.md).*

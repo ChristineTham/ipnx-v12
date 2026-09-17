@@ -6,7 +6,7 @@ nothing above it needs to know. The contract it serves is
 [compositor.md](compositor.md); the system it belongs to is
 [saranos.md](saranos.md).
 
-*Derived with Christine on 2026-09-02; decisions dated in [design.md](design.md).*
+*Derived with Christine on 2026-09-02; decisions dated in [design.md](archive/design-log-claude-written.md).*
 
 ## Where the surface sits
 
@@ -136,7 +136,7 @@ discovers by accident which keys it is not allowed to have.
 ## A populated tag line must read as populated
 
 Not cosmetic. The tag line beats the selection when both are present
-([design.md](design.md)), and the only thing preventing a stale search from
+([design.md](archive/design-log-claude-written.md)), and the only thing preventing a stale search from
 silently overriding a fresh selection is that the winning text is **on screen**.
 Style it like an empty placeholder and that defence disappears, leaving hidden
 state.

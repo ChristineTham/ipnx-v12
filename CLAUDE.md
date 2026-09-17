@@ -156,7 +156,6 @@ goes stale there — that is how four different test counts came to exist.
 | `docs/userland.md` | the userland's shape; the heritage exhibit's scope |
 | `docs/syscalls.md` | the derived call list — Plan 9's 40 live calls dispositioned |
 | `docs/identity.md` | the identity model — what a user *is* inside the system (not who it is *for*) |
-| `docs/design.md` | **the decision record** — every decision dated, with the constraint that forced it |
 
 ### where — surfaces and targets
 
@@ -196,7 +195,7 @@ one level down governs `docs/personas.md`: a persona is **extrinsic** and
 cannot be made stale by a design change — if deleting this project from the
 universe would change a card, that line is in the wrong document.
 
-Findings go in RESEARCH.md with provenance; decisions go in the decision record (docs/design.md);
+Findings go in RESEARCH.md with provenance; decisions go in the decision record (docs/archive/design-log-claude-written.md);
 contract changes go in docs/architecture.md in the same commit as the code; deployment-story
 reviews land dated in docs/platforms.md's ledger; build status goes in docs/when.md
 and NOWHERE else; all of these are living.
@@ -248,96 +247,35 @@ in `../ipnx` and is recorded **as data** because it cannot be re-derived here. A
 measurement is taken in `../ipnx` against `v10/usr/src/…` and recorded with file-and-line
 provenance in RESEARCH.md.
 
-## The decisions taken — do not re-derive them
+## What is authoritative — and what is not
 
-Each has its reasoning and citations in RESEARCH.md / the plan. Reopening one requires new
-evidence, not a fresh opinion.
+**Every document in this repository was written by Claude.** Measured
+2026-09-17: `docs/design.md` 31 commits, `implementation.md` 44, `RESEARCH.md`
+21, `architecture.md` 17, this file 20, `README.md` 3 — **all of them Claude's,
+none of them Christine's.** She has not seen most of it.
 
-- **The kernel's architecture is Plan 9's, not V10 retargeted** (and the identity is
-  IPNX's own — no code inherited from either; decision log 2026-08-30). ~5% of V10's 61,072-line kernel has
-  anything to say on a target with no MMU and no hardware. The surgery runs Unix-onto-
-  Plan 9 (addition), never the reverse (eviction) — and V10's `chmk $n` trap numbers
-  collide with Plan 9's on the same instruction (`.set open,5` vs `DUP` 5).
-- **Hosted, not native, not emulated** — Inferno `emu`'s architecture with wasm in place
-  of Dis, forced by iOS (no child processes, no JIT).
-- **9P is the system interface; WASI is a shim** (`wasi:cli/command` only). WIT's typed
-  interfaces and 9P's uniform untyped one do not compose.
-- **9P2000.** `version(5)`: the only defined version; negotiation built in; nothing here
-  needs wire compatibility with original 9P.
-- **Wire 9P at boundaries, a Dev table inside** — Plan 9's own kernel shape: devices
-  present the file interface as function calls, only the mount driver marshals 9P.
-- **Fetching is NOT the kernel's job — `#H` left on 2026-09-04 (P1 step 5).**
-  It was never Plan 9's letter, and Plan 9 answers the need in **userspace**:
-  `plan9/sys/src/cmd/webfs`. Gone with it: `Effect::Fetch`, `fetch_done`, the
-  hosts' HTTP clients and the `ureq` dependency. **Consequence:** `pkg`
-  registries are **local trees only** (an http base is refused with an error
-  that says why), and the Python shim's `pip` has no network. A userspace
-  webfs, or `/net`, is what brings either back.
-- **The kernel call list is derived** (`docs/syscalls.md`): of Plan 9's 40 live calls, 29
-  never leave the supervisor; ten are one 9P message each; `mount` is the boundary itself.
-  `Twalk` has no syscall, and `seek` is fd-table state, not a message.
-- **Class-B calls return as libc functions, never syscalls** — `chmod`/`fchmod`/`chown`/
-  `fchown`/`utime` collapse into `wstat` (V10 has no `rename`, and with no `link` either
-  there is nothing to build one from — where `rename` lives is the WASI personality's
-  question, P2's open gap). 40 of V10's 68 routines — 59% — are direct or library-only; counts are of
-  routines, not `sysent.c` rows (`lseek`/`seek` and `gtime`/`ftime` pair up).
-- **The lazy fork's resume mechanism and its bound** (RESEARCH §5.2): the child's `exec`
-  throws; a hand-assembled `try_table`/`catch_all` guard catches; the supervisor restores
-  the `[0, sp)` shadow-stack region saved at fork; the guard returns the pid. The catch
-  frame must be live when the child execs, so the child's pre-exec code runs inside the
-  guard's extent — **`procrfork(flags, fn, arg)`**, Plan 9's thread-library shape. Bare
-  dual-return `rfork(RFPROC)` is asyncify's case, realised as a per-binary flag (never
-  system-wide): `wasm-opt --asyncify` with instrumentation confined to paths reaching
-  `env.forka` (the real rc costs +103% — its fmt-driven error paths make nearly every
-  function transitively reach an indirect call, so the confinement barely confines);
-  the worker unwinds, snapshots the whole memory (the fork-time `__stack_pointer`
-  travels too — globals are not part of the snapshot), the supervisor spawns a fresh
-  Worker over the copy, both sides rewind — pid and 0. Every fork the real rc makes
-  runs this way.
-- **Syscall transport: a Worker is a process** (§5.3) — per-process SAB mailbox,
-  `Atomics.wait` in the Worker, kernel never blocks. Browser deployment needs COOP/COEP;
-  Node needs nothing. Guest memory stays unshared (so no atomics/shared-memory flags in
-  guest builds); sharing it is a later optimisation.
-- **One guest substrate** (wasm everywhere); base is **Plan 9 4th edition as reference,
-  9front consulted** (both MIT). **`/dev/tty` does not exist** — `/dev/cons`, aliased in
-  the personality's libc.
-- **`/dev/draw` stays an actual file, per window, per namespace** — the one place this
-  system can out-Plan 9 plan9port, **now demonstrated by both editors**:
-  `supervisor/devwsys.mjs` is the window server's kernel half (rio's *interface*),
-  `draw.mjs` its raster engine — screens, window views on one backing store,
-  clipping, per-channel uploads, draw(3)'s `b d f L e E y i l s x c A F t O v` —
-  and **the real samterm and acme draw on it** through the real libdraw/libframe,
-  on the wasm libthread — acme, the declared real test, passed.
-  **Self-hosting is not a goal** (`/cc` as
-  file server makes compilation a capability).
+That matters because of what the decision log was doing. It recorded
+"decisions", quoted her in them, and was then cited — by later sessions, and by
+this file — as settled fact not to be re-derived. A session would invent
+something, write it down as a decision, and every session after would defend it
+as hers. `#H`, `#V`, `#Z`, an effect list at the embedding boundary, a
+namespace keyed by path text: all of them became "decided" that way. The log is
+archived at `docs/archive/design-log-claude-written.md` and **is not
+authority**.
 
-- **Identity is Plan 9's, as of 2026-09-04 (P1 step 4): ONE NAME per process.**
-  `eve` is the machine's owner and the only privilege test; permission is
-  **`devpermcheck`** — owner bits for the owner, **the GROUP bits for `eve`** (so eve
-  is *not* omnipotent: a 0600 file owned by someone else is closed to it too), other
-  bits for everyone else. A process may become `"none"` through `/dev/user` and may
-  not come back (`auth.c`'s `userwrite`); `/dev/hostowner` is eve-only and renames the
-  machine's owner. **Gone**: `Cred{euid,ruid}`, `DMSETUID` and setuid-at-exec, and the
-  credential transitions through `/proc/<pid>/ctl` — a V10 personality inside the
-  kernel, which is where it did not belong. Consequences: `cmd/su.c` is **not built**
-  (its mechanism left; P2 step 4 rewrites it as a userspace program), and `run`'s
-  `user` directive is now a drop to `"none"` and nothing else.
-  `docs/identity.md` describes the *personality* and carries a banner saying so until
-  P2 rewrites it.
-- **Links are GONE — removed 2026-09-04 (P1 step 3), and there is no capability to
-  relocate.** They were added as the V12 additions and reviewed out: **Plan 9 has no
-  link operation at any layer** — no `Tlink`/`Rlink`/`Tsymlink` in `fcall.h`, no
-  `syslink` in `port/`, nothing in `9syscall/sys.h` — so refusing links is a design
-  position there, answered by `bind` and `mount`. What left: kernel traps 60–62 and
-  `lstat`'s nofollow flag, the minted wire types 128/130/132, the `QTSYMLINK`/
-  `DMSYMLINK` bits, the walk-time symlink resolution (a walk is now one pass, with no
-  redirect and no depth limit), `cmd/ln.c`, and **ten** suite assertions. Every
-  remaining trap is Plan 9's own number and name but for the four the substrate
-  forces — `ARGS` 200, `NOTEGET` 202, `AREAD` 210, `IOWAIT` 211. **Consequence, and
-  it is a real one:** WASI's `path_rename` was *defined* as link+unlink, so it now
-  answers `NOTSUP` along with `path_link`/`path_symlink`/`path_readlink` — copy+remove
-  is a different contract (not atomic) and was not silently substituted. Where
-  `rename` lives is the WASI personality's question, P2's open gap.
+**What IS authority, in this order:**
+
+1. **What Christine says.** In conversation, now. Not a transcription of it in
+   a document written by a previous session.
+2. **`plan9/`, at file and line.** Every claim about Plan 9 traces there or it
+   is not a claim.
+3. **The code and its tests**, for what the system actually does.
+
+**What the documents are for:** notes, so a session that inherits nothing has
+somewhere to start. They are a record of what was *thought*, not of what was
+*agreed*. A statement in one of them is a lead to check, never a decision to
+cite — and **it cannot make a deviation from Plan 9 approved**. Only she can do
+that, and her default answer is no.
 
 ## The tree (post-declaration, 2026-08-29)
 

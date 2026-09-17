@@ -7,7 +7,7 @@
 **acme is Bell Labs' program.** This document is how it is modified to fit into
 emca, with its functionality preserved. It is not a description of emca, and
 emca is not descended from it: the four-layer anatomy below was *input* to
-emca's design, not parentage (design.md, 2026-09-01).
+emca's design, not parentage (archive/design-log-claude-written.md, 2026-09-01).
 
 **The port decision (corrected 2026-09-02).** Christine: *"acme, the original
 Bell Labs program, is an emca-like program using `/dev/draw`, running under

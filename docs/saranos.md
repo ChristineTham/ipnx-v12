@@ -4,7 +4,7 @@
 and where the boundaries fall. The technical contracts are
 [architecture.md](architecture.md); the windowing system is
 [emca.md](emca.md); the dated decisions that produced these names are in
-[design.md](design.md)'s log (2026-08-31, sharpened twice on 2026-09-01).
+[design.md](archive/design-log-claude-written.md)'s log (2026-08-31, sharpened twice on 2026-09-01).
 
 ## What Saranos is
 

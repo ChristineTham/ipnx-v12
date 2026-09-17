@@ -7,7 +7,7 @@ The design record for the 2026-08-30 decision: *redesign sam, acme and the
 rest of the Plan 9 utilities to use our new paradigms — it's time to kiss
 compatibility goodbye.* The curation survives; the verbatim does not. Each
 program's **essence** is named and carried into a native design on the new
-paradigms — `/dev/canvas` (design.md 2026-08-30), the verb convention, the
+paradigms — `/dev/canvas` (archive/design-log-claude-written.md 2026-08-30), the verb convention, the
 namespace, pkg, and the plumber. The vendored raster world reclassifies as
 the **heritage exhibit** beside `/v10`: still built, still run, still
 holding the conformance floor — load-bearing for the suite, never for

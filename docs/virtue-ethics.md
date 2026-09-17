@@ -49,7 +49,7 @@ Take the whole project as the subject. For each virtue above, ask where the
 work sits between its two vices and write the receipt — the concrete evidence,
 not the intention. Name any virtue drifting toward either vice **while the
 drift is small**. Then name the practitioners' live temptations, and close with
-dispositions: **adopted** → the [decision log](design.md) and the
+dispositions: **adopted** → the [decision log](archive/design-log-claude-written.md) and the
 [plan](implementation.md); **parked** → named in the reading so the next
 application re-asks.
 

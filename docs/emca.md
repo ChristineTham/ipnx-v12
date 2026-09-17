@@ -13,7 +13,7 @@ true of every implementation, and points at the rest.
 | the **type system** — what content is, and what manages it | [type.md](type.md) |
 | the **acme port** — an emca-like program running as a client | [acme.md](acme.md) |
 | the layers and the names | [saranos.md](saranos.md) |
-| why each shape was chosen | [design.md](design.md) |
+| why each shape was chosen | [design.md](archive/design-log-claude-written.md) |
 | what is built, and what is not | [when.md](when.md) |
 
 **emca does the minimum possible, like rio.** It places windows, it handles
