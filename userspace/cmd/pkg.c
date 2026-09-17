@@ -546,8 +546,18 @@ conflictcheck(char *src, char *dst)
 	close(fd);
 }
 
-/* run a declaration's lines. `act` 0 = install (fetch, bind, env),
- * 1 = verify (check digests only), 2 = remove (unbind only). */
+/* Run a declaration's lines:
+ *
+ *   0  install   materialise (fetch/tree), then bind and set env
+ *   1  verify    check digests only
+ *   2  remove    unbind only
+ *   3  rebind    bind and set env, WITHOUT materialising
+ *
+ * 3 is what a fresh namespace needs. The store is durable and the declaration
+ * records that the package is installed, but a namespace is per-process and
+ * empty at boot — so "install" there means applying the bindings, not fetching
+ * 41MB that is already sitting in the store. Re-verifying on every namespace
+ * entry is `pkg verify`'s job, not boot's. */
 static void
 apply(char *declpath, char *base, int act)
 {
@@ -605,7 +615,7 @@ apply(char *declpath, char *base, int act)
 				else if(strcmp(f[1], "-b") == 0) flag = MBEFORE;
 				f[1] = f[2]; f[2] = f[3];
 			}
-			if(act == 0){
+			if(act == 0 || act == 3){
 				conflictcheck(f[1], f[2]);
 				if(bind(f[1], f[2], flag) < 0)
 					fprint(2, "pkg: bind %s %s: %r\n", f[1], f[2]);
@@ -613,7 +623,7 @@ apply(char *declpath, char *base, int act)
 				if(unmount(f[1], f[2]) < 0)
 					fprint(2, "pkg: unmount %s %s: %r\n", f[1], f[2]);
 			}
-		} else if(strcmp(f[0], "env") == 0 && act == 0){
+		} else if(strcmp(f[0], "env") == 0 && (act == 0 || act == 3)){
 			int efd;
 
 			snprint(envp, sizeof envp, "/env/%s", f[1]);
@@ -643,7 +653,11 @@ install(char *name)
 	fd = open(decl(name), OREAD);
 	if(fd >= 0){
 		close(fd);
-		print("pkg: %s is already installed\n", name);
+		/* Recorded already — so this namespace, not the store, is what is
+		 * missing it. Apply the bindings and stop. That is what boot does
+		 * with every declaration it finds, and why booting costs no
+		 * hashing: "installing is a bind". */
+		apply(decl(name), "", 3);
 		return;
 	}
 	for(i = 0; eachbase(i, base, sizeof base) == 0; i++){

@@ -141,9 +141,14 @@ main(int argc, char *argv[])
 	/* the split point where the new window lands varies a few lines
 	 * between hosts (the column's height heuristic); the band is wide so
 	 * the assertion is about the LOOK, not one host's layout */
+	/* y follows the LISTING: '/' gained 'namespace' and 'pkg' — both sort
+	 * before 'rc' — when the boot file moved to /namespace and packages
+	 * arrived (P2 steps 3 and 5), so the name sits two lines lower than it
+	 * did. The pitch is 15px, measured off the raster: text bands begin at
+	 * y = 49, 65, 80, 95. */
 	base = darkin(84, 240);
-	chord("mouse 280 55 4");
-	chord("mouse 280 55 0");
+	chord("mouse 280 85 4");
+	chord("mouse 280 85 0");
 	opened = 0;
 	for(i = 0; i < 100 && !opened; i++){
 		sleep(100);

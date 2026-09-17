@@ -267,48 +267,40 @@ short count, so a 16 KB write to a mounted file wrote 8192. Plan 9's `mntrdwr`
 loops (`devmnt.c:688`); ours now does too. `pkg` was left strict about short
 writes deliberately: it is the detector that caught this.
 
-**Step 3's namespace half landed** (2026-09-17, [RESEARCH §9.29](../RESEARCH.md)):
-`/lib/namespace` is now **`/namespace`** — `/` is a project instantiated from
-`/template/system`, so the file boot reads is the **instance's own**
-configuration and lives in `/` because `/` *is* the project. `init` reads it
-through `newns()`; the host is what put it there, which is the whole answer to
-the bootstrap ordering. The `bind #w /dev/window` line **stays** until `#w`
-leaves in P4: measured, 53 uses of `/dev/window` in the suite gate on that path
-resolving, so dropping it early would turn live assertions into silent skips
-rather than failures.
+**P2 step 3 landed whole, and step 5's move with it** (2026-09-17,
+[RESEARCH §9.29](../RESEARCH.md)).
 
-**And the move is PROVED, though not yet flipped.** `mk.sh` materialises
-`userspace/store/python/3.14` (**541 files, 41 MB**) and `.../go/1.25`, with
-five-line declarations beside them — outside `rootfs/` because the frozen
-oracle walks `rootfs/` to build its seed and may not be modified.
-`rc /rc/storeproof` passes five checks: the declarations are the record,
-`pkg verify` is clean against the pinned digest, and **REAL CPython runs from
-the store** — 30 MB streamed over 9P out of host storage — as does a real Go
-binary, and bound into `/bin` they are ordinary names.
+**The namespace half:** `/lib/namespace` is now **`/namespace`** — `/` is a
+project instantiated from `/template/system`, so the file boot reads is the
+**instance's own** configuration and lives in `/` because `/` *is* the project.
+The `bind #w /dev/window` line stays until `#w` leaves in P4: 53 uses of
+`/dev/window` gate on that path, so dropping it early would turn live
+assertions into silent skips.
 
-**A kernel defect the scale exposed:** a walk holds one mount fid per resolved
-path, and a path that was *dropped* — a failed lookup, a `chdir` — never gave
-it back. CPython's import machinery misses on most candidate names, so
-`storefs`'s 64 fids were gone before the interpreter finished starting.
-`walk()` now releases on both failure paths.
+**The rc half is `/rc/bin/termrc`** — Plan 9's own name at Plan 9's own
+location (`plan9/sys/src/cmd/init.c:178`), which is what `/rc/lib/rcmain` was
+already following. It starts `storefs`, mounts `/store` and applies each
+declaration's bindings. `init` forks it **without RFNAMEG**, so its mounts land
+in init's own namespace.
 
-**What blocks the flip is one name.** Removing the binaries from the seed needs
-boot to start `storefs`, mount `/store` and bind from it. `newns`'s verbs are
-`bind | mount | cd | clear` — none starts a server — so this is step 3's **rc
-half**, whose name and location [design.md](design.md) explicitly reserves as a
-gap. Everything else it needs exists and is proven. Measured: without python,
-its stdlib and the Go binaries the rootfs is **3.4 MB** against a 16 MB
-ceiling.
+**The move is DONE.** `mk.sh` materialises `userspace/store/python/3.14`
+(541 files, 41 MB) and `.../go/1.25` with five-line declarations, then
+**deletes them from the seed**: the rootfs goes from **49 MB to 3.4 MB**, and
+the browser's packed `rootfs.json` from 65 MB to **3.95 MB**. `rc/storeproof`
+proves REAL CPython and REAL Go running **from the store**, streamed over 9P
+out of host storage. `pkg install` on an already-recorded declaration now
+**rebinds** instead of re-materialising — boot needs the bindings, not the
+bytes.
 
-**The measurement that framed it** (2026-09-04, [RESEARCH §9.25](../RESEARCH.md)).
-The plan's step 5 cites `type.md` for *"`/pkg/<name>/<version>` subtrees"* — but
-that is what `cmd/pkg.c` implements (**pkg v1**), not what type.md accepted on
-2026-09-02: **`/pkg/<name>` is a declaration file** and the bytes live in
-**`/store/<name>/<version>`**, bound and never copied. The distinction decides
-whether the step works: under v1, `pkg install python` **copies 29 MB into the
-tree**, so the seed shrinks and the running tree does not — and step 2's root
-server is no better off. The plan cell is corrected; the build waits on one
-decision (below).
+**156 PASS / 0 FAIL on all three hosts**, identical assertion for assertion on
+the two that run the Rust core.
+
+**What is not done, plainly:** after init's `newns` restore test the namespace
+is cleared and the store goes with it, so the suite's Go and Python tranches
+self-skip from there on — `storeproof` is what proves the packages, not the
+suite. And **the frozen oracle loses Python and Go entirely**: packages live in
+host storage behind `#Z`, and the oracle has no `#Z`. That is the design's own
+consequence, not an accident.
 
 ## Replanned 2026-09-04 — what follows is LEGACY state
 

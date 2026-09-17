@@ -114,9 +114,13 @@ Inside the guest, `bind '#Z' /n/z` first — a `#`-rooted path can be walked and
 read but not created in ([RESEARCH §9.28](../RESEARCH.md) records why, and that
 it is a measured deviation from Plan 9 left in place deliberately).
 
-**Go and Python as packages.** `mk.sh` also materialises `userspace/store`
-(the store entries and their manifests) and `userspace/pkg` (the declarations).
-To see them run *from the store* rather than from the tree:
+**Go and Python ARE packages** (since 2026-09-17): `mk.sh` materialises
+`userspace/store` (the store entries and their manifests) and `userspace/pkg`
+(the declarations), and **removes them from the rootfs seed** — which is why
+the tree is 3.4 MB rather than 49 MB. `/rc/bin/termrc` binds them back at boot.
+A host with no store simply has no Python, and the suite's Go and Python
+tranches self-skip there — including the frozen oracle, which has no `#Z`.
+To see them run from the store:
 
 ```bash
 cargo run --release -p host -- userspace/rootfs --host userspace -i

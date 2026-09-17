@@ -2188,80 +2188,102 @@ it out of conformance with the reference over something nothing asked for, and
 the workaround — `bind '#Z' /n/z` first — is the idiomatic Plan 9 form anyway.
 One line each side if Christine wants them aligned. Recorded rather than done.
 
-### 9.29 Step 3's namespace half, and the move proved at scale (2026-09-17)
+### 9.29 Step 3 whole, and the move DONE (2026-09-17)
 
 **`/lib/namespace` is now `/namespace`.** `/` is a PROJECT instantiated from
 `/template/system`, so the file boot reads is the **instance's own**
 configuration and lives in `/` because `/` is the project ([design.md](docs/design.md)
-2026-09-04). `init` reads it through `newns()` as before; the host is what put
-it there, which is the whole answer to the bootstrap ordering — the host owns
-the storage, so reading one file before anything else exists is something it
-can simply do.
+2026-09-04). `init` reads it through `newns()`; the host put it there, which is
+the whole answer to the bootstrap ordering.
 
-**The `bind #w /dev/window` line STAYS, against the plan cell, and the reason
-is worth recording.** The plan has `/namespace` losing it at this step, but
-`#w` does not leave until P4. Measured: **53** uses of `/dev/window` in
-`tests.rc`, plus `rc/emca` and `cmd/emca.c`, and those tests gate on the path
-resolving. Dropping the bind while the device still exists would not fail
-them — it would turn about ten live assertions into silent *skips*, with the
-PASS count unchanged, which is worse than breaking loudly. The line goes when
-`#w` does.
+**The `bind #w /dev/window` line STAYS, against the plan cell.** `#w` does not
+leave until P4, and measured there are **53** uses of `/dev/window` in
+`tests.rc` plus `rc/emca` and `cmd/emca.c`, all gating on that path resolving.
+Dropping the bind early would not fail them — it would turn about ten live
+assertions into silent *skips* with the PASS count unchanged, which is worse
+than breaking loudly.
 
-### The move: Go and Python as packages, proved
+### The rc half was never a gap — Christine found it
 
-`mk.sh` now materialises the store outside the rootfs:
+I reported the boot script's name and location as a gap "reserved in
+design.md". Her question — *"doesn't /rc contain boot sequence and command?"* —
+was the correction, and the measurement settles it:
+`plan9/sys/src/cmd/init.c:178` execs
+
+```c
+rc -c ". /rc/bin/termrc; home=/usr/$user; cd; . lib/profile"
+```
+
+on a terminal (`cpurc` on a cpu server). **`/rc/bin/termrc` is Plan 9's own
+name at Plan 9's own location**, and `/rc/lib/rcmain` was already ours from the
+identical convention. This is the fourth instance of one failure shape: hunting
+for a name to invent while the reference the project explicitly follows already
+names the thing. *An empty search means the wrong word* — and here it meant the
+wrong question, because I searched the decision log for a gap instead of
+`plan9/rc/`.
+
+`init` cannot `exec` it as Plan 9 does — it is also the suite's driver — so it
+**forks without RFNAMEG**, and `kernel/src/lib.rs:4769` is why that works:
+without that flag the namespace is *shared*, "per rfork(2)". termrc's mounts
+and binds therefore land in init's own namespace.
+
+### The flip
+
+`mk.sh` materialises the store outside `rootfs/` — a constraint, not a
+preference, since `poc/run.sh` walks `userspace/rootfs` to build the frozen
+oracle's seed and **may not be modified**, so anything inside it is loaded into
+guest memory, the very thing the move exists to stop:
 
 | | |
 |---|---|
-| `userspace/store/python/3.14` | **541 files, 41 MB** — the wasi CPython binary and its full stdlib |
-| `userspace/store/go/1.25` | 3 files, 5.0 MB — the wasip1 citizens |
-| `userspace/pkg/{python,go}` | the declarations, **five lines each** |
+| `userspace/store/python/3.14` | 541 files, **41 MB** |
+| `userspace/store/go/1.25` | 3 files, 5.0 MB |
+| `userspace/pkg/{python,go}` | the declarations, five lines each |
 
-**Outside `rootfs/` deliberately, and this is a constraint rather than a
-preference:** `poc/run.sh` walks `userspace/rootfs` to build the frozen
-oracle's seed and **may not be modified**, so anything placed inside is loaded
-into guest memory — the very thing the move exists to stop.
+and then **deletes them from the seed**. Measured: the rootfs goes from
+**49 MB to 3.4 MB**, and the browser's packed `rootfs.json` from 65 MB to
+**3.95 MB**. `rc/storeproof` passes five checks — the declarations are the
+record, `pkg verify` is clean against the pinned digest, and REAL CPython and
+REAL Go run **from the store**, streamed over 9P out of host storage.
 
-`rc/storeproof` assembles it the way boot will, and all five checks pass:
-`ls /pkg` is `pkg list`; `pkg verify go` is clean against its pinned digest;
-**REAL CPython runs FROM THE STORE**, its 30 MB streamed over 9P out of host
-storage; a real Go binary does too; and bound into `/bin` they are ordinary
-names — *installing is a bind*. `cat /pkg/python` is **five lines for 41 MB
-and 540 files**, which is the tree form doing exactly what it was built for.
+**`pkg install` on an already-recorded declaration now REBINDS** rather than
+re-materialising (`apply` act 3). Boot needs the bindings, not the bytes: the
+store is durable and the declaration records the install, but a namespace is
+per-process and empty at boot. Re-hashing 41 MB at every boot to discover what
+`/pkg` already says would be absurd, and re-verifying is `pkg verify`'s job.
 
-**A KERNEL DEFECT THE SCALE EXPOSED — a leaked mount fid per failed lookup.**
-The first storeproof run died with `FileNotFoundError` on a stdlib file that
-demonstrably exists, and afterwards *every* `/store` path stopped resolving.
-Measured by reading `walk()`: a walk holds one server fid per resolved path;
-`open` hands it to a chan (clunked at close) and `stat` clunks it itself — but
-a path that is **dropped** never gave its fid back:
+### Four defects this turn, each found by measurement
 
-```rust
-let next = dev_walk(k, &dn, name, pid).await?
-    .ok_or_else(|| format!("'{}' does not exist", path))?;   // dn dropped here
-```
+- **A leaked mount fid per failed lookup.** A walk holds one server fid per
+  resolved path; `open` hands it to a chan and `stat` clunks it, but a path
+  that is *dropped* never gave it back. CPython's import machinery misses on
+  most candidate names, so `storefs`'s 64 fids were gone before the interpreter
+  finished starting, and `/store` died for everything after. `walk()` now
+  releases on both failure paths; `chdir` too. **`NFID` stays at 64** — a
+  generous limit would have hidden the leak rather than fixed it.
+- **`init`'s `await` stranded the suite.** `bootrc` first waited for termrc by
+  awaiting, and init is *also* the suite's driver whose tests own their own
+  children: the wait record it consumed belonged to one of them, and the suite
+  deadlocked. It now forks `RFNOWAIT` and waits on a marker termrc writes —
+  `bootrc=done` in `/env`, as Plan 9's own boot sets `$service`.
+- **The marker was in `/tmp` first**, and `ls /tmp` is asserted exactly.
+- **Mounting one posted channel twice hangs.** `/srv/store` is a single pipe,
+  so a second `mount store /store` puts two devmnt clients on one wire with
+  independent tag spaces. termrc now mounts only when `/store` is empty.
 
-That costs nothing until something resolves paths in bulk. CPython's import
-machinery tries a dozen candidate names per module and most of them **miss**,
-so `storefs`'s 64 fids were gone before the interpreter finished starting, and
-the mount was dead for everything after. `walk()` now releases the fid on both
-failure paths, and `chdir` — which also walked and discarded — releases too.
+**What is NOT done, stated plainly.** After init's `newns` restore test the
+namespace is cleared and the store goes with it, so the suite's Go and Python
+tranches self-skip from that point on — `rc/storeproof` is what proves the
+packages run, not the suite. Re-running termrc there would fix it, and a second
+run is not reliably idempotent yet, so it is not done: **a hang in pid 1 is
+worse than a skip**. And with `--host`, one legacy pkg assertion (`pecho`'s
+whole life) fails against a pre-populated `/pkg`; the documented three-host
+configuration is 156 PASS / 0 FAIL.
 
-`storefs`'s `NFID` was left at **64**, deliberately, for the same reason `pkg`
-was left strict about short writes: a generous limit would have hidden the leak
-rather than fixed it. The small number is the detector.
-
-**The flip is BLOCKED, on a gap that is recorded rather than filled.** Removing
-the binaries from the seed needs boot to start `storefs`, mount `/store` and
-bind from it. `newns`'s verbs are measured — `bind | mount | cd | clear` — and
-none of them starts a server, so this is the **rc half**: *"a script that
-attaches the root server and binds it over `/`"*, whose **name and location
-design.md explicitly reserves as a gap** (2026-09-04), repeated in the plan's
-own acceptance line. Putting it in `init.c` instead would be building that
-script in C, and *"the reference does not overrule a decision to differ from
-the reference"* — Plan 9's compiled `boot.c` is precisely what the founding
-refusal rejected. So: everything the flip needs exists and is proven; it waits
-on one name.
+**The frozen oracle loses Python and Go, and this is inherent.** Packages live
+in host storage reached through `#Z`; the oracle has no `#Z`, so it has no
+store and cannot have packages. Its tranches self-skip. That is the cost of the
+move, and it is the design's own consequence rather than an accident.
 
 ## 10. Licensing
 

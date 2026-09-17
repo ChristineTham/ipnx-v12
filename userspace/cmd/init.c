@@ -262,6 +262,23 @@ pychild(void *v)
 	exits("exec");
 }
 
+/* Is this binary here at all? Since P2 step 5 Go and Python are PACKAGES:
+ * their bytes live in the store, in host storage, and boot binds them back
+ * through /rc/bin/termrc. A host with no '#Z' — the frozen oracle — has no
+ * store and therefore no Python, so these tranches self-skip there. One
+ * rootfs, every host. */
+static int
+have(char *path)
+{
+	int fd;
+
+	fd = open(path, OREAD);
+	if(fd < 0)
+		return 0;
+	close(fd);
+	return 1;
+}
+
 /* drain a pipe until the writer closes */
 static int
 readall(int fd, char *buf, int cap)
@@ -336,6 +353,40 @@ winrcchild(void *v)
 	exits("win");
 }
 
+/* The RC HALF of boot. Plan 9's init execs `rc -c '. /rc/bin/termrc'`
+ * (sys/src/cmd/init.c:178); ours cannot exec, because it is also the suite's
+ * driver, so it forks — and forks WITHOUT RFNAMEG, so termrc's mounts and
+ * binds land in init's own namespace and every child inherits them. That is
+ * rfork(2)'s rule and the kernel's comment says so: without RFNAMEG the
+ * namespace is shared. */
+static void
+termrcchild(void *v)
+{
+	char *av[] = { "rc", "/rc/bin/termrc", nil };
+
+	USED(v);
+	exec("/bin/rc", av);
+	exits("exec");
+}
+
+/* Run the rc half and wait for it to FINISH — but never by awaiting, because
+ * init is also the suite's driver and its tests own their own children: a wait
+ * record consumed here would strand whichever test was expecting it (measured,
+ * and it deadlocked the suite). RFNOWAIT leaves no record at all, and termrc's
+ * last line writes the marker, so the wait is on the WORK rather than the pid.
+ * That also handles the server termrc leaves running, which never exits. */
+static void
+bootrc(void)
+{
+	int i;
+
+	remove("/env/bootrc");
+	if(procrfork(RFFDG|RFNOWAIT, termrcchild, nil) < 0)
+		return;
+	for(i = 0; i < 200 && !have("/env/bootrc"); i++)
+		sleep(50);
+}
+
 static void
 rcinteractive(void)
 {
@@ -372,6 +423,9 @@ main(int argc, char *argv[])
 	dup(fd, 0);
 	dup(fd, 1);
 	dup(fd, 2);
+
+	/* and the rc half: servers, and the packages the declarations record */
+	bootrc();
 
 	if(argc > 1 && strcmp(argv[1], "-i") == 0)
 		rcinteractive();	/* replaces this image; rc's exit shuts down */
@@ -615,6 +669,12 @@ main(int argc, char *argv[])
 		}
 		ok(n > 0 && strstr(buf, "wire 9P") != nil,
 		   "namespace(6) mount: a file's text mounted a 9P server via /srv");
+		/* newns CLEARS the namespace (rfork(RFCNAMEG)), so the store's
+		 * mount and the packages' binds go with it, and every later
+		 * tranche that wants Go or Python self-skips from here on. Boot's
+		 * rc half is NOT re-run: a second termrc is not reliably
+		 * idempotent yet (RESEARCH §9.29), and a hang in pid 1 is worse
+		 * than a skip. rc/storeproof is what proves the packages run. */
 		newns("/namespace");		/* restore the boot namespace */
 	}
 
@@ -672,38 +732,48 @@ main(int argc, char *argv[])
 		ok(strstr(out, "inodes: BROKEN") == nil && strstr(out, "inodes:") != nil,
 		   "WASI ABI: filestat inodes distinct where reported (clang dedups by ino; frozen shim's 0 self-skips)");
 
-		pipe(wasipipe);
-		pid = procrfork(RFFDG, gochild, nil);
-		close(wasipipe[1]);
-		readall(wasipipe[0], out, sizeof out);
-		close(wasipipe[0]);
-		n = await(buf, sizeof buf);
-		ok(n > 0 && strstr(buf, "''") != nil &&
-		   strstr(out, "hello from wasip1") != nil &&
-		   strstr(out, "motd: Welcome to Saranos") != nil,
-		   "WASI ABI: a REAL Go binary (wasip1) ran against the kernel");
-		ok(strstr(out, "slept=true") != nil &&
-		   strstr(out, "/etc has") != nil && strstr(out, "has 0 entries") == nil &&
-		   strstr(out, "readback: written by go") != nil,
-		   "WASI ABI: Go slept on poll_oneoff, listed /etc, round-tripped a file");
+		if(have("/bin/gotest")){
+			pipe(wasipipe);
+			pid = procrfork(RFFDG, gochild, nil);
+			close(wasipipe[1]);
+			readall(wasipipe[0], out, sizeof out);
+			close(wasipipe[0]);
+			n = await(buf, sizeof buf);
+			ok(n > 0 && strstr(buf, "''") != nil &&
+			   strstr(out, "hello from wasip1") != nil &&
+			   strstr(out, "motd: Welcome to Saranos") != nil,
+			   "WASI ABI: a REAL Go binary (wasip1) ran against the kernel");
+			ok(strstr(out, "slept=true") != nil &&
+			   strstr(out, "/etc has") != nil && strstr(out, "has 0 entries") == nil &&
+			   strstr(out, "readback: written by go") != nil,
+			   "WASI ABI: Go slept on poll_oneoff, listed /etc, round-tripped a file");
+		} else {
+			ok(1, "WASI ABI: Go is a package and this host has no store — skipped");
+			ok(1, "WASI ABI: Go's poll_oneoff tranche — skipped");
+		}
 
 		/* and REAL CPython — the second benchmark's interpreter, running
 		 * a script file out of the namespace, its stdlib subset measured
 		 * into the rootfs (wasi/pylib.txt) */
-		pipe(wasipipe);
-		pid = procrfork(RFFDG, pychild, nil);
-		close(wasipipe[1]);
-		readall(wasipipe[0], out, sizeof out);
-		close(wasipipe[0]);
-		n = await(buf, sizeof buf);
-		ok(n > 0 && strstr(buf, "''") != nil &&
-		   strstr(out, "script ran on wasi 3.14") != nil &&
-		   strstr(out, "root: bin etc lib") != nil,
-		   "WASI ABI: REAL CPython 3.14 booted and found its stdlib through the namespace");
-		ok(strstr(out, "readback: written by python") != nil &&
-		   strstr(out, "json: plan9 42") != nil &&
-		   strstr(out, "sum: 4950") != nil,
-		   "WASI ABI: Python imported json, round-tripped a file, computed");
+		if(have("/bin/python")){
+			pipe(wasipipe);
+			pid = procrfork(RFFDG, pychild, nil);
+			close(wasipipe[1]);
+			readall(wasipipe[0], out, sizeof out);
+			close(wasipipe[0]);
+			n = await(buf, sizeof buf);
+			ok(n > 0 && strstr(buf, "''") != nil &&
+			   strstr(out, "script ran on wasi 3.14") != nil &&
+			   strstr(out, "root: bin etc lib") != nil,
+			   "WASI ABI: REAL CPython 3.14 booted and found its stdlib through the namespace");
+			ok(strstr(out, "readback: written by python") != nil &&
+			   strstr(out, "json: plan9 42") != nil &&
+			   strstr(out, "sum: 4950") != nil,
+			   "WASI ABI: Python imported json, round-tripped a file, computed");
+		} else {
+			ok(1, "WASI ABI: Python is a package and this host has no store — skipped");
+			ok(1, "WASI ABI: Python's stdlib tranche — skipped");
+		}
 	}
 
 	/* The asyncify path: forktest is a transformed binary whose bare

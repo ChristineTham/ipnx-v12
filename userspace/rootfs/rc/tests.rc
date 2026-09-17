@@ -16,7 +16,10 @@ if(~ `{cat /tmp/t1} written) echo PASS 'redirection > and ramfs write'; if not f
 echo more >> /tmp/t1
 if(~ `{wc /tmp/t1} 2' '*) echo PASS 'append >> (wc counts 2 lines)'; if not fails=bad
 if(~ `{cat < /lib/alt/motd | wc} 1' '*) echo PASS 'input redirection <'; if not fails=bad
-if(~ `{ls /lib} '/lib/alt /lib/font /lib/pkg /lib/python3.14') echo PASS 'ls reads directories'; if not fails=bad
+# /lib/python3.14 is there only where the store is: Python is a package now,
+# bound in by boot, so the assertion is on what the SKELETON carries
+lsl=`{ls /lib}
+if(~ $"lsl '/lib/alt /lib/font /lib/pkg' || ~ $"lsl '/lib/alt /lib/font /lib/pkg /lib/python3.14') echo PASS 'ls reads directories'; if not fails=bad
 mkdir /tmp/d; cp /etc/motd /tmp/d/m
 if(~ `{wc /tmp/d/m} 1' '*) echo PASS 'mkdir and cp'; if not fails=bad
 rm /tmp/d/m /tmp/d
@@ -989,6 +992,8 @@ nsb=`{newns /tmp/ns1 pwd}
 if(~ $"nsa *'private view'* && ~ $nsb /lib) echo PASS 'newns: a namespace built from a file; an edit rebinds, no recompile'; if not fails=bad
 
 # pkg(1): the whole life of a package against an offline local registry —
+# NOTE: /pkg is not empty on a host with a store — boot installs go and python
+# from it — so these assert MEMBERSHIP, not the whole list.
 # a registry is just a tree of files, so the suite authors one, installs
 # from it (streamed, sha256-verified), runs the bound binary through the
 # /bin union, verifies digests, and removes. Network never involved.
@@ -1009,7 +1014,7 @@ pkl2=`{pkg list}
 # remove is an UNBIND: the store entry survives, so reinstalling is free
 pks=`{cat /tmp/store/pecho/1.0/bin/pecho | wc -c}
 pkb=`{cat /tmp/reg/pecho.wasm | wc -c}
-if(~ $pkr 'pkg bound and running' && ~ $"pkv *clean* && ~ $"pkl pecho && ~ $"pkl2 '' && ~ $"pke /tmp/store/pecho/1.0 && ~ $"pks $"pkb) echo PASS 'pkg: a declaration fetches into the store digest-verified, binds, sets env; remove is an unbind and the store entry survives'; if not fails=bad
+if(~ $pkr 'pkg bound and running' && ~ $"pkv *clean* && ~ $pkl pecho && ! ~ $pkl2 pecho && ~ $"pke /tmp/store/pecho/1.0 && ~ $"pks $"pkb) echo PASS 'pkg: a declaration fetches into the store digest-verified, binds, sets env; remove is an unbind and the store entry survives'; if not fails=bad
 
 # the namespace dissolves package conflicts (design 2026-08-29): a name that
 # already resolves to DIFFERENT bytes refuses the install; nothing global to
@@ -1020,7 +1025,7 @@ cd2=`{sha256sum < /tmp/reg2/echo.wasm}
 echo fetch echo.wasm $cd2 /tmp/store2/echo/9.9/bin/echo > /tmp/reg2/echo
 echo bind -a /tmp/store2/echo/9.9/bin /bin >> /tmp/reg2/echo
 pkc=`{pkg -r /tmp/reg2 install echo >[2=1]}
-if(~ $"pkc *CONFLICT* && ~ `{pkg list} '') echo PASS 'pkg: same name, different bytes — the install is refused'; if not fails=bad
+if(~ $"pkc *CONFLICT* && ! ~ `{pkg list} echo) echo PASS 'pkg: same name, different bytes — the install is refused'; if not fails=bad
 
 # pkg(1), the TREE form (endorsed 2026-09-15): content that is a DIRECTORY
 # rather than a file — Python's stdlib is 539 files — pins ONE digest in the
@@ -1055,7 +1060,7 @@ echo '0000000000000000000000000000000000000000000000000000000000000000  ../escap
 bmd=`{sha256sum < /tmp/treg2/m/manifest}
 echo tree m/manifest $bmd /tmp/tstore/esc/1.0 > /tmp/treg2/esc
 tre=`{pkg -r /tmp/treg2 install esc >[2=1]}
-if(~ $"tre *'not a path inside the store entry'* && ~ `{pkg list} '') echo PASS 'pkg: a manifest entry that climbs out of the store entry is refused, and records nothing'; if not fails=bad
+if(~ $"tre *'not a path inside the store entry'* && ! ~ `{pkg list} esc) echo PASS 'pkg: a manifest entry that climbs out of the store entry is refused, and records nothing'; if not fails=bad
 
 # The store lives in HOST STORAGE (P2 step 5, the host plumbing): '#Z' is the
 # host's storage box, and `--host <dir>` roots it at a durable directory — so a

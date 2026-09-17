@@ -33,3 +33,4 @@ plan9/
 plan9-stock/
 userspace/store/
 userspace/pkg/
+userspace/hstore/

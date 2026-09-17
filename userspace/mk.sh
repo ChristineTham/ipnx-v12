@@ -25,7 +25,7 @@ vcheck bison "$(bison --version | sed -n '1s/.* \([0-9.]*\)$/\1/p')"
 vcheck node "$(node --version)"
 vcheck go "$(go version | awk '{print $3}')"
 
-mkdir -p build rootfs/bin rootfs/srv rootfs/mnt rootfs/tmp
+mkdir -p build rootfs/bin rootfs/srv rootfs/mnt rootfs/tmp rootfs/n rootfs/pkg rootfs/store
 $CC -c libc/crt0.c -o build/crt0.o
 $CC -c libc/crt9.c -o build/crt9.o
 $CC -c libc/lib9.c -o build/lib9.o
@@ -386,22 +386,6 @@ cp wasi/pyshim/*.py rootfs/lib/python3.14/   # personality files (pure-Python zl
 cp wasi/pytest.py rootfs/tmp/pytest.py
 echo "  bin/python  $(wc -c < rootfs/bin/python | tr -d ' ') bytes (REAL CPython 3.14.7, wasi)"
 
-# pack the rootfs for the browser host (fetched by browser/main.mjs)
-node -e '
-const fs = require("fs"), p = require("path");
-const out = {};
-(function walk(d, pre){
-  const es = fs.readdirSync(d);
-  if (es.length === 0) { out[pre] = null; return; }   // empty dir: a marker, so /srv survives
-  for (const e of es) {
-    const f = p.join(d, e), s = fs.statSync(f);
-    if (s.isDirectory()) walk(f, pre + e + "/");
-    else out[pre + e] = fs.readFileSync(f).toString("base64");
-  }
-})("rootfs", "/");
-fs.writeFileSync("build/rootfs.json", JSON.stringify(out));
-'
-echo "  build/rootfs.json  $(wc -c < build/rootfs.json | tr -d " ") bytes"
 
 # ---- the STORE: Go and Python as PACKAGES (P2 step 5, the move) ----
 #
@@ -462,5 +446,30 @@ cat > pkg/go <<PKGEOF
 tree go/$GOV/manifest $godig /store/go/$GOV
 bind -a /store/go/$GOV/bin /bin
 PKGEOF
+# THE FLIP: they leave the seed. The bytes are in the store and the
+# declarations name them, so the tree carries neither — which is the whole
+# point (RESEARCH §9.24: 49MB of rootfs against a 16MB guest ceiling). Boot
+# binds them back through /rc/bin/termrc; a host with no '#Z' simply has no
+# Python, and the suite's Python and Go assertions self-skip there.
+rm -f rootfs/bin/python rootfs/bin/gotest rootfs/bin/gohello
+rm -rf rootfs/lib/python3.14
 echo "  store/python/$PYV  $(find store/python/$PYV -type f | wc -l | tr -d ' ') files, $(du -sh store/python/$PYV | cut -f1)"
 echo "  store/go/$GOV  $(find store/go/$GOV -type f | wc -l | tr -d ' ') files, $(du -sh store/go/$GOV | cut -f1)"
+echo "  rootfs (the SKELETON, python and go now bound from the store)  $(du -sh rootfs | cut -f1)"
+
+# pack the rootfs for the browser host (fetched by browser/main.mjs)
+node -e '
+const fs = require("fs"), p = require("path");
+const out = {};
+(function walk(d, pre){
+  const es = fs.readdirSync(d);
+  if (es.length === 0) { out[pre] = null; return; }   // empty dir: a marker, so /srv survives
+  for (const e of es) {
+    const f = p.join(d, e), s = fs.statSync(f);
+    if (s.isDirectory()) walk(f, pre + e + "/");
+    else out[pre + e] = fs.readFileSync(f).toString("base64");
+  }
+})("rootfs", "/");
+fs.writeFileSync("build/rootfs.json", JSON.stringify(out));
+'
+echo "  build/rootfs.json  $(wc -c < build/rootfs.json | tr -d " ") bytes"
