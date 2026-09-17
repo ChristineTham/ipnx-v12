@@ -160,7 +160,7 @@ pub fn unframe(buf: &[u8]) -> Option<Msg<'_>> {
 
 /// A qid: the server's name for a file, and the thing a client compares to
 /// decide two paths are the same file.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct Qid {
     pub qtype: u8,
     pub vers: u32,

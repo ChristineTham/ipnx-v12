@@ -201,18 +201,18 @@ impl Procs {
         }
     }
 
-    /// `await(2)`: reap one exited child, youngest pid first. A child forked
-    /// with `RFNOWAIT` is never reported and leaves no zombie.
+    /// `await(2)`: reap one exited child. Plan 9 states no order and neither
+    /// does this — an earlier version promised "youngest pid first", which was
+    /// a rule invented rather than found. A caller that needs a particular
+    /// child waits for its pid.
+    ///
+    /// A child forked with `RFNOWAIT` is never reported and leaves no zombie.
     pub fn await_child(&mut self, pid: Pid) -> Option<(Pid, String)> {
-        let mut found = None;
-        for (cpid, p) in &self.tab {
-            if p.ppid == pid && !p.waited && p.status.is_some() {
-                if found.map_or(true, |f: Pid| *cpid < f) {
-                    found = Some(*cpid);
-                }
-            }
-        }
-        let cpid = found?;
+        let cpid = *self
+            .tab
+            .iter()
+            .find(|(_, p)| p.ppid == pid && !p.waited && p.status.is_some())
+            .map(|(cpid, _)| cpid)?;
         let p = self.tab.remove(&cpid)?;
         Some((cpid, p.status.unwrap_or_default()))
     }
