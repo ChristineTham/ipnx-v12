@@ -21,8 +21,10 @@ cd saranos && cargo test     # the contracts, asserted
 1. **The kernel's core** — 9P codec, namespace, device table. *Done, tested.*
 2. **Processes** — instantiation as `exec`, fd tables, the fork guard.
 3. **Devices** — `#/ #c #e #d #p #s #|`, then `#M`, the one wire boundary.
-4. **Host storage** — served by the host over 9P and mounted, NOT a device.
-   Plan 9 has no letter for it and this kernel mints none.
+4. **What the host owns** — console, clock, randomness, storage: all served by
+   the host over 9P and mounted. None of them is a device letter and none is
+   an effect. Plan 9's `#c` alone serves `cons`, `time`, `random` and `reboot`,
+   so a variant per file adds four before it reaches a second device.
 5. **The userspace** — a libc over the syscall boundary, `rc`, the commands.
 6. **Boot** — `/namespace` read by the host, `/rc/bin/termrc` as the rc half.
 7. **`/store`, `/pkg`, `/profile`** — one format, three registries.

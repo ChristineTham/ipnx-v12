@@ -24,23 +24,32 @@ pub mod ns;
 /// A process id. Pid 1 is `init`, as it is everywhere.
 pub type Pid = u32;
 
-/// What the kernel asks the host to do. The host performs it and answers with a
-/// [`Reply`] carrying the same tag.
+/// What the kernel asks the host to do.
 ///
-/// This list is deliberately short and deliberately dull. Every variant is
-/// something a kernel cannot do for itself on any substrate — not something
-/// convenient to push outwards. A new variant is a claim that the kernel has
-/// grown, and must be argued as one.
+/// This list is SHORT and it is meant to stay short. Every variant is something
+/// no kernel can do for itself on any substrate — not something convenient to
+/// push outwards. Adding one is a claim that the kernel has grown, and has to
+/// be argued as one.
+///
+/// **There is no variant for a device, and there will not be.** The host owns
+/// the machine, so what the host owns arrives as FILES IT SERVES and the kernel
+/// mounts — the console, the clock, randomness, storage, all the same case,
+/// none of them an effect. The alternative is a variant per file: Plan 9's `#c`
+/// alone serves `cons`, `time`, `random` and `reboot`, so that road adds four
+/// before it reaches a second device. 9P is the only IPC, and this is what that
+/// rule is for.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
-    /// Instantiate a process image. `exec` is instantiation, so this is `exec`.
+    /// Instantiate a process image. `exec` is instantiation, and only the host
+    /// holds the engine that can do it.
     Spawn { tag: u64, pid: Pid, path: String, args: Vec<String> },
     /// A process has ended and the host may reclaim it.
     Reap { pid: Pid, status: String },
-    /// Bytes to the console the host owns.
-    Console { data: Vec<u8> },
-    /// Wake the kernel after a delay. Time is the host's to keep.
-    Timer { tag: u64, ms: u64 },
+    /// Bytes out on a channel the host holds — one end of a 9P connection to
+    /// something the host serves, or a process's own mailbox. This is
+    /// transport, not knowledge: the kernel says which channel and what bytes,
+    /// and nothing here knows what is on the other side.
+    Send { tag: u64, chan: u32, data: Vec<u8> },
     /// Stop.
     Shutdown { status: i32 },
 }
@@ -49,7 +58,9 @@ pub enum Effect {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reply {
     Ok { tag: u64 },
-    Bytes { tag: u64, data: Vec<u8> },
+    /// Bytes in from a channel the host holds. Same shape as `Send`, same
+    /// ignorance: the kernel does not know what served them.
+    Bytes { tag: u64, chan: u32, data: Vec<u8> },
     Err { tag: u64, msg: String },
 }
 
@@ -103,8 +114,11 @@ impl Kernel {
         pid
     }
 
-    pub fn console(&mut self, data: &[u8]) {
-        self.out.push(Effect::Console { data: data.to_vec() });
+    /// Bytes out on a host-held channel.
+    pub fn send(&mut self, chan: u32, data: &[u8]) -> u64 {
+        let tag = self.tag();
+        self.out.push(Effect::Send { tag, chan, data: data.to_vec() });
+        tag
     }
 
     pub fn shutdown(&mut self, status: i32) {
@@ -129,21 +143,40 @@ mod tests {
 
     #[test]
     fn the_kernel_does_no_io_it_only_asks() {
-        // Everything that touches the world leaves as an effect. If this test
-        // ever needs a file handle or a socket to pass, the kernel has grown.
+        // Everything touching the world leaves as an effect. If this test ever
+        // needs a file handle or a socket to pass, the kernel has grown.
         let mut k = Kernel::new();
-        k.console(b"hello");
+        k.send(3, b"hello");
         k.shutdown(0);
-        assert_eq!(
-            k.take_effects(),
-            vec![Effect::Console { data: b"hello".to_vec() }, Effect::Shutdown { status: 0 }]
-        );
+        match &k.take_effects()[..] {
+            [Effect::Send { chan: 3, data, .. }, Effect::Shutdown { status: 0 }] => {
+                assert_eq!(data, b"hello")
+            }
+            other => panic!("expected Send then Shutdown, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn no_effect_names_a_device() {
+        // The guard on the rule above. The host owns the machine and serves it
+        // as files; a variant named for the console, the clock, randomness or
+        // storage means someone reached for an effect where a mount belongs.
+        // Plan 9's own #c serves cons, time, random and reboot, so the first
+        // such variant invites four.
+        let names = ["Spawn", "Reap", "Send", "Shutdown"];
+        for forbidden in ["Console", "Timer", "Clock", "Random", "Host", "Draw", "Store"] {
+            assert!(
+                !names.contains(&forbidden),
+                "{forbidden} is a device, and a device is a file server, not an effect"
+            );
+        }
+        assert_eq!(names.len(), 4, "the effect list grew; argue it, do not widen it");
     }
 
     #[test]
     fn effects_are_drained_not_accumulated() {
         let mut k = Kernel::new();
-        k.console(b"a");
+        k.send(1, b"a");
         assert_eq!(k.take_effects().len(), 1);
         assert!(k.take_effects().is_empty());
     }

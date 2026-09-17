@@ -37,10 +37,17 @@ fn pump(k: &mut Kernel) -> i32 {
         }
         for e in effects {
             match e {
-                Effect::Console { data } => {
+                // Transport, and the host decides what is on the other end.
+                // Channel 1 is this terminal's own stdout: the console is a
+                // file THIS SIDE serves, not something the kernel knows about.
+                Effect::Send { chan: 1, data, .. } => {
                     let mut out = std::io::stdout();
                     let _ = out.write_all(&data);
                     let _ = out.flush();
+                }
+                Effect::Send { chan, .. } => {
+                    eprintln!("ipnx: nothing is serving channel {chan} yet");
+                    return 1;
                 }
                 Effect::Shutdown { status } => return status,
                 Effect::Spawn { pid, path, .. } => {
