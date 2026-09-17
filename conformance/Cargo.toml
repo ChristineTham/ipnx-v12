@@ -1,0 +1,15 @@
+# The conformance suite.
+#
+# It is a separate crate on purpose: it tests the DESIGN's contracts through
+# the kernel's public surface, never its internals, so a second implementation
+# could be dropped in and judged by the same file. A test that needs access to
+# a private field is testing an implementation, not a contract, and belongs in
+# that module instead.
+[package]
+name = "conformance"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+ipnx-kernel = { path = "../kernel" }

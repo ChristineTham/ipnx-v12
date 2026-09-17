@@ -1,5 +1,0 @@
-# The roles this type offers. Which one is DEFAULT is derived from
-# permissions — writable means edit, otherwise look — not from this order.
-look
-edit
-properties

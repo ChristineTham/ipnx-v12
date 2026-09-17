@@ -28,6 +28,12 @@ Three **layers** are the *what* — the architecture, from
 what it **depends on**, its **acceptance**, and the **gaps it exposes**.
 Nothing undesigned is built.
 
+**The conformance suite** (`conformance/`) is where a phase's acceptance is
+written down as something that runs. One file per contract, testing the public
+surface only — a test that needs a private field is testing an implementation,
+not a contract. It is a separate crate so a second implementation could be
+judged by the same file.
+
 **Everything is built from the design and from `plan9/`.** Those are the only
 two inputs. Where the design is silent, that is a gap to be raised, not a space
 to fill.
@@ -69,7 +75,7 @@ final state; design resumes after it. **Don't overengineer.**
 |---|---|
 | **builds** | the 9P2000 codec, the only place the wire exists; the namespace — mount table, longest-prefix walk, unions, `MCREATE`; Plan 9's device letters; the process table with `rfork`'s share/copy/clear, `await`, `RFNOWAIT` |
 | **depends on** | — |
-| **acceptance** | the rules are executable and tested: a call we answer is in Plan 9's `sys.h` and our list is strictly smaller; no call is named for what a file server does |
+| **acceptance** | four contracts in `conformance/`: the kernel is a subset (every call in Plan 9's `sys.h`, the list strictly smaller, no call doing a file server's job, no device letter Plan 9 lacks); processes are orchestrated (`rfork`'s three-way rule, `await`, `RFNOWAIT`); the namespace resolves (longest prefix, union order, the create element); 9P is the only IPC (framing, and a hostile message cannot panic the kernel) |
 | **exposes** | `exec` needs an engine, and the kernel cannot hold one |
 
 ## P1 — `exec`
