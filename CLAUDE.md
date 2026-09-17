@@ -398,17 +398,19 @@ evidence, not a fresh opinion.
 
 ## The tree (post-declaration, 2026-08-29)
 
-The PoC is **complete and frozen** (decision log, 2026-08-29): `poc/`'s JS supervisor
-is the reference implementation and conformance oracle — never modify it; `bash
-poc/run.sh` must stay green. The real implementation lives at the top level: `kernel/`
+`poc/` is **an artifact, not a gate** (Christine, 2026-09-17): *"we are in the
+middle of a plan to implement saranos, and the target is functional equivalence
+to demo. So the POC is not frozen, it is just an artifact… It has zero relevance
+to what we are building."* **We are not replicating its design.** Do not hold
+the implementation to its shape, and do not add scaffolding to keep
+`poc/run.sh` green. The real implementation lives at the top level: `kernel/`
 (the Rust core), `hosts/macos/` (wasmtime host; the workspace root is `Cargo.toml`),
 with `hosts/{oci,ipados,browser}/` scaffolded per implementation.md's milestones. The
 guest world lives at `userspace/` (graduated from poc/ as M0, 2026-08-29): the
 libcs, the vendored trees (verbatim), `cmd/`, `wasi/`, the rootfs seed, `mk.sh`
 and `VERSIONS` — the real userspace shared by every host, not frozen. Work is
 sequenced by
-`docs/implementation.md`; new features add self-skipping tests so one rootfs serves
-every host including the frozen oracle, and the 131 stay the permanent floor.
+`docs/implementation.md`. The target is **functional equivalence to the demo**.
 
 ## The PoC's shape (poc/) — frozen reference
 
@@ -508,6 +510,13 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
   `drawmsgs`, 364 in `draw.rs`), and none of it is process orchestration. the legacy a1
   and a2 steps removed the tree by this reasoning without the rule being written
   down; the rest follows the same way.
+- **NEVER INVENT WORDS** (Christine's rule, restated 2026-09-17). Not for a
+  thing she has not named, and not a second word for a thing already named —
+  `poc/` was called a *"conformance oracle"* in this file, and the coinage came
+  back as jargon in every reply until she asked what it meant. Say what a thing
+  is. Search the reference first: the boot script was reported as a gap when
+  `plan9/sys/src/cmd/init.c:178` already names it `/rc/bin/termrc`.
+
 - **SPEC'D, PROPOSED or GAP — triage before building** (Christine's rule,
   2026-09-02). Everything sits in one of three states: **spec'd** (explicitly
   discussed *and endorsed* — may be implemented), **proposed** (a design exists

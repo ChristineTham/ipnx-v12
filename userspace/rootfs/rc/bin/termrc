@@ -52,8 +52,15 @@ if(bind -a '#Z' /n/z >[2]/dev/null){
 					if(test -f $d) cp $d /pkg/`{basename $d}
 				}
 			}
-			for(p in /pkg/*){
-				if(test -f $p) pkg install `{basename $p}
+			# and then the USER's profile says which packages are
+			# theirs. Plan 9 sources a profile at this same point
+			# (init.c:178: `. /rc/bin/termrc; home=/usr/$user; cd;
+			# . lib/profile`), so the shape is its shape.
+			user=`{cat /dev/user}
+			if(test -d /usr/$user/profile){
+				for(f in /usr/$user/profile/*){
+					if(test -f $f) . $f
+				}
 			}
 		}
 	}

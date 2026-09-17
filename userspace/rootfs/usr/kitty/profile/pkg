@@ -1,0 +1,17 @@
+# kitty's profile: the packages this person wants.
+#
+# /profile, /pkg and /template are one format, three registries (design.md
+# 2026-09-02): a list of bindings plus commands. A package declaration says
+# what a tool IS; a profile says which tools are YOURS, and those are
+# different questions. So the installs live here, in the user's half —
+# /usr/kitty/profile is kitty's half of /profile — and not in a loop over
+# whatever declarations happen to exist.
+#
+# Sourced at the point Plan 9 sources a profile: sys/src/cmd/init.c:178 execs
+#   rc -c '. /rc/bin/termrc; home=/usr/$user; cd; . lib/profile'
+# — the system's rc half first, then the user's profile.
+#
+# Installing is a bind, so this costs no bytes and no hashing: it tells this
+# namespace about what the store already holds.
+pkg install python
+pkg install go
