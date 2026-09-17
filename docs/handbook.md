@@ -55,11 +55,10 @@ the measured toolchain; docs/handbook.md "Prerequisites" says what each is for.
     (the kernel as wasm — the Node harness below loads it and dies with ENOENT
     without it)
 
-VERIFY — all three must agree, and match the count docs/when.md states. If any
+VERIFY — both must agree, and match the count docs/when.md states. If either
 does not, stop and show me the FAIL lines; do not fix anything.
-  cargo run --release -p host -- userspace/rootfs
-  node demo/supervisor/main-rust.mjs userspace/rootfs
-  bash poc/run.sh                                  (the frozen oracle — never modify poc/)
+  cargo run --release -p host -- userspace/rootfs --host userspace
+  node demo/supervisor/main-rust.mjs userspace/rootfs --host userspace
 
 WORKING RULES — record each as a memory file, then follow them:
   - When I say something is not working, that outranks "it works for me".
@@ -93,9 +92,6 @@ auto-memory of any other machine. The rules above are what that memory held;
 
 ```sh
 bash userspace/mk.sh                       # build every guest binary
-bash poc/run.sh                            # boot the frozen reference on Node
-bash poc/run.sh -i                         # …to an interactive rc (EOF ends)
-node poc/serve.mjs                         # the same kernel in a page (?i = interactive)
 cargo run --release -p host -- userspace/rootfs  # the Rust core under wasmtime
 cargo build --release --target wasm32-unknown-unknown -p browserhost  # the kernel as wasm, then:
 node demo/supervisor/main-rust.mjs userspace/rootfs  # the Rust core under Node
@@ -129,9 +125,9 @@ cargo run --release -p host -- userspace/rootfs --host userspace -i
 
 Five checks: the declarations are the record, `pkg verify` is clean against the
 pinned digest, and real CPython and real Go run out of host storage over 9P.
-The store lives outside `rootfs/` on purpose — `poc/run.sh` walks `rootfs/` to
-build the frozen oracle's seed, so anything inside it is loaded into guest
-memory, which is what the move exists to stop.
+The store lives outside `rootfs/` on purpose: a host loads `rootfs/` as the
+seed, into guest memory, and keeping 41 MB of Python out of that is the whole
+point of the move.
 
 Green is: init (pid 1) prints the suite's `PASS` lines — the floor is 131 —
 and exits 0. Any other exit is a failure even if PASS lines appeared.
@@ -139,7 +135,7 @@ and exits 0. Any other exit is a failure even if PASS lines appeared.
 ## The working rules
 
 - **Every milestone ends in an artifact someone can hold** — a container
-  image, an app, a bootable profile — not a refactor. The PoC's cadence (each
+  image, an app, a bootable profile — not a refactor. The cadence (each
   commit demonstrably runs more of the world) continues.
 - **The suite is the merge bar.** The 131 are the permanent floor on every
   host; the count only grows. New tests probe for the features they need and
@@ -209,8 +205,8 @@ with provenance.
 **A host.** Implement the host contract
 ([architecture.md](architecture.md) — mailbox, exec-as-instantiate, forka
 snapshot, the guard, console, optional presentation), point it at the rootfs,
-and run the suite; `poc/supervisor/` is the executable statement of the
-contract to read alongside. A host is real when init exits 0.
+and run the suite. `hosts/macos/src/main.rs` is the working implementation to
+read alongside. A host is real when init exits 0.
 
 ## Running a service (M12's local stage)
 

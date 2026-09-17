@@ -75,44 +75,8 @@ above wanted a human name rather than a second acronym, exactly as Darwin did.
 log is not retroactively renamed; only present-tense statements of what the
 system *is* carry the new layering.
 
-The architecture runs, boots to a shell, forks both ways, and speaks its protocol in
-both directions: `poc/` is a working slice (hosted kernel in Node and the browser from
-one neutral core, freestanding-C wasm guests, per-process namespaces with union
-directories, the lazy-fork resume *and* the asyncify bare fork, pipes, a writable ramfs
-with V10 permission enforcement, the uid model running (docs/identity.md), **the REAL
-`rc`** — bison over its own `syn.y`, asyncified, prompting when fd 0 is `/dev/cons` —
-wire 9P at the mount boundary, exportfs serving a guest's namespace
-back out, and the window server: `#w` mints windows, `bind '#w/N' /dev` makes a
-namespace a window, `/dev/draw` is a real per-window file with text (`y i l s` and an
-8×8 font of our own authorship), `win rc` is a shell and `win sam` THE EDITOR in a
-browser window, and **both real userspaces have their
-real libraries**: `libp9.a` is ~150 files of genuine 4th-edition libc/libbio/libregexp
-over one platform shim (`u.h`), twenty-four real commands and the real `rc` ride it,
-V10 `cat`/`echo` sit in `/v10/bin` on `libv10`, and the kernel carries what rc needs:
-notes at the syscall boundary, `unmount`, honest rfork flags, `#d`, and real
-`setjmp/longjmp` over the asyncify machinery — which is what lets **the real `sam`**
-run in terminal mode (`sam -d`): structural regexps, the `x/c/s/i` loop, and the
-buffer piped through real commands — and **the real libdraw draws**: `geninitdraw`
-speaks `/dev/draw/new` against `#w`, `getwindow` allocates a screen and window view,
-and the real default font lands glyphs through `y/i/l/s` — libthread runs (the real
-thread.h API as a wasm platform layer: coroutines over saved asyncify contexts,
-channels delivering through off-stack slots, blocking reads that park a thread while
-the process keeps scheduling) — and **the real sam EDITS IN A WINDOW**: `win sam &`
-boots sam over samterm, libframe renders the command window through the device's
-`x` (string-with-background), typed text crosses the mesg protocol and sam's answer
-renders back — and **the real `acme` closes the proof of concept**: all twenty
-source files verbatim through the derivation layer (kencc adjusts pointers to
-unnamed substructures at call sites; clang does not — `frameadjust.h`), its own
-9P server mounted over a pipe, procexec on the wasm libthread, button-2 execute
-and button-3 look driven through `wctl` and verified in the raster, the float
-door opened (`strtod`/`fltfmt` verbatim), and `#s` — srv(3), a posted fd's
-channel kept alive by name — as the kernel's last PoC device — and **the WASI
-second ABI runs**: `supervisor/wasi1.mjs` is `wasi_snapshot_preview1` over the
-same mailbox, fd 3's one preopen is the namespace root, and a wasi-libc
-citizen plus a **real Go binary** (`GOOS=wasip1`) plus **REAL CPython 3.14**
-(the wasi build, its stdlib a measured 21-file subset over what is frozen
-in-binary) run files, directories, timers and json against the kernel — 131
-acceptance tests). Everything else is design documents.
+The architecture runs — the Rust kernel core under a host, booting to `rc`;
+what is built is [docs/when.md](docs/when.md). Everything else is design documents.
 
 ## Commands
 
@@ -133,25 +97,6 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 
 ```bash
 bash userspace/mk.sh
-```
-
-Boot the kernel — init (pid 1) runs the acceptance tests, prints the suite's PASS lines (floor 131; currently 157 — the count grows as features add self-skipping tests; the final "poc: all N tests passed" line counts only init.c's C-level tranche, not the whole suite), exits 0:
-
-```bash
-bash poc/run.sh
-```
-
-Boot to an interactive `rc` on the console (EOF shuts down):
-
-```bash
-bash poc/run.sh -i
-```
-
-Serve the browser port — the same kernel in a page (the server only supplies the
-COOP/COEP headers SharedArrayBuffer needs; `?i` boots interactive):
-
-```bash
-node poc/serve.mjs
 ```
 
 The real implementation — the Rust kernel core (`kernel/`, RESEARCH §9.6; OS-free:
@@ -224,7 +169,6 @@ goes stale there — that is how four different test counts came to exist.
 | | |
 |---|---|
 | `docs/when.md` | **the single authoritative statement of build status.** No other document carries it |
-| `docs/poc.md` | frozen — the PoC's record and declaration (2026-08-26 → 2026-08-29) |
 
 ### how — the plan, and the practice
 
@@ -232,7 +176,6 @@ goes stale there — that is how four different test counts came to exist.
 |---|---|
 | `docs/implementation.md` | **the plan, replanned 2026-09-04**: three layers — IPNX, emca, Saranos — with the demo (`ipnx` in a terminal + the website) as the first milestone. The accreted M0–M18 plan is in `docs/archive/` |
 | `docs/handbook.md` | the practice: prerequisites, build/run, load-bearing flags, how to add a command/test/device/host |
-| `poc/README.md` | the frozen reference implementation's layout and its deliberate v0 deviations |
 
 ### meta — documents that inform and guide the six
 
@@ -398,75 +341,20 @@ evidence, not a fresh opinion.
 
 ## The tree (post-declaration, 2026-08-29)
 
-`poc/` is **an artifact, not a gate** (Christine, 2026-09-17): *"we are in the
-middle of a plan to implement saranos, and the target is functional equivalence
-to demo. So the POC is not frozen, it is just an artifact… It has zero relevance
-to what we are building."* **We are not replicating its design.** Do not hold
-the implementation to its shape, and do not add scaffolding to keep
-`poc/run.sh` green. The real implementation lives at the top level: `kernel/`
+**`poc/` IS SUPERSEDED — DO NOT READ IT, IMPLEMENT IT, OR REFER TO IT**
+(Christine, 2026-09-17): *"Its design has been completely superseded by the new
+design. If you refer to POC, you are repeating mistakes we want to avoid."* It
+is an artifact of how this started, nothing is checked against it, and the
+target is **functional equivalence to the demo**.
+
+The implementation lives at the top level: `kernel/`
 (the Rust core), `hosts/macos/` (wasmtime host; the workspace root is `Cargo.toml`),
 with `hosts/{oci,ipados,browser}/` scaffolded per implementation.md's milestones. The
-guest world lives at `userspace/` (graduated from poc/ as M0, 2026-08-29): the
+guest world lives at `userspace/`: the
 libcs, the vendored trees (verbatim), `cmd/`, `wasi/`, the rootfs seed, `mk.sh`
 and `VERSIONS` — the real userspace shared by every host, not frozen. Work is
 sequenced by
 `docs/implementation.md`. The target is **functional equivalence to the demo**.
-
-## The PoC's shape (poc/) — frozen reference
-
-**The userspace objective** (re-founded 2026-08-27; **half-superseded
-2026-08-30** — design.md "compatibility kissed goodbye" + docs/userland.md:
-the curation survives, the verbatim does not; the vendored raster world is
-now the heritage exhibit holding the suite floor, and the product userland
-is redesigned native to /dev/canvas — one editor, an editable console,
-rio-today as policy files): the real Plan 9 userspace entire —
-the designers' curation of Unix — plus a measured modern personality proven by three
-benchmarks (git via a `libunix` source port, CPython and Go via the WASI ABI). The V10
-binaries stay as the exhibit, each userspace on its own libc over the kernel (`libc/`
-is lib9; `v10/lib` + `v10/include` is libv10; V10 growth is no longer a goal). Vendored sources under
-`poc/plan9/sys/` and `poc/v10/usr/` are **verbatim — never edit them**; each batch
-carries a NOTICE with provenance (Foundation MIT for Plan 9; Nokia's covenant for V10,
-with LICENSE's scope note kept in step). The shim headers beside them are ours. V10
-compiles want `-std=c89 -fno-builtin` (the libcall optimiser rewrites bare fprintf into
-fwrite) with K&R implicitness left authentic; growing both userspaces command by command
-is the standing work.
-
-One platform-neutral kernel, two hosts: `supervisor/kernel.mjs` runs unmodified on Node
-(`supervisor/main.mjs` + `worker.mjs` shims) and in the browser (`browser/main.mjs` +
-`browser/worker.mjs`, served by `serve.mjs`, whose only job is COOP/COEP). Everything in
-the supervisor speaks `Uint8Array` (`bytes.mjs`), never Buffer — a browser `TextDecoder`
-refuses SAB-backed views, so `bstr` copies them (measured, RESEARCH §5.3).
-
-`supervisor/kernel.mjs` is the kernel (proc table, namespaces as per-proc mount maps with
-longest-prefix walk, refcounted channels and fd tables closed at exit, dispatch,
-rfork/exec/exits/await). `supervisor/guestcore.mjs` is the guest runner: the mailbox
-protocol, and the fork guard — **the only hand-written wasm in the system**, emitted as
-bytes with computed section sizes. `supervisor/devs.mjs` holds the devices (writable
-ramfs, cons wired to host stdio, bidirectional pipes); a device read may **park** (return
-undefined, complete later via `ctx.done`) — that is how pipe and console reads block their
-caller without blocking the kernel. `userspace/libc/` is Plan 9-shaped freestanding C (Plan 9's own
-trap numbers; `read`/`write` are `pread`/`pwrite` at offset −1). Syscalls carrying
-strings/buffers copy through a per-proc transfer SAB. A lazy-fork child *borrows the
-parent's Worker*: the supervisor routes syscalls arriving on the parent's mailbox to the
-child's proc record (`borrower`) — that is how a child's `bind` lands in the child's
-namespace while sharing the parent's stack. A mount-table entry is a **union list**
-(`bind -a/-b/-c`): walks try elements in order, directory reads concatenate integrally,
-creates land in the MCREATE element. `cmd/exportfs.c` is devmnt's mirror — it serves its
-own namespace over wire 9P by relaying every request into real syscalls, so private
-binds travel and binaries exec across the wire; `libc/lib9p.[ch]` is the guest marshal
-vocabulary both servers share. **The shell is the real rc** —
-`plan9/sys/src/cmd/rc/` compiled verbatim (bison regenerates `syn.y` into `x.tab.h`'s
-namesake), linked by mk.sh's own rule: `weaken.mjs` restores common-symbol semantics
-for rc.h's tentative definitions, `--table-base=4096` keeps function-table indexes
-disjoint from `codefree`'s operand integers (both RESEARCH §9.5), and wasm-opt
-asyncifies the result so every bare `fork()` genuinely returns twice — pipelines,
-subshells, captures, `fn`, `while`, `switch`, and a prompt whenever `fd2path(0)` ends
-in `/dev/cons`. `supervisor/mnt9p.mjs` is devmnt — the only place
-the kernel marshals wire 9P: `mount(fd)` negotiates Tversion/Tattach, operations become
-tagged messages demultiplexed per connection, and a chan is **cloned (`Twalk`, no names)
-before open** so the attach fid is never consumed. `cmd/hellofs.c` is the proof server:
-9P2000 on fd 0, mounted over a pipe. The kernel dispatcher is async throughout; devices
-may instead *park* a read (return undefined, complete via `ctx.done`).
 
 ## Conventions
 
@@ -512,9 +400,9 @@ may instead *park* a read (return undefined, complete via `ctx.done`).
   down; the rest follows the same way.
 - **NEVER INVENT WORDS** (Christine's rule, restated 2026-09-17). Not for a
   thing she has not named, and not a second word for a thing already named —
-  `poc/` was called a *"conformance oracle"* in this file, and the coinage came
-  back as jargon in every reply until she asked what it meant. Say what a thing
-  is. Search the reference first: the boot script was reported as a gap when
+  a directory in this tree was called a *"conformance oracle"* here, and the
+  coinage came back as jargon in every reply until she asked what it meant. Say
+  what a thing is. Search the reference first: the boot script was reported as a gap when
   `plan9/sys/src/cmd/init.c:178` already names it `/rc/bin/termrc`.
 
 - **SPEC'D, PROPOSED or GAP — triage before building** (Christine's rule,
@@ -587,16 +475,6 @@ entire. **164 PASS / 0 FAIL** on all three hosts, plus two headless surface proo
 (`winproof.mjs` with no emca, `emcaproof.mjs` with it). Still design-only:
 `/project` (M14e) and the SwiftUI surface (M14g).
 
-
-**The PoC is complete — declared 2026-08-29** (decision log; full record in
-`docs/poc.md`). Final state: **131 acceptance tests green on three hosts** — the
-frozen JS reference on Node (`bash poc/run.sh`) and in Chrome (`node poc/serve.mjs`),
-and the Rust kernel core under wasmtime (`cargo run --release -p host -- userspace/rootfs`).
-Running on it: the real Plan 9 userspace (rc, sam, samterm, acme, twenty-four
-commands over `libp9.a`), the V10 exhibit, and the WASI second ABI's three citizens
-(wasi-libc, Go `wasip1`, CPython 3.14). The identity architecture is decided and
-recorded (su, the user decomposition, the profile, the capability doctrine — all
-2026-08-29, zero kernel mechanism; `docs/identity.md` tells it as one story).
 
 **The public demo is live: <https://christham.net/ipnx-v12/>** — the frozen
 browser port on GitHub Pages behind a COI service worker; redeploy per the

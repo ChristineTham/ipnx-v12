@@ -262,11 +262,7 @@ pychild(void *v)
 	exits("exec");
 }
 
-/* Is this binary here at all? Since P2 step 5 Go and Python are PACKAGES:
- * their bytes live in the store, in host storage, and boot binds them back
- * through /rc/bin/termrc. A host with no '#Z' — the frozen oracle — has no
- * store and therefore no Python, so these tranches self-skip there. One
- * rootfs, every host. */
+/* Does this path exist? */
 static int
 have(char *path)
 {
@@ -732,48 +728,38 @@ main(int argc, char *argv[])
 		ok(strstr(out, "inodes: BROKEN") == nil && strstr(out, "inodes:") != nil,
 		   "WASI ABI: filestat inodes distinct where reported (clang dedups by ino; frozen shim's 0 self-skips)");
 
-		if(have("/bin/gotest")){
-			pipe(wasipipe);
-			pid = procrfork(RFFDG, gochild, nil);
-			close(wasipipe[1]);
-			readall(wasipipe[0], out, sizeof out);
-			close(wasipipe[0]);
-			n = await(buf, sizeof buf);
-			ok(n > 0 && strstr(buf, "''") != nil &&
-			   strstr(out, "hello from wasip1") != nil &&
-			   strstr(out, "motd: Welcome to Saranos") != nil,
-			   "WASI ABI: a REAL Go binary (wasip1) ran against the kernel");
-			ok(strstr(out, "slept=true") != nil &&
-			   strstr(out, "/etc has") != nil && strstr(out, "has 0 entries") == nil &&
-			   strstr(out, "readback: written by go") != nil,
-			   "WASI ABI: Go slept on poll_oneoff, listed /etc, round-tripped a file");
-		} else {
-			ok(1, "WASI ABI: Go is a package and this host has no store — skipped");
-			ok(1, "WASI ABI: Go's poll_oneoff tranche — skipped");
-		}
+		pipe(wasipipe);
+		pid = procrfork(RFFDG, gochild, nil);
+		close(wasipipe[1]);
+		readall(wasipipe[0], out, sizeof out);
+		close(wasipipe[0]);
+		n = await(buf, sizeof buf);
+		ok(n > 0 && strstr(buf, "''") != nil &&
+		   strstr(out, "hello from wasip1") != nil &&
+		   strstr(out, "motd: Welcome to Saranos") != nil,
+		   "WASI ABI: a REAL Go binary (wasip1) ran against the kernel");
+		ok(strstr(out, "slept=true") != nil &&
+		   strstr(out, "/etc has") != nil && strstr(out, "has 0 entries") == nil &&
+		   strstr(out, "readback: written by go") != nil,
+		   "WASI ABI: Go slept on poll_oneoff, listed /etc, round-tripped a file");
 
 		/* and REAL CPython — the second benchmark's interpreter, running
 		 * a script file out of the namespace, its stdlib subset measured
 		 * into the rootfs (wasi/pylib.txt) */
-		if(have("/bin/python")){
-			pipe(wasipipe);
-			pid = procrfork(RFFDG, pychild, nil);
-			close(wasipipe[1]);
-			readall(wasipipe[0], out, sizeof out);
-			close(wasipipe[0]);
-			n = await(buf, sizeof buf);
-			ok(n > 0 && strstr(buf, "''") != nil &&
-			   strstr(out, "script ran on wasi 3.14") != nil &&
-			   strstr(out, "root: bin etc lib") != nil,
-			   "WASI ABI: REAL CPython 3.14 booted and found its stdlib through the namespace");
-			ok(strstr(out, "readback: written by python") != nil &&
-			   strstr(out, "json: plan9 42") != nil &&
-			   strstr(out, "sum: 4950") != nil,
-			   "WASI ABI: Python imported json, round-tripped a file, computed");
-		} else {
-			ok(1, "WASI ABI: Python is a package and this host has no store — skipped");
-			ok(1, "WASI ABI: Python's stdlib tranche — skipped");
-		}
+		pipe(wasipipe);
+		pid = procrfork(RFFDG, pychild, nil);
+		close(wasipipe[1]);
+		readall(wasipipe[0], out, sizeof out);
+		close(wasipipe[0]);
+		n = await(buf, sizeof buf);
+		ok(n > 0 && strstr(buf, "''") != nil &&
+		   strstr(out, "script ran on wasi 3.14") != nil &&
+		   strstr(out, "root: bin etc lib") != nil,
+		   "WASI ABI: REAL CPython 3.14 booted and found its stdlib through the namespace");
+		ok(strstr(out, "readback: written by python") != nil &&
+		   strstr(out, "json: plan9 42") != nil &&
+		   strstr(out, "sum: 4950") != nil,
+		   "WASI ABI: Python imported json, round-tripped a file, computed");
 	}
 
 	/* The asyncify path: forktest is a transformed binary whose bare
