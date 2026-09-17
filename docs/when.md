@@ -267,13 +267,38 @@ short count, so a 16 KB write to a mounted file wrote 8192. Plan 9's `mntrdwr`
 loops (`devmnt.c:688`); ours now does too. `pkg` was left strict about short
 writes deliberately: it is the detector that caught this.
 
-**Still to do for step 5:** Go and Python actually move out of the rootfs seed.
-Every mechanism that needs now exists — the store, its server, the declaration
-format, the tree form, and somewhere durable to put it. What remains is the
-**move itself**, and it reaches into the boot path (step 3): the seed drops the
-binaries and the boot namespace binds them back from the store. Measured:
-without python, its stdlib and the Go binaries the rootfs is **3.4 MB** against
-a 16 MB ceiling.
+**Step 3's namespace half landed** (2026-09-17, [RESEARCH §9.29](../RESEARCH.md)):
+`/lib/namespace` is now **`/namespace`** — `/` is a project instantiated from
+`/template/system`, so the file boot reads is the **instance's own**
+configuration and lives in `/` because `/` *is* the project. `init` reads it
+through `newns()`; the host is what put it there, which is the whole answer to
+the bootstrap ordering. The `bind #w /dev/window` line **stays** until `#w`
+leaves in P4: measured, 53 uses of `/dev/window` in the suite gate on that path
+resolving, so dropping it early would turn live assertions into silent skips
+rather than failures.
+
+**And the move is PROVED, though not yet flipped.** `mk.sh` materialises
+`userspace/store/python/3.14` (**541 files, 41 MB**) and `.../go/1.25`, with
+five-line declarations beside them — outside `rootfs/` because the frozen
+oracle walks `rootfs/` to build its seed and may not be modified.
+`rc /rc/storeproof` passes five checks: the declarations are the record,
+`pkg verify` is clean against the pinned digest, and **REAL CPython runs from
+the store** — 30 MB streamed over 9P out of host storage — as does a real Go
+binary, and bound into `/bin` they are ordinary names.
+
+**A kernel defect the scale exposed:** a walk holds one mount fid per resolved
+path, and a path that was *dropped* — a failed lookup, a `chdir` — never gave
+it back. CPython's import machinery misses on most candidate names, so
+`storefs`'s 64 fids were gone before the interpreter finished starting.
+`walk()` now releases on both failure paths.
+
+**What blocks the flip is one name.** Removing the binaries from the seed needs
+boot to start `storefs`, mount `/store` and bind from it. `newns`'s verbs are
+`bind | mount | cd | clear` — none starts a server — so this is step 3's **rc
+half**, whose name and location [design.md](design.md) explicitly reserves as a
+gap. Everything else it needs exists and is proven. Measured: without python,
+its stdlib and the Go binaries the rootfs is **3.4 MB** against a 16 MB
+ceiling.
 
 **The measurement that framed it** (2026-09-04, [RESEARCH §9.25](../RESEARCH.md)).
 The plan's step 5 cites `type.md` for *"`/pkg/<name>/<version>` subtrees"* — but

@@ -2188,6 +2188,81 @@ it out of conformance with the reference over something nothing asked for, and
 the workaround — `bind '#Z' /n/z` first — is the idiomatic Plan 9 form anyway.
 One line each side if Christine wants them aligned. Recorded rather than done.
 
+### 9.29 Step 3's namespace half, and the move proved at scale (2026-09-17)
+
+**`/lib/namespace` is now `/namespace`.** `/` is a PROJECT instantiated from
+`/template/system`, so the file boot reads is the **instance's own**
+configuration and lives in `/` because `/` is the project ([design.md](docs/design.md)
+2026-09-04). `init` reads it through `newns()` as before; the host is what put
+it there, which is the whole answer to the bootstrap ordering — the host owns
+the storage, so reading one file before anything else exists is something it
+can simply do.
+
+**The `bind #w /dev/window` line STAYS, against the plan cell, and the reason
+is worth recording.** The plan has `/namespace` losing it at this step, but
+`#w` does not leave until P4. Measured: **53** uses of `/dev/window` in
+`tests.rc`, plus `rc/emca` and `cmd/emca.c`, and those tests gate on the path
+resolving. Dropping the bind while the device still exists would not fail
+them — it would turn about ten live assertions into silent *skips*, with the
+PASS count unchanged, which is worse than breaking loudly. The line goes when
+`#w` does.
+
+### The move: Go and Python as packages, proved
+
+`mk.sh` now materialises the store outside the rootfs:
+
+| | |
+|---|---|
+| `userspace/store/python/3.14` | **541 files, 41 MB** — the wasi CPython binary and its full stdlib |
+| `userspace/store/go/1.25` | 3 files, 5.0 MB — the wasip1 citizens |
+| `userspace/pkg/{python,go}` | the declarations, **five lines each** |
+
+**Outside `rootfs/` deliberately, and this is a constraint rather than a
+preference:** `poc/run.sh` walks `userspace/rootfs` to build the frozen
+oracle's seed and **may not be modified**, so anything placed inside is loaded
+into guest memory — the very thing the move exists to stop.
+
+`rc/storeproof` assembles it the way boot will, and all five checks pass:
+`ls /pkg` is `pkg list`; `pkg verify go` is clean against its pinned digest;
+**REAL CPython runs FROM THE STORE**, its 30 MB streamed over 9P out of host
+storage; a real Go binary does too; and bound into `/bin` they are ordinary
+names — *installing is a bind*. `cat /pkg/python` is **five lines for 41 MB
+and 540 files**, which is the tree form doing exactly what it was built for.
+
+**A KERNEL DEFECT THE SCALE EXPOSED — a leaked mount fid per failed lookup.**
+The first storeproof run died with `FileNotFoundError` on a stdlib file that
+demonstrably exists, and afterwards *every* `/store` path stopped resolving.
+Measured by reading `walk()`: a walk holds one server fid per resolved path;
+`open` hands it to a chan (clunked at close) and `stat` clunks it itself — but
+a path that is **dropped** never gave its fid back:
+
+```rust
+let next = dev_walk(k, &dn, name, pid).await?
+    .ok_or_else(|| format!("'{}' does not exist", path))?;   // dn dropped here
+```
+
+That costs nothing until something resolves paths in bulk. CPython's import
+machinery tries a dozen candidate names per module and most of them **miss**,
+so `storefs`'s 64 fids were gone before the interpreter finished starting, and
+the mount was dead for everything after. `walk()` now releases the fid on both
+failure paths, and `chdir` — which also walked and discarded — releases too.
+
+`storefs`'s `NFID` was left at **64**, deliberately, for the same reason `pkg`
+was left strict about short writes: a generous limit would have hidden the leak
+rather than fixed it. The small number is the detector.
+
+**The flip is BLOCKED, on a gap that is recorded rather than filled.** Removing
+the binaries from the seed needs boot to start `storefs`, mount `/store` and
+bind from it. `newns`'s verbs are measured — `bind | mount | cd | clear` — and
+none of them starts a server, so this is the **rc half**: *"a script that
+attaches the root server and binds it over `/`"*, whose **name and location
+design.md explicitly reserves as a gap** (2026-09-04), repeated in the plan's
+own acceptance line. Putting it in `init.c` instead would be building that
+script in C, and *"the reference does not overrule a decision to differ from
+the reference"* — Plan 9's compiled `boot.c` is precisely what the founding
+refusal rejected. So: everything the flip needs exists and is proven; it waits
+on one name.
+
 ## 10. Licensing
 
 - **Plan 9** — Nokia Bell Labs transferred the copyright to the **Plan 9 Foundation** on

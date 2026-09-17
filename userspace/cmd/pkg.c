@@ -19,7 +19,7 @@
  *
  * `fetch`, `bind` and `env` are type.md's; `tree` is `fetch` for content that
  * is a directory rather than a file, endorsed 2026-09-15 and described below.
- * The little language is /lib/namespace's — one format across /profile, /pkg
+ * The little language is /namespace's — one format across /profile, /pkg
  * and /template (decision log 2026-09-02), so nothing new had to be designed.
  *
  * Immutability is not enforced here: `/store` is served by storefs, which

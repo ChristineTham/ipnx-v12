@@ -16,7 +16,7 @@ if(~ `{cat /tmp/t1} written) echo PASS 'redirection > and ramfs write'; if not f
 echo more >> /tmp/t1
 if(~ `{wc /tmp/t1} 2' '*) echo PASS 'append >> (wc counts 2 lines)'; if not fails=bad
 if(~ `{cat < /lib/alt/motd | wc} 1' '*) echo PASS 'input redirection <'; if not fails=bad
-if(~ `{ls /lib} '/lib/alt /lib/font /lib/namespace /lib/pkg /lib/python3.14') echo PASS 'ls reads directories'; if not fails=bad
+if(~ `{ls /lib} '/lib/alt /lib/font /lib/pkg /lib/python3.14') echo PASS 'ls reads directories'; if not fails=bad
 mkdir /tmp/d; cp /etc/motd /tmp/d/m
 if(~ `{wc /tmp/d/m} 1' '*) echo PASS 'mkdir and cp'; if not fails=bad
 rm /tmp/d/m /tmp/d
@@ -235,7 +235,7 @@ if(~ $"arres arok) echo PASS 'ar: archives round-trip r/t/x/d, replacement lands
 # The spec declares a namespace (built on the boot file), an environment,
 # a credential and a command; run detaches, declares, drops, execs.
 mkdir /tmp/s1
-cat /lib/namespace > /tmp/s1/namespace
+cat /namespace > /tmp/s1/namespace
 echo 'bind /lib/alt /n/sx' >> /tmp/s1/namespace
 echo 'GREETING=hello' > /tmp/s1/env
 echo cat > /tmp/s1/cmd

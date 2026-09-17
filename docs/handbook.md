@@ -114,6 +114,21 @@ Inside the guest, `bind '#Z' /n/z` first — a `#`-rooted path can be walked and
 read but not created in ([RESEARCH §9.28](../RESEARCH.md) records why, and that
 it is a measured deviation from Plan 9 left in place deliberately).
 
+**Go and Python as packages.** `mk.sh` also materialises `userspace/store`
+(the store entries and their manifests) and `userspace/pkg` (the declarations).
+To see them run *from the store* rather than from the tree:
+
+```bash
+cargo run --release -p host -- userspace/rootfs --host userspace -i
+% rc /rc/storeproof
+```
+
+Five checks: the declarations are the record, `pkg verify` is clean against the
+pinned digest, and real CPython and real Go run out of host storage over 9P.
+The store lives outside `rootfs/` on purpose — `poc/run.sh` walks `rootfs/` to
+build the frozen oracle's seed, so anything inside it is loaded into guest
+memory, which is what the move exists to stop.
+
 Green is: init (pid 1) prints the suite's `PASS` lines — the floor is 131 —
 and exits 0. Any other exit is a failure even if PASS lines appeared.
 

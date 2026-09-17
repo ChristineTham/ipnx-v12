@@ -358,9 +358,16 @@ main(int argc, char *argv[])
 
 	/* Boot is a namespace file (M2, 2026-08-29): the decision log has said
 	 * from the start that boot is rc plus a namespace file, and this is the
-	 * file half. The root is implicit; everything else is /lib/namespace's
-	 * text — no bind list lives in C any more. */
-	newns("/lib/namespace");
+	 * file half. The root is implicit; everything else is /namespace's text —
+	 * no bind list lives in C any more.
+	 *
+	 * '/namespace', not '/lib/namespace', since P2 step 3: '/' is a PROJECT
+	 * instantiated from '/template/system', and this is the INSTANCE's own
+	 * configuration, which is why it sits in '/' (design.md 2026-09-04). The
+	 * host put it there — it owns the storage, so reading one file before
+	 * anything else exists is something it can simply do, and there is no
+	 * chicken-and-egg to solve. */
+	newns("/namespace");
 	fd = open("/dev/cons", ORDWR);
 	dup(fd, 0);
 	dup(fd, 1);
@@ -608,7 +615,7 @@ main(int argc, char *argv[])
 		}
 		ok(n > 0 && strstr(buf, "wire 9P") != nil,
 		   "namespace(6) mount: a file's text mounted a 9P server via /srv");
-		newns("/lib/namespace");	/* restore the boot namespace */
+		newns("/namespace");		/* restore the boot namespace */
 	}
 
 	/* srv(3): post a pipe end under a name; the name keeps the channel

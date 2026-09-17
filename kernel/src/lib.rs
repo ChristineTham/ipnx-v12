@@ -2599,9 +2599,17 @@ async fn walk_once(k: &K, pid: Pid, path: &str) -> Result<DN, KErr> {
     let rest: Vec<String> =
         path[best.len()..].split('/').filter(|s| !s.is_empty()).map(|s| s.to_string()).collect();
     for name in rest.iter() {
-        let next = dev_walk(k, &dn, name, pid).await?
-            .ok_or_else(|| format!("'{}' does not exist", path))?;
-        dn = next;
+        match dev_walk(k, &dn, name, pid).await {
+            Ok(Some(next)) => dn = next,
+            Ok(None) => {
+                release_mnt(k, &dn);
+                return Err(format!("'{}' does not exist", path));
+            }
+            Err(e) => {
+                release_mnt(k, &dn);
+                return Err(e);
+            }
+        }
     }
     dn.path = Some(path.to_string());
     Ok(dn)
@@ -2674,6 +2682,21 @@ fn clunk_fid(k: &K, conn: &ConnR, fid: u32) {
     let frame = W9::new().u32(fid).frame(tv::CLUNK, tag);
     let chan = conn.borrow().chan.clone();
     let _ = dev_write_sync(k, &chan, &frame, u64::MAX, 1);
+}
+
+/// Give back a walked-but-never-opened mount fid. A walk holds one server fid
+/// per resolved path; `open` hands it to a chan (clunked at close) and `stat`
+/// clunks it itself, but a path that is DROPPED — a failed lookup, a chdir —
+/// leaves the server holding it forever. That costs nothing until something
+/// resolves paths in bulk: CPython's import machinery tries a dozen candidate
+/// names per module and most of them miss, so a 64-fid server is exhausted
+/// before the interpreter finishes starting (measured 2026-09-17).
+fn release_mnt(k: &K, dn: &DN) {
+    if let Node::Mnt(m) = &dn.node {
+        if m.ephemeral.get() {
+            clunk_fid(k, &m.conn.clone(), m.fid);
+        }
+    }
 }
 
 async fn rpc(k: &K, conn: &ConnR, ty: u8, body: W9) -> Result<Vec<u8>, KErr> {
@@ -3943,7 +3966,8 @@ async fn dispatch(k: &K, ex: &Rc<LocalExec>, worker_pid: Pid, pid: Pid, trap: i3
             let path = txstr(&tx, 0);
             let cwd = k.borrow().procs.get(&pid).unwrap().cwd.clone();
             let full = canon(&path, &cwd);
-            walk(k, pid, &full).await?;
+            let dn = walk(k, pid, &full).await?;
+            release_mnt(k, &dn);
             k.borrow_mut().procs.get_mut(&pid).unwrap().cwd = full;
             Ok(ok(0))
         }

@@ -402,3 +402,65 @@ const out = {};
 fs.writeFileSync("build/rootfs.json", JSON.stringify(out));
 '
 echo "  build/rootfs.json  $(wc -c < build/rootfs.json | tr -d " ") bytes"
+
+# ---- the STORE: Go and Python as PACKAGES (P2 step 5, the move) ----
+#
+# "Bind what stays shared. Copy what becomes yours." Python's binary and its
+# stdlib, and the Go citizens, are shared bytes — so they belong in the store
+# and are BOUND, never copied into the tree. Measured (RESEARCH §9.24): with
+# them the rootfs is 49MB against a 16MB guest ceiling; without, 3.4MB. That
+# is what makes a userspace root server fit.
+#
+# The store lives OUTSIDE rootfs/ deliberately: the frozen oracle walks
+# rootfs/ to build its seed (poc/run.sh, which may not be modified), so
+# anything put inside it is loaded into guest memory — which is the very thing
+# the move exists to stop. It is host storage, reached through '#Z':
+#
+#   cargo run --release -p host -- userspace/rootfs --host userspace
+#
+# makes '#Z/store' this directory. Each package is materialised here as its
+# store entry, with the manifest the declaration pins — so a booted system
+# finds its packages already verified, which is what "instantiate once, boot
+# many times" means for the bytes.
+PYV=3.14
+GOV=1.25
+mkdir -p store/python/$PYV/bin store/python/$PYV/lib store/go/$GOV/bin pkg
+
+cp build/pyx/python.wasm store/python/$PYV/bin/python
+rm -rf store/python/$PYV/lib/python3.14
+cp -R rootfs/lib/python3.14 store/python/$PYV/lib/python3.14
+cp rootfs/bin/gotest rootfs/bin/gohello store/go/$GOV/bin/
+
+# The manifest IS sha256sum's output — no format was invented for this
+# (design.md decision 122). Generated with the host's sha256sum over paths
+# relative to the entry, which is exactly what pkg's `tree` verb reads back.
+manifest() { # manifest <store entry dir>
+  ( cd "$1" && find . -type f ! -name manifest | sed 's|^\./||' | sort \
+      | xargs sha256sum > manifest )
+}
+manifest store/python/$PYV
+manifest store/go/$GOV
+
+# The declarations — one pinned digest each, covering the manifest that pins
+# the rest. `cat /pkg/python` is the whole audit.
+#
+# They are written HOST-SIDE, beside the store, and not into the rootfs seed:
+# a declaration in /pkg means "installed", and until boot binds these packages
+# they are not. Shipping them early would make `pkg list` lie, which is the
+# same defect the v2 ordering fix was about (RESEARCH §9.26).
+pydig=$(sha256sum < store/python/$PYV/manifest | awk '{print $1}')
+godig=$(sha256sum < store/go/$GOV/manifest | awk '{print $1}')
+cat > pkg/python <<PKGEOF
+# python — REAL CPython 3.14.7 (wasi), binary and full stdlib.
+# One pinned digest covers the manifest; the manifest pins every file.
+tree python/$PYV/manifest $pydig /store/python/$PYV
+bind -a /store/python/$PYV/bin /bin
+bind -a /store/python/$PYV/lib /lib
+PKGEOF
+cat > pkg/go <<PKGEOF
+# go — the wasip1 citizens, built by the real Go toolchain.
+tree go/$GOV/manifest $godig /store/go/$GOV
+bind -a /store/go/$GOV/bin /bin
+PKGEOF
+echo "  store/python/$PYV  $(find store/python/$PYV -type f | wc -l | tr -d ' ') files, $(du -sh store/python/$PYV | cut -f1)"
+echo "  store/go/$GOV  $(find store/go/$GOV -type f | wc -l | tr -d ' ') files, $(du -sh store/go/$GOV | cut -f1)"
