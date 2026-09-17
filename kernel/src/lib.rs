@@ -1,18 +1,38 @@
-//! The IPNX kernel — a SUBSET of Plan 9's kernel, containing process
-//! orchestration.
+//! The IPNX kernel.
 //!
-//! That sentence is the whole specification, and both halves bind. **Subset**:
-//! nothing here is invented. Every call is one of Plan 9's 51, every device
-//! letter is one of Plan 9's, every flag has Plan 9's value and meaning; where
-//! this kernel differs from Plan 9's it does so by LACKING something, never by
-//! adding. **Process orchestration**: processes, the three tables they own,
-//! the namespace, and the channels between them. Everything a system does
-//! beyond that is done BY processes, talking to each other — so a console, a
-//! clock, a store, a window system are all file servers in userspace, and none
-//! of them is the kernel's business.
+//! What it is, in Christine's words rather than a paraphrase of them — the
+//! quotes are in [`docs/verbatim.md`](../../docs/verbatim.md), which is the
+//! only part of this repository's documentation that is hers:
 //!
-//! The test of a proposed change is not whether it is useful. It is whether
-//! Plan 9 has it, and whether orchestrating processes requires it.
+//! > *"we are essentially implementing a micro kernel based on a subset of
+//! > Plan 9, we should not be adding to it (even the Unix v10 personality
+//! > should be userspace) … It is important to keep our kernel pure otherwise
+//! > we will encounter serious issues extending the kernel"*
+//!
+//! > *"The kernel only handles process orchestration. everything else is
+//! > handled by host or userspace. Everytime you design a change to the
+//! > kernel, the design is wrong."*
+//!
+//! > *"Actual deviations from Plan 9 kernel are only authorised when it is to
+//! > do with adapting it for WASM and WASI"* … *"even then it should be done
+//! > in a machine independent way as we may want a non WASM kernel in the
+//! > future … for example, dis, or .NET CLR"*
+//!
+//! And as of 2026-09-17: **every deviation needs her approval, and the default
+//! answer is no.** The substrate argument above is hers, but it is a reason to
+//! bring her, not a test to pass alone.
+//!
+//! So: processes, the three tables they own, the namespace, and the channels
+//! between them. A console, a clock, a store, a window system are not here —
+//!
+//! > *"Only saranos knows about the host… I am a macOS app. I have a screen, a
+//! > keyboard and a mouse. I will serve these as virtual devices to the IPNX
+//! > kernel, which I am going to start."*
+//!
+//! — the host serves them, over 9P, because *"9P is the only protocol"*. The
+//! kernel consumes what it is served and knows nothing about what serves it:
+//! *"`/dev/draw` should be rendered by host. the kernel does not know how to
+//! draw."*
 
 pub mod chan;
 pub mod dev;
@@ -24,12 +44,13 @@ pub use chan::Chan;
 pub use proc::{Fd, Pid};
 
 /// The calls this kernel answers — a subset of Plan 9's, named as Plan 9 names
-/// them.
+/// them (`plan9/sys/src/libc/9syscall/sys.h`).
 ///
-/// What is absent is as deliberate as what is present. There is no call for
-/// drawing, for time, for randomness or for fetching: those are reads and
-/// writes on files that userspace processes serve. There is no `link`, because
-/// Plan 9 has none at any layer and answers the need with `bind` and `mount`.
+/// What is absent is the point. There is no call for drawing, time, randomness
+/// or fetching, because those are not process orchestration; they are reads
+/// and writes on files that something else serves. There is no `link`, because
+/// Plan 9 has none at any layer.
+///
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Call {
     // processes

@@ -14,15 +14,20 @@
 use crate::chan::Chan;
 use crate::ninep::Qid;
 
-/// The device letters this kernel has, each because ORCHESTRATING PROCESSES
-/// requires it. Plan 9 has twenty-four; the rest describe hardware or services
-/// that are file servers here.
+/// The device letters this kernel has: seven, each because **orchestrating
+/// processes** requires it. Plan 9 has twenty-four.
 ///
-/// **`#c` cons is deliberately absent**, and it is the one worth explaining:
-/// Plan 9 has it because its kernel drives a uart and a screen. This kernel
-/// drives nothing. A console is a file server in userspace, and putting it
-/// here would be the first step back towards a kernel that grows a driver per
-/// machine.
+/// The rule is Christine's — *"The kernel only handles process orchestration.
+/// everything else is handled by host or userspace"* — so a letter earns its
+/// place by being part of how processes are made, connected and named, and by
+/// nothing else.
+///
+/// **What is absent, and why it is not an omission.** `#c` cons, `#i` draw,
+/// `#m` mouse: Plan 9 has them because its kernel drives hardware, and this
+/// one drives none. The host serves those — *"I have a screen, a keyboard and
+/// a mouse. I will serve these as virtual devices to the IPNX kernel"* — and
+/// the kernel reaches them the way it reaches anything, by mounting what a
+/// server offers. A letter Plan 9 lacks entirely is not a device at all.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DevId {
     /// `#/` — the root a namespace starts from, before anything is mounted.

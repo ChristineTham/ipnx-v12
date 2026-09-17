@@ -78,15 +78,48 @@ final state; design resumes after it. **Don't overengineer.**
 
 ---
 
-## P0 — the kernel's core *(done, rebuilt 2026-09-17)*
+## P0 — the kernel's core *(done; rewritten 2026-09-17 against the record)*
+
+**What P0 is for, in Christine's words** — the quotes are in
+[verbatim.md](verbatim.md), which is the only documentation that is hers:
+
+> *"we are essentially implementing a micro kernel based on a subset of Plan 9,
+> we should not be adding to it (even the Unix v10 personality should be
+> userspace) … It is important to keep our kernel pure otherwise we will
+> encounter serious issues extending the kernel"*
+
+> *"The kernel only handles process orchestration. everything else is handled
+> by host or userspace. Everytime you design a change to the kernel, the design
+> is wrong."*
 
 | | |
 |---|---|
-| **builds** | **`Chan`** — the object everything acts on, since a walk produces one, an fd holds one and a mount point is one; the **device table**, which is Plan 9's `struct Dev` (`attach walk stat open create close read write remove wstat`); the **namespace** over channels — longest-prefix walk, unions, the create element; the **process table** with `rfork`'s share/copy/clear; the **9P codec**, the only place the wire exists |
-| **the device letters** | `#/` root, `#\|` pipe, `#s` srv, `#M` mnt, `#p` proc, `#d` dup, `#e` env — seven, each because orchestrating processes needs it. **`#c` cons is absent**: Plan 9 has it because its kernel drives a uart and a screen; this one drives nothing, so a console is a file server |
+| **builds** | **`Chan`** — a walk produces one, an fd holds one, a mount point is one, and every device operation takes one; the **device table**, Plan 9's `struct Dev`; the **namespace**, keyed as Plan 9 keys it; the **process table** with `rfork`'s share/copy/clear; the **9P codec**, the only place the wire exists |
+| **the letters** | `#/` `#\|` `#s` `#M` `#p` `#d` `#e` — seven, each part of how processes are made, connected or named. `#c`, `#i`, `#m` are **absent**: Plan 9 has them because its kernel drives hardware and this one drives none |
 | **depends on** | — |
-| **acceptance** | the codec, the namespace, the device letters and `rfork`'s rule are tested where they live. Nothing on the demo's checklist is reached, and P0 was never going to reach any of it |
-| **exposes** | no device is implemented yet, and `exec` needs an engine |
+| **acceptance** | the codec, the namespace, the device letters and `rfork`'s rule are tested where they live. Nothing on the demo's checklist is reached — P0 was never going to reach any of it |
+| **exposes** | no device is implemented, and `exec` needs something to instantiate a process |
+
+**Where the machine goes instead**, and this is hers too:
+
+> *"Only saranos knows about the host… I am a macOS app. I have a screen, a
+> keyboard and a mouse. I will serve these as virtual devices to the IPNX
+> kernel, which I am going to start."*
+
+> *"`/dev/draw` should be rendered by host. the kernel does not know how to
+> draw."*
+
+So the host **serves** the machine and the kernel **consumes** it, over 9P
+because *"9P is the only protocol"*. `/dev/cons` exists on the IPNX side
+without the kernel holding a console driver.
+
+**Two things were wrong in the first P0 and are recorded so they are not
+repeated.** It kept `#c` in the device table while arguing elsewhere that a
+console is served, which is a contradiction rather than a trade-off. And its
+namespace was keyed by path text and resolved by longest prefix — the
+superseded implementation's design, not Plan 9's, which keys a mount by the
+identity of the channel mounted upon (`chan.c:855`) and checks at every
+component.
 
 ## P1 — `exec`
 
