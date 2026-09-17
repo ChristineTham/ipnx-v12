@@ -96,6 +96,24 @@ pub fn split(path: &str) -> Option<(DevId, &str)> {
 mod tests {
     use super::*;
 
+    /// The three letters an earlier tree minted, named so they stay refused.
+    #[test]
+    fn a_letter_plan_nine_lacks_is_not_a_device() {
+        for minted in ['H', 'V', 'Z'] {
+            assert!(DevId::from_letter(minted).is_none(), "#{minted} is not Plan 9's");
+        }
+    }
+
+    #[test]
+    fn every_letter_round_trips() {
+        for d in [
+            DevId::Root, DevId::Cons, DevId::Env, DevId::Dup, DevId::Proc,
+            DevId::Srv, DevId::Pipe, DevId::Mnt,
+        ] {
+            assert_eq!(DevId::from_letter(d.letter()), Some(d));
+        }
+    }
+
     #[test]
     fn a_device_path_splits_at_the_letter() {
         assert_eq!(split("#c/user"), Some((DevId::Cons, "user")));

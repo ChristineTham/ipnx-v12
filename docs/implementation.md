@@ -28,11 +28,18 @@ Three **layers** are the *what* — the architecture, from
 what it **depends on**, its **acceptance**, and the **gaps it exposes**.
 Nothing undesigned is built.
 
-**The conformance suite** (`conformance/`) is where a phase's acceptance is
-written down as something that runs. One file per contract, testing the public
-surface only — a test that needs a private field is testing an implementation,
-not a contract. It is a separate crate so a second implementation could be
-judged by the same file.
+**The conformance suite** (`conformance/`) answers one question: **have we
+reached functional equivalence with the demo?** It is a checklist of what a
+person can DO, taken from the demo itself, and it starts almost entirely
+unreached — that is the point, because it is a distance and it shrinks as
+phases land.
+
+Equivalence is in **features, not mechanism**: nothing in the suite says how a
+thing is done, and the rebuild is free to reach any of it by another route. It
+is **not** there to lock the design — the design is argued in the documents,
+and a test asserting "the call list is a subset" would freeze a decision rather
+than measure a system. Guards of that kind are unit tests of the code they
+guard.
 
 **Everything is built from the design and from `plan9/`.** Those are the only
 two inputs. Where the design is silent, that is a gap to be raised, not a space
@@ -75,7 +82,7 @@ final state; design resumes after it. **Don't overengineer.**
 |---|---|
 | **builds** | the 9P2000 codec, the only place the wire exists; the namespace — mount table, longest-prefix walk, unions, `MCREATE`; Plan 9's device letters; the process table with `rfork`'s share/copy/clear, `await`, `RFNOWAIT` |
 | **depends on** | — |
-| **acceptance** | four contracts in `conformance/`: the kernel is a subset (every call in Plan 9's `sys.h`, the list strictly smaller, no call doing a file server's job, no device letter Plan 9 lacks); processes are orchestrated (`rfork`'s three-way rule, `await`, `RFNOWAIT`); the namespace resolves (longest prefix, union order, the create element); 9P is the only IPC (framing, and a hostile message cannot panic the kernel) |
+| **acceptance** | the codec, the namespace, the device letters and `rfork`'s three-way rule are tested where they live. Nothing on the demo's checklist is reached yet, and P0 was never going to reach any of it |
 | **exposes** | `exec` needs an engine, and the kernel cannot hold one |
 
 ## P1 — `exec`
