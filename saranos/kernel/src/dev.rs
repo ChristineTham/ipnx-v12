@@ -11,15 +11,19 @@
 //! device that Plan 9 lacks is not a device: it is a userspace file server,
 //! which is what Plan 9 would have made it.
 
-/// Plan 9's device letters, and the one exception.
+/// Plan 9's device letters. All of them, and only them.
 ///
-/// The exception is `Z`, host files, and it has a reason no other candidate can
-/// borrow: a Plan 9 kernel reaches a disk through `#S`, and a hosted kernel has
-/// no disk — the storage it has belongs to the process it runs inside. `#Z` is
-/// that boundary made a device, so it is reached by walking a name like
-/// everything else rather than by a special call. The exception is the MACHINE
-/// being different, not the system, and it is a single boundary rather than a
-/// licence.
+/// A device exists here if Plan 9 has one, means the same thing by it, and
+/// spells it with the same letter. There is no exception and no exception
+/// mechanism. When this system needs something Plan 9 has no device for, the
+/// answer is a userspace file server reached through the mount driver — which
+/// is what Plan 9 would have made it, and what keeps the kernel from growing.
+///
+/// Host storage is the case that tests this, and it is the reason the rule is
+/// written here rather than assumed: a hosted kernel has no disk, and the
+/// storage it has belongs to the process it runs inside. That does NOT earn a
+/// letter. The host serves it over 9P and the kernel mounts it like any other
+/// file server, so the kernel learns nothing new at all.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DevId {
     /// `#/` — the root device: a fixed table of empty mount points.
@@ -38,8 +42,6 @@ pub enum DevId {
     Pipe,
     /// `#M` — mnt: the mount driver, and the only place wire 9P is spoken.
     Mnt,
-    /// `#Z` — hostfs. The exception, argued above.
-    Host,
 }
 
 impl DevId {
@@ -54,7 +56,6 @@ impl DevId {
             DevId::Srv => 's',
             DevId::Pipe => '|',
             DevId::Mnt => 'M',
-            DevId::Host => 'Z',
         }
     }
 
@@ -68,7 +69,6 @@ impl DevId {
             's' => DevId::Srv,
             '|' => DevId::Pipe,
             'M' => DevId::Mnt,
-            'Z' => DevId::Host,
             _ => return None,
         })
     }
@@ -98,8 +98,8 @@ mod tests {
 
     #[test]
     fn a_device_path_splits_at_the_letter() {
-        assert_eq!(split("#Z/store/python"), Some((DevId::Host, "store/python")));
         assert_eq!(split("#c/user"), Some((DevId::Cons, "user")));
+        assert_eq!(split("#p/1/ctl"), Some((DevId::Proc, "1/ctl")));
         assert_eq!(split("#|"), Some((DevId::Pipe, "")));
     }
 
@@ -111,16 +111,20 @@ mod tests {
 
     #[test]
     fn an_unknown_letter_is_not_a_device() {
-        // A letter Plan 9 does not use is not ours to mint.
-        assert_eq!(split("#Q/anything"), None);
+        // A letter Plan 9 does not use is not ours to mint. These three were
+        // minted in an earlier tree and are named here so they stay refused:
+        // '#H' fetch, '#V' versioning, '#Z' host files. Plan 9's letters are
+        // $ / A B D E F K M S X a c d e g i k m p s t w | — no H, V or Z.
         assert_eq!(split("#H/http"), None);
+        assert_eq!(split("#V/snap"), None);
+        assert_eq!(split("#Z/store"), None);
     }
 
     #[test]
     fn every_letter_round_trips() {
         for d in [
             DevId::Root, DevId::Cons, DevId::Env, DevId::Dup, DevId::Proc,
-            DevId::Srv, DevId::Pipe, DevId::Mnt, DevId::Host,
+            DevId::Srv, DevId::Pipe, DevId::Mnt,
         ] {
             assert_eq!(DevId::from_letter(d.letter()), Some(d));
         }

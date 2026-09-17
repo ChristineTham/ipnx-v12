@@ -39,24 +39,10 @@ pub enum Effect {
     Reap { pid: Pid, status: String },
     /// Bytes to the console the host owns.
     Console { data: Vec<u8> },
-    /// An operation on the host's own storage, reached as `#Z`. Paths are
-    /// ROOT-RELATIVE: the host keeps the real root and enforces containment,
-    /// because that is the side that can.
-    Host { tag: u64, op: HostOp },
     /// Wake the kernel after a delay. Time is the host's to keep.
     Timer { tag: u64, ms: u64 },
     /// Stop.
     Shutdown { status: i32 },
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum HostOp {
-    Meta { path: String },
-    Read { path: String, off: u64, n: usize },
-    Write { path: String, off: u64, data: Vec<u8> },
-    Create { path: String, dir: bool, perm: u32 },
-    Remove { path: String },
-    ReadDir { path: String },
 }
 
 /// The host's answer to an [`Effect`].
@@ -64,8 +50,6 @@ pub enum HostOp {
 pub enum Reply {
     Ok { tag: u64 },
     Bytes { tag: u64, data: Vec<u8> },
-    Meta { tag: u64, dir: bool, len: u64 },
-    Entries { tag: u64, names: Vec<String> },
     Err { tag: u64, msg: String },
 }
 
