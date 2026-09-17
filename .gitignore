@@ -34,3 +34,6 @@ plan9-stock/
 userspace/store/
 userspace/pkg/
 userspace/hstore/
+
+# the new project builds here
+saranos/target/

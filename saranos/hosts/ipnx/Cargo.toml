@@ -1,0 +1,11 @@
+# `ipnx` — the host for a terminal. The first of Saranos's host side: it gives
+# the kernel a console, host storage and a clock, performs the effects the
+# kernel asks for, and does nothing else. The browser, the app and the
+# hypervisor are the same contract with a different body.
+[package]
+name = "ipnx"
+version = "0.1.0"
+edition.workspace = true
+
+[dependencies]
+ipnx-kernel = { path = "../../kernel" }

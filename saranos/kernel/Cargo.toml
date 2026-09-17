@@ -1,0 +1,10 @@
+[package]
+name = "ipnx-kernel"
+version = "0.1.0"
+edition.workspace = true
+
+# No dependencies, deliberately. The kernel is a pure state machine — syscalls
+# in, effects out — and everything it needs it owns: the 9P codec, the mount
+# table, the process table. A dependency here would be a decision about the
+# substrate, and the kernel is not allowed one.
+[dependencies]

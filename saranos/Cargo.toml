@@ -1,0 +1,10 @@
+# Saranos — the operating system: the host side and the wasm side together.
+# IPNX is the kernel and the userspace inside it; emca is the windowing and UI
+# system, and arrives with its own crates when the plan reaches it.
+[workspace]
+resolver = "2"
+members = ["kernel", "hosts/ipnx"]
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.77"
