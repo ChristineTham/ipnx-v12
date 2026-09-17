@@ -174,7 +174,7 @@ goes stale there — that is how four different test counts came to exist.
 
 | | |
 |---|---|
-| `docs/implementation.md` | **the plan, replanned 2026-09-04**: three layers — IPNX, emca, Saranos — with the demo (`ipnx` in a terminal + the website) as the first milestone. The accreted M0–M18 plan is in `docs/archive/` |
+| `docs/implementation.md` | **the plan — a redesign and rebuild (2026-09-17)**: phases P0–P7 to the demo (the CLI, then the website), built from the design and from `plan9/`. Superseded plans are in `docs/archive/` |
 | `docs/handbook.md` | the practice: prerequisites, build/run, load-bearing flags, how to add a command/test/device/host |
 
 ### meta — documents that inform and guide the six
@@ -374,8 +374,7 @@ sequenced by
   hardware (Raspberry Pi)** — where there is no host, so every addition must be
   carried onto the metal or removed there, and removing it there is harder.
 
-  The audits are RESEARCH §9.11–9.15; the rectification is implementation.md's
-  **P1**. A personality — including V10's — is **userspace**, always.
+  A personality — including V10's — is **userspace**, always.
 
 - **THE KERNEL DOES NOT GROW — AND A DESIGN THAT CHANGES IT IS WRONG**
   (Christine's rule, 2026-09-03). *"you yourself said the kernel does not grow.
