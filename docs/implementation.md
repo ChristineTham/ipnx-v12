@@ -116,13 +116,9 @@ So the host **serves** the machine and the kernel **consumes** it, over 9P
 because *"9P is the only protocol"*. `/dev/cons` exists on the IPNX side
 without the kernel holding a console driver.
 
-**Two things were wrong in the first P0 and are recorded so they are not
-repeated.** It kept `#c` in the device table while arguing elsewhere that a
-console is served, which is a contradiction rather than a trade-off. And its
-namespace was keyed by path text and resolved by longest prefix — the
-superseded implementation's design, not Plan 9's, which keys a mount by the
-identity of the channel mounted upon (`chan.c:855`) and checks at every
-component.
+The device table holds no `#c`: a console is served, not driven. The namespace
+keys a mount by the identity of the channel mounted upon (`chan.c:855`,
+`findmount`) and checks at every component — not by path text.
 
 ## P1 — `exec` *(done)*
 

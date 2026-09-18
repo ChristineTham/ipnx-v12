@@ -150,27 +150,6 @@ git repository, which makes an identity versioned and diffable.
 An AI agent's identity falls out of the same design: it is given a sub-profile — fewer
 namespace fragments, scoped credentials, its own name in the audit trail.
 
-## Current Status
-
-**Rebuilding, from P1 of eight phases.** An earlier implementation got a long
-way — `rc` with fork returning twice, `sam` drawing into a window that was a
-file, Go and CPython running beside 61,000 lines of untouched Bell Labs
-userspace, a suite passing on Node, in Chrome and under wasmtime. It was
-**removed on 2026-09-17**, because it had stopped being a subset of Plan 9 and
-become its own design: device letters Plan 9 does not have, a namespace keyed
-by path text where Plan 9 keys by the identity of the channel mounted upon.
-Keeping it would have meant building the rest on that.
-
-What runs today is small and it is the real thing: a kernel of Plan 9's own
-shape — `Chan`, `namec`, `findmount` at every component — that resolves a name
-through a namespace, reads an image out of `#/`, and runs it. The plan is
-[docs/implementation.md](docs/implementation.md); what is built is
-[docs/when.md](docs/when.md), and nowhere else.
-
-The paragraphs below describe the system's design. Where they say a thing works,
-read it as the design's intent unless [docs/when.md](docs/when.md) says it is
-built.
-
 ## The tricks are the architecture
 
 These are not separate features. They are consequences of two decisions: everything is
@@ -289,106 +268,34 @@ computer is a network, and the network of our computers is one system.
 
 ## What runs today
 
-The whole stack now runs in a browser tab. The real `rc` supports pipelines, subshells
-and functions, with every fork going through the asyncify machinery. The real `sam`
-runs in terminal mode and in a window using the real libframe and libdraw. **The real
-`acme`** is also running: it is a 9P file server mounted over a pipe, executing commands
-under button 2 and opening files under button 3.
+A kernel of Plan 9's own shape, 1,617 lines of Rust with no dependencies:
+`Chan` as the object every name resolves to, a device table that is Plan 9's
+`struct Dev`, a namespace keyed by the identity of the channel mounted upon,
+`namec` checking that namespace at every path component, and `rfork`'s
+share-copy-clear over namespace, file descriptors and environment alike. 27
+tests.
 
-The earlier implementation had real `grep`, `sed`, `sort`, `ls`, `wc` and more than
-twenty other commands, along with working `setjmp`/`longjmp`, a WASM `libthread`,
-bidirectional 9P, a uid model that enforced permissions, and hard and symbolic links
-implemented as its own wire types. Two of those are **not the direction**: Plan 9's
-kernel has neither a uid model nor links, so both belong in userspace if they exist at
-all. That is the kind of drift the rebuild exists to undo.
+Under it, `hosts/ipnx` implements the machine-dependent half — `procsetup` and
+`touser`, the only two calls that know what a machine is — over wasmtime.
+`cargo run -p ipnx` resolves a name through a namespace, reads the image out of
+`#/`, instantiates it and runs it.
 
-It also showed that the modern world can coexist with this system: **a real Go binary,
-compiled with ordinary `GOOS=wasip1 go build`, and real CPython 3.14** read files, listed
-directories, slept on timers and ran scripts against the kernel, knowing nothing about
-Plan 9 — through a WASI shim whose single preopened directory is the process's namespace
-root. Alongside it, TUHS-tape V10 `cat` and `echo` ran unmodified in `/v10/bin`. Those
-are the results worth reproducing, and the plan reaches them again from a kernel that is
-actually Plan 9's.
+There is no filesystem beyond `#/` yet, no pipe or mount device, no shell and
+no userspace. [docs/when.md](docs/when.md) is the only place that says what is
+built, and it says so exactly.
 
-Four review lenses — the deployment ledger (where it runs), design thinking (who it is
-for), a six-hats pass (what we had missed), and virtue ethics (what character the work
-keeps) — have each been applied and recorded in the documents below.
-
-Next: the per-platform
-shims around the Rust core — iPadOS, a `FROM scratch` OCI container, the microVM. Then the
-personalities, in benchmark order: the Go binary and the Python interpreter
-under the WASI shim already run — next teaching Python to actually `fork`, and
-`git status` on a real repository. Beyond,
-stated as aspiration and admitted by one test — *does it become a file tree in a
-namespace?* — the cloud and the cluster: your S3 bucket is a directory, the model is a
-file you write prompts into, the pod is a namespace, and the function is this machine,
-booted for one request and gone.
-
-## Try it
-
-**The whole system runs in your browser at
-[christham.net/ipnx-v12](https://christham.net/ipnx-v12/).** One button boots
-it: emca appears in a few seconds, and the toolchains — about 260 MB of
-them — stream in while you look around. Nothing installs and nothing persists:
-the entire machine lives in a tab's memory, and a reload forgets it ever
-existed.
-
-You arrive as `kitty`, in a home directory with programs waiting. `cc hello.c`
-then `./a.out` compiles with real clang and links with real wasm-ld, driven by
-a real `cc(1)` — flags, `-o`, `-c`, `-E` and all. `go run hello.go` compiles
-with **the actual Go compiler** — `cmd/compile`, cross-built to WebAssembly and
-running as an ordinary process on this kernel, which folklore says is
-impossible; the folklore was confusing the orchestrator with the tools.
-`python hello.py` is real CPython 3.14 with its full standard library, and
-`pip install cowsay` fetches a real wheel from the real PyPI, verifies it and
-installs it — the network arriving, naturally, as a file. The example programs
-from python.org's front page and the features gobyexample.com teaches run as
-written, from `examples/` in your home.
-
-There is a package manager, and the demo is its first registry.
-`pkg install ruby` fetches real Ruby 3.2.2 from the site you are already on,
-verifies it against a pinned sha256, and binds it into `/bin` — installing
-here is a bind, not a copy into global state, and `pkg remove` is an unbind.
-`pkg install php` works the same way. `pkg install zlib` is the interesting
-one: the registry's zlib was compiled from pinned source by this system's
-own `cc`, because the upstream binary came from a newer LLVM than the one in
-the tab — a sysroot must match its toolchain's era, and this registry
-answers by building with the toolchain it serves. Then
-`cc z.c /lib/wasm32-wasi/zlib/*.o` links it, and your program compresses.
-
-The editors are there too: `win acme &` opens the real acme in a window
-(option-click is button 2, command- or right-click button 3), `rc /rc/tour`
-walks the whole system, and the Test suite button runs the full conformance
-suite in the tab you are sitting in.
-
-## Standing on
-
-Three systems built important pieces of this idea: **plan9port**, the userspace without
-the kernel, which is why its graphics had to abandon the file interface; **9vx**, a
-kernel running in a sandbox that died with x86; and **Inferno's `emu`**, the right
-architecture on a virtual machine that never acquired an ecosystem.
-
-IPNX uses `emu`'s architecture with WebAssembly in place of Dis. WebAssembly is the
-virtual machine for which the whole world now builds toolchains. The kernel is small
-enough that reimplementing it for each substrate is a milestone rather than a lifetime.
-
-The security model also has ancestors, most of them dead: capability operating systems
-from Amoeba to EROS. They died of a consistent set of causes — above all, that no
-existing software ran on them — and IPNX is designed against that history. The first
-thing this system proved was that unmodified Go and Python binaries run; the
-capabilities themselves never appear as a concept anyone must learn, because here a
-capability is just a namespace, a file descriptor, a bind. Amoeba's best idea, the
-cryptographically-checked ticket that became the web's signed URL, is the planned
-mechanism for identity across machines. The full history and its lessons are in
-[RESEARCH.md](RESEARCH.md).
+The target is the demo: `rc` in a terminal with every command, then the website
+with emca. Twelve capabilities, measured by a conformance suite that fails
+until all twelve are reached.
 
 ## The documents
 
 **[RESEARCH.md](RESEARCH.md)** — the living evidence base: every finding with
  provenance, from Plan 9's call table to the wasm toolchain's measured behaviors.
-**[docs/implementation.md](docs/implementation.md)** — the plan: the redesign and
- rebuild, phases P0–P7. The superseded design and its decision log are in
- [docs/archive/](docs/archive/).
+**[docs/implementation.md](docs/implementation.md)** — the plan: phases P0–P7,
+ from the kernel to the demo to hardware.
+**[docs/when.md](docs/when.md)** — what is built, and what is not. The only
+ document that says.
 **[docs/architecture.md](docs/architecture.md)** — the architecture: what the system
  is, present tense — the component map and the contracts a host, a guest, and the
  wire must honour.

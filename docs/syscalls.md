@@ -1,33 +1,19 @@
-# The kernel call list — derived
+# The kernel call list
 
-> **UNREVIEWED — CLAUDE-AUTHORED, NOT AUTHORITY.** Every document in this
-> repository was written by Claude. Christine has not reviewed this one, so
-> everything in it is **proposed**, not spec'd: a record of what was *thought*,
-> not of what was *agreed*. Nothing here makes a deviation from Plan 9
-> approved — **every deviation needs her approval and the default answer is
-> no** — and where it cites the decision log
-> ([archive/design-log-claude-written.md](archive/design-log-claude-written.md))
-> that log is Claude's too and is not authority. What she actually said is
-> [verbatim.md](verbatim.md); what is built is [when.md](when.md).
+> **PROPOSED — not reviewed.** Claude wrote this. Nothing in it is endorsed, and
+> nothing in it approves a deviation from Plan 9. What is built is
+> [when.md](when.md).
 
-> **UNDER REVISION (2026-09-03). The derivation runs the wrong way.** This list
-> is derived from **V10's 68 routines**, dispositioning each as library,
-> collapse, or kernel — which is how `link` became *"C: kernel, trap 60"* when
-> **Plan 9 has no link syscall at all**, and neither does 9legacy. Deriving
-> from the personality inward guarantees the personality ends up in the kernel.
-> The list must be derived from **Plan 9's subset outward**; what a personality
-> needs beyond it is the personality's problem, in userspace. See
-> [design.md](archive/design-log-claude-written.md) 2026-09-03 and [implementation.md](implementation.md)
-> P1 step 3. **The V10 disposition table below is still useful evidence — it is the
-> conclusion "therefore the kernel gains a trap" that does not follow.**
+**Role: a *what* — the kernel's call list.**
 
+**The list is derived from Plan 9's subset outward.** What a personality needs
+beyond it is the personality's problem, solved in userspace. Deriving inward
+from a personality guarantees the personality ends up in the kernel — that is
+how `link` once appeared here as a trap when Plan 9 has no `link` syscall at
+all, and neither does 9legacy.
 
-**Role: a *what* — the derived kernel call list.**
-
-*The first task, stated in both the design and the research: derive, call by call, which
-system calls survive as kernel calls and which become 9P messages. Derived 2026-08-26.
-The inputs are Plan 9's `/sys/src/libc/9syscall/sys.h` and V10's `os/sysent.c`, both
-recorded verbatim in [RESEARCH.md](../RESEARCH.md) §2–3.*
+The input is Plan 9's `/sys/src/libc/9syscall/sys.h`, recorded verbatim in
+[RESEARCH.md](../RESEARCH.md) §2.
 
 ## The principle that sorts them
 
@@ -125,88 +111,24 @@ slots are dropped entirely.
 never leaves the supervisor — **29 of 40 live calls are pure kernel calls**, which is the
 concrete answer to "which survive as kernel calls and which become 9P messages".
 
-## V10's 68 routines onto the V12 interface
+## The subset — 28 calls
 
-The A–D classing and its evidence are RESEARCH.md §3; this table is the per-call landing.
-"libc" means the personality's C library over the calls above; "design" means the item is
-part of the uid-model design task; "drop" means no expression in V12.
+Of the 40 live calls the kernel implements 28.
 
-| V10 call | class | lands on | note |
-|---|---|---|---|
-| `exit` | A | `exits` | status int → exit string in libc |
-| `fork` | A | `rfork(RFFDG\|RFREND\|RFPROC)` | the manual's own equation |
-| `read` | A | `pread(fd,buf,n,-1)` | |
-| `write` | A | `pwrite(fd,buf,n,-1)` | |
-| `open` | A | `open` | mode bits translated |
-| `close` | A | `close` | |
-| `wait` | A | `await` | status string parsed |
-| `creat` | A | `create` | falls back to `open(OTRUNC)` when it exists |
-| `link` | — | **not provided** | Plan 9 has none at any layer; `bind`/`mount` is the answer |
-| `unlink` | A | `remove` | |
-| `lseek` | A | `seek` | |
-| `chdir` | A | `chdir` | |
-| `gtime` | A | `nsec` | ns → s in libc |
-| `mknod` | C | not restored | devices are file servers; libc errors |
-| `chmod` | B | `wstat` | |
-| `chown` | B | `wstat` | |
-| `sbreak` | A | `brk_` | |
-| `stat` | A | `stat` | `Dir` → `struct stat` in libc |
-| `seek` | A | `seek` | |
-| `getpid` | A | libc | no trap in Plan 9 either |
-| `dirread` | A | `pread` on the directory | stat records, converted |
-| `setuid` | C | libc: write `/proc/n/ctl` | the item APE called impossible — [identity.md](identity.md) |
-| `getuid` | C | libc: read `/dev/user`, map via passwd | |
-| `stime` | D | drop | the host owns the clock |
-| `fmount` | A | `mount` | |
-| `alarm` | A | `alarm` | |
-| `fstat` | A | `fstat` | |
-| `pause` | A | `sleep` | |
-| `utime` | B | `wstat` | |
-| `fchmod` | B | `fwstat` | |
-| `fchown` | B | `fwstat` | |
-| `saccess` | B | attempt the `open`, `close` | |
-| `nice` | B | write `/proc/n/ctl` | |
-| `ftime` | A | `nsec` | |
-| `sync` | B | none | the file server's business |
-| `kill` | C | write `/proc/n/note` | |
-| `select` | C | personality helper | over multiple procs or a mux server |
-| `setpgrp` | B | `rfork(RFNOTEG)` | |
-| `lstat` | — | **not provided** | there are no symlinks to decline to follow |
-| `dup` | A | `dup` | |
-| `pipe` | A | `pipe` | |
-| `times` | B | read `/proc/n/status` | |
-| `profil` | D | drop | |
-| `setgid` | C | as `setuid` (identity.md D2) | |
-| `getgid` | C | as `getuid` (identity.md D2) | |
-| `ssig` | C | `notify`/`noted` | V7-style signals over notes; libc table |
-| `funmount` | A | `unmount` | |
-| `sysacct` | D | drop | |
-| `biasclock` | D | drop | |
-| `syslock` | D | drop | |
-| `ioctl` | C | `ctl` files | libc translation per device class |
-| `sysboot` | D | drop | |
-| `setruid` | C | libc: write `/proc/n/ctl` (identity.md D1) | |
-| `symlink` | — | **not provided** | as `link` |
-| `readlink` | — | **not provided** | as `link` |
-| `exece` | A | `exec` | |
-| `umask` | C | per-proc field, applied at `create` | not implemented |
-| `chroot` | B | `rfork(RFCNAMEG)` + `bind` | |
-| `rmdir` | A | `remove` | |
-| `mkdir` | A | `create(DMDIR)` | |
-| `vfork` (slot 66 = `fork`) | A | `rfork(RFPROC\|RFMEM)` | the lazy path — vfork *is* the design, §5.2 |
-| `getlogname` | B | read `/dev/user` | |
-| `vadvise` | D | drop | |
-| `setgroups` | C | as `setuid` (identity.md D2) | |
-| `getgroups` | C | as `getuid` (identity.md D2) | |
-| `vlimit` | D | drop | |
-| `vswapon` | D | drop | |
-| `nap` | D | drop | `sleep` exists if ever wanted |
-| `vtimes` | D | drop | |
+| processes | `rfork` `exec` `exits` `await` `sleep` `alarm` `notify` `noted` `rendezvous` |
+|---|---|
+| **namespace** | `bind` `mount` `unmount` `chdir` |
+| **channels** | `open` `create` `close` `pread` `pwrite` `seek` `dup` `pipe` `remove` `stat` `fstat` `wstat` `fwstat` `fversion` `errstr` |
 
-**Landing census over the 68: 28 direct onto live calls (A) · 12 libc/namespace idioms (B)
-· 17 split as — the seven uid calls landed by [identity.md](identity.md), `umask` in the kernel,
-4 libc translations (`ioctl`, `select`, `kill`, `ssig`), `mknod` deliberately not
-restored, and the `link`/`symlink`/`lstat`/`readlink` four landed as the V12 additions
-(kernel traps 60–62 plus a stat flag; wire types 128/130/132, minted above every
-dialect's range; symlinks resolved by the kernel in the walking process's namespace,
-V10's rule) — · 11 dropped (D).**
+The twelve it omits, and why:
+
+| omitted | why |
+|---|---|
+| `segbrk` `brk_` `segattach` `segdetach` `segfree` `segflush` | memory is the machine's, not the kernel's. A guest grows its own linear memory; on another machine the arrangement differs and the kernel does not change |
+| `fd2path` | a convenience over state the process already holds |
+| `fauth` | authentication is a file server's, established at attach |
+| `semacquire` `semrelease` `tsemacquire` | `rendezvous` is the primitive; semaphores are a library over it |
+| `nsec` | time is a file |
+
+Each omission is a call the kernel does not have, not a call answered
+elsewhere in the kernel. Adding one back is a deviation and needs approval.
