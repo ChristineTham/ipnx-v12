@@ -49,6 +49,13 @@ list of verbs is the thing acme is not.** Anything in this document that
 renders the tag as a toolbar of fixed buttons is a departure from acme, not a
 port of it.
 
+**And the names stay.** Christine, on renaming the built-ins: *"acme names for
+the builtins are idiosyncratic (snarf, zerox, put, get, etc.). They have not
+stood the test of time, and are against Apple HIG… **This only applies to
+emca, not acme. Acme of course retains it's naming.**"* So `Snarf`, `Zerox`,
+`Put` and `Get` are correct in this document and wrong in
+[emca.md](emca.md).
+
 ## Role: the port spec
 
 **acme is Bell Labs' program.** This document is how it is modified to fit into

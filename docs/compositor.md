@@ -21,6 +21,31 @@ Nothing here is visible to a type manager. A manager receives a rectangle and
 a namespace; it never learns whether that rectangle came from the allocation
 below, from a window someone dragged, or from a grouping gesture.
 
+## Where this departs from acme, and on whose word
+
+**acme has exactly two levels, fixed.** `struct Row` holds columns
+(`acme/dat.h:317`), `struct Column` holds `Window **w` (`dat.h:295`). A window
+never contains a column. rio is one level of overlapping windows. **Neither
+recurses.**
+
+The recursion here is Christine's, in her words:
+
+> *"We need a compositor - something that arranges windows into columns and
+> rows, and it is recursive. each window itself is a compositor that can
+> further decompose into windows… The entire browser surface (or macos/ios
+> screen) starts off as one giant window, of type root."*
+
+So is the root window being the screen — *"the '/' type and the screen is
+genuinely special, it is not a normal window"* — and duplicate's three
+buttons — *"duplicate is three buttons on our current emca implementation but
+may change"* — and the tab default — *"new rows and new columns should only
+ever be created by a user, so an open window opens a new tab by default… It is
+also the safest option, that does not destroy current layout."*
+
+This document is therefore **not** a place where Plan 9 was ignored. It is a
+deliberate departure, stated by her, in userspace, where a departure costs
+nothing structural.
+
 Every window is a compositor, and it runs on itself. Given its own
 rectangle it decides whether to hold a body or to divide along an
 axis, allocating rectangles to some children and leaving the rest as

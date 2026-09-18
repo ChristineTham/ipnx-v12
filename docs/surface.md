@@ -41,6 +41,13 @@ or not emca is running**:
 | **without emca** | they connect straight to the host's screen, keyboard and mouse. IPNX is a CLI with no windows — a mode that must keep working |
 | **with emca** | emca **virtualises** them per window, and a client cannot tell the difference |
 
+**This is rio's mechanism exactly.** Without rio, `/dev/cons` is `#c`'s
+(`lib/namespace`: `bind #c /dev`) and `/dev/draw` is `#i`'s. rio mounts itself
+at `/mnt/wsys` and binds that over `/dev` with `MBEFORE` (`rio/fsys.c:237`,
+`:241`), so inside a window the same names resolve to rio's 16 per-window files
+(`fsys.c:25`). No client is told which it is talking to, and nothing in the
+kernel changes.
+
 > **The convention: `/dev` is the slot that can be virtualised.** Not "where
 > devices live" — the place whose contents may be substituted underneath a
 > process without it being able to tell. That is why a window's files belong

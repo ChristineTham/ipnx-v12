@@ -292,41 +292,37 @@ Note on /usr: this is PLAN 9's /usr — home directories, /usr/glenda —
 not Unix's retconned "Unix System Resources" holding /usr/bin. Every
 Linux-shaped reader will assume the other.
 
-### The naming convention, measured
-Measured across the vendored Plan 9 source: sixteen root names, NOT
-ONE over four characters. lib bin tmp dev usr mnt etc sys srv env
-(3), proc acme draw (4), rc fd n (1-2). acme and draw look like
-exceptions and are not — they are words that already fitted.
+### The naming convention — the rule does not survive measurement
+
+This document carried a rule: *"a root name is at most four characters"*,
+with `/project` recorded as **the one exception**, justified at length.
+
+**Plan 9's own root refutes it** (read 2026-09-18). Its directories:
 
 ```
-THE RULE: a root name is at most four characters. Abbreviation is
-what you do when the word is longer. A directory is named for what
-one of its ENTRIES IS, not for the collection — /proc/17 is a proc,
-/pkg/go is a pkg — which is why Unix never wrote /procs or /devs.
+386  acme  adm  amd64  arm  arm64  boot  cfg  cron  dist  lib  mail
+mips  mips64  power  power64  rc  riscv  riscv64  sparc  spim  spim64
+sys  usr
 ```
 
-Expanding everything was refused, and not on taste: "modern software
-must run" (CPython, Go and git carry hardcoded /tmp, /dev/null, /bin,
-/lib, /usr) and "vendored sources are verbatim — never edit them"
-(571 references to /lib, 139 to /bin in source committed never to be
-touched).
+Nine are longer than four characters — `riscv64` and `power64` are **seven**,
+`spim64` and `mips64` six, `sparc`, `riscv`, `power`, `arm64` and `amd64`
+five. These are not incidental: `bind /$cputype/bin /bin` in `lib/namespace`
+names one of them on every boot.
 
-```
-THE ONE EXCEPTION: /project, seven characters. Recorded with its
-reason so it constrains rather than licenses — /proj is one
-keystroke from /proc and adjacent in meaning (templates for
-processes beside running processes), ambiguous under tab
-completion. A future root claiming this exception must show the
-same: a real collision, not merely a longer word.
-```
+So `/project` needs no exception and the long justification for it can go. What
+the earlier measurement actually found was the shape of the *runtime* namespace
+roots — `dev proc srv env fd net bin lib tmp mnt` — and generalised a habit
+into a law.
 
-The naming search that produced it, so it is not redone: recipe (6,
-too long), rec (opaque), menu (32 uses in the UI sense in these very
-documents, and the design's founding quote is "Acme doesn't need
-menus"), kit and app (overloaded), spec (geeky), proj (collides with
-/proc). The concept split in two and the agony ended — /pkg was
-always the ingredients and /project always the dish; "recipe" was
-trying to be both.
+**What does hold**, and is worth keeping: a directory is named for what one of
+its **entries** is, not for the collection. `/proc/17` is a proc, `/pkg/go` is
+a pkg. That is why Unix never wrote `/procs`.
+
+And the constraint that is real, because it is about other people's code:
+modern software carries hardcoded `/tmp`, `/dev/null`, `/bin`, `/lib` and
+`/usr`, and the vendored sources are never edited — 571 references to `/lib`
+and 139 to `/bin` in source committed never to be touched.
 
 ## Window types
 

@@ -94,28 +94,32 @@ same fact that makes Undo belong to one type rather than all of them.
 > exposes a file"* a sufficient contract. They fail together, and the manager
 > is what replaces the third.
 
-## Type names are MIME types
+## Type names are MIME types — and Plan 9 agrees
 
-`text/plain`, `inode/directory`, `inode/system`. Adopting MIME is consistent
-with the founding rather than a departure: the refusal is of POSIX-*the-standard*
-as an interface to implement, while *"sockets won"* and *"UTF-8 won"* are the
-precedent for adopting a vocabulary that won. `inode/directory` is
-shared-mime-info's own name, not an invention.
+**`file(1)` already does this** (read 2026-09-18). `file -m` emits MIME types,
+and three of this document's decisions are its behaviour rather than a design:
 
-**The two-part form is structural, not cosmetic.** The registry is a path, so
-names nest and inheritance falls out of the directory tree with no algorithm
-and no merge rule:
+| | |
+|---|---|
+| **names are MIME types** | `file.c` carries the table — `text/plain`, `image/png`, `image/jpeg`, `application/pdf`, `application/postscript`, `audio/mpeg`, `application/x-elf-executable` and the rest |
+| **`text/plain` is the fallback** | `char PLAIN[] = "text/plain\n"` (`file.c:206`), printed for short, ascii, extended-ascii and latin-ascii content (`:367–373`) and for an empty file (`:299`) |
+| **recognition is from contents** | the whole of `file.c` is a magic-and-heuristics table over the bytes. A suffix alone never decides |
 
-```
-/type/text/managers          text/*  inherits this
-/type/text/plain/verbs       text/plain's own
-/type/inode/directory/...
-```
+The binary fallback is `application/octet-stream` (`file.c:205`).
 
-A future `text/x-csrc` that declares nothing gets `text/`'s manager for free.
-That also answers the scale worry: *one entry per MIME type* does not mean
-importing shared-mime-info's 1,500 — only types with a **distinct manager**
-need a folder, and everything else inherits or falls back.
+**Two names in this document are not Plan 9's.** `file -m` gives a directory
+`application/octet-stream` (`file.c:284`) and a device file the same
+(`:288`); in plain mode it says `directory` and `special file #%C/%s`. So:
+
+| | |
+|---|---|
+| `inode/directory` | **not Plan 9's** — it is freedesktop.org's convention, and not an IANA type |
+| `inode/system` | **invented here.** Neither Plan 9 nor freedesktop has it |
+
+Christine did say the screen is special — *"the '/' type and the screen is
+genuinely special, it is not a normal window. That's an unescapable fact"* —
+so the *thing* is hers. The **name** is not, and needs one that is either
+Plan 9's or hers.
 
 ## What a type declares
 
