@@ -307,26 +307,39 @@ sequenced by
 
   A personality — including V10's — is **userspace**, always.
 
-- **THE KERNEL DOES NOT GROW — AND A DESIGN THAT CHANGES IT IS WRONG**
-  (Christine's rule, 2026-09-03). *"you yourself said the kernel does not grow.
-  The kernel only handles process orchestration. everything else is handled by
-  host or userspace. Everytime you design a change to the kernel, the design is
+- **THE KERNEL DOES NOT GROW BY INVENTION — AND PLAN 9 IS THE GUIDE**
+  (Christine's rule, 2026-09-03, **clarified 2026-09-18**). The rule as first
+  written was *"you yourself said the kernel does not grow. The kernel only
+  handles process orchestration. everything else is handled by host or
+  userspace. Everytime you design a change to the kernel, the design is
   wrong."*
 
-  **It is a TEST, applied before a design is written down, not a preference
-  weighed against others.** If answering a question requires adding to
-  `kernel/`, the answer is wrong and the real answer is in the host or in
-  userspace. The kernel may **shrink**; that is the only direction it moves.
+  **What it means, in her words:** *"that rule was to stop you from adding all
+  sorts of invented stuff in the kernel. the kernel focuses on the one thing it
+  does best — process orchestration, but it doesn't mean that is the only thing
+  the kernel does. Use Plan 9 as a guide."*
 
-  The failure it names is concrete: a proposal once offered *"extend the host
-  op list with draw operations"* as a legitimate option, and it was argued
-  against on other grounds — a second IPC beside 9P — when it should have been
-  struck out on sight for growing the kernel.
+  So the test is **provenance, not category**. Ask: *does Plan 9's kernel have
+  this?* If it does, it may be here — `#c`'s 23 files, a clock, a syscall
+  table, `up`, whatever it is. If it does not, it is an invention and the
+  answer is in the host or in userspace, whatever it looks like.
 
-  A window device is the standing example. Plan 9 has none: rio is an ordinary
-  userspace file server that posts to `/srv`, mounts at `/mnt/wsys` and binds
-  that over `/dev` (`rio/fsys.c:170`, `:237`, `:241`). Anything that would put
-  windows in the kernel is answered there.
+  **This was read too literally for most of 2026-09-18**, and it cost real
+  work: `#c` was struck out, restored, struck out again and restored again,
+  each time by asking *is this category orchestration?* rather than *does Plan
+  9 have it?*. Reading it as a ban on everything but process management makes
+  the kernel smaller than Plan 9's, which is a deviation in the other
+  direction and needs approval exactly as adding would.
+
+  The failure it actually names is concrete: a proposal once offered *"extend
+  the host op list with draw operations"* as a legitimate option, and it was
+  argued against on other grounds — a second IPC beside 9P — when it should
+  have been struck out on sight, because Plan 9 has no such thing.
+
+  A window device is the standing example of an invention. Plan 9 has none:
+  rio is an ordinary userspace file server that posts to `/srv`, mounts at
+  `/mnt/wsys` and binds that over `/dev` (`rio/fsys.c:170`, `:237`, `:241`).
+  Anything that would put windows in the kernel is answered there.
 - **EVERY DEVIATION FROM PLAN 9 NEEDS CHRISTINE'S APPROVAL, AND THE DEFAULT
   ANSWER IS NO** (her rule, 2026-09-17). Not "is it defensible", not "is it
   forced by the substrate", not "would Dis need it too" — those are arguments

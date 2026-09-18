@@ -54,10 +54,11 @@ opening `#d/3` returns the channel fd 3 holds.
 else; no `Tversion`/`Tattach`/`Twalk` is ever exchanged, because `#M` is not
 built.
 
-**Nothing stamps a process's start**, so `/dev/cputime`'s `TReal` is 0. The
-kernel has no clock of its own — Plan 9's is machine-provided and available
-kernel-wide (`MACHP(0)->ticks`), and here it reaches only `#c`, through its
-host.
+**Nothing stamps a process's start**, so `/dev/cputime`'s `TReal` is 0 — the
+kernel has no clock of its own. Plan 9's is machine-provided and available
+kernel-wide (`MACHP(0)->ticks`, `todget`), so **this kernel should have one**;
+it was left out by reading the growth rule as a ban on anything that is not
+process management, which is not what it says.
 
 No mount, srv, proc, dup, env or cap device. No shell, no userspace, no
 surface. `#c`'s `cons` and `consctl` wait for a host to serve them (P4).

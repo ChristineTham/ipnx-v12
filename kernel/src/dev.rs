@@ -16,10 +16,12 @@ use crate::ninep::Qid;
 
 /// The device letters this kernel has: nine. Plan 9 has twenty-four.
 ///
-/// The rule is Christine's — *"The kernel only handles process orchestration.
-/// everything else is handled by host or userspace"* — so a letter earns its
-/// place by being part of how processes are made, connected and named, and by
-/// nothing else.
+/// **A letter earns its place by being Plan 9's.** Christine's rule against
+/// growth is about invention, not category — *"that rule was to stop you from
+/// adding all sorts of invented stuff in the kernel… it doesn't mean that is
+/// the only thing the kernel does. Use Plan 9 as a guide"* (2026-09-18). So
+/// the question for any device is *does Plan 9's kernel have it*, not *is it
+/// process management*.
 ///
 /// **What is absent: `#i` draw and `#m` mouse**, and only those two of the
 /// ones a hosted kernel might want. Plan 9 has them because its kernel drives
@@ -29,7 +31,9 @@ use crate::ninep::Qid;
 /// anything, by mounting what a server offers.
 ///
 /// **`#c` is in** (Christine, 2026-09-18: *"we should keep `#c` in since it
-/// holds a variety of kernel info"*). `consdir[]` (`devcons.c:605`) is 23
+/// holds a variety of kernel info"*). It was struck out twice before that, by
+/// asking whether its 23 files were *orchestration* rather than whether Plan 9
+/// has them — the misreading the clarified rule names. `consdir[]` (`devcons.c:605`) is 23
 /// files and only two are the console; the rest is state the kernel has
 /// anyway — its name, its uptime, its message log, a process's own pid —
 /// shown as files, which is the founding principle rather than an addition.

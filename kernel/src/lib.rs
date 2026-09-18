@@ -53,10 +53,14 @@ pub use proc::{Fd, Pid};
 /// The calls this kernel answers — a subset of Plan 9's, named as Plan 9 names
 /// them (`plan9/sys/src/libc/9syscall/sys.h`).
 ///
-/// What is absent is the point. There is no call for drawing, time, randomness
-/// or fetching, because those are not process orchestration; they are reads
-/// and writes on files that something else serves. There is no `link`, because
-/// Plan 9 has none at any layer.
+/// What is absent is the point, and the test is Plan 9's list rather than a
+/// category: there is no call for drawing, time, randomness or fetching
+/// because **Plan 9 has none** — those are reads and writes on files that
+/// something else serves. There is no `link`, because Plan 9 has none at any
+/// layer.
+///
+/// **None of these is implemented.** The enum is a list; nothing dispatches
+/// it and no process can invoke any of them. See `docs/when.md`.
 ///
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Call {

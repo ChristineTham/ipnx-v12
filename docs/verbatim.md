@@ -297,3 +297,8 @@ On implementing the rest of `#c`:
 
 - *"implement rest of #c to the best of your ability. No reason why we can't do swap, config, reboot. It can also report drivers provided by the host app"*
 - *"remember just because the functionality is provided by host app doesn't mean it can't be visible and reported by kernel"*
+
+Clarifying the kernel-does-not-grow rule, after it was read as a ban on
+everything but process management:
+
+- *"you are interpreting 'only process orchestration in kernel' - that rule was to stop you from adding all sorts of invented stuff in the kernel. the kernel focuses on the one thing it does best - process orchestration, but it doesn't mean that is the only thing the kernel does. Use Plan 9 as a guide."*

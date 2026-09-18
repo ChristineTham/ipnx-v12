@@ -151,11 +151,12 @@ of the twelve needs a shell, and there is no userspace. Still 0 of 12.
 in since it holds a variety of kernel info"*.
 
 `#c` was excluded twice and restored twice, and the measurement was the same
-each time; only the question changed. *Is it hardware?* No — `consdir[]`
-(`devcons.c:605`) is 23 files and two are the console. *Is it orchestration?*
-Mostly no. *Does the kernel hold this state anyway?* **Yes**, and that is the
-one that decides: showing state the kernel already has as files is the
-founding principle, not an addition.
+each time; only the question changed — and two of the three questions were the
+wrong question. *Is it hardware?* No. *Is it orchestration?* Mostly no, **and
+that is not the test**. Christine, 2026-09-18: *"that rule was to stop you from
+adding all sorts of invented stuff in the kernel… it doesn't mean that is the
+only thing the kernel does. Use Plan 9 as a guide."* The test is **does Plan 9
+have it**, and Plan 9 has all 23.
 
 | | |
 |---|---|
