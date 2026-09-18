@@ -60,6 +60,10 @@ pub struct Cons {
     pub hostdomain: String,
     pub sysname: String,
     pub kmesg: Vec<u8>,
+    /// `Mach.syscall` and `Mach.cs` (`pc/dat.h:233`), the two counters this
+    /// kernel is in a position to keep honestly.
+    pub syscalls: u64,
+    pub cs: u64,
     /// The device letters this kernel carries, for `/dev/drivers`.
     letters: Vec<(char, &'static str)>,
     /// How a device reaches `up`. Plan 9 uses a per-machine global; this is
@@ -159,6 +163,8 @@ impl Cons {
             hostdomain: String::new(),
             sysname: String::new(),
             kmesg: Vec::new(),
+            syscalls: 0,
+            cs: 0,
             letters,
             up,
             host,
@@ -232,14 +238,28 @@ impl Dev for Cons {
                 let ppid = up.procs.borrow().ppid(up.pid).unwrap_or(0);
                 readnum(ppid as u64, NUMSIZE)
             }
-            // Plan 9 reports `up->pgrp->pgrpid` (`devcons.c:99`). This
-            // kernel has no process group yet — `rfork`'s `RFNOTEG` is
-            // unimplemented — so it reports the pid and will report the group
-            // when there is one.
-            Q::Pgrpid => readnum(self.up.borrow().pid as u64, NUMSIZE),
-            // Six numbers, as `consread`'s Qcputime writes them. Nothing
-            // accounts CPU time here yet, so they are zero rather than wrong.
-            Q::Cputime => (0..6).flat_map(|_| readnum(0, NUMSIZE)).collect(),
+            // `up->pgrp->pgrpid` (`devcons.c:99`) — the NAMESPACE group's
+            // number. `struct Pgrp` holds `mnthash[]` and nothing about
+            // signals or job control, so this is not a process group in the
+            // Unix sense at all.
+            Q::Pgrpid => {
+                let (pid, procs) = {
+                    let up = self.up.borrow();
+                    (up.pid, up.procs.clone())
+                };
+                let id = procs.borrow().pgrpid(pid).unwrap_or(0);
+                readnum(id as u64, NUMSIZE)
+            }
+            // Six numbers, `NUMSIZE` each (`devcons.c:63`), in milliseconds.
+            Q::Cputime => {
+                let (nsec, _, _) = self.host.now();
+                let (pid, procs) = {
+                    let up = self.up.borrow();
+                    (up.pid, up.procs.clone())
+                };
+                let t = procs.borrow().cputime(pid, nsec);
+                t.iter().flat_map(|v| readnum(*v, NUMSIZE)).collect()
+            }
 
             // identity
             Q::User => Self::readstr(&self.user(), n, off),
@@ -304,9 +324,19 @@ impl Dev for Cons {
                 );
                 Self::readstr(&s, n, off)
             }
-            // Per-processor counters (`devcons.c:129`). One machine, and no
-            // counters kept, so it is empty rather than invented.
-            Q::Sysstat => Self::readstr("", n, off),
+            // Per-processor counters (`devcons.c:129`), one line per machine:
+            // id, context switches, interrupts, syscalls, page faults, tlb
+            // faults, tlb purges, load. This kernel has one machine and
+            // counts what it actually does; the rest stay zero rather than
+            // being invented.
+            Q::Sysstat => {
+                let mut s = String::new();
+                for v in [0, self.cs, 0, self.syscalls, 0, 0, 0, 0] {
+                    s.push_str(&String::from_utf8_lossy(&readnum(v, NUMSIZE)));
+                }
+                s.push('\n');
+                Self::readstr(&s, n, off)
+            }
 
             // generators
             Q::Random => self.host.random(n),
@@ -372,7 +402,12 @@ impl Dev for Cons {
             Q::Kmesg | Q::Kprint => self.kmesg.extend_from_slice(data),
             // `/dev/null` swallows, and that is its whole job.
             Q::Null => {}
-            Q::Swap | Q::Sysstat | Q::Time | Q::Bintime => {}
+            // `conswrite`'s Qsysstat zeroes the counters (`devcons.c:107`).
+            Q::Sysstat => {
+                self.syscalls = 0;
+                self.cs = 0;
+            }
+            Q::Swap | Q::Time | Q::Bintime => {}
             Q::Cons | Q::Consctl => return Err("served by the host".into()),
             _ => return Err(EPERM.into()),
         }
@@ -600,6 +635,71 @@ mod tests {
         write(&mut d, "kprint", "boot\n").unwrap();
         write(&mut d, "kprint", "ready\n").unwrap();
         assert_eq!(read(&mut d, "kmesg"), "boot\nready\n");
+    }
+
+    /// `/dev/pgrpid` is the NAMESPACE group's number, not a Unix process
+    /// group: `struct Pgrp` holds `mnthash[]` and nothing else. So processes
+    /// sharing a namespace share the number, and `rfork` with `RFNAMEG`
+    /// changes it — `sysrfork` calls `newpgrp()` then `pgrpcpy`
+    /// (`sysproc.c:140`), so a copy is a NEW group.
+    #[test]
+    fn pgrpid_is_the_namespace_group_and_a_copy_is_a_new_one() {
+        let (mut d, procs) = cons();
+        let mine = read(&mut d, "pgrpid").trim().to_string();
+
+        // shared — RFPROC alone shares the namespace
+        let shared = procs.borrow_mut().rfork(1, crate::proc::rf::PROC).unwrap();
+        d.up.borrow_mut().pid = shared;
+        assert_eq!(read(&mut d, "pgrpid").trim(), mine, "a shared namespace is the same group");
+
+        // copied — RFNAMEG makes a new group
+        let copied = procs.borrow_mut().rfork(1, crate::proc::rf::PROC | crate::proc::rf::NAMEG).unwrap();
+        d.up.borrow_mut().pid = copied;
+        assert_ne!(read(&mut d, "pgrpid").trim(), mine, "a copied namespace is a new group");
+    }
+
+    /// Six numbers of `NUMSIZE` each (`devcons.c:63`), in milliseconds, and
+    /// `TReal` is wall time rather than a zero.
+    #[test]
+    fn cputime_reports_six_numbers_and_real_time_advances() {
+        let (mut d, procs) = cons();
+        // the fake host's clock is fixed; start the process one second before it
+        let (now, _, _) = FakeHost.now();
+        procs.borrow_mut().started(1, now - 1_500_000_000);
+        let s = read(&mut d, "cputime");
+        assert_eq!(s.len(), 6 * NUMSIZE);
+        let v: Vec<&str> = s.split_whitespace().collect();
+        assert_eq!(v.len(), 6);
+        assert_eq!(v[crate::proc::TREAL], "1500", "TReal is now - started, in ms");
+    }
+
+    /// An exited child's times fold into its parent's TCUser/TCSys/TCReal,
+    /// which is what makes the last three numbers mean anything.
+    #[test]
+    fn a_childs_time_is_added_to_its_parents_when_it_exits() {
+        let (mut d, procs) = cons();
+        let c = procs.borrow_mut().rfork(1, crate::proc::rf::PROC).unwrap();
+        procs.borrow_mut().charge(c, crate::proc::TUSER, 250);
+        procs.borrow_mut().exits(c, "");
+        let s = read(&mut d, "cputime");
+        let v: Vec<&str> = s.split_whitespace().collect();
+        assert_eq!(v[crate::proc::TCUSER], "250", "the child's user time came across");
+    }
+
+    /// `/dev/sysstat` is one line per machine, eight numbers, and writing it
+    /// zeroes the counters (`devcons.c:107`).
+    #[test]
+    fn sysstat_counts_what_the_kernel_does_and_a_write_zeroes_it() {
+        let (mut d, _) = cons();
+        d.syscalls = 17;
+        d.cs = 4;
+        let s = read(&mut d, "sysstat");
+        let v: Vec<&str> = s.split_whitespace().collect();
+        assert_eq!(v.len(), 8, "eight counters");
+        assert_eq!(v[1], "4", "context switches");
+        assert_eq!(v[3], "17", "syscalls");
+        write(&mut d, "sysstat", "").unwrap();
+        assert_eq!(read(&mut d, "sysstat").split_whitespace().nth(3).unwrap(), "0");
     }
 
     /// `cons` and `consctl` are the two of the 23 the host serves (P4), so

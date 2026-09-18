@@ -5,7 +5,7 @@ other document carries it.
 
 Measured 2026-09-18.
 
-## The kernel — 2,804 lines of Rust, no dependencies
+## The kernel — 2,999 lines of Rust, no dependencies
 
 | | |
 |---|---|
@@ -21,7 +21,7 @@ Measured 2026-09-18.
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-61 tests.
+65 tests.
 
 ## The host — `hosts/ipnx`, 116 lines
 
@@ -36,9 +36,12 @@ a process ran, and said so
 ## What is not built
 
 No mount, srv, proc, dup, env or cap device. No shell, no userspace, no
-surface. `#c`'s `cons` and `consctl` wait for a host to serve them (P4), and
-`pgrpid`, `cputime` and `sysstat` report placeholders because nothing keeps
-process groups, CPU time or per-processor counters yet.
+surface. `#c`'s `cons` and `consctl` wait for a host to serve them (P4).
+
+`/dev/sysstat`'s interrupt, page-fault, tlb and load counters are zero, and
+`cputime`'s `TUser`/`TSys` are charged by nothing yet — there is no syscall
+path to charge them from until P3. Both count honestly rather than reporting
+a number nothing produced.
 
 ## Functional equivalence to the demo — 0 of 12
 

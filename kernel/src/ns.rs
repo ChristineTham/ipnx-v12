@@ -68,14 +68,47 @@ impl Key {
 }
 
 /// A process's namespace: Plan 9's `Pgrp`, which is a table of `Mhead`.
-#[derive(Clone, Debug, Default)]
+#[derive(Debug)]
 pub struct Ns {
     mounts: HashMap<Key, Vec<Element>>,
+    /// `Pgrp.pgrpid` (`portdat.h`, `struct Pgrp`). **A namespace group is what
+    /// Plan 9 calls a process group** — `Pgrp` holds `mnthash[]`, the mount
+    /// table, and nothing about signals or job control. `newpgrp` numbers each
+    /// one from a global counter (`pgrp.c:53`, `incref(&pgrpid)`), which is
+    /// what `/dev/pgrpid` reports.
+    id: u32,
+}
+
+/// The counter `newpgrp` draws from (`pgrp.c:12`, `static Ref pgrpid`).
+static NEXT_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+/// **A copied namespace is a NEW group.** `sysrfork` calls `newpgrp()` and
+/// then `pgrpcpy` (`sysproc.c:140`), so the mounts come across and the id does
+/// not. Only sharing keeps the id, which is the point of the number.
+impl Clone for Ns {
+    fn clone(&self) -> Ns {
+        Ns { mounts: self.mounts.clone(), id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) }
+    }
+}
+
+/// A cleared namespace is `newpgrp()` with no `pgrpcpy` — also a new group.
+impl Default for Ns {
+    fn default() -> Ns {
+        Ns::new()
+    }
 }
 
 impl Ns {
     pub fn new() -> Self {
-        Ns::default()
+        Ns {
+            mounts: HashMap::new(),
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        }
+    }
+
+    /// `pgrpid` — this namespace group's number.
+    pub fn id(&self) -> u32 {
+        self.id
     }
 
     /// `bind(2)` and `mount(2)`: put `to` over the file `on`.

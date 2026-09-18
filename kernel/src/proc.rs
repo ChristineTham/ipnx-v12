@@ -13,6 +13,12 @@ use std::rc::Rc;
 use std::cell::RefCell;
 
 pub type Pid = u32;
+
+/// `Proc.time`'s slots (`portdat.h:630`).
+pub const TUSER: usize = 0;
+pub const TSYS: usize = 1;
+pub const TREAL: usize = 2;
+pub const TCUSER: usize = 3;
 pub type Fd = i32;
 
 /// `rfork(2)`'s flags, with Plan 9's values. They are bits and they compose,
@@ -100,6 +106,13 @@ pub struct Proc {
     /// `up->user` — Plan 9's whole identity field (`portdat.h:664`). One
     /// name. No uid, no gid, no euid/ruid pair.
     pub user: String,
+    /// `Proc.time[6]` (`portdat.h:630`): user, sys, real, and the three
+    /// aggregates for exited children. Milliseconds, as `/dev/cputime`
+    /// reports them (`TK2MS`, `devcons.c:63`).
+    pub time: [u64; 6],
+    /// When this process started, in the host's nanoseconds, so `TReal` can
+    /// be `now - start` the way Plan 9 computes it from `MACHP(0)->ticks`.
+    pub started: u64,
     /// `up->slash` and `up->dot`. Plan 9 holds both as CHANNELS, not as text —
     /// a name is resolved from a channel, so the process's idea of "/" and "."
     /// is a channel too. An earlier version here kept `cwd` as a String, which
@@ -119,6 +132,8 @@ impl Proc {
             ppid: 0,
             // The first process is eve's. `proc.c:1467`: `kstrdup(&p->user, eve)`.
             user: "eve".to_string(),
+            time: [0; 6],
+            started: 0,
             ns: Rc::new(RefCell::new(Ns::new())),
             fds: Rc::new(RefCell::new(Fds::default())),
             env: Rc::new(RefCell::new(HashMap::new())),
@@ -199,6 +214,8 @@ impl Procs {
             pid: self.next,
             ppid: pid,
             user: parent.user.clone(),
+            time: [0; 6],
+            started: 0,
             ns,
             fds,
             env,
@@ -222,6 +239,11 @@ impl Procs {
         } else {
             src.clone()
         }
+    }
+
+    /// `up->pgrp->pgrpid` — the namespace group's number.
+    pub fn pgrpid(&self, pid: Pid) -> Option<u32> {
+        self.tab.get(&pid).map(|p| p.ns.borrow().id())
     }
 
     /// `up->user`, for the device that reports it.
@@ -252,10 +274,50 @@ impl Procs {
         }
     }
 
-    /// `exits(2)`.
-    pub fn exits(&mut self, pid: Pid, status: &str) {
+    /// The six numbers `/dev/cputime` reports, in milliseconds. `TReal` is
+    /// wall time, which Plan 9 computes as `MACHP(0)->ticks - l`
+    /// (`devcons.c:63`) — here, from the host's clock.
+    pub fn cputime(&self, pid: Pid, now_nsec: u64) -> [u64; 6] {
+        match self.tab.get(&pid) {
+            None => [0; 6],
+            Some(p) => {
+                let mut t = p.time;
+                t[TREAL] = now_nsec.saturating_sub(p.started) / 1_000_000;
+                t
+            }
+        }
+    }
+
+    /// Add to one of a process's time slots. The kernel charges `TUser` and
+    /// `TSys` as it does work; `TReal` is computed, not charged.
+    pub fn charge(&mut self, pid: Pid, slot: usize, ms: u64) {
         if let Some(p) = self.tab.get_mut(&pid) {
-            p.status = Some(status.to_string());
+            p.time[slot] += ms;
+        }
+    }
+
+    /// Record that a process has begun, so `TReal` has an origin.
+    pub fn started(&mut self, pid: Pid, now_nsec: u64) {
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.started = now_nsec;
+        }
+    }
+
+    /// `exits(2)`. Plan 9 folds an exited child's times into its parent's
+    /// `TCUser`/`TCSys`/`TCReal`, which is what makes those three mean
+    /// anything.
+    pub fn exits(&mut self, pid: Pid, status: &str) {
+        let (ppid, time) = match self.tab.get_mut(&pid) {
+            None => return,
+            Some(p) => {
+                p.status = Some(status.to_string());
+                (p.ppid, p.time)
+            }
+        };
+        if let Some(parent) = self.tab.get_mut(&ppid) {
+            for i in 0..3 {
+                parent.time[TCUSER + i] += time[i];
+            }
         }
     }
 
