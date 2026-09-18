@@ -212,7 +212,13 @@ mod tests {
         fn todget(&mut self) -> machine::Tod {
             machine::Tod { nsec: 1_500_000_000_000_000_000, ticks: 42, hz: 1_000_000 }
         }
-        fn touser(&mut self, pid: Pid, image: &[u8], _a: &[String]) -> Result<String, String> {
+        fn touser(
+            &mut self,
+            pid: Pid,
+            image: &[u8],
+            _a: &[String],
+            _sys: &mut dyn machine::Syscalls,
+        ) -> Result<String, String> {
             let mut l = self.0.borrow_mut();
             l.order.push("touser");
             l.ran.push((pid, image.to_vec()));
