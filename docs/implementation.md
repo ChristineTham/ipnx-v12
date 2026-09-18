@@ -97,7 +97,7 @@ final state; design resumes after it. **Don't overengineer.**
 
 | | |
 |---|---|
-| **builds** | **`Chan`** — a walk produces one, an fd holds one, a mount point is one, and every device operation takes one; the **device table**, Plan 9's `struct Dev`; the **namespace**, keyed as Plan 9 keys it; the **process table** with `rfork`'s share/copy/clear; the **9P codec**, the only place the wire exists |
+| **builds** | **`Chan`** — a walk produces one, an fd holds one, a mount point is one, and every device operation takes one; the **device table**, Plan 9's `struct Dev`; the **namespace**, keyed as Plan 9 keys it; the **process table** with `rfork`'s share/copy/clear, its flag checks, `exits` and `await`; the **9P codec**, the only place the wire exists |
 | **the letters** | `#/` `#\|` `#s` `#M` `#p` `#d` `#e` `#c` `#¤` — nine. `#i` and `#m` are absent because Plan 9 has them to drive hardware and this kernel drives none |
 | **depends on** | — |
 | **acceptance** | 14 unit tests of the structures, where they live. **P0 does not pass conformance and cannot**: not one of the twelve behaviours is reachable without `exec`, a device and a userspace. The suite FAILS, and that is correct |
@@ -132,7 +132,7 @@ reads the image, and then does the machine's half. All three now happen.
 | **the one adaptation** | `touser` in Plan 9 jumps to a stack pointer, the image having been mapped already. A machine whose executable unit is a module has no such step — the image *is* the executable state — so the image is what crosses. Approved 2026-09-17: *"wasm instantiation is fine, keep it machine independent"* |
 | **also fixed** | a process holds `slash` and `dot` as **channels**, as Plan 9 does. They were a `String` cwd — the same error as keying the namespace by path text |
 | **depends on** | P0 |
-| **acceptance** | `cargo run -p ipnx` → `a process ran, and said so`. A process was resolved through a namespace, read out of a device, instantiated and run. **32 kernel tests**, including the four that prove the claims rather than exercise them: a walk lands on the MOUNTED file and not the one under it; a mount made on a walked-to component is honoured there, which is what "checked at every component" means; a relative name resolves from `dot`; and the machine is given the bytes that were resolved, set up before it is entered, and not touched at all when the name does not resolve |
+| **acceptance** | `cargo run -p ipnx` → `a process ran, and said so`. A process was resolved through a namespace, read out of a device, instantiated and run. **40 kernel tests**, including the four that prove the claims rather than exercise them: a walk lands on the MOUNTED file and not the one under it; a mount made on a walked-to component is honoured there, which is what "checked at every component" means; a relative name resolves from `dot`; and the machine is given the bytes that were resolved, set up before it is entered, and not touched at all when the name does not resolve |
 | **exposes** | one process is not two: nothing can talk to anything. That is P2 |
 
 **It moves nothing on the conformance checklist, and that is right** — every one

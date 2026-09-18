@@ -14,12 +14,12 @@ Measured 2026-09-18.
 | `devroot.rs` | `#/` — the read-only boot directory; every write is `Egreg` |
 | `ns.rs` | the namespace, keyed by the identity of the channel mounted upon |
 | `namec.rs` | name → channel, with the mount check at every component |
-| `proc.rs` | the process table; `rfork`'s share, copy and clear |
+| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits` and `await` |
 | `ninep.rs` | the 9P2000 codec |
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-32 tests.
+40 tests.
 
 ## The host — `hosts/ipnx`, 116 lines
 

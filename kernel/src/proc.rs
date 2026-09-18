@@ -153,7 +153,29 @@ impl Procs {
     /// `rfork(2)`. With `RFPROC` a new process; without it, the flags act on
     /// the caller — which is how a process gives ITSELF a private namespace,
     /// and why `rfork` is one call rather than two.
+    /// `Ebadarg` — Plan 9's error string, checked before anything is
+    /// committed (`sysproc.c:43`, *"Check flags before we commit"*).
+    pub const EBADARG: &'static str = "bad arg in system call";
+
+    /// The flag checks `sysrfork` makes before it does anything
+    /// (`sysproc.c:44–56`). A contradictory pair — copy AND clear the same
+    /// table — is an error, not a silent choice between them. So is asking for
+    /// `RFMEM` or `RFNOWAIT` without `RFPROC`, since there is no child for
+    /// either to describe.
+    pub fn rforkcheck(flags: i32) -> Result<(), String> {
+        for both in [rf::FDG | rf::CFDG, rf::NAMEG | rf::CNAMEG, rf::ENVG | rf::CENVG] {
+            if flags & both == both {
+                return Err(Self::EBADARG.into());
+            }
+        }
+        if flags & rf::PROC == 0 && flags & (rf::MEM | rf::NOWAIT) != 0 {
+            return Err(Self::EBADARG.into());
+        }
+        Ok(())
+    }
+
     pub fn rfork(&mut self, pid: Pid, flags: i32) -> Option<Pid> {
+        Self::rforkcheck(flags).ok()?;
         let parent = self.tab.get(&pid)?.clone();
 
         let ns = Self::table(&parent.ns, flags & rf::CNAMEG != 0, flags & rf::NAMEG != 0);
@@ -240,5 +262,139 @@ mod tests {
         let b = f.dup(a, -1).unwrap();
         f.get(a).unwrap().borrow_mut().offset = 42;
         assert_eq!(f.get(b).unwrap().borrow().offset, 42);
+    }
+
+    fn one() -> Procs {
+        Procs::new(Chan::attach(crate::dev::DevId::Root, 0))
+    }
+
+    /// The three-way rule, on file descriptors: a `G` bit copies, a `CG` bit
+    /// clears, and neither shares. Sharing is the default because that is what
+    /// `fork` without flags means in Plan 9.
+    #[test]
+    fn rfork_shares_copies_or_clears_the_descriptors() {
+        // share — the parent's later open is visible to the child
+        let mut p = one();
+        p.tab.get(&1).unwrap().fds.borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
+        let c = p.rfork(1, rf::PROC).unwrap();
+        p.tab.get(&1).unwrap().fds.borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
+        assert_eq!(p.tab.get(&c).unwrap().fds.borrow().count(), 2, "no bit means SHARE");
+
+        // copy — the child starts with what the parent had, and diverges
+        let mut p = one();
+        p.tab.get(&1).unwrap().fds.borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
+        let c = p.rfork(1, rf::PROC | rf::FDG).unwrap();
+        p.tab.get(&1).unwrap().fds.borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
+        assert_eq!(p.tab.get(&c).unwrap().fds.borrow().count(), 1, "RFFDG means COPY");
+        assert_eq!(p.tab.get(&1).unwrap().fds.borrow().count(), 2);
+
+        // clear — the child starts with none
+        let mut p = one();
+        p.tab.get(&1).unwrap().fds.borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
+        let c = p.rfork(1, rf::PROC | rf::CFDG).unwrap();
+        assert_eq!(p.tab.get(&c).unwrap().fds.borrow().count(), 0, "RFCFDG means CLEAR");
+    }
+
+    /// The same rule, on the environment group — which is the whole reason
+    /// `#e` is a device and `RFENVG`/`RFCENVG` exist.
+    #[test]
+    fn rfork_shares_copies_or_clears_the_environment() {
+        let mut p = one();
+        p.tab.get(&1).unwrap().env.borrow_mut().insert("a".into(), "1".into());
+        let c = p.rfork(1, rf::PROC).unwrap();
+        p.tab.get(&1).unwrap().env.borrow_mut().insert("b".into(), "2".into());
+        assert_eq!(p.tab.get(&c).unwrap().env.borrow().len(), 2, "no bit means SHARE");
+
+        let mut p = one();
+        p.tab.get(&1).unwrap().env.borrow_mut().insert("a".into(), "1".into());
+        let c = p.rfork(1, rf::PROC | rf::ENVG).unwrap();
+        p.tab.get(&1).unwrap().env.borrow_mut().insert("b".into(), "2".into());
+        assert_eq!(p.tab.get(&c).unwrap().env.borrow().len(), 1, "RFENVG means COPY");
+
+        let mut p = one();
+        p.tab.get(&1).unwrap().env.borrow_mut().insert("a".into(), "1".into());
+        let c = p.rfork(1, rf::PROC | rf::CENVG).unwrap();
+        assert!(p.tab.get(&c).unwrap().env.borrow().is_empty(), "RFCENVG means CLEAR");
+    }
+
+    /// And on the namespace, through `rfork` rather than through `Ns` alone —
+    /// the bit has to be wired to the table.
+    #[test]
+    fn rfork_shares_copies_or_clears_the_namespace() {
+        let mut p = one();
+        let c = p.rfork(1, rf::PROC).unwrap();
+        assert!(Rc::ptr_eq(&p.tab[&1].ns, &p.tab[&c].ns), "no bit means SHARE");
+
+        let mut p = one();
+        let c = p.rfork(1, rf::PROC | rf::NAMEG).unwrap();
+        assert!(!Rc::ptr_eq(&p.tab[&1].ns, &p.tab[&c].ns), "RFNAMEG means COPY");
+
+        let mut p = one();
+        let c = p.rfork(1, rf::PROC | rf::CNAMEG).unwrap();
+        assert!(!Rc::ptr_eq(&p.tab[&1].ns, &p.tab[&c].ns), "RFCNAMEG means CLEAR");
+    }
+
+    /// `sysrfork` checks its flags before it commits (`sysproc.c:43`). Asking
+    /// to copy AND clear the same table is `Ebadarg`, not a silent choice
+    /// between them; and `RFMEM` or `RFNOWAIT` without `RFPROC` describes a
+    /// child that is not being made.
+    #[test]
+    fn contradictory_rfork_flags_are_an_error() {
+        for bad in [
+            rf::PROC | rf::FDG | rf::CFDG,
+            rf::PROC | rf::NAMEG | rf::CNAMEG,
+            rf::PROC | rf::ENVG | rf::CENVG,
+            rf::MEM,
+            rf::NOWAIT,
+        ] {
+            assert!(
+                Procs::rforkcheck(bad).is_err(),
+                "rfork({bad:#x}) must be Ebadarg, as sysproc.c:44-56 has it"
+            );
+            assert_eq!(one().rfork(1, bad), None, "and rfork must make nothing");
+        }
+        assert!(Procs::rforkcheck(rf::PROC | rf::NOWAIT).is_ok());
+    }
+
+    /// `rfork` without `RFPROC` makes no child: it changes the CALLER's own
+    /// tables. That is how a shell gets a private namespace without forking.
+    #[test]
+    fn rfork_without_rfproc_changes_the_caller_and_makes_no_child() {
+        let mut p = one();
+        let before = p.tab[&1].ns.clone();
+        assert_eq!(p.rfork(1, rf::NAMEG), None, "no child");
+        assert_eq!(p.count(), 1);
+        assert!(!Rc::ptr_eq(&p.tab[&1].ns, &before), "the caller's own namespace was replaced");
+    }
+
+    /// `exits` then `await`: the parent reaps the child and gets its status.
+    #[test]
+    fn a_child_that_exits_is_reaped_by_its_parent_with_its_status() {
+        let mut p = one();
+        let c = p.rfork(1, rf::PROC).unwrap();
+        assert_eq!(p.await_child(1), None, "nothing to reap before it exits");
+        p.exits(c, "oops");
+        assert_eq!(p.await_child(1), Some((c, "oops".to_string())));
+        assert_eq!(p.await_child(1), None, "reaped once, and gone");
+    }
+
+    /// `RFNOWAIT`: the child is never reported and leaves no zombie.
+    #[test]
+    fn a_child_forked_with_nowait_is_never_reaped() {
+        let mut p = one();
+        let c = p.rfork(1, rf::PROC | rf::NOWAIT).unwrap();
+        p.exits(c, "gone");
+        assert_eq!(p.await_child(1), None);
+    }
+
+    /// A process reaps its own children and nobody else's.
+    #[test]
+    fn await_reaps_only_this_processs_children() {
+        let mut p = one();
+        let a = p.rfork(1, rf::PROC).unwrap();
+        let b = p.rfork(a, rf::PROC).unwrap();
+        p.exits(b, "b");
+        assert_eq!(p.await_child(1), None, "b is a's child, not 1's");
+        assert_eq!(p.await_child(a), Some((b, "b".to_string())));
     }
 }
