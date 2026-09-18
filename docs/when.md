@@ -13,6 +13,10 @@ Measured 2026-09-18.
 | `dev.rs` | the device table, Plan 9's `struct Dev`; nine letters (`/ \| s M p d e c ¤`) |
 | `devroot.rs` | `#/` — the read-only boot directory; every write is `Egreg` |
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed |
+| `devproc.rs` | `#p` — the process table as files: `status`, `ns` as the bind lines that rebuild it, `fd`, and `ctl` where a write kills |
+| `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user |
+| `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, clunk. **Not reachable from `mount(2)` yet** |
+| `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
 | `devsrv.rs` | `#s` — post a file descriptor's NUMBER, and an open of the name answers with the channel behind it |
 | `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` returns the channel fd 3 holds, so a dup IS an open |
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares |
@@ -24,7 +28,7 @@ Measured 2026-09-18.
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-96 kernel tests, and 3 in `hosts/ipnx` that run a guest against a real kernel.
+121 kernel tests, and 3 in `hosts/ipnx` that run a guest against a real kernel.
 
 ## The host — `hosts/ipnx`, 116 lines
 
@@ -54,9 +58,32 @@ Answered: `rfork` `exec` `exits` `await` `errstr` `bind` `unmount` `chdir`
 `fstat` `wstat` `fwstat` — **21 of 28**. A failed call leaves its reason where
 `errstr` finds it, and reading exchanges it as Plan 9's does.
 
-Refusing, and saying why rather than pretending: `mount` and `fversion` want
-the mount driver (P2); `sleep`, `alarm`, `notify`, `noted` and `rendezvous`
-want a scheduler (P3).
+Refusing, and saying why rather than pretending: `sleep`, `alarm`, `notify`,
+`noted` and `rendezvous` want a scheduler (P3); `mount` waits on the knot
+below.
+
+### The one thing P2 did not finish
+
+`#M` is built and proven against a real 9P server running in process —
+version, attach, walk, open, a read larger than one message, a failed walk
+that clunks its fid, an `Rerror` arriving as its own words. What is missing is
+the last inch: **`mount(2)` cannot hand it a wire.**
+
+`#M` is the one device that talks to *another* device. Plan 9 does it through
+the global `devtab[m->c->type]` (`devmnt.c`, `mountio`), so the mount driver
+reaches the pipe or network channel underneath it from anywhere. This kernel's
+device table is **owned**, not global: the mount driver lives inside it, so it
+cannot hold a transport onto a channel the same table serves without a cycle.
+
+Three attempts, recorded so they are not retried blindly: a
+`Box<dyn Transport>` stored in the mount needs `'static` and the table is
+borrowed; taking the driver out for the conversation covers the attach but not
+the walks and reads that follow, because those arrive through `namec`; and
+`Rc<RefCell<Devtab>>` trades the compile error for a double-borrow panic on the
+first read of a mounted channel.
+
+**This is a design question, not a coding one**, and the answer is
+Christine's.
 
 **A guest reaches them.** `Machine::touser` is handed a `Syscalls` — the
 kernel, lent for the duration — and turns whatever its trap looks like into a
@@ -82,7 +109,7 @@ built.
 nanoseconds, the fast-tick counter and its frequency; `exec` stamps a
 process's start from it, so `/dev/cputime`'s `TReal` is wall time.
 
-No mount, proc or cap device. No shell, no userspace, no
+`mount(2)` is not wired (above). No shell, no userspace, no
 surface. `#c`'s `cons` and `consctl` wait for a host to serve them (P4).
 
 `/dev/sysstat`'s interrupt, page-fault, tlb and load counters are zero, and
