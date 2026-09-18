@@ -102,7 +102,9 @@ pub struct Proc {
     /// sharing, it is the sharing.
     pub ns: Rc<RefCell<Ns>>,
     pub fds: Rc<RefCell<Fds>>,
-    pub env: Rc<RefCell<HashMap<String, String>>>,
+    /// `up->egrp`. **Values are bytes**, as Plan 9's `Evalue` is — a `char*`
+    /// with a length, not a C string — so a variable can hold anything.
+    pub env: Rc<RefCell<HashMap<String, Vec<u8>>>>,
     /// `up->user` — Plan 9's whole identity field (`portdat.h:664`). One
     /// name. No uid, no gid, no euid/ruid pair.
     pub user: String,
@@ -151,6 +153,36 @@ impl Proc {
             status: None,
             waited: true,
         }
+    }
+}
+
+/// **`up`** — the calling process, as Plan 9's per-machine global names it.
+///
+/// Plan 9's devices reach `up` from anywhere: `up->fgrp` in `devdup`,
+/// `up->egrp` in `devenv`, `up->user` in `devsrv`, `devmnt`, `devproc` and
+/// `devcap`. Rust has no ambient mutable global, so the same pointer is
+/// shared: the kernel sets `pid` before it dispatches, and a device reads
+/// through it. Identical information, one indirection more.
+pub struct Up {
+    pub pid: Pid,
+    pub procs: Rc<RefCell<Procs>>,
+}
+
+impl Up {
+    /// `up->user`.
+    pub fn user(&self) -> String {
+        let p = self.procs.borrow();
+        p.user(self.pid).unwrap_or_default()
+    }
+
+    /// `up->fgrp`.
+    pub fn fgrp(&self) -> Option<Rc<RefCell<Fds>>> {
+        self.procs.borrow().get(self.pid).map(|p| p.fds.clone())
+    }
+
+    /// `up->egrp`.
+    pub fn egrp(&self) -> Option<Rc<RefCell<HashMap<String, Vec<u8>>>>> {
+        self.procs.borrow().get(self.pid).map(|p| p.env.clone())
     }
 }
 

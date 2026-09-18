@@ -77,12 +77,12 @@ impl Dev for Root {
         Ok(self.files.iter().find(|e| e.name == name).map(|e| e.qid))
     }
 
-    fn open(&mut self, c: &mut Chan, mode: u16) -> Result<(), String> {
+    fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
         if mode & 3 != crate::chan::mode::OREAD && mode & 3 != crate::chan::mode::OEXEC {
             return Err(EGREG.into());
         }
         c.mode = mode;
-        Ok(())
+        Ok(c)
     }
 
     fn create(&mut self, _c: &mut Chan, _n: &str, _m: u16, _p: u32) -> Result<(), String> {
@@ -138,8 +138,8 @@ mod tests {
         r.addbootfile("init", b"the image".to_vec());
         let c = r.attach("").unwrap();
         let qid = r.walk(&c, "init").unwrap().expect("init is there");
-        let mut f = c.walked("init", qid);
-        r.open(&mut f, crate::chan::mode::OEXEC).unwrap();
+        let f = c.walked("init", qid);
+        let mut f = r.open(f, crate::chan::mode::OEXEC).unwrap();
         assert_eq!(r.read(&mut f, 100, 0).unwrap(), b"the image");
     }
 

@@ -125,7 +125,11 @@ pub trait Dev {
     /// error, because that is how a union walk tries the next element.
     fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String>;
 
-    fn open(&mut self, c: &mut Chan, mode: u16) -> Result<(), String>;
+    /// `Chan* (*open)(Chan*, int)` (`portdat.h:250`). **It returns a
+    /// channel**, which is not ceremony: `devdup`'s open answers with the
+    /// channel the fd already holds (`devdup.c`, `dupopen` → `fdtochan`), so a
+    /// dup IS an open. A device that just marks its argument returns it.
+    fn open(&mut self, c: Chan, mode: u16) -> Result<Chan, String>;
     fn create(&mut self, c: &mut Chan, name: &str, mode: u16, perm: u32) -> Result<(), String>;
     fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String>;
     fn write(&mut self, c: &mut Chan, data: &[u8], off: u64) -> Result<usize, String>;

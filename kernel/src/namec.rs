@@ -162,7 +162,7 @@ pub fn namec(
         }
         A::Open => {
             let d = tab.get(c.dev).ok_or("no such device")?;
-            d.open(&mut c, omode)?;
+            c = d.open(c, omode)?;
         }
     }
     Ok(c)
@@ -348,8 +348,8 @@ mod tests {
         fn walk(&mut self, _c: &Chan, _n: &str) -> Result<Option<crate::ninep::Qid>, String> {
             Ok(Some(self.qid))
         }
-        fn open(&mut self, _c: &mut Chan, _m: u16) -> Result<(), String> {
-            Ok(())
+        fn open(&mut self, c: Chan, _m: u16) -> Result<Chan, String> {
+            Ok(c)
         }
         fn create(&mut self, _c: &mut Chan, _n: &str, _m: u16, _p: u32) -> Result<(), String> {
             Err("no".into())

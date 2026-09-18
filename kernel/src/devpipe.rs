@@ -77,9 +77,9 @@ impl Dev for PipeDev {
         })
     }
 
-    fn open(&mut self, c: &mut Chan, mode: u16) -> Result<(), String> {
+    fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
         c.mode = mode;
-        Ok(())
+        Ok(c)
     }
 
     /// A pipe has no `create`: the attach made it.
@@ -148,8 +148,8 @@ mod tests {
         a.qid = d.walk(&dir, "data").unwrap().unwrap();
         let mut b = dir.clone();
         b.qid = d.walk(&dir, "data1").unwrap().unwrap();
-        d.open(&mut a, ORDWR).unwrap();
-        d.open(&mut b, ORDWR).unwrap();
+        let a = d.open(a, ORDWR).unwrap();
+        let b = d.open(b, ORDWR).unwrap();
         (d, a, b)
     }
 

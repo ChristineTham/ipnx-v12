@@ -39,6 +39,7 @@ use dev::Dev as _;
 pub mod chan;
 pub mod dev;
 pub mod devcons;
+pub mod devenv;
 pub mod devpipe;
 pub mod devroot;
 pub mod machine;
@@ -463,7 +464,7 @@ impl Kernel {
                     let d = self.tab.get(dev::DevId::Pipe).ok_or(ENODEV)?;
                     let mut c = dir.clone();
                     c.qid = d.walk(&dir, name)?.ok_or("no such file")?;
-                    d.open(&mut c, chan::mode::ORDWR)?;
+                    let c = d.open(c, chan::mode::ORDWR)?;
                     ends.push(c);
                 }
                 let b = self.newfd(up, ends.pop().unwrap())?;

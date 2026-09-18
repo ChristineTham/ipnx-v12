@@ -219,9 +219,9 @@ impl Dev for Cons {
             .map(|e| Qid { qtype: 0, vers: 0, path: e.1 as u64 }))
     }
 
-    fn open(&mut self, c: &mut Chan, mode: u16) -> Result<(), String> {
+    fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
         c.mode = mode;
-        Ok(())
+        Ok(c)
     }
 
     fn create(&mut self, _c: &mut Chan, _n: &str, _m: u16, _p: u32) -> Result<(), String> {
@@ -485,8 +485,7 @@ mod tests {
         let dir = d.attach("").unwrap();
         let mut c = dir.clone();
         c.qid = d.walk(&dir, name).unwrap().expect(name);
-        d.open(&mut c, mode).unwrap();
-        c
+        d.open(c, mode).unwrap()
     }
 
     fn read(d: &mut Cons, name: &str) -> String {
