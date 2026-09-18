@@ -1,5 +1,15 @@
 # The kernel call list — derived
 
+> **UNREVIEWED — CLAUDE-AUTHORED, NOT AUTHORITY.** Every document in this
+> repository was written by Claude. Christine has not reviewed this one, so
+> everything in it is **proposed**, not spec'd: a record of what was *thought*,
+> not of what was *agreed*. Nothing here makes a deviation from Plan 9
+> approved — **every deviation needs her approval and the default answer is
+> no** — and where it cites the decision log
+> ([archive/design-log-claude-written.md](archive/design-log-claude-written.md))
+> that log is Claude's too and is not authority. What she actually said is
+> [verbatim.md](verbatim.md); what is built is [when.md](when.md).
+
 > **UNDER REVISION (2026-09-03). The derivation runs the wrong way.** This list
 > is derived from **V10's 68 routines**, dispositioning each as library,
 > collapse, or kernel — which is how `link` became *"C: kernel, trap 60"* when

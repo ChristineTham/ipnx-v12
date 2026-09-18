@@ -298,7 +298,7 @@ own wire types. The uid model is particularly significant, since Plan 9's own
 compatibility layer considered this impossible. *(Status, 2026-09-03: both the uid model
 and the links are **under review** — Plan 9's kernel has neither, and the kernel is being
 cut to a subset of Plan 9's with the Unix personality moving to userspace; see
-docs/design.md under that date. They run today; they are not the direction.)*
+docs/archive/design-log-claude-written.md under that date. They are not the direction.)*
 
 The first proof that the modern world can coexist with this system is also working: **a
 real Go binary, compiled with ordinary `GOOS=wasip1 go build`, and real CPython 3.14**
@@ -309,6 +309,11 @@ the Rust kernel core under wasmtime: the same suite, identical on the reference
 implementation and the native rewrite. The proof of concept is complete, and the
 kernel has been built twice.** Alongside it, TUHS-tape V10 `cat` and `echo` run
 unmodified in `/v10/bin`, preserving the exhibit that started the project.
+*(Status, 2026-09-18: that whole tree has been **removed**. It was shaped by an
+earlier implementation whose design was superseded, and it is being rebuilt from
+the ground up as a genuine subset of Plan 9's kernel — `docs/implementation.md`
+for the plan, `docs/when.md` for what actually runs today, which is P1. The
+paragraph above records what was reached, not what is in the tree.)*
 Before the build, four review lenses — the deployment ledger (where it runs),
 design thinking (who it is for), a six-hats pass (what we had missed), and
 virtue ethics (what character the work keeps) — have each been applied and
@@ -386,8 +391,9 @@ mechanism for identity across machines. The full history and its lessons are in
 
 **[RESEARCH.md](RESEARCH.md)** — the living evidence base: every finding with
  provenance, from Plan 9's call table to the wasm toolchain's measured behaviors.
-**[docs/design.md](docs/design.md)** — the design: scope, rationale, decisions with
- dates, open questions.
+**[docs/implementation.md](docs/implementation.md)** — the plan: the redesign and
+ rebuild, phases P0–P7. The superseded design and its decision log are in
+ [docs/archive/](docs/archive/).
 **[docs/architecture.md](docs/architecture.md)** — the architecture: what the system
  is, present tense — the component map and the contracts a host, a guest, and the
  wire must honour.
@@ -413,8 +419,8 @@ mechanism for identity across machines. The full history and its lessons are in
  sweeps for what the plans keep missing.
 **[docs/virtue-ethics.md](docs/virtue-ethics.md)** — the character record: the
  virtues this work practises, each held between its two failure modes.
-**[docs/poc.md](docs/poc.md)** — the proof of concept's record, frozen: what three
- days built and what they proved.
+**[docs/verbatim.md](docs/verbatim.md)** — every statement of Christine's, quoted
+ from the session record. The one part of the documents she has actually said.
 
 ## Licence and estate
 

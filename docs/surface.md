@@ -1,5 +1,23 @@
 # The surface — what the host side owns
 
+> **UNREVIEWED — CLAUDE-AUTHORED, NOT AUTHORITY.** Every document in this
+> repository was written by Claude. Christine has not reviewed this one, so
+> everything in it is **proposed**, not spec'd: a record of what was *thought*,
+> not of what was *agreed*. Nothing here makes a deviation from Plan 9
+> approved — **every deviation needs her approval and the default answer is
+> no** — and where it cites the decision log
+> ([archive/design-log-claude-written.md](archive/design-log-claude-written.md))
+> that log is Claude's too and is not authority. What she actually said is
+> [verbatim.md](verbatim.md); what is built is [when.md](when.md).
+>
+> **The device letters in this document are not Plan 9's** (measured against
+> `plan9/` on 2026-09-18). `#H`, `#Z` and `#R` appear in no Plan 9 device at
+> all. `#V` and `#w` do exist there and mean something else: `V` is the TV
+> capture device (`plan9/sys/src/9/pc/devtv.c`) and `w` is the watchdog
+> (`plan9/sys/src/9/port/devwd.c`), not a snapshot layer and not a window. Each
+> use below is therefore either an invention or a collision, and none of them is
+> approved.
+
 **Role: a *what* — the host half.** What emca-host owns and decides, and why
 nothing above it needs to know. The contract it serves is
 [window.md](window.md); the tiled arrangement it renders is

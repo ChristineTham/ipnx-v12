@@ -1,5 +1,15 @@
 # Why — purpose and intent
 
+> **UNREVIEWED — CLAUDE-AUTHORED, NOT AUTHORITY.** Every document in this
+> repository was written by Claude. Christine has not reviewed this one, so
+> everything in it is **proposed**, not spec'd: a record of what was *thought*,
+> not of what was *agreed*. Nothing here makes a deviation from Plan 9
+> approved — **every deviation needs her approval and the default answer is
+> no** — and where it cites the decision log
+> ([archive/design-log-claude-written.md](archive/design-log-claude-written.md))
+> that log is Claude's too and is not authority. What she actually said is
+> [verbatim.md](verbatim.md); what is built is [when.md](when.md).
+
 **Role: the *why*.** Why this project exists, and the purpose and intent of
 each component. Christine's own statements of purpose are
 [README.md](../README.md) — **her document, in her voice** — and the landing
