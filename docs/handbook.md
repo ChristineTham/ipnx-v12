@@ -45,8 +45,9 @@ them:
 - **Execute against the plan.** Find the phase in
   [implementation.md](implementation.md) before building; do not append steps —
   if a decision invalidates an earlier phase, say so and redo it.
-- **README.md and demo/index.md are Christine's own voice.** Never rewrite or
-  re-voice them; change only a factual status line, and say which.
+- **README.md and demo/index.md are Claude-written**, like everything else.
+  Christine edited a few paragraphs of README and has not reviewed the rest.
+  Neither file is exempt from correction; fix what has gone false in them.
 - **The kernel does not grow, and it is a subset of Plan 9's.** A design that
   adds to it is wrong on sight; do not argue against it on other merits.
 - **Every edit you report must be verified on disk** — assert the anchor

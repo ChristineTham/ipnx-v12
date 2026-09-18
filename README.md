@@ -38,14 +38,14 @@ The system has three layers, and each has its own name. **Saranos** is the opera
 
 IPNX v12 consists of:
 
-- a reimplementation of the Plan 9 kernel in Rust, as an ordinary userspace process on the host system — with a JavaScript twin that runs the same kernel in any browser; the two implementations pass an identical conformance suite — and
+- a reimplementation of the Plan 9 kernel in Rust, as an ordinary userspace process on the host system, compiled to WASM for the browser — and
 - both Plan 9 and UNIX v10 utilities and commands supported as WASM binaries in a per process namespace.
-- The kernel supports Plan 9 syscalls natively, and UNIX v10 via a personality layer (in progress — two V10 binaries run today on a thin libc).
+- The kernel supports Plan 9 syscalls natively; a UNIX personality is userspace, not kernel.
 - The kernel is compiled using the host Rust toolchain.
 - WASM binaries are also compiled using the host toolchain, but are portable and can run everywhere.
 - WASI is supported, so IPNX binaries can coexist with non IPNX WASM binaries.
 - 9P2000 is used as the interprocess communication mechanism between processes.
-- IPNX never implements an on-disk format; today it runs on an in-memory tree seeded from the host at boot, and host and network filesystems arrive as 9P mounts.
+- IPNX never implements an on-disk format; the root is an in-memory tree seeded from the host at boot, and host and network filesystems arrive as 9P mounts.
 
 IPNX v12 adheres to the three principles behind [Plan 9](https://9p.io/plan9/):
 
@@ -123,9 +123,9 @@ This is also what `su` means here. It is not "superuser" — there is no superus
 become. It is an identity transition under the kernel's rules, with no password and no
 setuid machinery. The direction that matters most is downward: `su none` starts a shell
 with almost nothing, which is exactly what you want before running something you do not
-trust. *(Status, 2026-09-03: the kernel half of this is under review — Plan 9's kernel
-holds one name per process and lets it drop only to `none`; `su` is becoming a
-personality program, and identity is established per file server at attach.)*
+trust. The kernel's own share of this is Plan 9's and no more: one name per process,
+droppable only to `none`. `su` is a personality program, and identity is established per
+file server at attach.
 
 ### The profile
 
@@ -152,31 +152,35 @@ namespace fragments, scoped credentials, its own name in the audit trail.
 
 ## Current Status
 
-A kernel with processes, pipes, windows and a permission model. A
-shell — the real `rc`, compiled from Plan 9 source, every fork genuinely
-returning twice. An editor — the real `sam`, the one Rob Pike wrote, drawing itself
-into a window that is literally a file. Type `win sam &` and 1980s Bell Labs software
-paints glyphs in Chrome through `/dev/draw`.
+**Rebuilding, from P1 of eight phases.** An earlier implementation got a long
+way — `rc` with fork returning twice, `sam` drawing into a window that was a
+file, Go and CPython running beside 61,000 lines of untouched Bell Labs
+userspace, a suite passing on Node, in Chrome and under wasmtime. It was
+**removed on 2026-09-17**, because it had stopped being a subset of Plan 9 and
+become its own design: device letters Plan 9 does not have, a namespace keyed
+by path text where Plan 9 keys by the identity of the channel mounted upon.
+Keeping it would have meant building the rest on that.
 
-The kernel is about 3,000 lines in JavaScript and 4,000 in Rust — small enough to
-read in a sitting, twice over. It carries 61,000 lines of untouched Bell Labs
-userspace today, and Go binaries and Python already run beside them — with git
-repositories to come — through the same handful of operations on names. A hundred
-and sixty-one tests boot it, exercise everything from fork to fonts to
-the compilers to the package manager, and shut it down clean, identically on
-Node, in Chrome, on the Rust kernel under wasmtime — and, on every push, in
-a 62&nbsp;MB `FROM scratch` container.
+What runs today is small and it is the real thing: a kernel of Plan 9's own
+shape — `Chan`, `namec`, `findmount` at every component — that resolves a name
+through a namespace, reads an image out of `#/`, and runs it. The plan is
+[docs/implementation.md](docs/implementation.md); what is built is
+[docs/when.md](docs/when.md), and nowhere else.
+
+The paragraphs below describe the system's design. Where they say a thing works,
+read it as the design's intent unless [docs/when.md](docs/when.md) says it is
+built.
 
 ## The tricks are the architecture
 
 These are not separate features. They are consequences of two decisions: everything is
 a file, and every process composes its own world.
 
-- **A window is a file.** `bind '#w/1' /dev` makes a namespace into a window, and the
-  editor draws by writing to it. This is one of the ideas that most Plan 9 ports had to
-  abandon. A browser tab provides a place where it works naturally. *(Status,
-  2026-09-03: the window system is leaving the kernel — emca, a user program, serves
-  each window's files, and the host renders them. The idea stands; `#w` does not.)*
+- **A window is a file.** Bind a window's directory over `/dev` and a namespace *is* a
+  window; the editor draws by writing to it. This is one of the ideas that most Plan 9
+  ports had to abandon, and a browser tab is a place where it works naturally. The
+  window system is not in the kernel: emca, a user program, serves each window's files
+  and the host renders them.
 - **A process can be given a world.** `exportfs` serves a namespace, including its
   private binds, to another process, container or machine. It is not a copy of the
   namespace; it is the namespace itself, served over one protocol.
@@ -203,11 +207,11 @@ a file, and every process composes its own world.
   nvm and rbenv on one side, flatpak and snap on the other — are namespace
   emulations, built because their systems could not say `bind`.
 - **Every system is a time machine.** A snapshot is a tree and rollback is a
-  bind: `echo snap t1 > '#V/ctl'` freezes the running root by structural
-  clone — twenty snapshots of the whole filesystem cost nine megabytes and
-  under a second, because unchanged bytes are shared rather than copied —
-  and `bind '#V/t1/dir' /dir` restores. Put the same line first in a boot
-  namespace file and the system boots from its own past. History refuses
+  bind: freeze the running root by structural clone, and `bind` the frozen
+  tree back over `/dir` to restore it — twenty snapshots of the whole
+  filesystem cost nine megabytes and under a second, because unchanged bytes
+  are shared rather than copied. Put the same line first in a boot namespace
+  file and the system boots from its own past. History refuses
   writes from everyone, eve — the host owner — included. Snapshot volumes,
   backup daemons and immutable-distro machinery are what systems grow when
   the filesystem cannot say `snap` and the namespace cannot say `bind`.
@@ -291,33 +295,24 @@ runs in terminal mode and in a window using the real libframe and libdraw. **The
 `acme`** is also running: it is a 9P file server mounted over a pipe, executing commands
 under button 2 and opening files under button 3.
 
-There are real `grep`, `sed`, `sort`, `ls`, `wc` and more than twenty other commands,
-along with working `setjmp`/`longjmp`, a WASM `libthread`, bidirectional 9P, a uid model
-that enforces permissions, and hard and symbolic links implemented as this edition's
-own wire types. The uid model is particularly significant, since Plan 9's own
-compatibility layer considered this impossible. *(Status, 2026-09-03: both the uid model
-and the links are **under review** — Plan 9's kernel has neither, and the kernel is being
-cut to a subset of Plan 9's with the Unix personality moving to userspace; see
-docs/archive/design-log-claude-written.md under that date. They are not the direction.)*
+The earlier implementation had real `grep`, `sed`, `sort`, `ls`, `wc` and more than
+twenty other commands, along with working `setjmp`/`longjmp`, a WASM `libthread`,
+bidirectional 9P, a uid model that enforced permissions, and hard and symbolic links
+implemented as its own wire types. Two of those are **not the direction**: Plan 9's
+kernel has neither a uid model nor links, so both belong in userspace if they exist at
+all. That is the kind of drift the rebuild exists to undo.
 
-The first proof that the modern world can coexist with this system is also working: **a
-real Go binary, compiled with ordinary `GOOS=wasip1 go build`, and real CPython 3.14**
-can read files, list directories, sleep on timers and run scripts against the kernel.
-They know nothing about Plan 9. They use a WASI shim whose single preopened directory is
-the process's namespace root. **164 acceptance tests pass on Node, in Chrome — and on
-the Rust kernel core under wasmtime: the same suite, identical on the reference
-implementation and the native rewrite. The proof of concept is complete, and the
-kernel has been built twice.** Alongside it, TUHS-tape V10 `cat` and `echo` run
-unmodified in `/v10/bin`, preserving the exhibit that started the project.
-*(Status, 2026-09-18: that whole tree has been **removed**. It was shaped by an
-earlier implementation whose design was superseded, and it is being rebuilt from
-the ground up as a genuine subset of Plan 9's kernel — `docs/implementation.md`
-for the plan, `docs/when.md` for what actually runs today, which is P1. The
-paragraph above records what was reached, not what is in the tree.)*
-Before the build, four review lenses — the deployment ledger (where it runs),
-design thinking (who it is for), a six-hats pass (what we had missed), and
-virtue ethics (what character the work keeps) — have each been applied and
-recorded in the documents below; they now repeat together, on one cadence.
+It also showed that the modern world can coexist with this system: **a real Go binary,
+compiled with ordinary `GOOS=wasip1 go build`, and real CPython 3.14** read files, listed
+directories, slept on timers and ran scripts against the kernel, knowing nothing about
+Plan 9 — through a WASI shim whose single preopened directory is the process's namespace
+root. Alongside it, TUHS-tape V10 `cat` and `echo` ran unmodified in `/v10/bin`. Those
+are the results worth reproducing, and the plan reaches them again from a kernel that is
+actually Plan 9's.
+
+Four review lenses — the deployment ledger (where it runs), design thinking (who it is
+for), a six-hats pass (what we had missed), and virtue ethics (what character the work
+keeps) — have each been applied and recorded in the documents below.
 
 Next: the per-platform
 shims around the Rust core — iPadOS, a `FROM scratch` OCI container, the microVM. Then the

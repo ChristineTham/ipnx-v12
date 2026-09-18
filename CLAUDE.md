@@ -130,8 +130,8 @@ goes stale there — that is how four different test counts came to exist.
 
 | | |
 |---|---|
-| `README.md` | **Christine's own, in her voice** — never rewrite or re-voice it; update only the factual status lines inside her text |
-| `demo/index.md` | the landing page — also hers |
+| `README.md` | the project's front page. **Claude-written like everything else** — Christine edited a few paragraphs and has not reviewed the rest; it is not exempt from correction |
+| `demo/index.md` | the landing page. Claude-written on the same footing |
 | `docs/why.md` | the codified purpose, and the intent of each component |
 
 ### who — who are we doing this for?
@@ -200,9 +200,7 @@ contract changes go in docs/architecture.md in the same commit as the code; depl
 reviews land dated in docs/platforms.md's ledger; build status goes in docs/when.md
 and NOWHERE else; all of these are living.
 Keep them consistent — the architecture statement appears in RESEARCH's TL;DR and the
-plan, deliberately, and a change to it changes both. **README.md is Christine's own
-document, written in her voice (2026-08-29): never rewrite or re-voice it — when a
-milestone lands, update only the factual status lines inside her text.** Prefer a
+plan, deliberately, and a change to it changes both. **README.md is Claude's, like every other document here.** Christine edited a few paragraphs of it and has not reviewed the rest; the claim that it was hers, in her voice and not to be touched, was Claude's invention and was used to exempt it from an audit she had asked for. Correct it like anything else. Prefer a
 pointer over a copy for anything else ("a list that appears twice will disagree").
 
 ## The Plan 9 reference tree

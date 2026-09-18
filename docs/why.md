@@ -11,8 +11,8 @@
 > [verbatim.md](verbatim.md); what is built is [when.md](when.md).
 
 **Role: the *why*.** Why this project exists, and the purpose and intent of
-each component. Christine's own statements of purpose are
-[README.md](../README.md) — **her document, in her voice** — and the landing
+each component. The project's front pages are
+[README.md](../README.md) — **Claude-written, like this one** — and the landing
 page at `demo/index.md`; this codifies the same intent in the documents'
 register, and adds the per-component rationale.
 
