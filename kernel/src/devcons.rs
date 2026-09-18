@@ -658,6 +658,17 @@ mod tests {
         assert_ne!(read(&mut d, "pgrpid").trim(), mine, "a copied namespace is a new group");
     }
 
+    /// A process nothing has stamped reports `TReal` 0, not the whole epoch.
+    /// The test below sets the origin, so without this one it would pass
+    /// while every real process reported about forty-seven years.
+    #[test]
+    fn an_unstarted_process_reports_no_real_time() {
+        let (mut d, _) = cons();
+        let v: Vec<String> =
+            read(&mut d, "cputime").split_whitespace().map(|s| s.to_string()).collect();
+        assert_eq!(v[crate::proc::TREAL], "0");
+    }
+
     /// Six numbers of `NUMSIZE` each (`devcons.c:63`), in milliseconds, and
     /// `TReal` is wall time rather than a zero.
     #[test]

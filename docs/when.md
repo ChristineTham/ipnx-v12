@@ -21,7 +21,7 @@ Measured 2026-09-18.
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-65 tests.
+66 tests.
 
 ## The host — `hosts/ipnx`, 116 lines
 
@@ -34,6 +34,30 @@ a process ran, and said so
 ```
 
 ## What is not built
+
+**The 28 calls are a list, not an implementation.** `Call` is declared in
+`lib.rs` and referenced nowhere — not by the kernel, not by the host, not by a
+test. The kernel's whole public surface is `new`, `exec` and `exec_image`;
+there is no `bind`, `mount`, `open`, `read`, `write`, `close`, `dup`, `chdir`,
+`rfork`, `exits` or `await` a process can invoke. `rfork`, `exits` and `await`
+exist on `Procs` and are unreachable from a process.
+
+**There is no syscall path.** `hosts/ipnx` gives a guest one import, a print
+function. A process cannot open a file, fork, or reach any device — so
+everything `#c` and `#|` do is reachable only from Rust, not from a process.
+
+**`Dev::open` does not return a channel.** Plan 9's does
+(`portdat.h:250`, `Chan* (*open)(Chan*, int)`), and `devdup` depends on it:
+opening `#d/3` returns the channel fd 3 holds.
+
+**The 9P codec has no wire.** `ninep.rs` formats `stat` replies and nothing
+else; no `Tversion`/`Tattach`/`Twalk` is ever exchanged, because `#M` is not
+built.
+
+**Nothing stamps a process's start**, so `/dev/cputime`'s `TReal` is 0. The
+kernel has no clock of its own — Plan 9's is machine-provided and available
+kernel-wide (`MACHP(0)->ticks`), and here it reaches only `#c`, through its
+host.
 
 No mount, srv, proc, dup, env or cap device. No shell, no userspace, no
 surface. `#c`'s `cons` and `consctl` wait for a host to serve them (P4).

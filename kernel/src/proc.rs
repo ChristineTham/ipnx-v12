@@ -112,7 +112,13 @@ pub struct Proc {
     pub time: [u64; 6],
     /// When this process started, in the host's nanoseconds, so `TReal` can
     /// be `now - start` the way Plan 9 computes it from `MACHP(0)->ticks`.
-    pub started: u64,
+    ///
+    /// `None` until something with a clock stamps it. Plan 9 always has one —
+    /// `MACHP(0)->ticks` is machine-provided and available kernel-wide — and
+    /// this kernel does not yet, because the clock reaches it only through
+    /// `#c`'s host. An unstamped process reports `TReal` 0 rather than the
+    /// whole of the epoch.
+    pub started: Option<u64>,
     /// `up->slash` and `up->dot`. Plan 9 holds both as CHANNELS, not as text —
     /// a name is resolved from a channel, so the process's idea of "/" and "."
     /// is a channel too. An earlier version here kept `cwd` as a String, which
@@ -133,7 +139,7 @@ impl Proc {
             // The first process is eve's. `proc.c:1467`: `kstrdup(&p->user, eve)`.
             user: "eve".to_string(),
             time: [0; 6],
-            started: 0,
+            started: None,
             ns: Rc::new(RefCell::new(Ns::new())),
             fds: Rc::new(RefCell::new(Fds::default())),
             env: Rc::new(RefCell::new(HashMap::new())),
@@ -215,7 +221,7 @@ impl Procs {
             ppid: pid,
             user: parent.user.clone(),
             time: [0; 6],
-            started: 0,
+            started: None,
             ns,
             fds,
             env,
@@ -282,7 +288,10 @@ impl Procs {
             None => [0; 6],
             Some(p) => {
                 let mut t = p.time;
-                t[TREAL] = now_nsec.saturating_sub(p.started) / 1_000_000;
+                t[TREAL] = match p.started {
+                    Some(start) => now_nsec.saturating_sub(start) / 1_000_000,
+                    None => 0,
+                };
                 t
             }
         }
@@ -299,7 +308,7 @@ impl Procs {
     /// Record that a process has begun, so `TReal` has an origin.
     pub fn started(&mut self, pid: Pid, now_nsec: u64) {
         if let Some(p) = self.tab.get_mut(&pid) {
-            p.started = now_nsec;
+            p.started = Some(now_nsec);
         }
     }
 
