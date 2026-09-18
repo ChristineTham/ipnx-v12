@@ -97,14 +97,6 @@ to a console, because a console is a file something else serves (P4). A failed
 call answers −1 and leaves its reason for `errstr`, which is Plan 9's
 convention rather than an error type crossing the boundary.
 
-**`Dev::open` does not return a channel.** Plan 9's does
-(`portdat.h:250`, `Chan* (*open)(Chan*, int)`), and `devdup` depends on it:
-opening `#d/3` returns the channel fd 3 holds.
-
-**The 9P codec has no wire.** `ninep.rs` formats `stat` replies and nothing
-else; no `Tversion`/`Tattach`/`Twalk` is ever exchanged, because `#M` is not
-built.
-
 **The kernel has a clock.** `Machine::todget` (`port/tod.c:153`) answers
 nanoseconds, the fast-tick counter and its frequency; `exec` stamps a
 process's start from it, so `/dev/cputime`'s `TReal` is wall time.
@@ -122,5 +114,6 @@ a number nothing produced.
 The conformance suite lists twelve capabilities and reaches none of them. It
 fails, and will until it does.
 
-The phases are in [implementation.md](implementation.md). P0 and P1 are done;
-P2 is the devices.
+The phases are in [implementation.md](implementation.md). P0 and P1 are done.
+P2's nine devices are built and `mount(2)`'s last inch is not; P3 is the
+userspace — a libc over the call list, and `rc`.
