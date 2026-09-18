@@ -1,7 +1,5 @@
-# `ipnx` — the host for a terminal. The first of Saranos's host side: it gives
-# the kernel a console, host storage and a clock, performs the effects the
-# kernel asks for, and does nothing else. The browser, the app and the
-# hypervisor are the same contract with a different body.
+# `ipnx` — the embedding for a terminal. It starts the kernel and serves the
+# machine; the kernel holds none of the machine itself.
 [package]
 name = "ipnx"
 version = "0.1.0"
@@ -9,3 +7,7 @@ edition.workspace = true
 
 [dependencies]
 ipnx-kernel = { path = "../../kernel" }
+# The engine. It lives HERE and only here: the kernel's machine trait names no
+# machine, so this dependency cannot reach it.
+wasmtime = { version = "39", default-features = false, features = ["cranelift", "runtime", "std"] }
+wat = "1"

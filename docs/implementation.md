@@ -124,33 +124,23 @@ superseded implementation's design, not Plan 9's, which keys a mount by the
 identity of the channel mounted upon (`chan.c:855`) and checks at every
 component.
 
-## P1 — `exec` *(the Plan 9 half is done; the other half needs a decision)*
+## P1 — `exec` *(done)*
 
-`sysproc.c:302` is where `exec` starts: `tc = namec(file, Aopen, OEXEC, 0)`.
-Resolving the name and reading the image is Plan 9's, and it is built. Turning
-the image into a running process is the machine-dependent half — segments and
-the MMU there, module instantiation here — and it is **not built**.
+`sysexec` starts at `sysproc.c:302` with `tc = namec(file, Aopen, OEXEC, 0)`,
+reads the image, and then does the machine's half. All three now happen.
 
 | | |
 |---|---|
-| **builds** | **`namec`** (`chan.c:1317`): the starting point is a CHANNEL — the process's `slash`, its `dot`, or a device attach — then the elements are walked, stepping through a mount point at **every** component. **`devroot`** (`#/`): the small read-only directory the kernel carries so there is something for the first process to be read from; `rootwrite` refuses, and so do create, wstat and remove. **`exec`'s first two acts**: resolve with `Aopen`/`OEXEC`, read the image |
-| **also fixed** | a process now holds `slash` and `dot` as **channels**, as Plan 9 does. They were a `String` cwd, which is the same error as keying the namespace by path text |
+| **builds** | **`namec`** (`chan.c:1317`): the starting point is a CHANNEL — the process's `slash`, its `dot`, or a device attach — then the elements are walked, stepping through a mount point at **every** component. **`devroot`** (`#/`): the small read-only directory the kernel carries, so the first process has somewhere to be read from. **`exec`**: resolve, read, `procsetup`, `touser` |
+| **the machine boundary** | Plan 9 splits `port/` from the architecture directories, and a machine supplies what that directory's `fns.h` declares — `void touser(void*)` at `pc/fns.h:173`. The kernel's `Machine` trait is that boundary with those names, and **names no machine**: not WebAssembly, not a module, not an engine. The kernel has no dependencies |
+| **the one adaptation** | `touser` in Plan 9 jumps to a stack pointer, the image having been mapped already. A machine whose executable unit is a module has no such step — the image *is* the executable state — so the image is what crosses. Approved 2026-09-17: *"wasm instantiation is fine, keep it machine independent"* |
+| **also fixed** | a process holds `slash` and `dot` as **channels**, as Plan 9 does. They were a `String` cwd — the same error as keying the namespace by path text |
 | **depends on** | P0 |
-| **acceptance** | `ipnx` resolves `/init` through the namespace and reads it. 26 kernel tests, including: `#M` cannot be attached by name (`chan.c`: `if(utfrune("M", r)) error(Enoattach)`); a `#` path ignores what is mounted over it; a walk steps through a mount point; the root refuses every write |
+| **acceptance** | `cargo run -p ipnx` → `a process ran, and said so`. A process was resolved through a namespace, read out of a device, instantiated and run. 27 kernel tests |
+| **exposes** | one process is not two: nothing can talk to anything. That is P2 |
 
-**BLOCKED, and it needs Christine's decision.** A process is a WebAssembly
-instance and instantiating one is not something the kernel can do. Plan 9 has
-no counterpart to hand to — its `sysexec` builds segments itself — so by the
-rule there is nothing to cite and the answer is to stop and ask. Her own words
-authorise the adaptation and constrain its shape:
-
-> *"Actual deviations from Plan 9 kernel are only authorised when it is to do
-> with adapting it for WASM and WASI"* … *"even then it should be done in a
-> machine independent way as we may want a non WASM kernel in the future … for
-> example, dis, or .NET CLR"*
-
-so whatever is chosen must read the same on Dis or the CLR. **What is NOT in
-question:** the kernel does not gain a device, a call, or knowledge of wasm.
+**It moves nothing on the conformance checklist, and that is right** — every one
+of the twelve needs a shell, and there is no userspace. Still 0 of 12.
 
 ## P2 — the devices orchestration needs
 

@@ -39,6 +39,7 @@ use dev::Dev as _;
 pub mod chan;
 pub mod dev;
 pub mod devroot;
+pub mod machine;
 pub mod namec;
 pub mod ninep;
 pub mod ns;
@@ -93,9 +94,12 @@ pub enum Call {
 }
 
 /// The kernel.
+///
+/// It is built with its machine, as Plan 9 is compiled for one architecture.
 pub struct Kernel {
     pub procs: proc::Procs,
     pub tab: namec::Devtab,
+    machine: Box<dyn machine::Machine>,
 }
 
 impl Kernel {
@@ -103,23 +107,35 @@ impl Kernel {
     /// first process needs, and pid 1 starts with that as its `slash`. This is
     /// Plan 9's arrangement — the kernel has just enough of a root to start
     /// something, and that something mounts the real file server.
-    pub fn new(root: devroot::Root) -> Result<Kernel, String> {
+    pub fn new(root: devroot::Root, machine: Box<dyn machine::Machine>)
+        -> Result<Kernel, String>
+    {
         let mut tab = namec::Devtab::new();
         let mut root = root;
         let slash = root.attach("")?;
         tab.add(Box::new(root));
-        Ok(Kernel { procs: proc::Procs::new(slash), tab })
+        Ok(Kernel { procs: proc::Procs::new(slash), tab, machine })
     }
 
-    /// `exec`'s first two acts, and they are Plan 9's: resolve the name through
-    /// the calling process's namespace with `Aopen`/`OEXEC`
-    /// (`sysproc.c:302` — `tc = namec(file, Aopen, OEXEC, 0)`), then read the
-    /// image.
+    /// `exec`, in the order `sysexec` does it (`sysproc.c:302`).
     ///
-    /// What it does NOT do is start anything. In Plan 9 the rest of `sysexec`
-    /// builds segments and returns into the new text; here a process is a
-    /// WebAssembly instance, and instantiating one is the machine-dependent
-    /// half. That half is **not designed and not built** — see the plan's P1.
+    /// 1. `namec(file, Aopen, OEXEC, 0)` — resolve through the calling
+    ///    process's namespace and open for execution.
+    /// 2. read the image.
+    /// 3. `procsetup`, then `touser` — the machine's half.
+    ///
+    /// Only step 3 is not Plan 9's own sequence, and only because a module
+    /// machine has no address space to have mapped the image into first.
+    pub fn exec(&mut self, pid: Pid, path: &str, args: &[String]) -> Result<String, String> {
+        let image = self.exec_image(pid, path)?;
+        self.machine.procsetup(pid)?;
+        let status = self.machine.touser(pid, &image, args)?;
+        self.procs.exits(pid, &status);
+        Ok(status)
+    }
+
+    /// Steps 1 and 2 alone: resolve and read. Split out because it is entirely
+    /// Plan 9's, and so it can be tested without a machine.
     pub fn exec_image(&mut self, pid: Pid, path: &str) -> Result<Vec<u8>, String> {
         let p = self.procs.get(pid).ok_or("no such process")?;
         let (slash, dot, ns) = (p.slash.clone(), p.dot.clone(), p.ns.clone());
@@ -151,10 +167,29 @@ impl Kernel {
 mod tests {
     use super::*;
 
+    /// A machine that records what it was asked to run. The kernel cannot
+    /// tell the difference, which is the property the trait exists for.
+    #[derive(Default)]
+    struct Recorder {
+        setup: Vec<Pid>,
+        ran: Vec<(Pid, Vec<u8>)>,
+    }
+
+    impl machine::Machine for Recorder {
+        fn procsetup(&mut self, pid: Pid) -> Result<(), String> {
+            self.setup.push(pid);
+            Ok(())
+        }
+        fn touser(&mut self, pid: Pid, image: &[u8], _a: &[String]) -> Result<String, String> {
+            self.ran.push((pid, image.to_vec()));
+            Ok(String::new())
+        }
+    }
+
     fn booted() -> Kernel {
         let mut root = devroot::Root::new();
         root.addbootfile("init", b"an image".to_vec());
-        Kernel::new(root).unwrap()
+        Kernel::new(root, Box::new(Recorder::default())).unwrap()
     }
 
     #[test]
@@ -166,6 +201,12 @@ mod tests {
     fn exec_resolves_through_the_namespace_and_reads_the_image() {
         let mut k = booted();
         assert_eq!(k.exec_image(1, "/init").unwrap(), b"an image");
+    }
+
+    #[test]
+    fn exec_runs_the_image_it_resolved() {
+        let mut k = booted();
+        assert_eq!(k.exec(1, "/init", &[]).unwrap(), "");
     }
 
     #[test]
