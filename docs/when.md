@@ -5,21 +5,23 @@ other document carries it.
 
 Measured 2026-09-18.
 
-## The kernel — 1,617 lines of Rust, no dependencies
+## The kernel — 2,804 lines of Rust, no dependencies
 
 | | |
 |---|---|
 | `chan.rs` | `Chan` — the object every name resolves to |
-| `dev.rs` | the device table, Plan 9's `struct Dev`; seven letters (`/ \| s M p d e`) |
+| `dev.rs` | the device table, Plan 9's `struct Dev`; nine letters (`/ \| s M p d e c ¤`) |
 | `devroot.rs` | `#/` — the read-only boot directory; every write is `Egreg` |
+| `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed |
+| `devcons.rs` | `#c` — all 23 of `consdir[]`. A **reporting** device: identity, this process's numbers, the clock, the kernel's log and name, the generators. The host supplies the clock, entropy, memory figures, its own drivers and `reboot`; the kernel names them |
 | `ns.rs` | the namespace, keyed by the identity of the channel mounted upon |
 | `namec.rs` | name → channel, with the mount check at every component |
-| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits` and `await` |
+| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser` |
 | `ninep.rs` | the 9P2000 codec |
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-40 tests.
+61 tests.
 
 ## The host — `hosts/ipnx`, 116 lines
 
@@ -33,8 +35,10 @@ a process ran, and said so
 
 ## What is not built
 
-No filesystem beyond `#/`. No pipe, mount, srv, proc, dup or env device. No
-shell. No userspace. No surface.
+No mount, srv, proc, dup, env or cap device. No shell, no userspace, no
+surface. `#c`'s `cons` and `consctl` wait for a host to serve them (P4), and
+`pgrpid`, `cputime` and `sysstat` report placeholders because nothing keeps
+process groups, CPU time or per-processor counters yet.
 
 ## Functional equivalence to the demo — 0 of 12
 

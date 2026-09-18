@@ -97,6 +97,9 @@ pub struct Proc {
     pub ns: Rc<RefCell<Ns>>,
     pub fds: Rc<RefCell<Fds>>,
     pub env: Rc<RefCell<HashMap<String, String>>>,
+    /// `up->user` — Plan 9's whole identity field (`portdat.h:664`). One
+    /// name. No uid, no gid, no euid/ruid pair.
+    pub user: String,
     /// `up->slash` and `up->dot`. Plan 9 holds both as CHANNELS, not as text —
     /// a name is resolved from a channel, so the process's idea of "/" and "."
     /// is a channel too. An earlier version here kept `cwd` as a String, which
@@ -114,6 +117,8 @@ impl Proc {
         Proc {
             pid,
             ppid: 0,
+            // The first process is eve's. `proc.c:1467`: `kstrdup(&p->user, eve)`.
+            user: "eve".to_string(),
             ns: Rc::new(RefCell::new(Ns::new())),
             fds: Rc::new(RefCell::new(Fds::default())),
             env: Rc::new(RefCell::new(HashMap::new())),
@@ -193,6 +198,7 @@ impl Procs {
         let child = Proc {
             pid: self.next,
             ppid: pid,
+            user: parent.user.clone(),
             ns,
             fds,
             env,
@@ -215,6 +221,34 @@ impl Procs {
             Rc::new(RefCell::new(src.borrow().clone()))
         } else {
             src.clone()
+        }
+    }
+
+    /// `up->user`, for the device that reports it.
+    pub fn user(&self, pid: Pid) -> Option<String> {
+        self.tab.get(&pid).map(|p| p.user.clone())
+    }
+
+    pub fn ppid(&self, pid: Pid) -> Option<Pid> {
+        self.tab.get(&pid).map(|p| p.ppid)
+    }
+
+    /// `userwrite` sets it (`auth.c:113`, `kstrdup(&up->user, "none")`). The
+    /// device decides who may; this only carries it out.
+    pub fn setuser(&mut self, pid: Pid, name: &str) {
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.user = name.to_string();
+        }
+    }
+
+    /// `renameuser` (`proc.c:1601`): walk the whole table and rename every
+    /// process owned by the old name. This is why writing `/dev/hostowner`
+    /// carries eve's processes with it.
+    pub fn renameuser(&mut self, old: &str, new: &str) {
+        for p in self.tab.values_mut() {
+            if p.user == old {
+                p.user = new.to_string();
+            }
         }
     }
 

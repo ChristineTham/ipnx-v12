@@ -292,3 +292,8 @@ On method:
 On `#c`, after it was removed on the process-orchestration rule:
 
 - *"we should keep #c in since it holds a variety of kernel info"*
+
+On implementing the rest of `#c`:
+
+- *"implement rest of #c to the best of your ability. No reason why we can't do swap, config, reboot. It can also report drivers provided by the host app"*
+- *"remember just because the functionality is provided by host app doesn't mean it can't be visible and reported by kernel"*
