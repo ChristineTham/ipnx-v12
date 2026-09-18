@@ -106,6 +106,31 @@ impl Ns {
         }
     }
 
+    /// The namespace as the lines that would rebuild it, which is what
+    /// `/proc/n/ns` prints (`devproc.c:952`): one per mount element, with the
+    /// flag `bind` would have been given.
+    pub fn describe(&self) -> Vec<(String, String, &'static str)> {
+        let mut out = Vec::new();
+        for (key, els) in &self.mounts {
+            for (i, el) in els.iter().enumerate() {
+                let how = if el.create {
+                    "-c"
+                } else if i == 0 {
+                    "-b"
+                } else {
+                    "-a"
+                };
+                out.push((
+                    format!("#{}/{}", key.dev.letter(), key.qid.path),
+                    format!("#{}/{}", el.chan.dev.letter(), el.chan.qid.path),
+                    how,
+                ));
+            }
+        }
+        out.sort();
+        out
+    }
+
     /// `pgrpid` — this namespace group's number.
     pub fn id(&self) -> u32 {
         self.id

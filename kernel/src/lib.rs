@@ -38,10 +38,12 @@ use dev::Dev as _;
 
 pub mod chan;
 pub mod dev;
+pub mod devcap;
 pub mod devcons;
 pub mod devdup;
 pub mod devenv;
 pub mod devpipe;
+pub mod devproc;
 pub mod devroot;
 pub mod devsrv;
 pub mod machine;
@@ -49,6 +51,7 @@ pub mod namec;
 pub mod ninep;
 pub mod ns;
 pub mod proc;
+pub mod sha1;
 
 pub use chan::Chan;
 pub use proc::{Fd, Pid};

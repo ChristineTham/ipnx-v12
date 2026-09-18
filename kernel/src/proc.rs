@@ -311,6 +311,11 @@ impl Procs {
         }
     }
 
+    /// Every living process, for `ls /proc`.
+    pub fn pids(&self) -> Vec<Pid> {
+        self.tab.keys().copied().collect()
+    }
+
     /// `up->pgrp->pgrpid` — the namespace group's number.
     pub fn pgrpid(&self, pid: Pid) -> Option<u32> {
         self.tab.get(&pid).map(|p| p.ns.borrow().id())
