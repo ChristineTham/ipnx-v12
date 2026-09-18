@@ -93,7 +93,11 @@ These are not lookups. Plan 9 has no window types, no type registry and no
 manager interface: rio serves one kind of window and acme serves one kind of
 content. The concept is Christine's — *"a window type is encapsulating things
 that are not text, that's why we need a manager"* — so there is nothing to
-check it against and a design has to be written and reviewed.
+check it against.
+
+**A proposal now exists** — [proposals.md](proposals.md), 2026-09-18: a type is
+a plumb rule, a manager is a file server on a plumb port. **It is not agreed
+and must not be built from.** Five questions inside it need Christine.
 
 - **The window type specification itself** — what a type declares, in what
   files, and what a manager's interface is. The manager is agreed to be
