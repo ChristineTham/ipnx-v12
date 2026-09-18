@@ -5,7 +5,7 @@ other document carries it.
 
 Measured 2026-09-18.
 
-## The kernel — 6,846 lines of Rust, no dependencies
+## The kernel — 6,943 lines of Rust, no dependencies
 
 | | |
 |---|---|
@@ -22,13 +22,13 @@ Measured 2026-09-18.
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`. A **reporting** device: identity, this process's numbers, the clock, the kernel's log and name, the generators. The host supplies the clock, entropy, memory figures, its own drivers and `reboot`; the kernel names them |
 | `ns.rs` | the namespace, keyed by the identity of the channel mounted upon |
-| `namec.rs` | name → channel, with the mount check at every component |
+| `namec.rs` | name → channel, with the mount check at every component; all seven of Plan 9's access modes |
 | `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser` |
 | `ninep.rs` | the 9P2000 codec |
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-129 kernel tests, and 3 in `hosts/ipnx` that run a guest against a real kernel.
+131 kernel tests, and 3 in `hosts/ipnx` that run a guest against a real kernel.
 
 ## The host — `hosts/ipnx`, 116 lines
 

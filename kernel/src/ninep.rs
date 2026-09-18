@@ -171,6 +171,10 @@ pub struct Qid {
 /// to whoever set them.
 pub const QTDIR: u8 = 0x80;
 
+/// `DMDIR` — the directory bit in a mode (`libc.h`). `namec`'s `Acreate`
+/// requires it when the name ends in `/` or `/.`.
+pub const DMDIR: u32 = 0x8000_0000;
+
 impl Qid {
     pub fn is_dir(self) -> bool {
         self.qtype & QTDIR != 0

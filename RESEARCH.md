@@ -2908,6 +2908,29 @@ carrying it; `noattach` permitting exactly `"|decp"`; `ERRMAX` bounding an
 error string and an exit status; `NFD` bounding the descriptor table;
 `#/boot/init` rather than `#/init`; and a guest exiting with the bytes it read.
 
+### The last two, closed 2026-09-18 — and two behavioural bugs behind them
+
+**`namec` has all seven access modes now**, and adding them was not cosmetic:
+
+| | |
+|---|---|
+| **`bind` refused a file** | `bindmount` resolves the source with `Abind` and the target with `Amount` (`sysfile.c:51`, `:60`). **Neither is `Atodir`.** Ours used `Atodir` for both, which requires a directory — so `bind /bin/rc /bin/sh`, binding a file over a file, was impossible |
+| **a directory could be executed** | `Aopen` with `OEXEC` on a directory is *"cannot exec directory"* (`chan.c`), refused by `namec` because only it knows the mode the caller asked for. Ours went to the device, which read a directory |
+
+`Acreate` also carries two checks made **before** anything is walked: a name
+ending in `/` or `/.` must be created with `DMDIR`, and creating the root is
+`Eexist`. Both are now in `create`, which is where `Acreate` goes because it
+walks the parent (`e.nelems--`).
+
+**`bread`/`bwrite` stay absent, and this is the one difference needing no
+approval:** they take a `Block`, the kernel buffer the network stack and the
+queues pass around. A device that cares handles one natively and saves a copy;
+every device that does not gets `devbread`/`devbwrite`, which forward to `read`
+and `write` and nothing else — `devtab[c->type]->write(c, bp->rp, BLEN(bp),
+offset)` (`dev.c:418`). This kernel has no `Block` because it has no network
+stack and no queues, so the pair would forward to methods callers already use.
+Recorded at the trait, per the rule.
+
 ### What was checked and matches
 
 The pipe's permissions (`0500` on the directory, `0600` on each end,

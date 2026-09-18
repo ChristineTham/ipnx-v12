@@ -23,17 +23,28 @@ use crate::ns::Ns;
 use std::collections::HashMap;
 
 /// `namec`'s `amode`: what the name is being resolved FOR. Plan 9's set, less
-/// the ones this subset has no caller for yet.
+/// `namec`'s access modes — all seven of Plan 9's (`portdat.h:144`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum A {
-    /// Resolve and open.
-    Open,
-    /// Resolve only — the caller wants the channel, not an open file.
+    /// `Aaccess` — *"as in stat, wstat"*. Resolve only.
     Access,
-    /// Resolve, and it must be a directory (`chdir`).
+    /// `Abind` — *"for left-hand-side of bind"*: the thing being bound, and
+    /// **not required to be a directory**, so `bind /bin/rc /bin/sh` puts a
+    /// file over a file. Plan 9 notes *"no need to maintain path - cannot
+    /// dotdot an Abind"*.
+    Bind,
+    /// `Atodir` — *"as in chdir"*. Must be a directory.
     Todir,
-    /// Resolve the thing that will be mounted upon.
+    /// `Aopen` — *"for i/o"*.
+    Open,
+    /// `Amount` — *"to be mounted or mounted upon"*: `bind`'s right-hand side.
     Mount,
+    /// `Acreate` — *"is to be created"*. The PARENT is walked and the last
+    /// element created in it (`chan.c`, `e.nelems--`), which is why it goes
+    /// through [`create`] rather than this function.
+    Create,
+    /// `Aremove` — *"will be removed by caller"*. Resolves as `Aaccess` does.
+    Remove,
 }
 
 /// The kernel's device table: `devtab`, keyed by letter as Plan 9 keys it.
@@ -325,13 +336,24 @@ pub fn namec(
     let (s, names) = start(tab, ns, name, slash, dot)?;
     let mut c = walk(tab, ns, s.chan, &names, s.nomount)?;
     match amode {
-        A::Access | A::Mount => {}
+        // `Aaccess`, `Abind`, `Amount` and `Aremove` resolve and stop.
+        // **None requires a directory** — which is why `bind` can put a file
+        // over a file, and why using `Atodir` for bind's sides was wrong.
+        A::Access | A::Bind | A::Mount | A::Remove => {}
         A::Todir => {
             if !c.is_dir() {
                 return Err("not a directory".into());
             }
         }
+        A::Create => {
+            return Err("Acreate goes through `create`, which walks the parent".into());
+        }
         A::Open => {
+            // `chan.c`: exec of a directory is refused here rather than by the
+            // device, because only `namec` knows the caller asked for `OEXEC`.
+            if omode & 3 == crate::chan::mode::OEXEC && c.is_dir() {
+                return Err("cannot exec directory".into());
+            }
             c = tab.dopen(c, omode)?;
             // `namec`'s `Aopen`: the open modes that are really channel flags
             // (`<libc.h>`, and `devdup.c`'s `if(omode & OCEXEC)`).
@@ -361,6 +383,17 @@ pub fn create(
     omode: u16,
     perm: u32,
 ) -> Result<Chan, String> {
+    // `Acreate`'s own checks (`chan.c`), before anything is walked:
+    // a name ending in `/` or `/.` must be created with `DMDIR`, and creating
+    // the root itself is `Eexist`.
+    let mustbedir = name.ends_with('/') || name.ends_with("/.");
+    if mustbedir && perm & crate::ninep::DMDIR == 0 {
+        return Err("create without DMDIR".into());
+    }
+    let name = name.trim_end_matches('.').trim_end_matches('/');
+    if name.is_empty() || name == "#" {
+        return Err("file already exists".into());
+    }
     let (dir, last) = match name.rfind('/') {
         Some(i) => (&name[..i.max(1)], &name[i + 1..]),
         None => (".", name),

@@ -159,6 +159,22 @@ pub trait Dev {
     fn wstat(&mut self, c: &mut Chan, edir: &[u8]) -> Result<(), String>;
     fn remove(&mut self, c: &mut Chan) -> Result<(), String>;
     fn close(&mut self, c: &mut Chan);
+
+    // `bread` and `bwrite` are absent, and this is the one kind of difference
+    // that needs no approval: **Plan 9's counterpart cannot exist here.**
+    //
+    // They take a `Block` — the kernel buffer the network stack and the
+    // queues pass around (`allocb`, `freeb`, `BLEN`). A device that cares
+    // handles one natively and saves a copy; every device that does not gets
+    // `devbread`/`devbwrite`, which forward to `read` and `write` and nothing
+    // else: `devtab[c->type]->write(c, bp->rp, BLEN(bp), offset)`
+    // (`dev.c:418`).
+    //
+    // This kernel has no `Block`, because it has no network stack and no
+    // queues for one to travel through. Adding the pair would add
+    // `devbread`/`devbwrite` and nothing more — a forward to the methods
+    // above, which callers already use. They return when there is something
+    // to pass.
 }
 
 /// `devpermcheck` — `dev.c:339`, verbatim in behaviour:

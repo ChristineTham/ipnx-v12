@@ -398,18 +398,21 @@ impl Kernel {
             Call::Errstr => Ok(Ret::Str(self.procs.borrow_mut().errstr(up))),
 
             // ---- the namespace
+            // `bindmount` (`sysfile.c`): the SOURCE is `Abind` and the
+            // TARGET is `Amount` (`:51`, `:60`). Neither is `Atodir`, so a
+            // file binds over a file — `bind /bin/rc /bin/sh`.
             Call::Bind { name, old, flag } => {
-                let on = self.walk(up, &old, namec::A::Todir, 0)?;
-                let to = self.walk(up, &name, namec::A::Todir, 0)?;
+                let on = self.walk(up, &old, namec::A::Mount, 0)?;
+                let to = self.walk(up, &name, namec::A::Bind, 0)?;
                 let procs = self.procs.borrow();
                 let p = procs.get(up).ok_or("no such process")?;
                 p.ns.borrow_mut().mount(&on, ns::Element::new(to), bind_of(flag));
                 Ok(Ret::Ok)
             }
             Call::Unmount { name, old } => {
-                let on = self.walk(up, &old, namec::A::Todir, 0)?;
+                let on = self.walk(up, &old, namec::A::Mount, 0)?;
                 let what = match &name {
-                    Some(n) => Some(self.walk(up, n, namec::A::Todir, 0)?),
+                    Some(n) => Some(self.walk(up, n, namec::A::Bind, 0)?),
                     None => None,
                 };
                 let procs = self.procs.borrow();
@@ -500,7 +503,7 @@ impl Kernel {
                 Ok(Ret::Two(a, b))
             }
             Call::Remove { path } => {
-                let mut c = self.walk(up, &path, namec::A::Access, 0)?;
+                let mut c = self.walk(up, &path, namec::A::Remove, 0)?;
                 self.tab.dremove(&mut c)?;
                 Ok(Ret::Ok)
             }
@@ -608,6 +611,7 @@ mod syscalls {
     fn booted() -> Kernel {
         let mut root = devroot::Root::new();
         root.addbootfile("init", b"an image".to_vec());
+        root.addbootfile("hello", b"greetings".to_vec());
         let mut k = Kernel::new(root, Box::new(tests::Recorder::silent())).unwrap();
         k.tab.add(Box::new(devpipe::PipeDev::new()));
         k
@@ -866,6 +870,46 @@ mod syscalls {
             k.syscall(1, Call::Pread { fd, n: 64, off: -1 }).unwrap(),
             Ret::Data(b"served over 9P".to_vec())
         );
+    }
+
+    /// `bindmount` resolves the source with `Abind` and the target with
+    /// `Amount` (`sysfile.c:51`, `:60`) — **neither is `Atodir`**. So a file
+    /// binds over a file, which is how `bind /bin/rc /bin/sh` works. Using
+    /// `Atodir` for both, as this did, refuses every bind of a file.
+    #[test]
+    fn a_file_binds_over_a_file() {
+        let mut k = booted();
+        assert_eq!(
+            k.syscall(
+                1,
+                Call::Bind {
+                    name: "/boot/hello".into(),
+                    old: "/boot/init".into(),
+                    flag: 0
+                }
+            )
+            .unwrap(),
+            Ret::Ok
+        );
+        // and the name now answers with what was bound over it
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(
+            k.syscall(1, Call::Pread { fd, n: 64, off: -1 }).unwrap(),
+            Ret::Data(b"greetings".to_vec())
+        );
+    }
+
+    /// `chan.c`: `Aopen` with `OEXEC` on a directory is *"cannot exec
+    /// directory"*, refused by `namec` because only it knows the mode the
+    /// caller asked for.
+    #[test]
+    fn a_directory_cannot_be_executed() {
+        let mut k = booted();
+        let e = k.exec(1, "/boot", &[]).unwrap_err();
+        assert!(e.contains("cannot exec directory"), "{e}");
     }
 
     /// The calls P2 and P3 have not reached say so rather than pretending.
