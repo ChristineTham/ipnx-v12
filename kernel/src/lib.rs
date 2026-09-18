@@ -142,7 +142,15 @@ impl Kernel {
         // what a clock is.
         let now = self.machine.todget().nsec;
         self.procs.started(pid, now);
-        let status = self.machine.touser(pid, &image, args)?;
+        // The machine runs the process, and the process calls back here while
+        // it does. Plan 9 needs no arrangement for that — a trap lands in
+        // `syscall()` and reaches the kernel through globals. Rust needs the
+        // machine out of the kernel for the duration, so the kernel can be
+        // lent to it as the thing to call.
+        let mut m = std::mem::replace(&mut self.machine, Box::new(machine::Nowhere));
+        let status = m.touser(pid, &image, args, self);
+        self.machine = m;
+        let status = status?;
         self.procs.exits(pid, &status);
         Ok(status)
     }
@@ -298,6 +306,12 @@ mod tests {
                 assert_ne!(c, forbidden, "{c} is a file server's job");
             }
         }
+    }
+}
+
+impl machine::Syscalls for Kernel {
+    fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
+        Kernel::syscall(self, up, call)
     }
 }
 

@@ -21,7 +21,7 @@ Measured 2026-09-18.
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-75 tests.
+75 kernel tests, and 3 in `hosts/ipnx` that run a guest against a real kernel.
 
 ## The host — `hosts/ipnx`, 116 lines
 
@@ -30,8 +30,13 @@ a namespace, reads the image out of `#/`, instantiates it and runs it. It
 prints:
 
 ```
-a process ran, and said so
+a process read a file it opened by name
 ```
+
+That line is the point of it: `/init` is a wasm module that calls `open` with
+the name `/hello`, and the kernel resolves it through that process's namespace,
+reads it out of `#/`, and hands the bytes back. Nothing in the module knows
+where the file is.
 
 ## What is not built
 
@@ -50,9 +55,17 @@ Refusing, and saying why rather than pretending: `mount` and `fversion` want
 the mount driver (P2); `sleep`, `alarm`, `notify`, `noted` and `rendezvous`
 want a scheduler (P3).
 
-**There is still no syscall path from a guest.** `hosts/ipnx` gives a wasm
-module one import, a print function, so the calls are reachable from Rust and
-not yet from a process running inside the machine.
+**A guest reaches them.** `Machine::touser` is handed a `Syscalls` — the
+kernel, lent for the duration — and turns whatever its trap looks like into a
+`Call`. Plan 9 needs no such arrangement: a trap lands in `syscall()` and
+reaches the kernel through globals. Here the machine goes out of the kernel
+for the call and comes back before anything else can ask.
+
+`hosts/ipnx` exposes `open` `pread` `pwrite` `close` `errstr` `exits`, plus a
+`write` that is deliberately **not** a call — the kernel has none for writing
+to a console, because a console is a file something else serves (P4). A failed
+call answers −1 and leaves its reason for `errstr`, which is Plan 9's
+convention rather than an error type crossing the boundary.
 
 **`Dev::open` does not return a channel.** Plan 9's does
 (`portdat.h:250`, `Chan* (*open)(Chan*, int)`), and `devdup` depends on it:

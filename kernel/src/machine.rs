@@ -21,6 +21,15 @@
 //! adaptation Christine authorised, and it is the only one here.
 
 use crate::proc::Pid;
+use crate::{Call, Ret};
+
+/// The way back in. Plan 9's process traps and lands in `syscall()`
+/// (`pc/trap.c:665`), which reaches the kernel's tables through globals. A
+/// machine here is handed this instead, and the reentrancy is explicit:
+/// `touser` is running, and the process inside it is calling back.
+pub trait Syscalls {
+    fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String>;
+}
 
 pub trait Machine {
     /// `procsetup` — whatever state this machine needs for a new process,
@@ -29,7 +38,17 @@ pub trait Machine {
 
     /// `touser` — start the process running. It returns when the process has
     /// finished, carrying the status `exits` would have set.
-    fn touser(&mut self, pid: Pid, image: &[u8], args: &[String]) -> Result<String, String>;
+    ///
+    /// `sys` is how the process calls back, and it is the whole of what a
+    /// machine must arrange: turn whatever its trap looks like into a
+    /// [`Call`], hand it over, and turn the answer back.
+    fn touser(
+        &mut self,
+        pid: Pid,
+        image: &[u8],
+        args: &[String],
+        sys: &mut dyn Syscalls,
+    ) -> Result<String, String>;
 
     /// `todget(&ticks, &mono)` (`port/tod.c:153`) — nanoseconds since the
     /// epoch, the fast-tick counter, and its frequency.
@@ -50,4 +69,28 @@ pub struct Tod {
     pub ticks: u64,
     /// `fasthz` — that counter's frequency.
     pub hz: u64,
+}
+
+/// Stands in while the real machine is running a process. Plan 9 has no
+/// counterpart because it needs none: nothing there takes the machine out of
+/// the kernel to enter it. Every call fails, and none is reachable — the
+/// machine is back before anything could ask.
+pub struct Nowhere;
+
+impl Machine for Nowhere {
+    fn procsetup(&mut self, _pid: Pid) -> Result<(), String> {
+        Err("no machine".into())
+    }
+    fn todget(&mut self) -> Tod {
+        Tod::default()
+    }
+    fn touser(
+        &mut self,
+        _pid: Pid,
+        _image: &[u8],
+        _args: &[String],
+        _sys: &mut dyn Syscalls,
+    ) -> Result<String, String> {
+        Err("no machine".into())
+    }
 }
