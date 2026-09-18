@@ -2826,3 +2826,72 @@ the deleted parts enumerated and cited, rather than asserted.
 [Wanix](https://github.com/tractordev/wanix) ·
 [Apptron](https://github.com/tractordev/apptron) ·
 [Apptron announcement](https://progrium.medium.com/announcing-apptron-cross-platform-native-apis-made-accessible-da661f492541)
+
+---
+
+## §10 — The deviation audit, 2026-09-18
+
+Every structure and device implemented so far, read against `plan9/` line by
+line. Christine asked for it *"no matter how small"*, after a day in which
+seven deviations were found one at a time.
+
+**Thirteen found.** Each is a fact about the source, not a judgement.
+
+### `struct Chan` (`portdat.h`) — five fields absent
+
+| | |
+|---|---|
+| **`flag`** | `COPEN CMSG CCEXEC CFREE CRCLOSE CCACHE` (`portdat.h:154–160`). **Code already written depends on it**: `srvwrite` refuses a posted fd carrying `CCEXEC\|CRCLOSE` — *"posted fd has remove-on-close or close-on-exec"* (`devsrv.c:323`); `srvclose` acts on `CRCLOSE` (`:286`); `pipewrite` suppresses the note when the pipe is a mounted queue, `(c->flag & CMSG) == 0` (`devpipe.c:348`) |
+| **`iounit`** | *"chunk size for i/o; 0==default"*. `mntversion` caps the negotiated msize by it: `if(msize > c->iounit && c->iounit != 0) msize = c->iounit` (`devmnt.c:119`) |
+| **`mux`** | the `Mnt` for clients using this channel for messages. `mntattach` reads `m = c->mux` and only versions when it is nil (`devmnt.c:317`). **Ours re-versions on every mount of the same channel** |
+| **`mchan`, `mqid`** | the channel to the mounted server and the qid of the mount root |
+| `devoffset`, `ismtpt`, `aux`, `umh`/`umc`/`uri` | union-read and cache state, for machinery not built |
+
+### `struct Dev` (`portdat.h:241`) — two entries absent
+
+| | |
+|---|---|
+| **`name`** | Plan 9's `Dev` carries `"cons"`, `"pipe"`. `/dev/drivers` prints `#%C %s` from `devtab[i]->dc` and `->name` (`devcons.c:198`). Ours has the letter and **the names were passed into `#c` separately**, so two places now hold the same list |
+| `bread`, `bwrite` | block I/O. `mountio` writes with `bwrite`; ours uses `write` with a buffer |
+
+### `rfork` (`libc.h:610`) — two flags absent
+
+| | |
+|---|---|
+| **`RFREND` (1<<13)** | the rendezvous group. `sysrfork` does `up->rgrp = newrgrp()` (`sysproc.c:44`). There is no `rgrp` here |
+| **`RFNOMNT` (1<<14)** | `up->pgrp->noattach = 1` (`sysproc.c:42`), and a copy carries it: `up->pgrp->noattach = opg->noattach` (`:38`). **This is the containment tool this project's own documents cite** — `rfork(RFNOMNT\|RFCNAMEG)` — and the namespace has no `noattach` |
+
+Also absent: `noteid` (`up->noteid = incref(&noteidalloc)`, `:57`), which `RFNOTEG`
+exists to allocate.
+
+### `namec` (`portdat.h:144`) — three access modes absent
+
+Plan 9 has seven: `Aaccess` **`Abind`** `Atodir` `Aopen` `Amount` **`Acreate`**
+**`Aremove`**. Ours has four. `Abind` is *"for left-hand-side of bind"* and
+ours uses `Atodir` for both sides; `create` is a separate function rather than
+`Acreate`; `remove` does not use `Aremove`.
+
+### `devroot` — boot files are in the wrong place
+
+`rootdir[]` is `#/` and **`boot`, both directories** (`devroot.c:27`), and
+`addbootfile` adds to `bootlist`, whose base is `Qboot` (`devroot.c:80`). **A
+boot file is `#/boot/init`, not `#/init`.** Ours is flat, so `/init` is at the
+root where Plan 9 has a `boot` directory.
+
+### Limits not enforced
+
+| | |
+|---|---|
+| **`ERRMAX` = 128** | `libc.h:553`, *"max length of error string"*. `sysexits` copies a status through `char buf[ERRMAX]` (`sysproc.c:668`). Our `errstr` and exit status are unbounded `String`s |
+| **`NFD` = 100** | `portdat.h:476`, *"per process file descriptors"*. Our `Fds` grows without limit |
+
+### What was checked and matches
+
+The pipe's permissions (`0500` on the directory, `0600` on each end,
+`devpipe.c:33`); the qid on the wire — one byte of type, four of version, eight
+of path; `KNAMELEN` = 28 (`port/lib.h:171`); `readnum`'s width and trailing
+space (`devcons.c:633`); `consdir[]`'s 23 names and permissions; `devpermcheck`'s
+shift and mask (`dev.c:339`); `MAXRPC`/`MAXCMNRPC` and which one `mntversion`
+asks for (`devmnt.c:19,118`); the three `rfork` flag-pair checks
+(`sysproc.c:44–50`); `procdir[]`'s names and permissions; `capdir[]`'s two
+write-only files.
