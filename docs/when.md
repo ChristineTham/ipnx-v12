@@ -19,7 +19,7 @@ Measured 2026-09-18.
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-27 tests.
+32 tests.
 
 ## The host — `hosts/ipnx`, 116 lines
 

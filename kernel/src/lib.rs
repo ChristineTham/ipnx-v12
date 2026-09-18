@@ -166,30 +166,49 @@ impl Kernel {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     /// A machine that records what it was asked to run. The kernel cannot
     /// tell the difference, which is the property the trait exists for.
+    /// A machine that records what it was asked to do, into state the test
+    /// still holds. The `Machine` trait gains nothing for this — a test hook
+    /// on the kernel's one machine-dependent boundary would be a deviation
+    /// paid for by tests.
     #[derive(Default)]
-    struct Recorder {
-        setup: Vec<Pid>,
+    struct Log {
         ran: Vec<(Pid, Vec<u8>)>,
+        order: Vec<&'static str>,
     }
 
+    struct Recorder(Rc<RefCell<Log>>);
+
     impl machine::Machine for Recorder {
-        fn procsetup(&mut self, pid: Pid) -> Result<(), String> {
-            self.setup.push(pid);
+        fn procsetup(&mut self, _pid: Pid) -> Result<(), String> {
+            self.0.borrow_mut().order.push("procsetup");
             Ok(())
         }
         fn touser(&mut self, pid: Pid, image: &[u8], _a: &[String]) -> Result<String, String> {
-            self.ran.push((pid, image.to_vec()));
+            let mut l = self.0.borrow_mut();
+            l.order.push("touser");
+            l.ran.push((pid, image.to_vec()));
             Ok(String::new())
         }
+    }
+
+    /// A kernel with one boot file, and the log its machine writes to.
+    fn watched() -> (Kernel, Rc<RefCell<Log>>) {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let mut root = devroot::Root::new();
+        root.addbootfile("init", b"an image".to_vec());
+        let k = Kernel::new(root, Box::new(Recorder(log.clone()))).unwrap();
+        (k, log)
     }
 
     fn booted() -> Kernel {
         let mut root = devroot::Root::new();
         root.addbootfile("init", b"an image".to_vec());
-        Kernel::new(root, Box::new(Recorder::default())).unwrap()
+        Kernel::new(root, Box::new(Recorder(Rc::new(RefCell::new(Log::default()))))).unwrap()
     }
 
     #[test]
@@ -203,10 +222,32 @@ mod tests {
         assert_eq!(k.exec_image(1, "/init").unwrap(), b"an image");
     }
 
+    /// `exec` must hand the machine the bytes it resolved. Asserting only on
+    /// the returned status passes against a machine that ignored the image.
+    /// `exec` must hand the machine the bytes it resolved. Asserting only on
+    /// the returned status passes against a machine that ignored the image.
     #[test]
     fn exec_runs_the_image_it_resolved() {
-        let mut k = booted();
-        assert_eq!(k.exec(1, "/init", &[]).unwrap(), "");
+        let (mut k, log) = watched();
+        k.exec(1, "/init", &[]).unwrap();
+        assert_eq!(log.borrow().ran, vec![(1, b"an image".to_vec())]);
+    }
+
+    /// `sysexec` does the machine's half in one order: set the process up,
+    /// then enter it.
+    #[test]
+    fn procsetup_runs_before_touser() {
+        let (mut k, log) = watched();
+        k.exec(1, "/init", &[]).unwrap();
+        assert_eq!(log.borrow().order, vec!["procsetup", "touser"]);
+    }
+
+    /// A name that does not resolve must not reach the machine at all.
+    #[test]
+    fn a_failed_resolve_never_reaches_the_machine() {
+        let (mut k, log) = watched();
+        assert!(k.exec(1, "/nothing", &[]).is_err());
+        assert!(log.borrow().order.is_empty(), "the machine was touched for a name that does not exist");
     }
 
     #[test]

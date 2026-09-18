@@ -132,7 +132,7 @@ reads the image, and then does the machine's half. All three now happen.
 | **the one adaptation** | `touser` in Plan 9 jumps to a stack pointer, the image having been mapped already. A machine whose executable unit is a module has no such step — the image *is* the executable state — so the image is what crosses. Approved 2026-09-17: *"wasm instantiation is fine, keep it machine independent"* |
 | **also fixed** | a process holds `slash` and `dot` as **channels**, as Plan 9 does. They were a `String` cwd — the same error as keying the namespace by path text |
 | **depends on** | P0 |
-| **acceptance** | `cargo run -p ipnx` → `a process ran, and said so`. A process was resolved through a namespace, read out of a device, instantiated and run. 27 kernel tests |
+| **acceptance** | `cargo run -p ipnx` → `a process ran, and said so`. A process was resolved through a namespace, read out of a device, instantiated and run. **32 kernel tests**, including the four that prove the claims rather than exercise them: a walk lands on the MOUNTED file and not the one under it; a mount made on a walked-to component is honoured there, which is what "checked at every component" means; a relative name resolves from `dot`; and the machine is given the bytes that were resolved, set up before it is entered, and not touched at all when the name does not resolve |
 | **exposes** | one process is not two: nothing can talk to anything. That is P2 |
 
 **It moves nothing on the conformance checklist, and that is right** — every one

@@ -224,24 +224,123 @@ mod tests {
     #[test]
     fn a_walk_steps_through_a_mount_point() {
         // The property the namespace exists for: a name resolves to what is
-        // mounted on it, and it is checked at the component, not a prefix.
+        // mounted on it, and the answer must be the MOUNTED file, not the one
+        // underneath — which a bare is_ok() cannot tell apart.
         let mut tab = Devtab::new();
         let mut r = Root::new();
-        r.addbootfile("init", b"real".to_vec());
+        r.addbootfile("init", b"under".to_vec());
         let slash = r.attach("").unwrap();
-
-        let mut other = Root::new();
-        other.addbootfile("init", b"mounted".to_vec());
-        let other_root = other.attach("").unwrap();
         tab.add(Box::new(r));
 
+        let mut other = Other::new();
+        let over = other.attach("").unwrap();
+        tab.add(Box::new(other));
+
         let mut ns = Ns::new();
-        ns.mount(&slash, Element::new(other_root), Bind::Replace);
-        // both roots are the same device instance here, so the walk lands on
-        // the mounted channel's qid rather than the underlying one
-        let c = namec(&mut tab, &ns, &slash, &slash, "/init", A::Access, 0);
-        assert!(c.is_ok(), "{:?}", c.err());
+        ns.mount(&slash, Element::new(over), Bind::Replace);
+
+        let c = namec(&mut tab, &ns, &slash, &slash, "/init", A::Access, 0).expect("resolve");
+        assert_eq!(
+            c.dev,
+            DevId::Srv,
+            "the walk landed on the file under the mount, not the mounted one"
+        );
     }
+
+    /// Plan 9 checks `findmount` at EVERY component (the loop in `namec`,
+    /// `chan.c:1317`), not once at the start. A mount made on a file that is
+    /// reached by walking has to be honoured where it was made.
+    #[test]
+    fn the_mount_is_checked_at_every_component_not_only_the_first() {
+        let mut tab = Devtab::new();
+        let mut r = Root::new();
+        r.addbootfile("init", b"under".to_vec());
+        let slash = r.attach("").unwrap();
+        tab.add(Box::new(r));
+
+        // the channel for /init — reached by a walk, not the starting point
+        let on = namec(&mut tab, &Ns::new(), &slash, &slash, "/init", A::Access, 0).unwrap();
+        assert_eq!(on.dev, DevId::Root);
+
+        let mut other = Other::new();
+        let over = other.attach("").unwrap();
+        tab.add(Box::new(other));
+
+        let mut ns = Ns::new();
+        ns.mount(&on, Element::new(over), Bind::Replace);
+
+        let c = namec(&mut tab, &ns, &slash, &slash, "/init", A::Access, 0).unwrap();
+        assert_eq!(
+            c.dev,
+            DevId::Srv,
+            "a mount made on a walked-to component was not honoured there"
+        );
+    }
+
+    /// The starting point of a relative name is the process's `dot`, not its
+    /// `slash`. Both are channels, and `namec` takes both.
+    #[test]
+    fn a_relative_name_resolves_from_dot() {
+        let mut tab = Devtab::new();
+        let mut r = Root::new();
+        r.addbootfile("init", b"an image".to_vec());
+        let slash = r.attach("").unwrap();
+        tab.add(Box::new(r));
+        let ns = Ns::new();
+
+        let rooted = namec(&mut tab, &ns, &slash, &slash, "/init", A::Access, 0).unwrap();
+        let relative = namec(&mut tab, &ns, &slash, &slash, "init", A::Access, 0)
+            .expect("a relative name must resolve from dot");
+        assert_eq!(rooted.qid, relative.qid);
+    }
+
+    /// A one-file device under a second letter, so a test can tell which of
+    /// two files a walk landed on. One `Dev` per letter is Plan 9's own
+    /// arrangement (`devtab[]`), so two instances of one device is not a
+    /// thing a test can ask for.
+    struct Other {
+        qid: crate::ninep::Qid,
+    }
+    impl Other {
+        fn new() -> Other {
+            Other { qid: crate::ninep::Qid { qtype: crate::ninep::QTDIR, vers: 0, path: 0 } }
+        }
+    }
+    impl crate::dev::Dev for Other {
+        fn id(&self) -> DevId {
+            DevId::Srv
+        }
+        fn attach(&mut self, _s: &str) -> Result<Chan, String> {
+            Ok(Chan::attach(DevId::Srv, 0))
+        }
+        fn walk(&mut self, _c: &Chan, _n: &str) -> Result<Option<crate::ninep::Qid>, String> {
+            Ok(Some(self.qid))
+        }
+        fn open(&mut self, _c: &mut Chan, _m: u16) -> Result<(), String> {
+            Ok(())
+        }
+        fn create(&mut self, _c: &mut Chan, _n: &str, _m: u16, _p: u32) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn read(&mut self, _c: &mut Chan, _n: usize, _o: u64) -> Result<Vec<u8>, String> {
+            Ok(b"over".to_vec())
+        }
+        fn write(&mut self, _c: &mut Chan, _d: &[u8], _o: u64) -> Result<usize, String> {
+            Err("no".into())
+        }
+        fn stat(&mut self, _c: &Chan) -> Result<Vec<u8>, String> {
+            Ok(Vec::new())
+        }
+        fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn remove(&mut self, _c: &mut Chan) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn close(&mut self, _c: &mut Chan) {}
+    }
+
+
 
     #[test]
     fn opening_for_writing_is_refused_by_the_root() {
