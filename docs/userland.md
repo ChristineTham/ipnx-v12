@@ -122,12 +122,15 @@ the redesign completes the merger the originals gestured at:
   driven by samtest, so the whole sam/samterm/libframe stack stays
   proven while the product face speaks only the new world. The demo
   menu's heritage wing retired with it.
-- Open question, deliberately: whether the command language is also
-  exposed as a control file on every `edit` node (write commands, the
-  node edits itself) — which would make "sam" a property of text in this
-  system rather than a program. Still open leaving M5 — the language
-  landed inside `edit(1)` first; the control-file form waits for a
-  second consumer.
+- **Answered by acme, 2026-09-18.** This was recorded as an open question —
+  whether the command language is also exposed as a control file on every
+  `edit` node. acme does **both**, and has since 1993. Per window
+  (`acme/fsys.c:76`): `addr` sets an address, `data` and `xdata` read and
+  write through it — that is the control-file form, and a program edits a
+  window without acme parsing a language. Separately, `Edit` runs sam's
+  language over the window (`acme/edit.c:149`, `editcmd`). Text being
+  programmatically editable *and* having a command language is not a choice
+  between two designs.
 - **The Edit language returned 2026-08-30**, and the same day —
   Christine reading the acme paper beside the build — the workspace took
   **the paper's own shape**: a root tag over a ROW of columns, every tag

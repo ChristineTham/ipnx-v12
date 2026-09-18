@@ -48,8 +48,16 @@ that `/` is `inode/system`, and that unrecognised content is `text/plain`.
   cursor at every match, so **typing after a Find is replace-all and there is no
   Replace verb**; the status line must therefore show the **match count**, which
   is the first safety requirement for it. Escape collapses to a single cursor at
-  the last match. Still open: the rest of the status line, and what `Edit` means
-  over a dot that is a set of rune ranges. What was already settled is only its
+  the last match.
+
+  > **A DEVIATION, unapproved.** acme's dot is **one range** — `q0` and `q1`,
+  > two `uint`s on a `Text` (`acme/dat.h:177`). There is no set of ranges and
+  > no multi-cursor anywhere in Plan 9; `Look` moves the single dot to the next
+  > match. Replace-all in acme is `Edit` with a substitution (`edit.c:149`),
+  > which is why it needs no Replace verb and no match count. Multi-cursor Find
+  > is a modern-editor feature, not Plan 9's, and it is what makes the status
+  > line's match count "the first safety requirement" — a requirement invented
+  > along with the thing that needs it. What was already settled is only its
   *edges*: it is the fallback, it can never fail,
   non-UTF-8 content renders with escapes and opens read-only, and line endings
   are never rewritten. What it *is* — its content model, its verbs, its status

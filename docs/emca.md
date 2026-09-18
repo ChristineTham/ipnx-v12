@@ -87,7 +87,13 @@ and the IPNX side**, and is responsible for rendering the content, editing the
 content, providing toolbar buttons, and supplying the semantics of the standard
 buttons — Edit, Find and the rest. See [type.md](type.md).
 
-### Not yet defined
+### Genuine gaps — Plan 9 has no counterpart
+
+These are not lookups. Plan 9 has no window types, no type registry and no
+manager interface: rio serves one kind of window and acme serves one kind of
+content. The concept is Christine's — *"a window type is encapsulating things
+that are not text, that's why we need a manager"* — so there is nothing to
+check it against and a design has to be written and reviewed.
 
 - **The window type specification itself** — what a type declares, in what
   files, and what a manager's interface is. The manager is agreed to be
