@@ -8,7 +8,8 @@
 //! trait names no machine; this file is where "machine" means WebAssembly, and
 //! nothing above it knows that.
 
-use ipnx_kernel::{devroot::Root, machine::Machine, Kernel, Pid};
+use ipnx_kernel::{devroot::Root, machine::{Machine, Tod}, Kernel, Pid};
+use std::time::{SystemTime, UNIX_EPOCH};
 use wasmtime::{Caller, Engine, Extern, Linker, Module, Store};
 
 /// The machine: a WebAssembly engine.
@@ -29,6 +30,12 @@ impl Wasm {
 impl Machine for Wasm {
     fn procsetup(&mut self, _pid: Pid) -> Result<(), String> {
         Ok(())
+    }
+
+    /// `todget`. The host has the clock; the kernel names what it reports.
+    fn todget(&mut self) -> Tod {
+        let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+        Tod { nsec: d.as_nanos() as u64, ticks: d.as_nanos() as u64, hz: 1_000_000_000 }
     }
 
     fn touser(&mut self, _pid: Pid, image: &[u8], _args: &[String]) -> Result<String, String> {

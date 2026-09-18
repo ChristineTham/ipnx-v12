@@ -106,6 +106,8 @@ pub struct Kernel {
     pub procs: proc::Procs,
     pub tab: namec::Devtab,
     machine: Box<dyn machine::Machine>,
+    /// `Mach.syscall` (`pc/dat.h:234`) — what `/dev/sysstat` reports.
+    pub syscalls: u64,
 }
 
 impl Kernel {
@@ -120,7 +122,7 @@ impl Kernel {
         let mut root = root;
         let slash = root.attach("")?;
         tab.add(Box::new(root));
-        Ok(Kernel { procs: proc::Procs::new(slash), tab, machine })
+        Ok(Kernel { procs: proc::Procs::new(slash), tab, machine, syscalls: 0 })
     }
 
     /// `exec`, in the order `sysexec` does it (`sysproc.c:302`).
@@ -135,6 +137,11 @@ impl Kernel {
     pub fn exec(&mut self, pid: Pid, path: &str, args: &[String]) -> Result<String, String> {
         let image = self.exec_image(pid, path)?;
         self.machine.procsetup(pid)?;
+        // `TReal`'s origin. Plan 9 takes it from `MACHP(0)->ticks`; here the
+        // machine supplies it, and nothing else in the kernel needs to know
+        // what a clock is.
+        let now = self.machine.todget().nsec;
+        self.procs.started(pid, now);
         let status = self.machine.touser(pid, &image, args)?;
         self.procs.exits(pid, &status);
         Ok(status)
@@ -187,12 +194,15 @@ mod tests {
         order: Vec<&'static str>,
     }
 
-    struct Recorder(Rc<RefCell<Log>>);
+    pub(crate) struct Recorder(Rc<RefCell<Log>>);
 
     impl machine::Machine for Recorder {
         fn procsetup(&mut self, _pid: Pid) -> Result<(), String> {
             self.0.borrow_mut().order.push("procsetup");
             Ok(())
+        }
+        fn todget(&mut self) -> machine::Tod {
+            machine::Tod { nsec: 1_500_000_000_000_000_000, ticks: 42, hz: 1_000_000 }
         }
         fn touser(&mut self, pid: Pid, image: &[u8], _a: &[String]) -> Result<String, String> {
             let mut l = self.0.borrow_mut();
@@ -214,7 +224,13 @@ mod tests {
     fn booted() -> Kernel {
         let mut root = devroot::Root::new();
         root.addbootfile("init", b"an image".to_vec());
-        Kernel::new(root, Box::new(Recorder(Rc::new(RefCell::new(Log::default()))))).unwrap()
+        Kernel::new(root, Box::new(Recorder::silent())).unwrap()
+    }
+
+    impl Recorder {
+        pub(crate) fn silent() -> Recorder {
+            Recorder(Rc::new(RefCell::new(Log::default())))
+        }
     }
 
     #[test]
@@ -281,6 +297,379 @@ mod tests {
             for forbidden in ["DRAW", "TIME", "RANDOM", "FETCH", "STORE", "WINDOW", "CONSOLE"] {
                 assert_ne!(c, forbidden, "{c} is a file server's job");
             }
+        }
+    }
+}
+
+/// What a call answers. Plan 9's syscalls all return `uintptr` and write
+/// their real answer through a pointer; a typed return says the same thing
+/// without a memory model in the way.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Ret {
+    Ok,
+    Fd(Fd),
+    Two(Fd, Fd),
+    N(usize),
+    Data(Vec<u8>),
+    Pid(Pid),
+    Wait(Pid, String),
+    Str(String),
+}
+
+impl Kernel {
+    /// `syscall` (`pc/trap.c:665`): the one door. Plan 9 looks the number up
+    /// in `systab[]`, refuses one out of range, and lets `waserror` carry a
+    /// failure back as a string the process reads with `errstr`.
+    ///
+    /// **`up` is the calling process.** Plan 9 keeps it in a per-machine
+    /// global; here it is the argument, because a Rust kernel cannot hand a
+    /// device an ambient mutable global — the same information, made explicit.
+    pub fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
+        self.syscalls += 1;
+        let r = self.dispatch(up, call);
+        if let Err(e) = &r {
+            self.procs.seterrstr(up, e);
+        }
+        r
+    }
+
+    fn dispatch(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
+        match call {
+            // ---- processes
+            Call::Rfork { flags } => match self.procs.rfork(up, flags) {
+                Some(pid) => Ok(Ret::Pid(pid)),
+                None => {
+                    proc::Procs::rforkcheck(flags)?;
+                    Ok(Ret::Pid(0))
+                }
+            },
+            Call::Exec { path, args } => Ok(Ret::Str(self.exec(up, &path, &args)?)),
+            Call::Exits { status } => {
+                self.procs.exits(up, &status);
+                Ok(Ret::Ok)
+            }
+            Call::Await => match self.procs.await_child(up) {
+                Some((pid, status)) => Ok(Ret::Wait(pid, status)),
+                None => Err("no living children".into()),
+            },
+            Call::Errstr => Ok(Ret::Str(self.procs.errstr(up))),
+
+            // ---- the namespace
+            Call::Bind { name, old, flag } => {
+                let on = self.walk(up, &old, namec::A::Todir, 0)?;
+                let to = self.walk(up, &name, namec::A::Todir, 0)?;
+                let p = self.procs.get(up).ok_or("no such process")?;
+                p.ns.borrow_mut().mount(&on, ns::Element::new(to), bind_of(flag));
+                Ok(Ret::Ok)
+            }
+            Call::Unmount { name, old } => {
+                let on = self.walk(up, &old, namec::A::Todir, 0)?;
+                let what = match &name {
+                    Some(n) => Some(self.walk(up, n, namec::A::Todir, 0)?),
+                    None => None,
+                };
+                let p = self.procs.get(up).ok_or("no such process")?;
+                p.ns.borrow_mut().unmount(&on, what.as_ref());
+                Ok(Ret::Ok)
+            }
+            Call::Chdir { path } => {
+                let c = self.walk(up, &path, namec::A::Todir, 0)?;
+                self.procs.chdir(up, c);
+                Ok(Ret::Ok)
+            }
+
+            // ---- channels
+            Call::Open { path, mode } => {
+                let c = self.walk(up, &path, namec::A::Open, mode as u16)?;
+                Ok(Ret::Fd(self.newfd(up, c)?))
+            }
+            Call::Create { path, mode, perm } => {
+                let c = self.walk_create(up, &path, mode as u16, perm)?;
+                Ok(Ret::Fd(self.newfd(up, c)?))
+            }
+            Call::Close { fd } => {
+                let p = self.procs.get(up).ok_or("no such process")?;
+                if p.fds.borrow_mut().close(fd) {
+                    Ok(Ret::Ok)
+                } else {
+                    Err(EBADFD.into())
+                }
+            }
+            Call::Pread { fd, n, off } => {
+                let mut c = self.chan(up, fd)?;
+                let at = if off < 0 { c.offset } else { off as u64 };
+                let d = self.tab.get(c.dev).ok_or(ENODEV)?.read(&mut c, n, at)?;
+                if off < 0 {
+                    self.advance(up, fd, d.len() as u64);
+                }
+                Ok(Ret::Data(d))
+            }
+            Call::Pwrite { fd, data, off } => {
+                let mut c = self.chan(up, fd)?;
+                let at = if off < 0 { c.offset } else { off as u64 };
+                let n = self.tab.get(c.dev).ok_or(ENODEV)?.write(&mut c, &data, at)?;
+                if off < 0 {
+                    self.advance(up, fd, n as u64);
+                }
+                Ok(Ret::N(n))
+            }
+            // `seek` is fd-class, not 9P: the offset is kernel state in the
+            // Chan, because `Tread`/`Twrite` carry theirs explicitly.
+            Call::Seek { fd, off, whence } => {
+                let p = self.procs.get(up).ok_or("no such process")?;
+                let fds = p.fds.clone();
+                let cell = fds.borrow().get(fd).cloned().ok_or(EBADFD)?;
+                let mut c = cell.borrow_mut();
+                let new = match whence {
+                    0 => off as u64,
+                    1 => (c.offset as i64 + off) as u64,
+                    _ => return Err("bad whence".into()),
+                };
+                c.offset = new;
+                Ok(Ret::N(new as usize))
+            }
+            Call::Dup { old, new } => {
+                let p = self.procs.get(up).ok_or("no such process")?;
+                let fds = p.fds.clone();
+                let r = fds.borrow_mut().dup(old, new).ok_or(EBADFD)?;
+                Ok(Ret::Fd(r))
+            }
+            // `syspipe` (`sysfile.c`): attach `#|`, walk the two ends, open
+            // both. The attach IS the allocation.
+            Call::Pipe => {
+                let dir = self.tab.get(dev::DevId::Pipe).ok_or(ENODEV)?.attach("")?;
+                let mut ends = Vec::new();
+                for name in ["data", "data1"] {
+                    let d = self.tab.get(dev::DevId::Pipe).ok_or(ENODEV)?;
+                    let mut c = dir.clone();
+                    c.qid = d.walk(&dir, name)?.ok_or("no such file")?;
+                    d.open(&mut c, chan::mode::ORDWR)?;
+                    ends.push(c);
+                }
+                let b = self.newfd(up, ends.pop().unwrap())?;
+                let a = self.newfd(up, ends.pop().unwrap())?;
+                Ok(Ret::Two(a, b))
+            }
+            Call::Remove { path } => {
+                let mut c = self.walk(up, &path, namec::A::Access, 0)?;
+                self.tab.get(c.dev).ok_or(ENODEV)?.remove(&mut c)?;
+                Ok(Ret::Ok)
+            }
+            Call::Stat { path } => {
+                let c = self.walk(up, &path, namec::A::Access, 0)?;
+                Ok(Ret::Data(self.tab.get(c.dev).ok_or(ENODEV)?.stat(&c)?))
+            }
+            Call::Fstat { fd } => {
+                let c = self.chan(up, fd)?;
+                Ok(Ret::Data(self.tab.get(c.dev).ok_or(ENODEV)?.stat(&c)?))
+            }
+            Call::Wstat { path, edir } => {
+                let mut c = self.walk(up, &path, namec::A::Access, 0)?;
+                self.tab.get(c.dev).ok_or(ENODEV)?.wstat(&mut c, &edir)?;
+                Ok(Ret::Ok)
+            }
+            Call::Fwstat { fd, edir } => {
+                let mut c = self.chan(up, fd)?;
+                self.tab.get(c.dev).ok_or(ENODEV)?.wstat(&mut c, &edir)?;
+                Ok(Ret::Ok)
+            }
+
+            // ---- not yet
+            Call::Mount { .. } => Err("no mount driver yet — P2".into()),
+            Call::Fversion { .. } => Err("no mount driver yet — P2".into()),
+            Call::Sleep { .. } | Call::Alarm { .. } => Err("no scheduler yet — P3".into()),
+            Call::Notify | Call::Noted { .. } => Err("no notes yet — P3".into()),
+            Call::Rendezvous { .. } => Err("no rendezvous yet — P3".into()),
+        }
+    }
+
+    /// `namec` for the calling process: its namespace, its `slash`, its `dot`.
+    fn walk(&mut self, up: Pid, path: &str, a: namec::A, mode: u16) -> Result<Chan, String> {
+        let p = self.procs.get(up).ok_or("no such process")?;
+        let (slash, dot, ns) = (p.slash.clone(), p.dot.clone(), p.ns.clone());
+        let ns = ns.borrow();
+        namec::namec(&mut self.tab, &ns, &slash, &dot, path, a, mode)
+    }
+
+    fn walk_create(&mut self, up: Pid, path: &str, mode: u16, perm: u32) -> Result<Chan, String> {
+        let p = self.procs.get(up).ok_or("no such process")?;
+        let (slash, dot, ns) = (p.slash.clone(), p.dot.clone(), p.ns.clone());
+        let ns = ns.borrow();
+        namec::create(&mut self.tab, &ns, &slash, &dot, path, mode, perm)
+    }
+
+    fn newfd(&mut self, up: Pid, c: Chan) -> Result<Fd, String> {
+        let p = self.procs.get(up).ok_or("no such process")?;
+        let fds = p.fds.clone();
+        let fd = fds.borrow_mut().add(c);
+        Ok(fd)
+    }
+
+    fn chan(&mut self, up: Pid, fd: Fd) -> Result<Chan, String> {
+        let p = self.procs.get(up).ok_or("no such process")?;
+        let fds = p.fds.clone();
+        let cell = fds.borrow().get(fd).cloned().ok_or(EBADFD)?;
+        let c = cell.borrow().clone();
+        Ok(c)
+    }
+
+    /// A read or write at offset −1 uses and advances the Chan's own offset.
+    fn advance(&mut self, up: Pid, fd: Fd, by: u64) {
+        if let Some(p) = self.procs.get(up) {
+            if let Some(c) = p.fds.borrow().get(fd) {
+                c.borrow_mut().offset += by;
+            }
+        }
+    }
+}
+
+const EBADFD: &str = "fd out of range or not open";
+const ENODEV: &str = "no such device";
+
+/// `MREPL`, `MBEFORE`, `MAFTER` (`<libc.h>`).
+fn bind_of(flag: i32) -> ns::Bind {
+    match flag & 3 {
+        1 => ns::Bind::Before,
+        2 => ns::Bind::After,
+        _ => ns::Bind::Replace,
+    }
+}
+
+#[cfg(test)]
+mod syscalls {
+    use super::*;
+    use crate::proc::rf;
+
+    fn booted() -> Kernel {
+        let mut root = devroot::Root::new();
+        root.addbootfile("init", b"an image".to_vec());
+        let mut k = Kernel::new(root, Box::new(tests::Recorder::silent())).unwrap();
+        k.tab.add(Box::new(devpipe::PipeDev::new()));
+        k
+    }
+
+    /// The point of the whole exercise: a process opens a file by name and
+    /// reads it, through the call interface rather than through Rust.
+    #[test]
+    fn a_process_can_open_a_file_and_read_it() {
+        let mut k = booted();
+        let fd = match k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap() {
+            Ret::Fd(fd) => fd,
+            r => panic!("{r:?}"),
+        };
+        let d = k.syscall(1, Call::Pread { fd, n: 64, off: -1 }).unwrap();
+        assert_eq!(d, Ret::Data(b"an image".to_vec()));
+        assert_eq!(k.syscall(1, Call::Close { fd }).unwrap(), Ret::Ok);
+        assert!(k.syscall(1, Call::Close { fd }).is_err(), "closed twice");
+    }
+
+    /// Offset −1 uses and advances the channel's own offset, so a second read
+    /// continues where the first stopped. That is what makes `read` work
+    /// when `Tread` carries its offset explicitly.
+    #[test]
+    fn reading_at_minus_one_advances_the_channel() {
+        let mut k = booted();
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap()
+        else {
+            panic!()
+        };
+        assert_eq!(k.syscall(1, Call::Pread { fd, n: 2, off: -1 }).unwrap(), Ret::Data(b"an".into()));
+        assert_eq!(k.syscall(1, Call::Pread { fd, n: 3, off: -1 }).unwrap(), Ret::Data(b" im".into()));
+        // an explicit offset does NOT move it
+        assert_eq!(k.syscall(1, Call::Pread { fd, n: 2, off: 0 }).unwrap(), Ret::Data(b"an".into()));
+        assert_eq!(k.syscall(1, Call::Pread { fd, n: 3, off: -1 }).unwrap(), Ret::Data(b"age".into()));
+    }
+
+    /// `pipe(2)` returns two fds, and what is written to one is read at the
+    /// other — the acceptance P2 names first.
+    #[test]
+    fn two_processes_talk_over_a_pipe() {
+        let mut k = booted();
+        let Ret::Two(a, b) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
+        // a child forked with RFPROC shares the fd table, so it has both ends
+        let Ret::Pid(child) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else {
+            panic!()
+        };
+        k.syscall(1, Call::Pwrite { fd: a, data: b"hello".to_vec(), off: -1 }).unwrap();
+        let got = k.syscall(child, Call::Pread { fd: b, n: 16, off: -1 }).unwrap();
+        assert_eq!(got, Ret::Data(b"hello".to_vec()));
+    }
+
+    /// A child with its own fd table does NOT see the parent's later opens.
+    #[test]
+    fn rfork_reaches_the_call_interface() {
+        let mut k = booted();
+        let Ret::Pid(child) = k
+            .syscall(1, Call::Rfork { flags: rf::PROC | rf::FDG })
+            .unwrap()
+        else {
+            panic!()
+        };
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap()
+        else {
+            panic!()
+        };
+        assert!(
+            k.syscall(child, Call::Pread { fd, n: 4, off: -1 }).is_err(),
+            "RFFDG copied the table, so the child has no such fd"
+        );
+    }
+
+    /// `dup` shares the channel, so the offset moves for both.
+    #[test]
+    fn dup_shares_the_offset_through_the_call_interface() {
+        let mut k = booted();
+        let Ret::Fd(a) = k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap()
+        else {
+            panic!()
+        };
+        let Ret::Fd(b) = k.syscall(1, Call::Dup { old: a, new: -1 }).unwrap() else { panic!() };
+        k.syscall(1, Call::Pread { fd: a, n: 2, off: -1 }).unwrap();
+        assert_eq!(k.syscall(1, Call::Pread { fd: b, n: 2, off: -1 }).unwrap(), Ret::Data(b" i".into()));
+    }
+
+    /// `bind` and `chdir` go through the same namespace `namec` walks, so a
+    /// relative open after a `chdir` resolves from the new `dot`.
+    #[test]
+    fn chdir_moves_dot_and_a_relative_name_follows_it() {
+        let mut k = booted();
+        assert_eq!(k.syscall(1, Call::Chdir { path: "/".into() }).unwrap(), Ret::Ok);
+        let r = k.syscall(1, Call::Open { path: "init".into(), mode: 0 }).unwrap();
+        assert!(matches!(r, Ret::Fd(_)), "{r:?}");
+    }
+
+    /// A failed call leaves its reason where `errstr(2)` finds it, and
+    /// reading EXCHANGES it, so a second read says nothing.
+    #[test]
+    fn a_failed_call_leaves_an_errstr_and_reading_it_clears_it() {
+        let mut k = booted();
+        assert!(k.syscall(1, Call::Open { path: "/nothing".into(), mode: 0 }).is_err());
+        let Ret::Str(e) = k.syscall(1, Call::Errstr).unwrap() else { panic!() };
+        assert!(!e.is_empty(), "the failure said nothing");
+        let Ret::Str(again) = k.syscall(1, Call::Errstr).unwrap() else { panic!() };
+        assert!(again.is_empty(), "errstr exchanges; it does not repeat");
+    }
+
+    /// Every call goes through one door, and `/dev/sysstat` counts them.
+    #[test]
+    fn the_kernel_counts_the_calls_it_answers() {
+        let mut k = booted();
+        assert_eq!(k.syscalls, 0);
+        let _ = k.syscall(1, Call::Errstr);
+        let _ = k.syscall(1, Call::Open { path: "/nothing".into(), mode: 0 });
+        assert_eq!(k.syscalls, 2, "a failed call is still a call");
+    }
+
+    /// The calls P2 and P3 have not reached say so rather than pretending.
+    #[test]
+    fn what_is_not_built_refuses_rather_than_lying() {
+        let mut k = booted();
+        for c in [
+            Call::Mount { fd: 0, afd: -1, old: "/n".into(), flag: 0, aname: String::new() },
+            Call::Sleep { ms: 1 },
+            Call::Rendezvous { tag: 0, val: 0 },
+        ] {
+            assert!(k.syscall(1, c).is_err());
         }
     }
 }

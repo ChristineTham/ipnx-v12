@@ -5,7 +5,7 @@ other document carries it.
 
 Measured 2026-09-18.
 
-## The kernel — 2,999 lines of Rust, no dependencies
+## The kernel — 3,495 lines of Rust, no dependencies
 
 | | |
 |---|---|
@@ -21,7 +21,7 @@ Measured 2026-09-18.
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-66 tests.
+75 tests.
 
 ## The host — `hosts/ipnx`, 116 lines
 
@@ -35,16 +35,24 @@ a process ran, and said so
 
 ## What is not built
 
-**The 28 calls are a list, not an implementation.** `Call` is declared in
-`lib.rs` and referenced nowhere — not by the kernel, not by the host, not by a
-test. The kernel's whole public surface is `new`, `exec` and `exec_image`;
-there is no `bind`, `mount`, `open`, `read`, `write`, `close`, `dup`, `chdir`,
-`rfork`, `exits` or `await` a process can invoke. `rfork`, `exits` and `await`
-exist on `Procs` and are unreachable from a process.
+**The calls are dispatched.** `Kernel::syscall(up, Call)` is the one door —
+Plan 9's `syscall()` (`pc/trap.c:665`) looking a number up in `systab[]`.
+**`up` is an argument**, where Plan 9 keeps it in a per-machine global: the
+same information, made explicit because a Rust kernel cannot hand a device an
+ambient mutable global.
 
-**There is no syscall path.** `hosts/ipnx` gives a guest one import, a print
-function. A process cannot open a file, fork, or reach any device — so
-everything `#c` and `#|` do is reachable only from Rust, not from a process.
+Answered: `rfork` `exec` `exits` `await` `errstr` `bind` `unmount` `chdir`
+`open` `create` `close` `pread` `pwrite` `seek` `dup` `pipe` `remove` `stat`
+`fstat` `wstat` `fwstat` — **21 of 28**. A failed call leaves its reason where
+`errstr` finds it, and reading exchanges it as Plan 9's does.
+
+Refusing, and saying why rather than pretending: `mount` and `fversion` want
+the mount driver (P2); `sleep`, `alarm`, `notify`, `noted` and `rendezvous`
+want a scheduler (P3).
+
+**There is still no syscall path from a guest.** `hosts/ipnx` gives a wasm
+module one import, a print function, so the calls are reachable from Rust and
+not yet from a process running inside the machine.
 
 **`Dev::open` does not return a channel.** Plan 9's does
 (`portdat.h:250`, `Chan* (*open)(Chan*, int)`), and `devdup` depends on it:
@@ -54,11 +62,9 @@ opening `#d/3` returns the channel fd 3 holds.
 else; no `Tversion`/`Tattach`/`Twalk` is ever exchanged, because `#M` is not
 built.
 
-**Nothing stamps a process's start**, so `/dev/cputime`'s `TReal` is 0 — the
-kernel has no clock of its own. Plan 9's is machine-provided and available
-kernel-wide (`MACHP(0)->ticks`, `todget`), so **this kernel should have one**;
-it was left out by reading the growth rule as a ban on anything that is not
-process management, which is not what it says.
+**The kernel has a clock.** `Machine::todget` (`port/tod.c:153`) answers
+nanoseconds, the fast-tick counter and its frequency; `exec` stamps a
+process's start from it, so `/dev/cputime`'s `TReal` is wall time.
 
 No mount, srv, proc, dup, env or cap device. No shell, no userspace, no
 surface. `#c`'s `cons` and `consctl` wait for a host to serve them (P4).

@@ -119,6 +119,8 @@ pub struct Proc {
     /// `#c`'s host. An unstamped process reports `TReal` 0 rather than the
     /// whole of the epoch.
     pub started: Option<u64>,
+    /// `up->errstr`. Set when a call fails, and taken by `errstr(2)`.
+    pub errstr: String,
     /// `up->slash` and `up->dot`. Plan 9 holds both as CHANNELS, not as text —
     /// a name is resolved from a channel, so the process's idea of "/" and "."
     /// is a channel too. An earlier version here kept `cwd` as a String, which
@@ -140,6 +142,7 @@ impl Proc {
             user: "eve".to_string(),
             time: [0; 6],
             started: None,
+            errstr: String::new(),
             ns: Rc::new(RefCell::new(Ns::new())),
             fds: Rc::new(RefCell::new(Fds::default())),
             env: Rc::new(RefCell::new(HashMap::new())),
@@ -222,6 +225,7 @@ impl Procs {
             user: parent.user.clone(),
             time: [0; 6],
             started: None,
+            errstr: String::new(),
             ns,
             fds,
             env,
@@ -244,6 +248,29 @@ impl Procs {
             Rc::new(RefCell::new(src.borrow().clone()))
         } else {
             src.clone()
+        }
+    }
+
+    /// `chdir(2)`: `up->dot` is a CHANNEL, so this replaces it.
+    pub fn chdir(&mut self, pid: Pid, dot: Chan) {
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.dot = dot;
+        }
+    }
+
+    /// `errstr(2)`: the per-process error string. Plan 9 exchanges it —
+    /// reading clears what was there — which is why a second `errstr` after a
+    /// failure says nothing.
+    pub fn errstr(&mut self, pid: Pid) -> String {
+        match self.tab.get_mut(&pid) {
+            Some(p) => std::mem::take(&mut p.errstr),
+            None => String::new(),
+        }
+    }
+
+    pub fn seterrstr(&mut self, pid: Pid, e: &str) {
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.errstr = e.to_string();
         }
     }
 

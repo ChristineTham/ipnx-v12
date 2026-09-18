@@ -30,4 +30,24 @@ pub trait Machine {
     /// `touser` — start the process running. It returns when the process has
     /// finished, carrying the status `exits` would have set.
     fn touser(&mut self, pid: Pid, image: &[u8], args: &[String]) -> Result<String, String>;
+
+    /// `todget(&ticks, &mono)` (`port/tod.c:153`) — nanoseconds since the
+    /// epoch, the fast-tick counter, and its frequency.
+    ///
+    /// **The kernel has a clock**, because Plan 9's does: `todget` is called
+    /// from `port/` (`devcons.c:1239`, `devloopback.c:563`) and the numbers
+    /// come from the architecture. It is here for the same reason `touser`
+    /// is — portable code needs it, and only a machine can supply it.
+    fn todget(&mut self) -> Tod;
+}
+
+/// What `todget` answers.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
+pub struct Tod {
+    /// Nanoseconds since the epoch.
+    pub nsec: u64,
+    /// `fastticks` — a monotonic counter.
+    pub ticks: u64,
+    /// `fasthz` — that counter's frequency.
+    pub hz: u64,
 }

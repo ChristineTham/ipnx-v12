@@ -168,6 +168,38 @@ pub fn namec(
     Ok(c)
 }
 
+/// `namec(..., Acreate, ...)`: walk the parent, then create in the union's
+/// **create element** — the one bound with `MCREATE`. Plan 9 resolves the
+/// last element's parent and creates there (`chan.c`, `namec`'s `Acreate`
+/// case), which is why a create can land in a different file server from the
+/// one a read of the same directory would answer.
+pub fn create(
+    tab: &mut Devtab,
+    ns: &Ns,
+    slash: &Chan,
+    dot: &Chan,
+    name: &str,
+    omode: u16,
+    perm: u32,
+) -> Result<Chan, String> {
+    let (dir, last) = match name.rfind('/') {
+        Some(i) => (&name[..i.max(1)], &name[i + 1..]),
+        None => (".", name),
+    };
+    if last.is_empty() || last == "." || last == ".." {
+        return Err("bad create name".into());
+    }
+    let parent = namec(tab, ns, slash, dot, dir, A::Todir, 0)?;
+    // The create lands in the create element if this directory is a union.
+    let mut target = match ns.create_element(&parent) {
+        Some(e) => e.chan.clone(),
+        None => parent,
+    };
+    let d = tab.get(target.dev).ok_or("no such device")?;
+    d.create(&mut target, last, omode, perm)?;
+    Ok(target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
