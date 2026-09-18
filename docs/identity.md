@@ -9,12 +9,45 @@
 
 ## What the kernel holds
 
-Plan 9's field and no more: **one name per process**. `eve` is the machine's
-owner. A process may become `none` and may not come back.
+Plan 9's field and no more: **one `char *user` per process** (`portdat.h:664`).
+No uid, no gid, no euid/ruid pair, no setuid bit, no credential transition.
 
-Permission is the file's own — owner bits, group bits, other — decided by the
-device that serves the file. There is no euid, no ruid, no setuid bit and no
-credential transition through `/proc`. There is no superuser to become.
+**`eve` is a name, compared as a string.** `char *eve` (`auth.c:10`); `iseve()`
+is `strcmp(eve, up->user) == 0` (`auth.c:17`).
+
+**eve gets the group bits.** `devpermcheck` (`dev.c:339`) shifts the file's mode
+by who is asking:
+
+```c
+if(strcmp(up->user, fileuid) == 0)   perm <<= 0;   /* owner */
+else if(strcmp(up->user, eve) == 0)  perm <<= 3;   /* group */
+else                                 perm <<= 6;   /* other */
+```
+
+So the host owner is **not** root. On a file with mode `0700` eve is denied.
+There is no bypass anywhere in the core.
+
+**Three files change it.** Two are `#c`'s, one is `#¤`'s — `devcap`
+(`devcap.c:267`, letter `L'¤'`):
+
+| | |
+|---|---|
+| `/dev/user`, `0666` | accepts the four bytes `none` and nothing else — *"anyone can become none"* (`auth.c:107`). One way; there is no route back |
+| `/dev/hostowner`, `0664` | eve only. Writing it renames eve **and every process owned by the old name** (`renameuser`, `proc.c:1601`) |
+| `/dev/caphash` `0200`, `/dev/capuse` `0222` | the only way to become *another* user. eve writes an HMAC-SHA1 of `from@to@key` to `caphash`, minting a capability (`devcap.c:206`); anyone writes `from@to@key` to `capuse`, and if the hash matches a minted capability and `from` is the writer's current name, the kernel sets `up->user = to` (`devcap.c:215–252`) |
+
+A capability is **consumed** — `remcap` unlinks it from the list — so each is
+good once. This is what `auth/newns` and factotum use. It is also the answer to
+`su`: a process cannot name a user and become it; it presents a capability eve
+minted for exactly that transition.
+
+**`none` is contained**: it cannot read or write another process's state in
+`/proc` — `nonone` (`devproc.c:336`), against a subverted server.
+
+**Nothing is centrally privileged.** `iseve()` is called 27 times, spread
+across `devcap`, `devcons`, `devenv`, `devkbin`, `devkbmap`, `devmouse`,
+`devproc`, `devsd` and `devsegment`. Each device decides what eve may do at its
+own files. Authority lives at the resource.
 
 Everything below is userspace.
 
@@ -75,9 +108,9 @@ list of binds**, so `su` names none of them. It is not a mechanism; it is
 retarget `/bin`'s union element — the profile must be re-applied. That failure
 would pass a test that checked `/home` and fail in use.
 
-**Downward is free.** A process may become `none` and may not come back.
-Becoming another person needs eve, since their credentials were never yours to
-bind.
+**Downward is free** — `echo none > /dev/user`, one way. Becoming another
+person needs a capability eve minted for that exact transition, consumed once.
+`su` is therefore assembly plus a capability, never a bit in the process.
 
 ### Bare `su`, and `sudo`
 
