@@ -31,34 +31,53 @@ the same way rio does not reach inside acme's columns.
 |---|---|
 | **a rectangle** | the **content** rectangle — chrome is already subtracted. A manager never learns what furniture exists around it, or where |
 | **notification when it changes** | *resize*. The only thing crossing continuously — and the **cause** is never communicated, because the cause is the implementation's business: allocation, a drag, a grouping gesture |
-| **a namespace** | the window's own. Populating a window is **binding**: a debugger binds the debuggee's `/dev/cons` into one pane, its control file into another |
+| **a namespace** | the window's own — in rio, **16 files** (`rio/fsys.c:25`): `cons` `cursor` `consctl` `winid` `winname` `kbdin` `label` `mouse` `screen` `snarf` `text` `wdir` `wctl` `window` and the `wsys` directory. Populating a window is **binding**: rio mounts itself at `/mnt/wsys` and binds that over `/dev` with `MBEFORE` (`fsys.c:237`, `:241`), so a program's `/dev/cons` *is* its window |
 
 ## What a manager gives back
 
 | | |
 |---|---|
-| **minimum and natural size** | so any implementation can size it sensibly — tiled allocation and a floating window's initial size both need it |
+| **a requested rectangle** | rio takes `-r minx miny maxx maxy`, or `-dx`/`-dy` for a size (`wctl.c:68`). There is no separate minimum-and-natural negotiation in Plan 9 |
 | **a status line** | what the window reports about itself. The manager says *what*; the surface decides *how* it is drawn |
 | **verbs** | what the toolbar offers. **The MANAGER declares these, not the type** — `look` and `edit` are the same type and must differ, since Save and Undo are meaningless under `look` ([type.md](type.md)) |
 | **dirty state** | whether unsaved work exists |
 
-## The controls
+## The controls — Plan 9's, at `wctl`
 
-**close**, **minimise**, **maximise**, **duplicate** — a child *informs its
-parent*, which acts. The first three are in the contract because they are
-universal: every window system under every style has had them since 1984.
-Duplicate joins them because copying a window is equally style-neutral.
+A window manager already exists in `plan9/`, and its control vocabulary is
+`rio/wctl.c:35`. **Twelve verbs, written to the window's own `wctl` file:**
 
-**How many BUTTONS a person sees is the implementation's.** The tiled
-implementation renders duplicate as **three** — *as column*, *as row*, *as tab*
-— because those are its placements; a floating implementation would show one
-and place the copy itself. So the contract names **duplicate**, once, and
-[compositor.md](compositor.md) names the three. (Three buttons is what emca
-renders today, and may change.)
+```
+new  resize  move  scroll  noscroll  set
+top  bottom  current  hide  unhide  delete
+```
 
-What they *mean* is the implementation's. Under tiling, maximise minimises
-every sibling; under a floating manager it zooms. The manager asking never
-knows which.
+and thirteen parameters (`wctl.c:68`):
+
+```
+-cd  -dx  -dy  -hide  -id  -maxx  -maxy  -minx  -miny  -pid  -r  -scroll  -noscroll
+```
+
+`-minx -miny -maxx -maxy` are the **rectangle's corners**, and `-dx -dy` its
+size. There is no "minimum and natural size" negotiation: a client asks for a
+rectangle and rio answers.
+
+Mapping the four controls this document once named:
+
+| named here | rio |
+|---|---|
+| close | `delete` |
+| minimise | `hide`, with `unhide` to reverse |
+| maximise | **absent** — a client resizes itself with `resize -r` |
+| duplicate | **absent** |
+
+So two of the four are Plan 9's under other names, and two are inventions. A
+manager that wants maximise or duplicate builds it from `resize` and `new`,
+in userspace, like any other program.
+
+**What the implementation renders is still the implementation's.** rio draws
+none of these as buttons; the verbs are a file you write to. A surface that
+offers buttons is choosing to, and [compositor.md](compositor.md) says which.
 
 ## The four operands
 
@@ -68,7 +87,7 @@ A verb needs something to act on, and there are exactly four things it can be:
 |---|---|
 | **the window in its layout** | close, minimise, maximise, duplicate |
 | **the window's content** | the manager's verbs |
-| **the tag line's text** | **New, Open, Run, Find, Edit, Add** — always these six, in this order, in every window. The tag line is an *operand*, not a command line; empty means "use the selection" |
+| **the tag line's text** | **editable text, not a menu.** acme has no fixed six: the tag is a text the person types into, and the defaults are merely what is *inserted* into it, at three scopes — `New Cut Paste Snarf Sort Zerox Delcol ` for a column (`acme/cols.c:34`), `Newcol Kill Putall Dump Exit ` for the row above them (`rows.c:36`), and ` Del Snarf` appended after the filename for a window (`wind.c:467`). Any of the 28 built-ins (`exec.c:64`) or any command at all can be typed there. **`Open`, `Run`, `Find` and `Add` are not acme's words** |
 | **the selection** | verbs offered contextually |
 
 **The operands are the contract; where each appears is the surface's.** A title

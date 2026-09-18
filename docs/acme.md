@@ -6,6 +6,49 @@
 
 **Role: a *what* — the acme port specification.**
 
+## What acme is, measured — 2026-09-18
+
+Read from `plan9/sys/src/cmd/acme/`, because the program exists and the port
+must match it.
+
+**Its file interface.** acme is a file server. Top level (`fsys.c:62`):
+`acme` `cons` `consctl` `draw` `editout` `index` `label` `new` — note `draw`
+is a directory with mode `0000`, *"to suppress graphics progs started in
+acme"*. Per window (`fsys.c:76`), **11 files**:
+
+| | |
+|---|---|
+| `addr` | the address the next `data` operation applies to |
+| `body` `tag` | the two texts, both append-only (`QTAPPEND`) |
+| `data` `xdata` | read and write through `addr` |
+| `ctl` | the window's state and commands |
+| `event` | what the person did — a program reading this drives the window |
+| `rdsel` `wrsel` | the selection |
+| `editout` `errors` | output sinks |
+
+**Its commands — 28 built-ins** (`exec.c:64`):
+
+```
+Cut  Del  Delcol  Delete  Dump  Edit  Exit  Font  Get  ID  Incl
+Indent  Kill  Load  Local  Look  New  Newcol  Paste  Put  Putall
+Redo  Send  Snarf  Sort  Tab  Undo  Zerox
+```
+
+**Its tags are editable text, not menus**, and there are three, at three
+scopes:
+
+| | |
+|---|---|
+| the row above the columns | `Newcol Kill Putall Dump Exit ` (`rows.c:36`) |
+| a column | `New Cut Paste Snarf Sort Zerox Delcol ` (`cols.c:34`) |
+| a window | ` Del Snarf`, appended after the filename (`wind.c:467`) |
+
+Those strings are `textinsert`ed into an ordinary text. A person edits them,
+types any command into them, and executes any word with button 2. **A fixed
+list of verbs is the thing acme is not.** Anything in this document that
+renders the tag as a toolbar of fixed buttons is a departure from acme, not a
+port of it.
+
 ## Role: the port spec
 
 **acme is Bell Labs' program.** This document is how it is modified to fit into

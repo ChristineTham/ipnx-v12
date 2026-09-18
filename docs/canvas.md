@@ -60,6 +60,45 @@ one event (`select`) and one attr (`sel`) joined, each carried by a
 measured need; both pass through the devices untouched, so neither
 kernel changed.*
 
+## What Plan 9 does — read 2026-09-18
+
+Plan 9 draws through `#i`, and its interface is **five files per client**
+(`devdraw.c:18–25`):
+
+| | |
+|---|---|
+| `new` | opening it mints a client and its `ctl` |
+| `ctl` | the client's own state |
+| `data` | **where drawing happens** |
+| `colormap` | |
+| `refresh` | |
+
+**The vocabulary is single-byte opcodes written to `data`** — about 26 of
+them in `drawwrite`'s switch (`devdraw.c:1543–2085`). The drawing ones:
+
+| | |
+|---|---|
+| `d` | **draw** — source, mask and destination rectangles. This is the primitive; almost everything is a case of it |
+| `l` `L` | line |
+| `e` `E` | ellipse, filled ellipse |
+| `p` `P` | polygon, filled polygon |
+| `s` `x` | string, string over a background |
+| `y` `Y` | load pixels into an image |
+| `A` `S` `o` `t` `f` `F` `n` `N` `i` `c` `v` | screens, origins, top/bottom, free, name, init font, cursor, flush |
+
+and a client batches them in userspace before writing: `bufimage`
+(`libdraw/init.c:453`) fills a buffer of `iounit(datafd)` bytes
+(`init.c:291`, else 8000) and flushes when the next operation will not fit.
+
+**So the turtle vocabulary and SVG `path` notation below are deviations**, not
+gaps Plan 9 left open. Plan 9's answer is `draw` plus line, ellipse, polygon
+and string, composited with a mask. Adopting SVG path data instead is a change
+that needs Christine's approval, and the default answer is no.
+
+What *is* genuinely different here: Plan 9's `devdraw` is a renderer inside the
+kernel, and this system puts rendering in the host. That moves where the
+opcodes are executed. It does not by itself argue for different opcodes.
+
 ## The derivation (the measurement pass, 2026-08-30)
 
 | benchmark | demands | and nothing else |
