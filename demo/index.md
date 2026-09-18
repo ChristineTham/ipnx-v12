@@ -74,7 +74,7 @@ Underneath them is the real 4th-edition `rc` and twenty-four real Plan 9 command
 
 **pkg** — installing is a **bind**. A package is a verified subtree; `pkg install ruby` binds its binaries into `/bin`; versions coexist; conflicts are refused at install time; and a subshell that does `rfork n` owns a private environment that vanishes with it. No venv, no nvm, no flatpak, because the kernel can say `bind`.
 
-**#V** *(under review, 2026-09-03: Plan 9 has no such device, and snapshots move to a userspace file server with the filesystem)* — every system is a time machine. `echo snap t1 > '#V/ctl'` freezes the filesystem by copy-on-write — nine megabytes for twenty whole-system snapshots — `cat '#V/t1/tmp/f'` reads the past, and rollback is `bind '#V/t1/dir' /dir`. Nobody rewrites history, not even the owner.
+**Snapshots** — every system is a time machine. A snapshot freezes the filesystem by copy-on-write — nine megabytes for twenty whole-system snapshots — the past is readable as an ordinary tree, and rollback is a `bind` of it over the present. Nobody rewrites history, not even the owner. Snapshots are a userspace file server, not a kernel device.
 
 **run & svc** — orchestration without the industry. A process spec is a directory: a Dockerfile has to be a script because installing is mutation, and here it is a declaration because installing is a bind. `svc` keeps N replicas alive, and kubectl is `cat` and `echo`: `echo start web /spec 3 > /n/svc/ctl`.
 
@@ -93,7 +93,7 @@ cargo run --release -p host -- userspace/rootfs --live    # writes persist to th
 bash hosts/macos/mkapp.sh                                 # wrap it as IPNX.app
 ```
 
-Under `--app` the canvas renders natively *(status, 2026-09-03: `#V` and `/dev/snarf` are leaving the kernel — snapshots to a userspace file server, the clipboard to the host — so this paragraph describes the site as deployed, not the direction)*; `/dev/snarf` *is* the Mac pasteboard (`echo hi > /dev/snarf` then paste anywhere); and the versioning layer runs everywhere: `echo snap t1 > '#V/ctl'` freezes the filesystem, `bind '#V/t1/dir' /dir` is the rollback — twenty whole-system snapshots cost nine megabytes.
+Under `--app` the canvas renders natively; `/dev/snarf` *is* the Mac pasteboard (`echo hi > /dev/snarf` then paste anywhere), served by the host; and the versioning layer runs everywhere — a snapshot freezes the filesystem and a `bind` of it is the rollback, with twenty whole-system snapshots costing nine megabytes.
 
 Once the prompt appears, take the guided tour:
 

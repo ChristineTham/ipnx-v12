@@ -99,8 +99,7 @@ initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
 bash userspace/mk.sh
 ```
 
-The real implementation — the Rust kernel core (`kernel/`, RESEARCH §9.6; OS-free:
-'#Z' host files are ops delegated to the embedding) under the macOS wasmtime host
+The real implementation — the Rust kernel core (`kernel/`, RESEARCH §9.6) under the macOS wasmtime host
 (`hosts/macos/`), compiled to wasm for the browser (`hosts/browser/` +
 `demo/supervisor/rustkern.mjs` — THE DEMO'S KERNEL since 2026-08-31; the JS demo
 lineage is reference-in-tree), and driven headless by Node
@@ -256,8 +255,10 @@ That matters because of what the decision log was doing. It recorded
 "decisions", quoted her in them, and was then cited — by later sessions, and by
 this file — as settled fact not to be re-derived. A session would invent
 something, write it down as a decision, and every session after would defend it
-as hers. `#H`, `#V`, `#Z`, an effect list at the embedding boundary, a
-namespace keyed by path text: all of them became "decided" that way. The log is
+as hers. Three device letters that exist in no Plan 9 kernel — `#H`, `#V`,
+`#Z`, named here **only so they are recognised if they reappear** — plus an
+effect list at the embedding boundary and a namespace keyed by path text: all
+of them became "decided" that way. The log is
 archived at `docs/archive/design-log-claude-written.md` and **is not
 authority**.
 
@@ -317,16 +318,15 @@ sequenced by
   `kernel/`, the answer is wrong and the real answer is in the host or in
   userspace. The kernel may **shrink**; that is the only direction it moves.
 
-  The failure it names is specific and recent: the raster proposal's "Design A" proposed
-  extending `HostOp` with draw operations. It was offered as a legitimate
-  option and argued against on *other* grounds — a second IPC beside 9P — when
-  it should have been struck out on sight for growing the kernel.
+  The failure it names is concrete: a proposal once offered *"extend the host
+  op list with draw operations"* as a legitimate option, and it was argued
+  against on other grounds — a second IPC beside 9P — when it should have been
+  struck out on sight for growing the kernel.
 
-  **What the rule says about what is already there:** `#w` — the window device —
-  is **~1,100 lines, 22% of the kernel** (745 in `wsys_*`/`win_*`/`cv_*`/
-  `drawmsgs`, 364 in `draw.rs`), and none of it is process orchestration. the legacy a1
-  and a2 steps removed the tree by this reasoning without the rule being written
-  down; the rest follows the same way.
+  A window device is the standing example. Plan 9 has none: rio is an ordinary
+  userspace file server that posts to `/srv`, mounts at `/mnt/wsys` and binds
+  that over `/dev` (`rio/fsys.c:170`, `:237`, `:241`). Anything that would put
+  windows in the kernel is answered there.
 - **EVERY DEVIATION FROM PLAN 9 NEEDS CHRISTINE'S APPROVAL, AND THE DEFAULT
   ANSWER IS NO** (her rule, 2026-09-17). Not "is it defensible", not "is it
   forced by the substrate", not "would Dis need it too" — those are arguments

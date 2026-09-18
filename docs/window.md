@@ -178,8 +178,9 @@ make a floating implementation substitutable for the tiled one.
 
 rio — not acme — is therefore the analogue: it serves `/dev/cons`,
 `/dev/mouse` and `/dev/wctl` to its clients, with the full set at
-`/dev/emca/<n>/`. This project already follows it: `bind '#w/N' /dev` makes a
-namespace a window, and the supervisor's file is named `devwsys.mjs`.
+`/dev/emca/<n>/`. This is rio's own shape: rio mounts itself at `/mnt/wsys` and binds that over
+`/dev` with `MBEFORE` (`rio/fsys.c:237`, `:241`), so a namespace **is** a
+window.
 
 ```
 /dev/window/      each manager's OWN window — the common case, no id in the path
@@ -189,9 +190,9 @@ A manager opens /dev/window/rect, never /dev/emca/3/rect: no window id appears
 in any path a manager uses, because its namespace contains only its own window.
 It cannot reach another window's files — they are not there.
 
-/dev/window is ALREADY this project's path: /lib/namespace binds '#w' there,
-and the archived device spec used it. Ten generic names directly in /dev
-(ctl, events, size, type...) would collide with cons, draw and canvas.
+/dev/window keeps the window's own files under one name. Ten generic names
+directly in /dev (ctl, events, size, type...) would collide with cons, draw
+and canvas.
 
     rect      read  x y w h — the CONTENT rectangle, chrome already subtracted.
               A blocking read returns when it changes: that IS resize, and the

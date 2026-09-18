@@ -899,8 +899,8 @@ is DERIVED from the title after all — strip the /output prefix — so it
 is deterministic, visible in the path, and no type has to keep a
 private field.
 
-A parallel tree indexed by path is the house shape: #V/<snapshot>/…
-does it for versions, /n/ for mounted worlds. /output does it for what
+A parallel tree indexed by path is the house shape: `/n/` does it for
+mounted worlds, and a snapshot server does it for versions. /output does it for what
 commands said.
 
 ### The selection's verbs, and where they appear
@@ -1136,7 +1136,8 @@ Consequences:
 - the browser page, the macOS app and the iPadOS app stop being
   hosts that run a demo and become SURFACES OF EMCA. The demo is
   the system's face, not a demonstration of it.
-- emca absorbs rio's job. #w still mints windows; a program that
+- emca absorbs rio's job. A window is minted by the window manager,
+  not by a kernel device; a program that
   opens its own canvas window appears as an emca window of a canvas
   type. rio-today as a separate design retires.
 - a window IS a namespace view, which makes per-window confinement

@@ -51,7 +51,7 @@ kernel changes.
 > **The convention: `/dev` is the slot that can be virtualised.** Not "where
 > devices live" — the place whose contents may be substituted underneath a
 > process without it being able to tell. That is why a window's files belong
-> there rather than under `/mnt`, and why `bind '#w/N' /dev` was the right shape
+> there rather than under `/mnt`, and why binding a window's directory over `/dev` was the right shape
 > from the start.
 
 That indistinguishability is the load-bearing property, and it is rio's: a

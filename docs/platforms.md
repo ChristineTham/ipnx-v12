@@ -30,7 +30,7 @@ are unaffected.
 
 | form | host | engine (guests) | state (2026-08-30) |
 |---|---|---|---|
-| **macOS** | `hosts/macos` | wasmtime 48, Cranelift JIT | **green, 149** (floor 131) headless — full canvas parity (M5); **IPNX.app runs** (M3): windows via winit/softbuffer, acme on screen, `--live` hostfs persistence (M4), `#V` snapshots, and the canvas presenter v0 renders the semantic tree natively (con's transcript verified by capture) |
+| **macOS** | `hosts/macos` | wasmtime 48, Cranelift JIT | **green, 149** (floor 131) headless — full canvas parity (M5); **IPNX.app runs** (M3): windows via winit/softbuffer, acme on screen, `--live` hostfs persistence (M4), snapshots, and the canvas presenter v0 renders the semantic tree natively (con's transcript verified by capture) |
 | **OCI container** | `hosts/oci` | wasmtime, Cranelift (or AOT `.cwasm`) | **green, 149** (floor 131) — `FROM scratch`, musl-static, 62.2MB image, proven on every push by CI (amd64 full suite; the aarch64 image smoke-boots under qemu) |
 | **iPadOS** | `hosts/ipados` (M6, **re-aimed 2026-08-30**) | WKWebView (JavaScriptCore, full JIT — sanctioned in the content process); SwiftUI presents | the webview is the engine room, not the display: kernel + binaries inside WebKit (WKURLSchemeHandler serves the bundled dist with real COOP/COEP; offline first boot), `/dev/canvas` crosses the bridge to a native SwiftUI presenter, and the app's file entitlements serve the local filesystem into hostfs (a security-scoped bookmark is a bind); Pulley demoted to fallback research |
 | **VSCode** | `hosts/vscode` (M13, designed 2026-08-30) | the extension host's Node (kernel-as-a-library) | unbuilt — FileSystemProvider ≈ 9P mounts the namespace as a workspace; Pseudoterminal is `/dev/cons`; tasks run process files; canvas panels after M5 |
@@ -109,9 +109,9 @@ and the union-of-system-and-yours rule it rests on, are ours. Both are
 userspace — a namespace file and a set of binds — so nothing in the kernel
 follows from them.
 
-**`#R` is not a device.** `/` in Plan 9 is `mount -aC #s/boot /root` followed
-by `bind -a $rootdir /` — a file server posted in `#s`, mounted. Not a ramfs
-device letter.
+**`/` is not a device.** In Plan 9 it is `mount -aC #s/boot /root` followed by
+`bind -a $rootdir /` — a file server posted in `#s`, mounted. There is no root
+ramfs device letter to invent.
 
 **Mounts are not prefix-map entries.** `findmount` (`chan.c:855`) keys a mount
 by the identity of the channel mounted upon, and `namec` checks at every
@@ -193,7 +193,7 @@ in seconds, and three real toolchains streaming into the live namespace
 behind the visitor — a real cc(1) over clang, THE REAL gc compiler and
 linker as guests (the "Go cannot compile on wasm" folklore fell to the
 process model), pip installing sha256-verified wheels from the real PyPI
-over the `#H` webfs device, the full CPython stdlib, and runnable examples
+over a webfs served into the namespace, the full CPython stdlib, and runnable examples
 in the home (python.org's programs verbatim; gobyexample's features).
 **What it changes about the bet**: the browser-tab form now demonstrates
 the *thesis*, not just the kernel — personalities absorbing unmodified
@@ -265,12 +265,12 @@ answers the baseline's two named tests honestly.
 **What has actually shipped since the last entry**: the container form
 (M1 — `FROM scratch`, musl-static, 62.2MB, the floor gated on every push,
 an aarch64 image smoke-booting under qemu); boot as a namespace file (M2);
-the macOS app (M3); host storage (M4 — `#Z`, `--live`); pkg v1 with the
+the macOS app (M3); host storage (M4, `--live`); pkg v1 with the
 demo doubling as a live registry and five language toolchains installable
 in the field form; the Safari failure root-caused to `http://` (Pages'
 `https_enforced` was off — forced on, both repositories); and the
 engineering round that closed every recorded deferral, the versioning
-layer `#V` and `ar(1)` among them. 143 on all three hosts; CI proves
+layer and `ar(1)` among them. 143 on all three hosts; CI proves
 world, container and arm64 on every push.
 
 **The baseline's two tests, answered.** *Does the container form find use

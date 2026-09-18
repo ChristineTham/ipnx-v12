@@ -197,7 +197,7 @@ the redesign completes the merger the originals gestured at:
 ## rio-today: policy as a file server
 
 > **Retired as a separate design, 2026-08-31 (decision log): emca
-> absorbs it.** `#w` still mints windows and a window is still a
+> absorbs it.** The window manager still mints windows and a window is still a
 > namespace; a program that opens its own canvas window now appears as
 > an emca window of a canvas type. The proof this section records
 > (`/rc/tile`, a window manager in a dozen lines of rc) stands as

@@ -111,7 +111,7 @@ the tree below stays where it is.
 |---|---|---|
 | **console-today** | one `edit` node (the transcript); insert/delete events with offsets and text (typing echo is presenter-local — the app *observes* edits, acme's discipline); addressed writes (append output, rewrite the input region); `label` | no key events — typed text arrives as edit events; arrows/scroll are presenter-local |
 | **acme-today** | `stack` (columns and rows: orientation, order, proportion attrs); `edit` bodies and tags; `execute`/`look` events carrying node, range and the text under the verb | no pre-marked span roles in v0 — the event carries the target text and policy decides (span attrs arrive with the web presenter's real links, later) |
-| **rio-today** | `resize` and `close` as events — the protocol lines that retire the demo's oldest deferral; windows themselves stay `#w`'s | no nested windowing in v0 (that is the remote-surface story) |
+| **rio-today** | `resize` and `close` as events — the protocol lines that retire the demo's oldest deferral; windows themselves are the window manager's | no nested windowing in v0 (that is the remote-surface story) |
 | **one plot** | `path` (SVG path data verbatim — adopt notation, own the model); `text` labels; a `viewbox` attr for coordinates; stroke/fill attrs | no gradients, no clipping, no transforms in v0 |
 
 Kinds shipped in v0: **`stack · text · edit · path`**. The vocabulary's
@@ -128,7 +128,8 @@ A window's canvas is a flat directory of numbered nodes — acme's shape:
 structure lives in attrs, not filesystem nesting, so the whole UI greps.
 
 ```
-/dev/canvas/            (bind '#w/N' /dev makes this a window's)
+/dev/canvas/            (the window manager binds its window over /dev,
+                         as rio binds /mnt/wsys there — rio/fsys.c:241)
   ctl                   new · del · sync · event
   events                the surface speaks: one line per event, reads park
   caps                  what the attached surface offers (ro)

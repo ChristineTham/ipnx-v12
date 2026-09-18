@@ -460,7 +460,7 @@ group   kitty
 size    4096
 mtime   2026-09-02 14:22:07
 qid     0x8a3f1c v3 file
-served  #R (ramfs)
+served  a root file server
 ```
 
 Change the `mode` line and Save, and `chmod` happens. Change `owner`, and the
@@ -565,7 +565,8 @@ and `/template` already work.
 **Name-and-version is the interface; content-addressing is not.** A declaration
 names `/store/python/3.14`, and whether the store implements that as a real
 directory or as a bind to a hash-named one is **invisible to everything above**.
-So dedup can arrive later without changing a single declaration — and `#V`
+So dedup can arrive later without changing a single declaration — and a
+snapshot server
 already proves the system can share unchanged bytes structurally.
 
 ### What a declaration does with it
@@ -688,7 +689,7 @@ digest is pinned in the declaration.
 > **DECIDED 2026-09-04 — `/store` IS SERVED BY A USERSPACE FILE SERVER over a
 > host directory.** Christine, choosing between the two this paragraph had
 > weighed without stating a lean: **verification lives inside IPNX**, not in a
-> promise the host makes. `storefs` reads the host's directory through `#Z` and
+> promise the host makes. `storefs` reads the host's directory over 9P and
 > serves `/store` over 9P, so *"a store entry never changes after verification"*
 > is a rule a program we own enforces, and *"a name that would bind over
 > different bytes is refused"* is checkable at install rather than debuggable
@@ -700,7 +701,7 @@ digest is pinned in the declaration.
 >
 > **2026-09-02.** It must be immutable-after-write,
 > reachable by every process that binds from it, and durable across boots — so
-> it is either host storage behind `#Z` (durable, but the host owns the
+> it is either host storage the host serves over 9P (durable, but the host owns the
 > integrity guarantee) or a userspace file server over a host directory
 > (integrity in IPNX, one more process). The first is simpler; the second keeps
 > the verification where the design says trust lives.
