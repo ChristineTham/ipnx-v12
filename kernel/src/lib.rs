@@ -110,11 +110,16 @@ pub enum Call {
 ///
 /// It is built with its machine, as Plan 9 is compiled for one architecture.
 pub struct Kernel {
-    pub procs: proc::Procs,
+    /// The process table, shared with the devices that read `up` through it —
+    /// which is what Plan 9 gets from its being a global.
+    pub procs: std::rc::Rc<std::cell::RefCell<proc::Procs>>,
     pub tab: namec::Devtab,
     machine: Box<dyn machine::Machine>,
     /// `Mach.syscall` (`pc/dat.h:234`) — what `/dev/sysstat` reports.
     pub syscalls: u64,
+    /// `up` — the calling process, which the devices that need it read
+    /// through. Set before each dispatch.
+    pub up: std::rc::Rc<std::cell::RefCell<proc::Up>>,
 }
 
 impl Kernel {
@@ -129,7 +134,9 @@ impl Kernel {
         let mut root = root;
         let slash = root.attach("")?;
         tab.add(Box::new(root));
-        Ok(Kernel { procs: proc::Procs::new(slash), tab, machine, syscalls: 0 })
+        let procs = std::rc::Rc::new(std::cell::RefCell::new(proc::Procs::new(slash)));
+        let up = std::rc::Rc::new(std::cell::RefCell::new(proc::Up { pid: 1, procs: procs.clone() }));
+        Ok(Kernel { procs, up, tab, machine, syscalls: 0 })
     }
 
     /// `exec`, in the order `sysexec` does it (`sysproc.c:302`).
@@ -148,7 +155,7 @@ impl Kernel {
         // machine supplies it, and nothing else in the kernel needs to know
         // what a clock is.
         let now = self.machine.todget().nsec;
-        self.procs.started(pid, now);
+        self.procs.borrow_mut().started(pid, now);
         // The machine runs the process, and the process calls back here while
         // it does. Plan 9 needs no arrangement for that — a trap lands in
         // `syscall()` and reaches the kernel through globals. Rust needs the
@@ -158,14 +165,15 @@ impl Kernel {
         let status = m.touser(pid, &image, args, self);
         self.machine = m;
         let status = status?;
-        self.procs.exits(pid, &status);
+        self.procs.borrow_mut().exits(pid, &status);
         Ok(status)
     }
 
     /// Steps 1 and 2 alone: resolve and read. Split out because it is entirely
     /// Plan 9's, and so it can be tested without a machine.
     pub fn exec_image(&mut self, pid: Pid, path: &str) -> Result<Vec<u8>, String> {
-        let p = self.procs.get(pid).ok_or("no such process")?;
+        let procs = self.procs.borrow();
+                let p = procs.get(pid).ok_or("no such process")?;
         let (slash, dot, ns) = (p.slash.clone(), p.dot.clone(), p.ns.clone());
         let ns = ns.borrow();
         let mut c = namec::namec(
@@ -256,7 +264,7 @@ mod tests {
 
     #[test]
     fn a_kernel_begins_with_pid_one() {
-        assert_eq!(booted().procs.count(), 1);
+        assert_eq!(booted().procs.borrow().count(), 1);
     }
 
     #[test]
@@ -355,7 +363,7 @@ impl Kernel {
         self.syscalls += 1;
         let r = self.dispatch(up, call);
         if let Err(e) = &r {
-            self.procs.seterrstr(up, e);
+            self.procs.borrow_mut().seterrstr(up, e);
         }
         r
     }
@@ -363,7 +371,7 @@ impl Kernel {
     fn dispatch(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
         match call {
             // ---- processes
-            Call::Rfork { flags } => match self.procs.rfork(up, flags) {
+            Call::Rfork { flags } => match self.procs.borrow_mut().rfork(up, flags) {
                 Some(pid) => Ok(Ret::Pid(pid)),
                 None => {
                     proc::Procs::rforkcheck(flags)?;
@@ -372,20 +380,21 @@ impl Kernel {
             },
             Call::Exec { path, args } => Ok(Ret::Str(self.exec(up, &path, &args)?)),
             Call::Exits { status } => {
-                self.procs.exits(up, &status);
+                self.procs.borrow_mut().exits(up, &status);
                 Ok(Ret::Ok)
             }
-            Call::Await => match self.procs.await_child(up) {
+            Call::Await => match self.procs.borrow_mut().await_child(up) {
                 Some((pid, status)) => Ok(Ret::Wait(pid, status)),
                 None => Err("no living children".into()),
             },
-            Call::Errstr => Ok(Ret::Str(self.procs.errstr(up))),
+            Call::Errstr => Ok(Ret::Str(self.procs.borrow_mut().errstr(up))),
 
             // ---- the namespace
             Call::Bind { name, old, flag } => {
                 let on = self.walk(up, &old, namec::A::Todir, 0)?;
                 let to = self.walk(up, &name, namec::A::Todir, 0)?;
-                let p = self.procs.get(up).ok_or("no such process")?;
+                let procs = self.procs.borrow();
+                let p = procs.get(up).ok_or("no such process")?;
                 p.ns.borrow_mut().mount(&on, ns::Element::new(to), bind_of(flag));
                 Ok(Ret::Ok)
             }
@@ -395,13 +404,14 @@ impl Kernel {
                     Some(n) => Some(self.walk(up, n, namec::A::Todir, 0)?),
                     None => None,
                 };
-                let p = self.procs.get(up).ok_or("no such process")?;
+                let procs = self.procs.borrow();
+                let p = procs.get(up).ok_or("no such process")?;
                 p.ns.borrow_mut().unmount(&on, what.as_ref());
                 Ok(Ret::Ok)
             }
             Call::Chdir { path } => {
                 let c = self.walk(up, &path, namec::A::Todir, 0)?;
-                self.procs.chdir(up, c);
+                self.procs.borrow_mut().chdir(up, c);
                 Ok(Ret::Ok)
             }
 
@@ -415,7 +425,8 @@ impl Kernel {
                 Ok(Ret::Fd(self.newfd(up, c)?))
             }
             Call::Close { fd } => {
-                let p = self.procs.get(up).ok_or("no such process")?;
+                let procs = self.procs.borrow();
+                let p = procs.get(up).ok_or("no such process")?;
                 if p.fds.borrow_mut().close(fd) {
                     Ok(Ret::Ok)
                 } else {
@@ -425,7 +436,7 @@ impl Kernel {
             Call::Pread { fd, n, off } => {
                 let mut c = self.chan(up, fd)?;
                 let at = if off < 0 { c.offset } else { off as u64 };
-                let d = self.tab.get(c.dev).ok_or(ENODEV)?.read(&mut c, n, at)?;
+                let d = self.tab.dread(&mut c, n, at)?;
                 if off < 0 {
                     self.advance(up, fd, d.len() as u64);
                 }
@@ -434,7 +445,7 @@ impl Kernel {
             Call::Pwrite { fd, data, off } => {
                 let mut c = self.chan(up, fd)?;
                 let at = if off < 0 { c.offset } else { off as u64 };
-                let n = self.tab.get(c.dev).ok_or(ENODEV)?.write(&mut c, &data, at)?;
+                let n = self.tab.dwrite(&mut c, &data, at)?;
                 if off < 0 {
                     self.advance(up, fd, n as u64);
                 }
@@ -443,7 +454,8 @@ impl Kernel {
             // `seek` is fd-class, not 9P: the offset is kernel state in the
             // Chan, because `Tread`/`Twrite` carry theirs explicitly.
             Call::Seek { fd, off, whence } => {
-                let p = self.procs.get(up).ok_or("no such process")?;
+                let procs = self.procs.borrow();
+                let p = procs.get(up).ok_or("no such process")?;
                 let fds = p.fds.clone();
                 let cell = fds.borrow().get(fd).cloned().ok_or(EBADFD)?;
                 let mut c = cell.borrow_mut();
@@ -456,7 +468,8 @@ impl Kernel {
                 Ok(Ret::N(new as usize))
             }
             Call::Dup { old, new } => {
-                let p = self.procs.get(up).ok_or("no such process")?;
+                let procs = self.procs.borrow();
+                let p = procs.get(up).ok_or("no such process")?;
                 let fds = p.fds.clone();
                 let r = fds.borrow_mut().dup(old, new).ok_or(EBADFD)?;
                 Ok(Ret::Fd(r))
@@ -470,7 +483,8 @@ impl Kernel {
                     let d = self.tab.get(dev::DevId::Pipe).ok_or(ENODEV)?;
                     let mut c = dir.clone();
                     c.qid = d.walk(&dir, name)?.ok_or("no such file")?;
-                    let c = d.open(c, chan::mode::ORDWR)?;
+                    let _ = d;
+                    let c = self.tab.dopen(c, chan::mode::ORDWR)?;
                     ends.push(c);
                 }
                 let b = self.newfd(up, ends.pop().unwrap())?;
@@ -479,37 +493,42 @@ impl Kernel {
             }
             Call::Remove { path } => {
                 let mut c = self.walk(up, &path, namec::A::Access, 0)?;
-                self.tab.get(c.dev).ok_or(ENODEV)?.remove(&mut c)?;
+                self.tab.dremove(&mut c)?;
                 Ok(Ret::Ok)
             }
             Call::Stat { path } => {
                 let c = self.walk(up, &path, namec::A::Access, 0)?;
-                Ok(Ret::Data(self.tab.get(c.dev).ok_or(ENODEV)?.stat(&c)?))
+                Ok(Ret::Data(self.tab.dstat(&c)?))
             }
             Call::Fstat { fd } => {
                 let c = self.chan(up, fd)?;
-                Ok(Ret::Data(self.tab.get(c.dev).ok_or(ENODEV)?.stat(&c)?))
+                Ok(Ret::Data(self.tab.dstat(&c)?))
             }
             Call::Wstat { path, edir } => {
                 let mut c = self.walk(up, &path, namec::A::Access, 0)?;
-                self.tab.get(c.dev).ok_or(ENODEV)?.wstat(&mut c, &edir)?;
+                self.tab.dwstat(&mut c, &edir)?;
                 Ok(Ret::Ok)
             }
             Call::Fwstat { fd, edir } => {
                 let mut c = self.chan(up, fd)?;
-                self.tab.get(c.dev).ok_or(ENODEV)?.wstat(&mut c, &edir)?;
+                self.tab.dwstat(&mut c, &edir)?;
                 Ok(Ret::Ok)
             }
 
             // ---- not yet
-            // The 9P client is built and proven (`devmnt.rs`), but it is not
-            // reachable from here yet. `#M` is the one device that talks to
-            // ANOTHER device — Plan 9 does it through the global
-            // `devtab[m->c->type]` (`mountio`) — and this kernel's device
-            // table is owned, not global, so the mount driver cannot hold a
-            // transport onto a channel the table also serves. See
-            // `docs/when.md`; the shape of the answer is Christine's.
-            Call::Mount { .. } => Err("mount(2) is not wired to #M yet".into()),
+            // `sysmount` (`sysfile.c`): the fd is a channel to a SERVER, and
+            // `#M` speaks 9P down it. Every other device presents files as
+            // function calls; this is the one crossing.
+            Call::Mount { fd, afd: _, old, flag, aname } => {
+                let wire = self.chan(up, fd)?;
+                let on = self.walk(up, &old, namec::A::Todir, 0)?;
+                let user = self.procs.borrow().user(up).unwrap_or_default();
+                let to = self.tab.dmount(wire, &user, &aname)?;
+                let procs = self.procs.borrow();
+                let p = procs.get(up).ok_or("no such process")?;
+                p.ns.borrow_mut().mount(&on, ns::Element::new(to), bind_of(flag));
+                Ok(Ret::Ok)
+            }
             Call::Fversion { .. } => Err("fversion is mntversion's, done at mount".into()),
             Call::Sleep { .. } | Call::Alarm { .. } => Err("no scheduler yet — P3".into()),
             Call::Notify | Call::Noted { .. } => Err("no notes yet — P3".into()),
@@ -519,28 +538,32 @@ impl Kernel {
 
     /// `namec` for the calling process: its namespace, its `slash`, its `dot`.
     fn walk(&mut self, up: Pid, path: &str, a: namec::A, mode: u16) -> Result<Chan, String> {
-        let p = self.procs.get(up).ok_or("no such process")?;
+        let procs = self.procs.borrow();
+                let p = procs.get(up).ok_or("no such process")?;
         let (slash, dot, ns) = (p.slash.clone(), p.dot.clone(), p.ns.clone());
         let ns = ns.borrow();
         namec::namec(&mut self.tab, &ns, &slash, &dot, path, a, mode)
     }
 
     fn walk_create(&mut self, up: Pid, path: &str, mode: u16, perm: u32) -> Result<Chan, String> {
-        let p = self.procs.get(up).ok_or("no such process")?;
+        let procs = self.procs.borrow();
+                let p = procs.get(up).ok_or("no such process")?;
         let (slash, dot, ns) = (p.slash.clone(), p.dot.clone(), p.ns.clone());
         let ns = ns.borrow();
         namec::create(&mut self.tab, &ns, &slash, &dot, path, mode, perm)
     }
 
     fn newfd(&mut self, up: Pid, c: Chan) -> Result<Fd, String> {
-        let p = self.procs.get(up).ok_or("no such process")?;
+        let procs = self.procs.borrow();
+                let p = procs.get(up).ok_or("no such process")?;
         let fds = p.fds.clone();
         let fd = fds.borrow_mut().add(c);
         Ok(fd)
     }
 
     fn chan(&mut self, up: Pid, fd: Fd) -> Result<Chan, String> {
-        let p = self.procs.get(up).ok_or("no such process")?;
+        let procs = self.procs.borrow();
+                let p = procs.get(up).ok_or("no such process")?;
         let fds = p.fds.clone();
         let cell = fds.borrow().get(fd).cloned().ok_or(EBADFD)?;
         let c = cell.borrow().clone();
@@ -549,7 +572,7 @@ impl Kernel {
 
     /// A read or write at offset −1 uses and advances the Chan's own offset.
     fn advance(&mut self, up: Pid, fd: Fd, by: u64) {
-        if let Some(p) = self.procs.get(up) {
+        if let Some(p) = self.procs.borrow().get(up) {
             if let Some(c) = p.fds.borrow().get(fd) {
                 c.borrow_mut().offset += by;
             }
@@ -692,6 +715,149 @@ mod syscalls {
         let _ = k.syscall(1, Call::Errstr);
         let _ = k.syscall(1, Call::Open { path: "/nothing".into(), mode: 0 });
         assert_eq!(k.syscalls, 2, "a failed call is still a call");
+    }
+
+    /// A device that is a 9P server: write it a request, read back the reply.
+    /// That is what a file server is — a process reading 9P off a channel —
+    /// and a pipe with something on the far end differs only in how the bytes
+    /// travel.
+    #[derive(Default)]
+    struct Server9P {
+        reply: Vec<u8>,
+    }
+
+    impl dev::Dev for Server9P {
+        fn id(&self) -> dev::DevId {
+            dev::DevId::Env // borrowing a letter; this stands in for a wire
+        }
+        fn as_any(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+        fn attach(&mut self, _s: &str) -> Result<Chan, String> {
+            Ok(Chan::attach(dev::DevId::Env, 0))
+        }
+        fn walk(&mut self, _c: &Chan, _n: &str) -> Result<Option<ninep::Qid>, String> {
+            Ok(None)
+        }
+        fn open(&mut self, c: Chan, _m: u16) -> Result<Chan, String> {
+            Ok(c)
+        }
+        fn create(&mut self, _c: &mut Chan, _n: &str, _m: u16, _p: u32) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn read(&mut self, _c: &mut Chan, n: usize, _o: u64) -> Result<Vec<u8>, String> {
+            let take = n.min(self.reply.len());
+            Ok(self.reply.drain(..take).collect())
+        }
+        fn write(&mut self, _c: &mut Chan, data: &[u8], _o: u64) -> Result<usize, String> {
+            self.reply = serve9p(data);
+            Ok(data.len())
+        }
+        fn stat(&mut self, _c: &Chan) -> Result<Vec<u8>, String> {
+            Ok(Vec::new())
+        }
+        fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn remove(&mut self, _c: &mut Chan) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn close(&mut self, _c: &mut Chan) {}
+    }
+
+    /// One flat file, served in 9P2000.
+    fn serve9p(req: &[u8]) -> Vec<u8> {
+        use ninep::{unframe, Qid, R, T, W, QTDIR};
+        let m = unframe(req).expect("malformed");
+        let mut r = R::new(m.body);
+        match m.ty {
+            x if x == T::Version as u8 => {
+                let msize = r.u32().unwrap();
+                let _v = r.s().unwrap();
+                W::new().u32(msize.min(8192)).s("9P2000").frame(T::Version.reply(), m.tag)
+            }
+            x if x == T::Attach as u8 => {
+                let q = Qid { qtype: QTDIR, vers: 0, path: 0 };
+                W::new().raw(&q.write(W::new()).into_body()).frame(T::Attach.reply(), m.tag)
+            }
+            x if x == T::Walk as u8 => {
+                let (_from, _newfid) = (r.u32().unwrap(), r.u32().unwrap());
+                let n = r.u16().unwrap();
+                let mut qids = Vec::new();
+                for _ in 0..n {
+                    if r.s().unwrap() == "answer" {
+                        qids.push(Qid { qtype: 0, vers: 0, path: 1 });
+                    }
+                }
+                let mut w = W::new().u16(qids.len() as u16);
+                for q in &qids {
+                    w = w.raw(&q.write(W::new()).into_body());
+                }
+                w.frame(T::Walk.reply(), m.tag)
+            }
+            x if x == T::Open as u8 => {
+                let q = Qid { qtype: 0, vers: 0, path: 1 };
+                W::new().raw(&q.write(W::new()).into_body()).u32(0).frame(T::Open.reply(), m.tag)
+            }
+            x if x == T::Read as u8 => {
+                let (_fid, off, count) = (r.u32().unwrap(), r.u64().unwrap(), r.u32().unwrap());
+                let data = b"served over 9P";
+                let off = off as usize;
+                let end = (off + count as usize).min(data.len());
+                let slice = if off >= data.len() { &[][..] } else { &data[off..end] };
+                W::new().u32(slice.len() as u32).raw(slice).frame(T::Read.reply(), m.tag)
+            }
+            x if x == T::Clunk as u8 => W::new().frame(T::Clunk.reply(), m.tag),
+            _ => W::new().s("not implemented").frame(T::Error.reply(), m.tag),
+        }
+    }
+
+    /// **P2's acceptance, whole.** A channel is posted at `/srv`; it is opened
+    /// by name, mounted, and a file is then resolved THROUGH that mount by an
+    /// ordinary `open`. Four devices and the namespace, in one path.
+    #[test]
+    fn a_posted_channel_is_mounted_and_a_name_resolves_through_it() {
+        let mut k = booted();
+        k.tab.add(Box::new(Server9P::default()));
+        k.tab.add(Box::new(devsrv::SrvDev::new(k.up.clone())));
+        k.tab.add(Box::new(devmnt::MntDev::new()));
+
+        // a server opens its own channel and posts it at #s/store
+        let Ret::Fd(wire) = k.syscall(1, Call::Open { path: "#e".into(), mode: 2 }).unwrap()
+        else {
+            panic!()
+        };
+        let Ret::Fd(post) = k
+            .syscall(1, Call::Create { path: "#s/store".into(), mode: 1, perm: 0o600 })
+            .unwrap()
+        else {
+            panic!()
+        };
+        k.syscall(1, Call::Pwrite { fd: post, data: wire.to_string().into_bytes(), off: -1 })
+            .unwrap();
+
+        // another process opens the NAME and gets the posted channel
+        let Ret::Fd(got) = k.syscall(1, Call::Open { path: "#s/store".into(), mode: 2 }).unwrap()
+        else {
+            panic!()
+        };
+
+        // mount it over /n — the 9P conversation runs inside this call
+        k.syscall(
+            1,
+            Call::Mount { fd: got, afd: -1, old: "/".into(), flag: 1, aname: String::new() },
+        )
+        .expect("mount");
+
+        // and a name resolves through it
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/answer".into(), mode: 0 }).unwrap()
+        else {
+            panic!("the mounted server was not reached")
+        };
+        assert_eq!(
+            k.syscall(1, Call::Pread { fd, n: 64, off: -1 }).unwrap(),
+            Ret::Data(b"served over 9P".to_vec())
+        );
     }
 
     /// The calls P2 and P3 have not reached say so rather than pretending.

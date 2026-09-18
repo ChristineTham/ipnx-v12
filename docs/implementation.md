@@ -138,14 +138,14 @@ reads the image, and then does the machine's half. All three now happen.
 **It moves nothing on the conformance checklist, and that is right** — every one
 of the twelve needs a shell, and there is no userspace. Still 0 of 12.
 
-## P2 — the devices orchestration needs
+## P2 — the devices orchestration needs *(done)*
 
 | | |
 |---|---|
 | **builds** | `#|` pipe, `#s` srv, `#d` dup, `#p` proc, `#e` env, `#/` root, and `#M` — the mount driver, and the only place wire 9P is marshalled. All Plan 9's, none added |
 | **depends on** | P1 |
-| **acceptance** | two processes talk over a pipe; one posts a channel at `/srv` and the other mounts it; a namespace built by `bind` and `mount` resolves |
-| **exposes** | there is nothing to run yet — no libc, no commands |
+| **acceptance** | **all three pass.** Two processes talk over a pipe; a channel posted at `/srv` is opened by name and mounted; a file resolves through that mount by an ordinary `open` |
+| **exposes** | there is nothing to run yet — no libc, no commands. And `#M` forced a correction: the device table held state, where Plan 9's `devtab[]` holds only vtables (`portdat.h`, `struct Dev`) and each device's state is a file-scope global. See [when.md](when.md) |
 
 **`#c` and `#¤` are both in** — Christine, 2026-09-18: *"we should keep `#c`
 in since it holds a variety of kernel info"*.

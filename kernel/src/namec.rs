@@ -18,6 +18,7 @@
 
 use crate::chan::Chan;
 use crate::dev::{self, Dev, DevId};
+use crate::ninep::Qid;
 use crate::ns::Ns;
 use std::collections::HashMap;
 
@@ -61,6 +62,149 @@ impl Devtab {
 
     pub fn put(&mut self, d: Box<dyn Dev>) {
         self.devs.insert(d.id(), d);
+    }
+
+    /// The mount driver, taken out for the length of one operation.
+    ///
+    /// **This is what makes `#M` possible**, and it is Plan 9's arrangement
+    /// rather than a trick. `devtab[]` holds `Dev*` — seventeen function
+    /// pointers and no state (`portdat.h`, `struct Dev`) — and devmnt's own
+    /// state is `mntalloc` (`devmnt.c:48`), a file-scope global that was never
+    /// in the table. So `mountio`'s `devtab[m->c->type]->bwrite` reaches a
+    /// vtable, never devmnt's state, and cannot recur into it.
+    ///
+    /// Here the state IS in the table, so the same property is arranged by
+    /// taking the driver out: while it runs, nothing can reach it, and the
+    /// rest of the table is free for its wire.
+    fn with_mnt<R>(
+        &mut self,
+        f: impl FnOnce(&mut crate::devmnt::MntDev, &mut Devtab) -> R,
+    ) -> Result<R, String> {
+        let mut boxed = self.take(DevId::Mnt).ok_or("no mount driver")?;
+        let r = match boxed.as_any().downcast_mut::<crate::devmnt::MntDev>() {
+            None => Err("#M is not the mount driver".to_string()),
+            Some(m) => Ok(f(m, self)),
+        };
+        self.put(boxed);
+        r
+    }
+
+    /// `devtab[c->type]->walk(...)` and the rest. Every device operation goes
+    /// through these, so `#M` is dispatched the same way as anything else
+    /// from a caller's point of view.
+    pub fn dwalk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+        if c.dev == DevId::Mnt {
+            let (c, name) = (c.clone(), name.to_string());
+            return self.with_mnt(|m, tab| {
+                let mut w = Wire::new(&c, m, tab)?;
+                m.walk(&mut w, &c, &name)
+            })?;
+        }
+        self.get(c.dev).ok_or("no such device")?.walk(c, name)
+    }
+
+    pub fn dopen(&mut self, c: Chan, mode: u16) -> Result<Chan, String> {
+        if c.dev == DevId::Mnt {
+            return self.with_mnt(|m, tab| {
+                let mut w = Wire::new(&c, m, tab)?;
+                m.open(&mut w, c.clone(), mode)
+            })?;
+        }
+        self.get(c.dev).ok_or("no such device")?.open(c, mode)
+    }
+
+    pub fn dread(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
+        if c.dev == DevId::Mnt {
+            let mut cc = c.clone();
+            return self.with_mnt(|m, tab| {
+                let mut w = Wire::new(&cc, m, tab)?;
+                m.read(&mut w, &mut cc, n, off)
+            })?;
+        }
+        self.get(c.dev).ok_or("no such device")?.read(c, n, off)
+    }
+
+    pub fn dwrite(&mut self, c: &mut Chan, data: &[u8], off: u64) -> Result<usize, String> {
+        if c.dev == DevId::Mnt {
+            let mut cc = c.clone();
+            let data = data.to_vec();
+            return self.with_mnt(|m, tab| {
+                let mut w = Wire::new(&cc, m, tab)?;
+                m.write(&mut w, &mut cc, &data, off)
+            })?;
+        }
+        self.get(c.dev).ok_or("no such device")?.write(c, data, off)
+    }
+
+    pub fn dstat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
+        if c.dev == DevId::Mnt {
+            let c = c.clone();
+            return self.with_mnt(|m, tab| {
+                let mut w = Wire::new(&c, m, tab)?;
+                m.stat(&mut w, &c)
+            })?;
+        }
+        self.get(c.dev).ok_or("no such device")?.stat(c)
+    }
+
+    pub fn dcreate(&mut self, c: &mut Chan, name: &str, mode: u16, perm: u32) -> Result<(), String> {
+        if c.dev == DevId::Mnt {
+            let (mut cc, name) = (c.clone(), name.to_string());
+            let r = self.with_mnt(|m, tab| {
+                let mut w = Wire::new(&cc, m, tab)?;
+                m.create(&mut w, &mut cc, &name, mode, perm)
+            })?;
+            *c = cc;
+            return r;
+        }
+        self.get(c.dev).ok_or("no such device")?.create(c, name, mode, perm)
+    }
+
+    pub fn dremove(&mut self, c: &mut Chan) -> Result<(), String> {
+        if c.dev == DevId::Mnt {
+            let mut cc = c.clone();
+            return self.with_mnt(|m, tab| {
+                let mut w = Wire::new(&cc, m, tab)?;
+                m.remove(&mut w, &mut cc)
+            })?;
+        }
+        self.get(c.dev).ok_or("no such device")?.remove(c)
+    }
+
+    pub fn dwstat(&mut self, c: &mut Chan, edir: &[u8]) -> Result<(), String> {
+        if c.dev == DevId::Mnt {
+            let (mut cc, edir) = (c.clone(), edir.to_vec());
+            return self.with_mnt(|m, tab| {
+                let mut w = Wire::new(&cc, m, tab)?;
+                m.wstat(&mut w, &mut cc, &edir)
+            })?;
+        }
+        self.get(c.dev).ok_or("no such device")?.wstat(c, edir)
+    }
+
+    pub fn dclose(&mut self, c: &mut Chan) {
+        if c.dev == DevId::Mnt {
+            let mut cc = c.clone();
+            let _ = self.with_mnt(|m, tab| {
+                if let Ok(mut w) = Wire::new(&cc, m, tab) {
+                    m.close(&mut w, &mut cc);
+                }
+                Ok::<(), String>(())
+            });
+            return;
+        }
+        if let Some(d) = self.get(c.dev) {
+            d.close(c)
+        }
+    }
+
+    /// Attach a 9P server over a channel — `mount(2)`'s device half.
+    pub fn dmount(&mut self, wire: Chan, uname: &str, aname: &str) -> Result<Chan, String> {
+        let (uname, aname) = (uname.to_string(), aname.to_string());
+        self.with_mnt(|m, tab| {
+            let mut w = Wire { wire: wire.clone(), tab };
+            m.mount(wire.clone(), &mut w, &uname, &aname)
+        })?
     }
 }
 
@@ -140,8 +284,7 @@ pub fn walk(
         if name != ".." && !nomount {
             c = domount(ns, c);
         }
-        let d = tab.get(c.dev).ok_or("no such device")?;
-        match d.walk(&c, name)? {
+        match tab.dwalk(&c, name)? {
             Some(qid) => c = c.walked(name, qid),
             None => return Err(format!("'{}' does not exist", name)),
         }
@@ -172,8 +315,7 @@ pub fn namec(
             }
         }
         A::Open => {
-            let d = tab.get(c.dev).ok_or("no such device")?;
-            c = d.open(c, omode)?;
+            c = tab.dopen(c, omode)?;
         }
     }
     Ok(c)
@@ -206,8 +348,7 @@ pub fn create(
         Some(e) => e.chan.clone(),
         None => parent,
     };
-    let d = tab.get(target.dev).ok_or("no such device")?;
-    d.create(&mut target, last, omode, perm)?;
+    tab.dcreate(&mut target, last, omode, perm)?;
     Ok(target)
 }
 
@@ -393,5 +534,49 @@ mod tests {
         let e = namec(&mut tab, &ns, &slash, &slash, "/init", A::Open,
                       crate::chan::mode::OWRITE);
         assert!(e.is_err(), "devroot refuses writing, as rootwrite does");
+    }
+}
+
+/// A 9P wire over an ordinary channel — `devtab[m->c->type]`'s `bwrite` and
+/// `bread` (`devmnt.c`, `mountio`), with the table passed rather than global.
+///
+/// The mount driver is out of `tab` while this exists, so a wire can never be
+/// a mounted channel served by the driver using it.
+struct Wire<'a> {
+    wire: Chan,
+    tab: &'a mut Devtab,
+}
+
+impl<'a> Wire<'a> {
+    fn new(
+        c: &Chan,
+        m: &crate::devmnt::MntDev,
+        tab: &'a mut Devtab,
+    ) -> Result<Wire<'a>, String> {
+        let wire = m.wire_of(c).ok_or("not mounted")?;
+        Ok(Wire { wire, tab })
+    }
+}
+
+impl crate::devmnt::Transport for Wire<'_> {
+    fn rpc(&mut self, request: &[u8]) -> Result<Vec<u8>, String> {
+        let d = self.tab.get(self.wire.dev).ok_or("no such device")?;
+        d.write(&mut self.wire, request, 0)?;
+        // A reply is framed, so its first four bytes say how long it is.
+        let d = self.tab.get(self.wire.dev).ok_or("no such device")?;
+        let mut out = d.read(&mut self.wire, 4, 0)?;
+        if out.len() < 4 {
+            return Err("short reply".into());
+        }
+        let size = u32::from_le_bytes([out[0], out[1], out[2], out[3]]) as usize;
+        while out.len() < size {
+            let d = self.tab.get(self.wire.dev).ok_or("no such device")?;
+            let more = d.read(&mut self.wire, size - out.len(), 0)?;
+            if more.is_empty() {
+                return Err("truncated reply".into());
+            }
+            out.extend_from_slice(&more);
+        }
+        Ok(out)
     }
 }

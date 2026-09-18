@@ -36,9 +36,15 @@ pub trait Transport {
 }
 
 /// One mounted server — Plan 9's `Mnt`.
+///
+/// **It holds the wire CHANNEL, not a transport.** Plan 9's `Mnt` keeps
+/// `m->c` and looks the device up at each RPC — `devtab[m->c->type]->bwrite`
+/// (`mountio`) — because `devtab` is a global it can reach from anywhere.
+/// Storing a transport instead would mean holding a borrow on the device
+/// table for the life of the mount, which is the thing Plan 9 never does.
 pub struct Mnt {
     pub msize: u32,
-    wire: Box<dyn Transport>,
+    pub wire: Chan,
     tag: u16,
     /// `NFID`-style allocation. A fid is the server's name for a file, and
     /// this side chooses them.
@@ -49,7 +55,8 @@ impl Mnt {
     /// `mntversion` then `mntattach`: negotiate, then attach. Neither is
     /// optional — a server that has not agreed a version answers nothing.
     pub fn attach(
-        mut wire: Box<dyn Transport>,
+        wire: Chan,
+        t: &mut dyn Transport,
         uname: &str,
         aname: &str,
     ) -> Result<(Mnt, Chan), String> {
@@ -58,7 +65,7 @@ impl Mnt {
         // (`:155`, `msg = malloc(MAXCMNRPC)`) — asking for it instead would
         // cap every session at the old 8K and nothing would look wrong.
         let req = W::new().u32(MAXRPC).s(VERSION).frame(T::Version as u8, !0);
-        let reply = wire.rpc(&req)?;
+        let reply = t.rpc(&req)?;
         let m = unframe(&reply).ok_or("malformed Rversion")?;
         if m.ty != T::Version.reply() {
             return Err(rerror(&m.body).unwrap_or_else(|| "not Rversion".into()));
@@ -80,7 +87,7 @@ impl Mnt {
             .s(uname)
             .s(aname)
             .frame(T::Attach as u8, mnt.newtag());
-        let reply = mnt.wire.rpc(&req)?;
+        let reply = t.rpc(&req)?;
         let m = unframe(&reply).ok_or("malformed Rattach")?;
         if m.ty != T::Attach.reply() {
             return Err(rerror(&m.body).unwrap_or_else(|| "not Rattach".into()));
@@ -104,9 +111,9 @@ impl Mnt {
         f
     }
 
-    fn rpc(&mut self, ty: T, body: W) -> Result<Vec<u8>, String> {
+    fn rpc(&mut self, t: &mut dyn Transport, ty: T, body: W) -> Result<Vec<u8>, String> {
         let tag = self.newtag();
-        let reply = self.wire.rpc(&body.frame(ty as u8, tag))?;
+        let reply = t.rpc(&body.frame(ty as u8, tag))?;
         let m = unframe(&reply).ok_or("malformed reply")?;
         if m.ty != ty.reply() {
             return Err(rerror(m.body).unwrap_or_else(|| format!("unexpected reply {}", m.ty)));
@@ -117,13 +124,13 @@ impl Mnt {
     /// `Twalk`. One message carries the whole path, and the reply says how
     /// many elements the server managed — fewer than asked is not an error,
     /// it is how "no such file" is reported partway along.
-    pub fn walk(&mut self, from: u32, names: &[&str]) -> Result<(u32, Vec<Qid>), String> {
+    pub fn walk(&mut self, t: &mut dyn Transport, from: u32, names: &[&str]) -> Result<(u32, Vec<Qid>), String> {
         let newfid = self.newfid();
         let mut w = W::new().u32(from).u32(newfid).u16(names.len() as u16);
         for n in names {
             w = w.s(n);
         }
-        let body = self.rpc(T::Walk, w)?;
+        let body = self.rpc(t, T::Walk, w)?;
         let mut r = R::new(&body);
         let n = r.u16().ok_or("short Rwalk")? as usize;
         let mut qids = Vec::with_capacity(n);
@@ -133,21 +140,21 @@ impl Mnt {
         Ok((newfid, qids))
     }
 
-    pub fn open(&mut self, fid: u32, mode: u8) -> Result<Qid, String> {
-        let body = self.rpc(T::Open, W::new().u32(fid).u8(mode))?;
+    pub fn open(&mut self, t: &mut dyn Transport, fid: u32, mode: u8) -> Result<Qid, String> {
+        let body = self.rpc(t, T::Open, W::new().u32(fid).u8(mode))?;
         Qid::read(&mut R::new(&body)).ok_or_else(|| "short Ropen".into())
     }
 
     /// `mntrdwr`'s loop (`devmnt.c:688`). **One RPC is not one read**: each is
     /// bounded by `msize - IOHDRSZ`, and the caller asked for `n`.
-    pub fn read(&mut self, fid: u32, n: usize, off: u64) -> Result<Vec<u8>, String> {
+    pub fn read(&mut self, t: &mut dyn Transport, fid: u32, n: usize, off: u64) -> Result<Vec<u8>, String> {
         let mut out = Vec::new();
         let mut off = off;
         let mut left = n;
         let cap = (self.msize as usize).saturating_sub(IOHDRSZ);
         while left > 0 {
             let want = left.min(cap);
-            let body = self.rpc(T::Read, W::new().u32(fid).u64(off).u32(want as u32))?;
+            let body = self.rpc(t, T::Read, W::new().u32(fid).u64(off).u32(want as u32))?;
             let mut r = R::new(&body);
             let count = r.u32().ok_or("short Rread")? as usize;
             let data = &r.rest()[..count.min(r.rest().len())];
@@ -163,13 +170,13 @@ impl Mnt {
 
     /// The same loop for `Twrite`. A server that accepts less than it was
     /// offered is normal, and the rest goes in the next message.
-    pub fn write(&mut self, fid: u32, data: &[u8], off: u64) -> Result<usize, String> {
+    pub fn write(&mut self, t: &mut dyn Transport, fid: u32, data: &[u8], off: u64) -> Result<usize, String> {
         let mut done = 0;
         let mut off = off;
         let cap = (self.msize as usize).saturating_sub(IOHDRSZ);
         while done < data.len() {
             let chunk = &data[done..(done + cap).min(data.len())];
-            let body = self.rpc(T::Write, W::new().u32(fid).u64(off).u32(chunk.len() as u32).raw(chunk))?;
+            let body = self.rpc(t, T::Write, W::new().u32(fid).u64(off).u32(chunk.len() as u32).raw(chunk))?;
             let count = R::new(&body).u32().ok_or("short Rwrite")? as usize;
             if count == 0 {
                 break;
@@ -180,8 +187,8 @@ impl Mnt {
         Ok(done)
     }
 
-    pub fn stat(&mut self, fid: u32) -> Result<Vec<u8>, String> {
-        let body = self.rpc(T::Stat, W::new().u32(fid))?;
+    pub fn stat(&mut self, t: &mut dyn Transport, fid: u32) -> Result<Vec<u8>, String> {
+        let body = self.rpc(t, T::Stat, W::new().u32(fid))?;
         let mut r = R::new(&body);
         let _n = r.u16().ok_or("short Rstat")?;
         Ok(r.rest().to_vec())
@@ -189,13 +196,13 @@ impl Mnt {
 
     /// `Tclunk`. **A fid not clunked is a fid the server keeps**, and a client
     /// that leaks them runs a server out.
-    pub fn clunk(&mut self, fid: u32) -> Result<(), String> {
-        self.rpc(T::Clunk, W::new().u32(fid))?;
+    pub fn clunk(&mut self, t: &mut dyn Transport, fid: u32) -> Result<(), String> {
+        self.rpc(t, T::Clunk, W::new().u32(fid))?;
         Ok(())
     }
 
-    pub fn remove(&mut self, fid: u32) -> Result<(), String> {
-        self.rpc(T::Remove, W::new().u32(fid))?;
+    pub fn remove(&mut self, t: &mut dyn Transport, fid: u32) -> Result<(), String> {
+        self.rpc(t, T::Remove, W::new().u32(fid))?;
         Ok(())
     }
 }
@@ -208,6 +215,13 @@ fn rerror(body: &[u8]) -> Option<String> {
 
 /// The device itself. Each mount is an instance, named by the channel's
 /// `devno` — Plan 9's `c->dev`.
+///
+/// **It does not implement [`Dev`].** Every other device answers from what it
+/// holds; this one has to reach the device serving its wire, which in Plan 9
+/// is `devtab[m->c->type]` — a global. Here the table dispatches to it
+/// specially, handing it a transport, and while it runs it is OUT of the
+/// table: see [`crate::namec::Devtab`]. That is the same property Plan 9 gets
+/// for free, since `mntalloc` (`devmnt.c:48`) was never in `devtab` either.
 #[derive(Default)]
 pub struct MntDev {
     mounts: Vec<Mnt>,
@@ -218,108 +232,145 @@ impl MntDev {
         MntDev::default()
     }
 
-    /// Attach a server over a transport, and answer with the root channel.
-    /// This is what `mount(2)` calls once the fd has been turned into a wire.
+    /// `mntattach`. The channel handed in **is the wire**.
     pub fn mount(
         &mut self,
-        wire: Box<dyn Transport>,
+        wire: Chan,
+        t: &mut dyn Transport,
         uname: &str,
         aname: &str,
     ) -> Result<Chan, String> {
-        let (m, mut c) = Mnt::attach(wire, uname, aname)?;
+        let (m, mut c) = Mnt::attach(wire, t, uname, aname)?;
         self.mounts.push(m);
         c.devno = (self.mounts.len() - 1) as u32;
         Ok(c)
     }
 
+    /// Which mount a channel belongs to, and the wire it speaks down.
+    pub fn wire_of(&self, c: &Chan) -> Option<Chan> {
+        self.mounts.get(c.devno as usize).map(|m| m.wire.clone())
+    }
+
     fn mnt(&mut self, c: &Chan) -> Result<&mut Mnt, String> {
         self.mounts.get_mut(c.devno as usize).ok_or_else(|| "not mounted".into())
     }
-}
 
-impl Dev for MntDev {
-    fn id(&self) -> DevId {
-        DevId::Mnt
-    }
-
-    fn as_any(&mut self) -> &mut dyn std::any::Any {
-        self
-    }
-
-    /// `#M` cannot be attached by name. `mount(2)` supplies a channel to a
-    /// server; there is no server to reach by writing `#M` in a path, which
-    /// is why `namec` refuses the letter (`chan.c`, and `namec.rs`).
-    fn attach(&mut self, _spec: &str) -> Result<Chan, String> {
-        Err("#M cannot be attached by name — use mount(2)".into())
-    }
-
-    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+    pub fn walk(&mut self, t: &mut dyn Transport, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
         let m = self.mnt(c)?;
-        let (fid, qids) = m.walk(c.fid, &[name])?;
+        let (fid, qids) = m.walk(t, c.fid, &[name])?;
         if qids.is_empty() {
-            // the server managed none: no such file. Clunk the fid we asked
+            // The server managed none: no such file. Clunk the fid we asked
             // for, or the server keeps it.
-            let _ = m.clunk(fid);
+            let _ = m.clunk(t, fid);
             return Ok(None);
         }
         Ok(Some(qids[0]))
     }
 
-    fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
-        let m = self.mnt(&c)?;
-        c.qid = m.open(c.fid, mode as u8)?;
+    pub fn open(&mut self, t: &mut dyn Transport, mut c: Chan, mode: u16) -> Result<Chan, String> {
+        c.qid = self.mnt(&c)?.open(t, c.fid, mode as u8)?;
         c.mode = mode;
         Ok(c)
     }
 
-    fn create(&mut self, c: &mut Chan, name: &str, mode: u16, perm: u32) -> Result<(), String> {
-        let m = self.mnt(c)?;
-        let body = m.rpc(
-            T::Create,
-            W::new().u32(c.fid).s(name).u32(perm).u8(mode as u8),
-        )?;
+    pub fn create(
+        &mut self,
+        t: &mut dyn Transport,
+        c: &mut Chan,
+        name: &str,
+        mode: u16,
+        perm: u32,
+    ) -> Result<(), String> {
+        let fid = c.fid;
+        let body = self.mnt(c)?.rpc(t, T::Create, W::new().u32(fid).s(name).u32(perm).u8(mode as u8))?;
         c.qid = Qid::read(&mut R::new(&body)).ok_or("short Rcreate")?;
         c.mode = mode;
         Ok(())
     }
 
-    fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
+    pub fn read(&mut self, t: &mut dyn Transport, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
         let fid = c.fid;
-        self.mnt(c)?.read(fid, n, off)
+        self.mnt(c)?.read(t, fid, n, off)
     }
 
-    fn write(&mut self, c: &mut Chan, data: &[u8], off: u64) -> Result<usize, String> {
+    pub fn write(&mut self, t: &mut dyn Transport, c: &mut Chan, data: &[u8], off: u64) -> Result<usize, String> {
         let fid = c.fid;
-        self.mnt(c)?.write(fid, data, off)
+        self.mnt(c)?.write(t, fid, data, off)
     }
 
-    fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
-        let (fid, devno) = (c.fid, c.devno);
-        let m = self.mounts.get_mut(devno as usize).ok_or("not mounted")?;
-        m.stat(fid)
+    pub fn stat(&mut self, t: &mut dyn Transport, c: &Chan) -> Result<Vec<u8>, String> {
+        let fid = c.fid;
+        let m = self.mounts.get_mut(c.devno as usize).ok_or("not mounted")?;
+        m.stat(t, fid)
     }
 
-    fn wstat(&mut self, c: &mut Chan, edir: &[u8]) -> Result<(), String> {
+    pub fn wstat(&mut self, t: &mut dyn Transport, c: &mut Chan, edir: &[u8]) -> Result<(), String> {
         let fid = c.fid;
-        self.mnt(c)?
-            .rpc(T::Wstat, W::new().u32(fid).u16(edir.len() as u16).raw(edir))?;
+        self.mnt(c)?.rpc(t, T::Wstat, W::new().u32(fid).u16(edir.len() as u16).raw(edir))?;
         Ok(())
     }
 
-    fn remove(&mut self, c: &mut Chan) -> Result<(), String> {
+    pub fn remove(&mut self, t: &mut dyn Transport, c: &mut Chan) -> Result<(), String> {
         let fid = c.fid;
-        self.mnt(c)?.remove(fid)
+        self.mnt(c)?.remove(t, fid)
     }
 
-    /// Clunking is not optional bookkeeping: the server holds the fid until
-    /// it is told to let go.
-    fn close(&mut self, c: &mut Chan) {
+    /// Clunking is not optional bookkeeping: the server holds the fid until it
+    /// is told to let go.
+    pub fn close(&mut self, t: &mut dyn Transport, c: &mut Chan) {
         let fid = c.fid;
         if let Ok(m) = self.mnt(c) {
-            let _ = m.clunk(fid);
+            let _ = m.clunk(t, fid);
         }
     }
 }
+
+/// `#M` lives in the table like any device so that `take`/`put` and the
+/// channel's letter work uniformly — but every operation reaches it through
+/// [`crate::namec::Devtab`]'s dispatcher, which hands it a transport. These
+/// say so loudly rather than failing quietly, because a direct call means the
+/// dispatcher was bypassed.
+impl Dev for MntDev {
+    fn id(&self) -> DevId {
+        DevId::Mnt
+    }
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+    /// `#M` cannot be attached by name: `mount(2)` supplies the channel, and
+    /// there is no server to reach by writing `#M` in a path.
+    fn attach(&mut self, _spec: &str) -> Result<Chan, String> {
+        Err("#M cannot be attached by name — use mount(2)".into())
+    }
+    fn walk(&mut self, _c: &Chan, _n: &str) -> Result<Option<Qid>, String> {
+        Err(DIRECT.into())
+    }
+    fn open(&mut self, _c: Chan, _m: u16) -> Result<Chan, String> {
+        Err(DIRECT.into())
+    }
+    fn create(&mut self, _c: &mut Chan, _n: &str, _m: u16, _p: u32) -> Result<(), String> {
+        Err(DIRECT.into())
+    }
+    fn read(&mut self, _c: &mut Chan, _n: usize, _o: u64) -> Result<Vec<u8>, String> {
+        Err(DIRECT.into())
+    }
+    fn write(&mut self, _c: &mut Chan, _d: &[u8], _o: u64) -> Result<usize, String> {
+        Err(DIRECT.into())
+    }
+    fn stat(&mut self, _c: &Chan) -> Result<Vec<u8>, String> {
+        Err(DIRECT.into())
+    }
+    fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
+        Err(DIRECT.into())
+    }
+    fn remove(&mut self, _c: &mut Chan) -> Result<(), String> {
+        Err(DIRECT.into())
+    }
+    fn close(&mut self, _c: &mut Chan) {}
+}
+
+const DIRECT: &str = "#M reached directly: it needs a transport, so it is \
+                      dispatched through Devtab";
 
 #[cfg(test)]
 mod tests {
@@ -433,32 +484,34 @@ mod tests {
         }
     }
 
-    fn mounted(msize: u32) -> (MntDev, Chan, std::rc::Rc<std::cell::RefCell<Server>>) {
+    fn mounted(msize: u32) -> (MntDev, Loopback, Chan, std::rc::Rc<std::cell::RefCell<Server>>) {
         let s = std::rc::Rc::new(std::cell::RefCell::new(Server::new(msize)));
         let mut d = MntDev::new();
-        let c = d.mount(Box::new(Loopback(s.clone())), "kitty", "").unwrap();
-        (d, c, s)
+        let mut t = Loopback(s.clone());
+        // the wire is a channel; a loopback stands in for the device serving it
+        let c = d.mount(Chan::attach(DevId::Pipe, 0), &mut t, "kitty", "").unwrap();
+        (d, t, c, s)
     }
 
     /// Version, attach, walk, open, read — the whole conversation, over a
     /// server that speaks real 9P.
     #[test]
     fn a_mounted_server_answers_a_walk_and_a_read() {
-        let (mut d, root, _) = mounted(MAXRPC);
+        let (mut d, mut t, root, _) = mounted(MAXRPC);
         let mut c = root.clone();
-        c.qid = d.walk(&root, "hello").unwrap().expect("no hello");
+        c.qid = d.walk(&mut t, &root, "hello").unwrap().expect("no hello");
         c.fid = 2;
-        let mut c = d.open(c, 0).unwrap();
-        assert_eq!(d.read(&mut c, 64, 0).unwrap(), b"from a server");
+        let mut c = d.open(&mut t, c, 0).unwrap();
+        assert_eq!(d.read(&mut t, &mut c, 64, 0).unwrap(), b"from a server");
     }
 
     /// `Tversion` first, or there is no session. The negotiated msize is the
     /// smaller of the two.
     #[test]
     fn the_msize_is_the_smaller_of_what_each_side_offers() {
-        let (d, _, _) = mounted(2048);
+        let (d, _, _, _) = mounted(2048);
         assert_eq!(d.mounts[0].msize, 2048, "the server's, being smaller");
-        let (d, _, _) = mounted(1 << 20);
+        let (d, _, _, _) = mounted(1 << 20);
         assert_eq!(
             d.mounts[0].msize, MAXRPC,
             "ours, being smaller — and MAXRPC, not MAXCMNRPC: asking for the \
@@ -473,12 +526,12 @@ mod tests {
     /// and pass every other test in this file.
     #[test]
     fn a_read_larger_than_one_message_is_still_whole() {
-        let (mut d, root, _) = mounted(IOHDRSZ as u32 + 1024);
+        let (mut d, mut t, root, _) = mounted(IOHDRSZ as u32 + 1024);
         let mut c = root.clone();
-        c.qid = d.walk(&root, "big").unwrap().unwrap();
+        c.qid = d.walk(&mut t, &root, "big").unwrap().unwrap();
         c.fid = 2;
-        let mut c = d.open(c, 0).unwrap();
-        let got = d.read(&mut c, 5000, 0).unwrap();
+        let mut c = d.open(&mut t, c, 0).unwrap();
+        let got = d.read(&mut t, &mut c, 5000, 0).unwrap();
         assert_eq!(got.len(), 5000, "the loop must keep going past one message");
         assert!(got.iter().all(|b| *b == b'x'));
     }
@@ -488,9 +541,9 @@ mod tests {
     /// bug that only shows under load.
     #[test]
     fn a_failed_walk_does_not_leak_a_fid() {
-        let (mut d, root, s) = mounted(MAXRPC);
+        let (mut d, mut t, root, s) = mounted(MAXRPC);
         for _ in 0..50 {
-            assert!(d.walk(&root, "nothing").unwrap().is_none());
+            assert!(d.walk(&mut t, &root, "nothing").unwrap().is_none());
         }
         assert!(s.borrow().handed > 50, "the server did hand them out");
         assert_eq!(s.borrow().fids.len(), 1, "only the attach fid is still held");
@@ -500,20 +553,15 @@ mod tests {
     /// wrong rather than answering a number.
     #[test]
     fn an_error_from_the_server_arrives_as_its_own_words() {
-        let (mut d, root, _) = mounted(MAXRPC);
+        let (mut d, mut t, root, _) = mounted(MAXRPC);
         let mut c = root.clone();
         c.fid = 99; // a fid the server never handed out
-        let e = d.read(&mut c, 8, 0).unwrap_err();
+        let e = d.read(&mut t, &mut c, 8, 0).unwrap_err();
         assert!(e.contains("unknown fid"), "{e}");
     }
 
     /// `#M` is not reachable by writing its letter in a path: `mount(2)`
     /// supplies the channel, and there is no server to find by name.
-    #[test]
-    fn the_mount_driver_cannot_be_attached_by_name() {
-        assert!(MntDev::new().attach("").is_err());
-    }
-
     /// A server that will not speak 9P2000 is refused, rather than being
     /// talked at in a protocol it does not know.
     #[test]
@@ -525,7 +573,9 @@ mod tests {
                 Ok(W::new().u32(8192).s("9P1000").frame(T::Version.reply(), m.tag))
             }
         }
-        let e = MntDev::new().mount(Box::new(Rude), "kitty", "").unwrap_err();
+        let e = MntDev::new()
+            .mount(Chan::attach(DevId::Pipe, 0), &mut Rude, "kitty", "")
+            .unwrap_err();
         assert!(e.contains("9P1000"), "{e}");
         let _ = NOFID;
     }
