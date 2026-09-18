@@ -355,20 +355,30 @@ sequenced by
 
   So the trigger is the act of implementing, not the feeling of doubt:
 
-  1. **Open the counterpart first.** Before a device, a call, a structure or a
-     field: find it in `plan9/` and read it. Not the name — the body.
+  1. **Open the counterpart and read the body — at the moment of writing.**
+     Not the name, not a grep hit, not something read earlier in the session.
+     **A grep hit is not reading.** `mntversion` was implemented from four grep
+     hits on `MAXRPC|MAXCMNRPC`; what decides it is `f.msize = msize`
+     (`devmnt.c:153`), a line containing neither constant, which no such grep
+     can ever show. `devpermcheck` was read correctly hours earlier and then
+     written from memory with the shift reversed.
   2. **Read what is around it.** `struct Dev` is seventeen function pointers
-     and no state, which is the whole reason `devtab[]` can be reached from
-     anywhere; reading only the method list produced a table that owns its
-     devices and a mount driver that could not work.
-  3. **Cite it in the code, at file and line.** A comment naming
-     `dev.c:339` is a claim the next reader can check in one command.
-  4. **Write the test that fails if the behaviour differs** — not one that
-     passes if the code runs. Three of the seven happened with the file open,
-     and it was tests that caught them: `devpermcheck` shifting right passes an
-     owner's own open and fails every other case; `mntversion` asking for
-     `MAXCMNRPC` caps every session at the old 8K with nothing looking wrong.
-     Reading is necessary and is not sufficient.
+     and **no state**, which is the whole reason `devtab[]` can be reached from
+     anywhere; taking the method list without reading the struct produced a
+     table that owns its devices and a mount driver that could not work.
+  3. **Cite it in the code, at file and line**, so the next reader checks the
+     claim in one command.
+  4. **Write the test that fails if the behaviour differs** — a second net, not
+     a substitute. `devpermcheck` shifting the wrong way passes an owner's own
+     open and fails every other case; `mntversion` asking for the wrong
+     constant caps every session at the old 8K with nothing looking wrong.
+
+  **All seven deviations of 2026-09-18 were step 1**, and none was "read it and
+  got it wrong". There is no case on record where reading the body at the
+  moment of writing was done and the deviation happened anyway. A first draft
+  of this rule claimed otherwise — that reading "is necessary and not
+  sufficient" — which was false and had the effect of weakening the rule on the
+  day it was written.
 
   **Where Plan 9's counterpart cannot exist here** — no address space, no
   register set, no hardware — say so at the point of the difference, name what

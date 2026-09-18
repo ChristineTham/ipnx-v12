@@ -307,3 +307,7 @@ Proposing the rule that opens the Conventions section, after a day of
 deviations:
 
 - *"given all the deviations so far, why can't you introduce a rule that says before you implement anything, you must consult Plan 9 source and you are not allowed to deviate"*
+
+Rejecting the hedge in the first draft of that rule:
+
+- *"That cannot be right. You said you did not look at struct Dev. That would not have happened if you were forced and no deviations allowed"*
