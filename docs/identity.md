@@ -27,7 +27,7 @@ else                                 perm <<= 6;   /* other */
 So the host owner is **not** root. On a file with mode `0700` eve is denied.
 There is no bypass anywhere in the core.
 
-**Three files change it in Plan 9.** Two are `#c`'s, one is `#¤`'s — `devcap`
+**Three files change it.** Two are `#c`'s, one is `#¤`'s — `devcap`
 (`devcap.c:267`, letter `L'¤'`):
 
 | | |
@@ -35,12 +35,6 @@ There is no bypass anywhere in the core.
 | `/dev/user`, `0666` | accepts the four bytes `none` and nothing else — *"anyone can become none"* (`auth.c:107`). One way; there is no route back |
 | `/dev/hostowner`, `0664` | eve only. Writing it renames eve **and every process owned by the old name** (`renameuser`, `proc.c:1601`) |
 | `/dev/caphash` `0200`, `/dev/capuse` `0222` | the only way to become *another* user. eve writes an HMAC-SHA1 of `from@to@key` to `caphash`, minting a capability (`devcap.c:206`); anyone writes `from@to@key` to `capuse`, and if the hash matches a minted capability and `from` is the writer's current name, the kernel sets `up->user = to` (`devcap.c:215–252`) |
-
-**This kernel has `#¤` and not `#c`** (`#c` is 23 files of which four are
-orchestration — [implementation.md](implementation.md) P2), so `/dev/user` and
-`/dev/hostowner` have no home in it yet and the one-way drop to `none` cannot
-be expressed. Whether `#¤` carries those two files or identity moves to
-userspace entire is **open, and Christine's**.
 
 A capability is **consumed** — `remcap` unlinks it from the list — so each is
 good once. This is what `auth/newns` and factotum use. It is also the answer to

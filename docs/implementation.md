@@ -98,7 +98,7 @@ final state; design resumes after it. **Don't overengineer.**
 | | |
 |---|---|
 | **builds** | **`Chan`** — a walk produces one, an fd holds one, a mount point is one, and every device operation takes one; the **device table**, Plan 9's `struct Dev`; the **namespace**, keyed as Plan 9 keys it; the **process table** with `rfork`'s share/copy/clear, its flag checks, `exits` and `await`; the **9P codec**, the only place the wire exists |
-| **the letters** | `#/` `#\|` `#s` `#M` `#p` `#d` `#e` `#¤` — eight. `#i` and `#m` are absent because Plan 9 has them to drive hardware and this kernel drives none; `#c` because only 4 of its 23 files are orchestration |
+| **the letters** | `#/` `#\|` `#s` `#M` `#p` `#d` `#e` `#c` `#¤` — nine. `#i` and `#m` are absent because Plan 9 has them to drive hardware and this kernel drives none |
 | **depends on** | — |
 | **acceptance** | 14 unit tests of the structures, where they live. **P0 does not pass conformance and cannot**: not one of the twelve behaviours is reachable without `exec`, a device and a userspace. The suite FAILS, and that is correct |
 | **exposes** | no device is implemented, and `exec` needs something to instantiate a process |
@@ -147,35 +147,25 @@ of the twelve needs a shell, and there is no userspace. Still 0 of 12.
 | **acceptance** | two processes talk over a pipe; one posts a channel at `/srv` and the other mounts it; a namespace built by `bind` and `mount` resolves |
 | **exposes** | there is nothing to run yet — no libc, no commands |
 
-**`#¤` is in; `#c` is not** (Christine, 2026-09-18 — *"i thought the kernel
-only handled process orchestration, per rule"*, then *"the rule wins"*).
+**`#c` and `#¤` are both in** — Christine, 2026-09-18: *"we should keep `#c`
+in since it holds a variety of kernel info"*.
 
-`#c` was first excluded with `#i` and `#m` as hardware, which was wrong on
-measurement: `consdir[]` (`devcons.c:605`) is 23 files and only two are the
-console. It was brought in on that, and then taken back out on the rule, which
-cuts differently — **only `pid`, `ppid`, `pgrpid` and `cputime` are process
-orchestration**:
+`#c` was excluded twice and restored twice, and the measurement was the same
+each time; only the question changed. *Is it hardware?* No — `consdir[]`
+(`devcons.c:605`) is 23 files and two are the console. *Is it orchestration?*
+Mostly no. *Does the kernel hold this state anyway?* **Yes**, and that is the
+one that decides: showing state the kernel already has as files is the
+founding principle, not an addition.
 
 | | |
 |---|---|
-| console | `cons` `consctl` — the host's |
-| identity | `user` `hostowner` `hostdomain` |
-| **orchestration** | **`pid` `ppid` `pgrpid` `cputime`** — these move to `#p` |
+| console | `cons` `consctl` — served by the host (P4) |
+| identity | `user` `hostowner` `hostdomain` — `/dev/user` is the only drop to `none` (`auth.c:107`) |
+| this process | `pid` `ppid` `pgrpid` `cputime` |
 | the clock | `time` `bintime` |
-| the machine | `sysname` `osversion` `drivers` `kmesg` `kprint` `sysstat` `swap` `config` `reboot` |
+| the kernel itself | `sysname` `osversion` `kmesg` `kprint` |
 | generators | `null` `zero` `random` |
-
-Plan 9 keeps all of it in the kernel because its kernel drives the machine.
-This one does not, so everything but the four goes to userspace and the host
-(P4).
-
-`#¤` stays: it changes a process's one `char *user` (`devcap.c:215`), which is
-per-process state and nothing else's business.
-
-**Open, and Christine's:** `/dev/user` and `/dev/hostowner` were `#c`'s, and
-`/dev/user` is the only way to drop to `none` (`auth.c:107`). With `#c` gone
-that has no home. Either `#¤` carries the two files, or identity moves to
-userspace entire. Not decided.
+| **hardware this kernel has none of** | `swap` `drivers` `config` `sysstat` `reboot` — absent for the reason `#i` and `#m` are |
 
 **What each device needs of the current process**, measured rather than
 assumed — `up->genbuf` is a scratch buffer for formatting names, not state, and
@@ -183,10 +173,10 @@ it is most of the raw count (13 of `devproc`'s 19, 5 of `devdup`'s 6):
 
 | | |
 |---|---|
-| identity, for a permission check | `#s` `#M` `#p` `#¤` |
+| identity, for a permission check | `#s` `#M` `#p` `#¤` `#c` |
 | the tables `rfork` shares, copies or clears | `#d` is `up->fgrp`, `#e` is `up->egrp`, `#p` is the process table |
 
-The second kind is why those three are not growth: the kernel holds all three
+The second kind is why those are not growth: the kernel holds all three
 already, because `rfork` acts on them. They are that state shown as files.
 
 ## P3 — the userspace
@@ -202,7 +192,7 @@ already, because `rfork` acts on them. They are that state shown as files.
 
 | | |
 |---|---|
-| **builds** | the console, storage and the clock as **userspace file servers**, reached by mounting what the embedding serves — and the rest of Plan 9's `#c`: `sysname`, `osversion`, `drivers`, `kmesg`, `swap`, `reboot`, `random`, `null`, `zero`, `time` |
+| **builds** | the console and storage as **userspace file servers**, reached by mounting what the embedding serves. `cons` and `consctl` are 2 of `#c`'s 23 and the only ones needing a host behind them |
 | **depends on** | P3 |
 | **acceptance** | `rc` reads and writes `/dev/cons`; a file written through the storage server survives a boot |
 | **exposes** | nothing assembles these at boot yet |

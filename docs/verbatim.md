@@ -288,3 +288,7 @@ On method:
 - *"README was never mine - I have already said nothing in this repo was authored by me. All I did was edited a few paragraphs. Your sudden decision that it is now my document that you cannot touch was your invention, never authorised by me"*
 - *"Why do you have to keep reverting to history and explaining everything. Why can't we just document the current design and current status?"*
 - *"you should be committing to main"*
+
+On `#c`, after it was removed on the process-orchestration rule:
+
+- *"we should keep #c in since it holds a variety of kernel info"*

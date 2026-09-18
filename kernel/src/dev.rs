@@ -14,7 +14,7 @@
 use crate::chan::Chan;
 use crate::ninep::Qid;
 
-/// The device letters this kernel has: eight. Plan 9 has twenty-four.
+/// The device letters this kernel has: nine. Plan 9 has twenty-four.
 ///
 /// The rule is Christine's — *"The kernel only handles process orchestration.
 /// everything else is handled by host or userspace"* — so a letter earns its
@@ -28,18 +28,20 @@ use crate::ninep::Qid;
 /// the IPNX kernel"* — and the kernel reaches them the way it reaches
 /// anything, by mounting what a server offers.
 ///
-/// **`#c` is absent too, and for the rule rather than the hardware argument**
-/// (Christine, 2026-09-18: *"i thought the kernel only handled process
-/// orchestration, per rule"* — *"the rule wins"*). `consdir[]`
-/// (`devcons.c:605`) is 23 files, and only `pid`, `ppid`, `pgrpid` and
-/// `cputime` are orchestration; `sysname`, `osversion`, `drivers`, `kmesg`,
-/// `swap`, `reboot`, `random`, `time`, `null` and `zero` are not, and
-/// `cons`/`consctl` are the host's. Plan 9 keeps them because its kernel
-/// drives the machine. This one does not, so they are served from userspace
-/// and the host, and the four orchestration files are read from `#p`.
+/// **`#c` is in** (Christine, 2026-09-18: *"we should keep `#c` in since it
+/// holds a variety of kernel info"*). `consdir[]` (`devcons.c:605`) is 23
+/// files and only two are the console; the rest is state the kernel has
+/// anyway — its name, its uptime, its message log, a process's own pid —
+/// shown as files, which is the founding principle rather than an addition.
+/// It also carries `/dev/user`, the only way a process drops to `none`
+/// (`auth.c:107`), and `/dev/hostowner`.
 ///
-/// **`#¤` stays**: it changes a process's one `char *user` (`devcap.c:215`),
-/// which is per-process state and nothing else's business.
+/// Some of the 23 describe hardware this kernel does not have — `swap`,
+/// `drivers`, `config`, `sysstat`. Those are absent here for the reason `#i`
+/// and `#m` are, not by a separate rule.
+///
+/// **`#¤`**: it changes a process's one `char *user` (`devcap.c:215`), which
+/// is per-process state and nothing else's business.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DevId {
     /// `#/` — the root a namespace starts from, before anything is mounted.
@@ -60,6 +62,13 @@ pub enum DevId {
     /// `#e` — env: the environment group, which `rfork`'s `ENVG` and `CENVG`
     /// flags exist to share, copy or clear.
     Env,
+    /// `#c` — cons: the kernel's own state as files. Two of its 23 are the
+    /// console (`cons`, `consctl`) and are the host's; the rest is identity
+    /// (`user`, `hostowner`, `hostdomain`), this process's numbers (`pid`,
+    /// `ppid`, `pgrpid`, `cputime`), the clock (`time`, `bintime`), the
+    /// kernel's own name and log (`sysname`, `osversion`, `kmesg`, `kprint`),
+    /// and the generators (`null`, `zero`, `random`).
+    Cons,
     /// `#¤` — cap: the only way a process becomes another user. eve mints a
     /// capability into `caphash`; a process spends it through `capuse`
     /// (`devcap.c:215`). One use each — `remcap` unlinks it.
@@ -76,6 +85,7 @@ impl DevId {
             DevId::Proc => 'p',
             DevId::Dup => 'd',
             DevId::Env => 'e',
+            DevId::Cons => 'c',
             DevId::Cap => '\u{a4}',
         }
     }
@@ -89,6 +99,7 @@ impl DevId {
             'p' => DevId::Proc,
             'd' => DevId::Dup,
             'e' => DevId::Env,
+            'c' => DevId::Cons,
             '\u{a4}' => DevId::Cap,
             _ => return None,
         })
@@ -150,11 +161,10 @@ mod tests {
 
     /// A guard on this kernel, after its author minted three letters in a day.
     /// `H`, `V` and `Z` are not Plan 9's at all; `i` and `m` are, and drive
-    /// hardware this kernel does not have; `c` is Plan 9's and is 23 files of
-    /// which four are orchestration — the rest is userspace's and the host's.
+    /// hardware this kernel does not have.
     #[test]
     fn a_letter_this_kernel_has_no_business_with_is_not_a_device() {
-        for absent in ['H', 'V', 'Z', 'i', 'm', 'c'] {
+        for absent in ['H', 'V', 'Z', 'i', 'm'] {
             assert!(DevId::from_letter(absent).is_none(), "#{absent} must not be a device here");
         }
     }
@@ -165,14 +175,14 @@ mod tests {
     fn the_cap_device_splits_on_a_multibyte_letter() {
         assert_eq!(split("#\u{a4}/capuse"), Some((DevId::Cap, "capuse")));
         assert_eq!(split("#\u{a4}"), Some((DevId::Cap, "")));
-        assert_eq!(split("#c/user"), None, "#c is not this kernel's");
+        assert_eq!(split("#c/user"), Some((DevId::Cons, "user")));
     }
 
     #[test]
     fn every_letter_round_trips() {
         for d in [
             DevId::Root, DevId::Pipe, DevId::Srv, DevId::Mnt, DevId::Proc, DevId::Dup,
-            DevId::Env, DevId::Cap,
+            DevId::Env, DevId::Cons, DevId::Cap,
         ] {
             assert_eq!(DevId::from_letter(d.letter()), Some(d));
         }
