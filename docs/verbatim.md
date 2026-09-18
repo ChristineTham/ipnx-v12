@@ -302,3 +302,8 @@ Clarifying the kernel-does-not-grow rule, after it was read as a ban on
 everything but process management:
 
 - *"you are interpreting 'only process orchestration in kernel' - that rule was to stop you from adding all sorts of invented stuff in the kernel. the kernel focuses on the one thing it does best - process orchestration, but it doesn't mean that is the only thing the kernel does. Use Plan 9 as a guide."*
+
+Proposing the rule that opens the Conventions section, after a day of
+deviations:
+
+- *"given all the deviations so far, why can't you introduce a rule that says before you implement anything, you must consult Plan 9 source and you are not allowed to deviate"*

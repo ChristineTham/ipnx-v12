@@ -340,6 +340,41 @@ sequenced by
   rio is an ordinary userspace file server that posts to `/srv`, mounts at
   `/mnt/wsys` and binds that over `/dev` (`rio/fsys.c:170`, `:237`, `:241`).
   Anything that would put windows in the kernel is answered there.
+- **READ THE PLAN 9 SOURCE BEFORE WRITING ANYTHING, EVERY TIME** (Christine's
+  rule, 2026-09-18). Not when a deviation is suspected — **before implementing
+  anything at all.**
+
+  The rule below it, *find the counterpart by file and line*, has been here
+  since 2026-09-17 and did not stop seven deviations on 2026-09-18, because it
+  **fires on suspicion** and not one of them was suspected: `#c` was excluded
+  while I thought I was applying a rule; `devpermcheck` was shifted the wrong
+  way while I thought I was implementing what I had read; `mntversion` asked
+  for the wrong constant with both constants on screen; `Dev::open` dropped its
+  return value because I had copied the method *names* out of `struct Dev` and
+  never read the struct. **You cannot suspect what you have not looked at.**
+
+  So the trigger is the act of implementing, not the feeling of doubt:
+
+  1. **Open the counterpart first.** Before a device, a call, a structure or a
+     field: find it in `plan9/` and read it. Not the name — the body.
+  2. **Read what is around it.** `struct Dev` is seventeen function pointers
+     and no state, which is the whole reason `devtab[]` can be reached from
+     anywhere; reading only the method list produced a table that owns its
+     devices and a mount driver that could not work.
+  3. **Cite it in the code, at file and line.** A comment naming
+     `dev.c:339` is a claim the next reader can check in one command.
+  4. **Write the test that fails if the behaviour differs** — not one that
+     passes if the code runs. Three of the seven happened with the file open,
+     and it was tests that caught them: `devpermcheck` shifting right passes an
+     owner's own open and fails every other case; `mntversion` asking for
+     `MAXCMNRPC` caps every session at the old 8K with nothing looking wrong.
+     Reading is necessary and is not sufficient.
+
+  **Where Plan 9's counterpart cannot exist here** — no address space, no
+  register set, no hardware — say so at the point of the difference, name what
+  Plan 9 does, and keep everything else identical. That is not licence: it is
+  the only kind of difference that needs no approval, and it is narrow.
+
 - **EVERY DEVIATION FROM PLAN 9 NEEDS CHRISTINE'S APPROVAL, AND THE DEFAULT
   ANSWER IS NO** (her rule, 2026-09-17). Not "is it defensible", not "is it
   forced by the substrate", not "would Dis need it too" — those are arguments
