@@ -54,29 +54,67 @@ evictable, so real user files arrive only through granted subtrees
 
 ## Where everything lives — the canonical namespace
 
-The boot namespace, **as `/lib/namespace` declares it** (M2, landed
-2026-08-29: init carries no bind list — boot is the file's text, read
-through `newns()`; the root is implicit). Mount points are prefix-map
-entries and need not exist
-in any underlying tree (`/proc` has no directory in the rootfs; the bind is
-the directory):
+**Plan 9's own `/lib/namespace` is 39 lines, and it is the answer** (read
+2026-09-18). `newns()` — `libauth/newns.c:35`, `buildns` — reads it and runs
+it; init carries no bind list:
 
-| path | served by | contents |
-|---|---|---|
-| `/` | ramfs (`#R`), seeded from `rootfs/` | V10 permissions enforced |
-| `/bin` | seed | the Plan 9 userland — rc, sam, acme, the twenty-four, the harnesses |
-| `/rc` | seed | rc's library and `tests.rc`, the shell half of the suite |
-| `/lib` | seed | `namespace` (the boot file itself), `pkg/` (registries), `font/` (real subfonts + `*default*`), `python3.14/` (the full stdlib + personality files), `alt/` (union-test fixture) |
-| `/etc` | seed | personality-side files as they land (`/etc/passwd` is future, personality-owned) |
-| `/tmp` | seed | scratch; wiped per boot |
-| `/v10/bin` | seed | the V10 exhibit — TUHS-tape `cat`, `echo` on `libv10` |
-| `/mnt` | convention | parking for `mount` targets (`/mnt/profile` is the profile's decided seat) |
-| `/dev` | `bind #c` | `cons`; a window replaces it wholesale — `bind '#w/N' /dev` makes a namespace a window (`cons ctl mouse wctl label rgb draw/…`) |
-| `/env` | `bind #e` | environment as files |
-| `/fd` | `bind #d` | dup by open |
-| `/srv` | `bind #s` | posted channels, alive by name |
-| `/proc` | `bind #p` | status, ctl (identity transitions — [identity.md](identity.md)), notes |
-| `/net` | — | **does not exist yet** (M7); its absence is what the suite's future network tests will probe |
+```
+# root
+mount -aC #s/boot /root $rootspec
+bind -a $rootdir /
+bind -c $rootdir/mnt /mnt
+
+# kernel devices
+bind #c /dev          bind #d /fd           bind -c #e /env
+bind #p /proc         bind -c #s /srv
+bind -a #¤ /dev       bind -a #S /dev       bind -b #k /dev
+bind -a #κ /dev       bind -a #u /dev       bind -b #P /dev
+
+# mount points
+mount -a /srv/slashn /n
+
+# authentication
+mount -a /srv/factotum /mnt
+
+# standard bin
+bind /$cputype/bin /bin
+bind -a /rc/bin /bin
+
+# internal networks
+bind -a #l /net       bind -a #I /net
+mount -a /srv/cs /net     mount -a /srv/dns /net
+mount -a /srv/net /net    mount -b /srv/ssh /net
+
+bind -c /usr/$user/tmp /tmp
+cd /usr/$user
+
+. /lib/namespace.local
+. /lib/namespace.$sysname
+. /cfg/$sysname/namespace
+```
+
+Four things it settles that were being designed around:
+
+| | |
+|---|---|
+| **`#¤` is bound into `/dev`** | `bind -a #¤ /dev` — which is how `/dev/capuse` gets its path. Identity needs no special plumbing |
+| **`/bin` is a union** | `bind /$cputype/bin /bin` then `bind -a /rc/bin /bin` — compiled binaries and rc scripts in one directory, per architecture |
+| **`/tmp` is a bind of your own** | `bind -c /usr/$user/tmp /tmp`. Not a seeded scratch wiped per boot |
+| **customisation is three sourced files** | `/lib/namespace.local`, `/lib/namespace.$sysname`, `/cfg/$sysname/namespace`. That is Plan 9's answer to "where do my overrides go" |
+
+**`/home` is not Plan 9's.** There is no `/home` in the file; a person's tree
+is `/usr/$user`, and the last line before the includes is `cd /usr/$user`. The
+`/home`-bound-to-`/usr/<me>` design below, and the union-of-system-and-yours
+rule it rests on, are **deviations** — plausible ones, and userspace either
+way, but not endorsed and not Plan 9's.
+
+**`#R` is not a device.** `/` in Plan 9 is `mount -aC #s/boot /root` followed
+by `bind -a $rootdir /` — a file server posted in `#s`, mounted. Not a ramfs
+device letter.
+
+**Mounts are not prefix-map entries.** `findmount` (`chan.c:855`) keys a mount
+by the identity of the channel mounted upon, and `namec` checks at every
+component.
 
 **Designed 2026-09-02, not yet in `/lib/namespace`** (decision log):
 

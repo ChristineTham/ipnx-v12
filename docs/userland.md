@@ -214,15 +214,46 @@ the window server's root lists windows, and `/rc/tile` is a window
 manager in a dozen lines of rc — any program can be one, a shell script
 included.
 
-## The plumber, central again
+## The plumber — Plan 9 has it, entire
 
-Every `look` is a plumb: the tap on a path, URL, error line, or
-identifier becomes a typed message through rules — the file that decides
-"what does looking at this mean here". The plumber is the verb
-convention's engine and gets designed (rules format, message shape,
-port namespace) as part of canvas v0's measurement pass, because
-acme-today's right-click… — no: acme-today's *tap* — is unimplementable
-without it.
+This document said the plumber *"gets designed (rules format, message shape,
+port namespace) as part of canvas v0's measurement pass"*. All three exist in
+`plan9/` (read 2026-09-18).
+
+**The message** — `Plumbmsg`, `sys/include/plumb.h`, seven fields:
+
+| | |
+|---|---|
+| `src` | who sent it |
+| `dst` | the port, or empty to let the rules decide |
+| `wdir` | the sender's working directory, so a relative path resolves |
+| `type` | `text`, today always |
+| `attr` | a list of name=value pairs |
+| `data` `ndata` | the bytes under the tap |
+
+**The rules language** — `cmd/plumb/rules.c`, 22 words:
+
+```
+add  arg  attr  client  data  delete  dir  dst  file  include  is
+isdir  isfile  matches  plumb  send  set  src  start  to  type  wdir
+```
+
+A rule is a block of `object verb argument` lines; the first rule whose
+predicates all match wins. `/sys/lib/plumb/basic` is the worked example — it
+opens with *"these are generally in order from most specific to least, since
+first rule that fires wins"*, then `include fileaddr`, then blocks like:
+
+```
+type is text
+data matches '...\.(jpe?g|gif|ps|pdf|png)'
+plumb start rc -c 'hget '''$0''' | page -w'
+```
+
+**The ports are `/mnt/plumb/<port>`** — served by `plumber`, which is an
+ordinary file server (`cmd/plumb/fsys.c`). A program reads its port and acts.
+
+So there is nothing here to derive. `look` becoming a plumb is Plan 9's design,
+and the work is a port, not a specification.
 
 ## What the exhibit keeps
 
