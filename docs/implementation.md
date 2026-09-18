@@ -98,7 +98,7 @@ final state; design resumes after it. **Don't overengineer.**
 | | |
 |---|---|
 | **builds** | **`Chan`** — a walk produces one, an fd holds one, a mount point is one, and every device operation takes one; the **device table**, Plan 9's `struct Dev`; the **namespace**, keyed as Plan 9 keys it; the **process table** with `rfork`'s share/copy/clear; the **9P codec**, the only place the wire exists |
-| **the letters** | `#/` `#\|` `#s` `#M` `#p` `#d` `#e` — seven, each part of how processes are made, connected or named. `#i` and `#m` are absent because Plan 9 has them to drive hardware and this kernel drives none. **`#c` and `#¤` are absent without a reason that holds — an open decision, see P2** |
+| **the letters** | `#/` `#\|` `#s` `#M` `#p` `#d` `#e` `#c` `#¤` — nine. `#i` and `#m` are absent because Plan 9 has them to drive hardware and this kernel drives none |
 | **depends on** | — |
 | **acceptance** | 14 unit tests of the structures, where they live. **P0 does not pass conformance and cannot**: not one of the twelve behaviours is reachable without `exec`, a device and a userspace. The suite FAILS, and that is correct |
 | **exposes** | no device is implemented, and `exec` needs something to instantiate a process |
@@ -147,11 +147,10 @@ of the twelve needs a shell, and there is no userspace. Still 0 of 12.
 | **acceptance** | two processes talk over a pipe; one posts a channel at `/srv` and the other mounts it; a namespace built by `bind` and `mount` resolves |
 | **exposes** | there is nothing to run yet — no libc, no commands |
 
-**Open decision — `#c` and `#¤`, and it is Christine's.** The seven letters
-were chosen by one rule: a letter earns its place by being part of how
-processes are made, connected and named. `#c` was excluded as hardware, and
-that is wrong on measurement — `consdir[]` (`devcons.c:605`) is 23 files of
-which **two** are the console:
+**`#c` and `#¤` are in, as Plan 9 has them** (Christine's decision,
+2026-09-18). They had been excluded with `#i` and `#m` on a hardware argument
+that fits neither: `consdir[]` (`devcons.c:605`) is 23 files of which **two**
+are the console —
 
 | | |
 |---|---|
@@ -162,16 +161,11 @@ which **two** are the console:
 | time | `time` `bintime` |
 | generators | `null` `zero` `random` |
 
-`#¤` (`devcap.c:267`) touches no hardware at all; its exclusion was never
-argued.
-
-**Without them the kernel cannot express identity**: nothing can drop to `none`
-(`/dev/user`, `auth.c:107`) and nothing can become another user
-(`/dev/capuse`, `devcap.c:215`). `docs/identity.md` describes a model the
-kernel has no interface for.
-
-Excluding a Plan 9 device is a deviation from Plan 9. This one was made without
-approval and stands open until Christine decides it.
+— and `#¤` (`devcap.c:267`) touches no hardware at all. With them the kernel
+can express identity: a drop to `none` through `/dev/user` (`auth.c:107`), and
+a transition to another user by spending a capability eve minted
+(`devcap.c:215`). Only `cons` and `consctl` need a host behind them, and that
+is P4.
 
 ## P3 — the userspace
 
