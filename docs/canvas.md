@@ -60,44 +60,50 @@ one event (`select`) and one attr (`sel`) joined, each carried by a
 measured need; both pass through the devices untouched, so neither
 kernel changed.*
 
-## What Plan 9 does — read 2026-09-18
+## Three files, not one — and canvas leverages Plan 9's shape
 
-Plan 9 draws through `#i`, and its interface is **five files per client**
-(`devdraw.c:18–25`):
+**Christine, 2026-09-18:** *"we created it because `/dev/draw` was bitmapped
+and we wanted a vector canvas. Why can't we leverage as much of Plan 9 as
+possible? Also we can implement `/dev/svg` if we want SVG semantics."*
 
-| | |
-|---|---|
-| `new` | opening it mints a client and its `ctl` |
-| `ctl` | the client's own state |
-| `data` | **where drawing happens** |
-| `colormap` | |
-| `refresh` | |
-
-**The vocabulary is single-byte opcodes written to `data`** — about 26 of
-them in `drawwrite`'s switch (`devdraw.c:1543–2085`). The drawing ones:
+So the answer is not to bend one interface into three jobs:
 
 | | |
 |---|---|
-| `d` | **draw** — source, mask and destination rectangles. This is the primitive; almost everything is a case of it |
-| `l` `L` | line |
-| `e` `E` | ellipse, filled ellipse |
-| `p` `P` | polygon, filled polygon |
-| `s` `x` | string, string over a background |
-| `y` `Y` | load pixels into an image |
-| `A` `S` `o` `t` `f` `F` `n` `N` `i` `c` `v` | screens, origins, top/bottom, free, name, init font, cursor, flush |
+| **`/dev/draw`** | **Plan 9's, unchanged.** Bitmapped, and that is what it is for. *"acme, the original Bell Labs program, is an emca-like program using `/dev/draw`, running under emca"*; *"`/dev/draw` should be rendered by host. the kernel does not know how to draw."* Rendering moves to the host; the interface does not change |
+| **`/dev/canvas`** | the **vector** interface, because draw is raster. *"we don't use `/dev/draw` — we use `/dev/canvas`."* Her word, kept |
+| **`/dev/svg`** | **SVG semantics, when SVG semantics are wanted.** A separate file rather than SVG path notation smuggled into canvas as a node kind and a `viewbox` attr |
 
-and a client batches them in userspace before writing: `bufimage`
-(`libdraw/init.c:453`) fills a buffer of `iounit(datafd)` bytes
+### What Plan 9 gives canvas, measured
+
+`#i` is five files per client (`devdraw.c:18–25`): `new` mints a client and
+opening it hands back that client's `ctl` (`devdraw.c:1056`); then `ctl`,
+`data`, `refresh`, `colormap`. **Take that shape.** A canvas client should be
+minted the same way rather than assuming one canvas per window, and `refresh`
+is Plan 9's name for what a surface needs told.
+
+The drawing vocabulary is single-byte opcodes written to `data` — about 26 in
+`drawwrite`'s switch (`devdraw.c:1543–2085`), the primitive being `d`: **draw**,
+with source, mask and destination rectangles. Line, ellipse, polygon and string
+are `l L e E p P s x`. **A vector canvas does not need different primitives for
+the raster case** — where canvas overlaps draw, use draw's names.
+
+**Batching is userspace's, and already solved.** `bufimage`
+(`libdraw/init.c:453`) appends into a buffer of `iounit(datafd)` bytes
 (`init.c:291`, else 8000) and flushes when the next operation will not fit.
+Canvas's `sync` is that flush; the buffer between syncs should be sized by the
+channel's iounit, not by a constant chosen here.
 
-**So the turtle vocabulary and SVG `path` notation below are deviations**, not
-gaps Plan 9 left open. Plan 9's answer is `draw` plus line, ellipse, polygon
-and string, composited with a mask. Adopting SVG path data instead is a change
-that needs Christine's approval, and the default answer is no.
+**And `addr`/`data` is acme's**, which this document already took
+(`acme/fsys.c:76`: `addr` `body` `ctl` `data` `xdata` `event` `rdsel` `wrsel`
+`tag` `errors` `editout`). Keep the credit visible so it is not re-derived.
 
-What *is* genuinely different here: Plan 9's `devdraw` is a renderer inside the
-kernel, and this system puts rendering in the host. That moves where the
-opcodes are executed. It does not by itself argue for different opcodes.
+### What moves to `/dev/svg`
+
+The `path` node kind, its `viewbox`, and `stroke`/`fill`/`width` as SVG
+attributes. They entered canvas from one benchmark — the plot — and they are
+SVG notation, so they belong behind a file that says SVG. Everything else in
+the tree below stays where it is.
 
 ## The derivation (the measurement pass, 2026-08-30)
 

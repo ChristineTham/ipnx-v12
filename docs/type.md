@@ -50,14 +50,12 @@ that `/` is `inode/system`, and that unrecognised content is `text/plain`.
   is the first safety requirement for it. Escape collapses to a single cursor at
   the last match.
 
-  > **A DEVIATION, unapproved.** acme's dot is **one range** — `q0` and `q1`,
-  > two `uint`s on a `Text` (`acme/dat.h:177`). There is no set of ranges and
-  > no multi-cursor anywhere in Plan 9; `Look` moves the single dot to the next
-  > match. Replace-all in acme is `Edit` with a substitution (`edit.c:149`),
-  > which is why it needs no Replace verb and no match count. Multi-cursor Find
-  > is a modern-editor feature, not Plan 9's, and it is what makes the status
-  > line's match count "the first safety requirement" — a requirement invented
-  > along with the thing that needs it. What was already settled is only its
+  > **Approved 2026-09-18, and it is a departure from acme.** acme's dot is
+  > **one range** — `q0` and `q1`, two `uint`s on a `Text` (`acme/dat.h:177`);
+  > `Look` moves that single dot, and replace-all is `Edit` with a substitution
+  > (`edit.c:149`). Multi-cursor Find is ours, which is also why the match
+  > count is needed: acme needs no such indicator because it never has more
+  > than one cursor. What was already settled is only its
   *edges*: it is the fallback, it can never fail,
   non-UTF-8 content renders with escapes and opens read-only, and line endings
   are never rewritten. What it *is* — its content model, its verbs, its status
@@ -121,13 +119,14 @@ The binary fallback is `application/octet-stream` (`file.c:205`).
 
 | | |
 |---|---|
-| `inode/directory` | **not Plan 9's** — it is freedesktop.org's convention, and not an IANA type |
-| `inode/system` | **invented here.** Neither Plan 9 nor freedesktop has it |
+| `inode/directory` | freedesktop.org's convention, not Plan 9's and not an IANA type |
+| `inode/system` | ours |
 
-Christine did say the screen is special — *"the '/' type and the screen is
-genuinely special, it is not a normal window. That's an unescapable fact"* —
-so the *thing* is hers. The **name** is not, and needs one that is either
-Plan 9's or hers.
+**Both approved 2026-09-18.** `file -m` gives a directory
+`application/octet-stream` (`file.c:284`), which carries no information, so a
+directory needs a name of its own here. `inode/system` names the thing
+Christine called out: *"the '/' type and the screen is genuinely special, it is
+not a normal window. That's an unescapable fact."*
 
 ## What a type declares
 

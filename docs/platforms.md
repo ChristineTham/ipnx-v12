@@ -102,11 +102,12 @@ Four things it settles that were being designed around:
 | **`/tmp` is a bind of your own** | `bind -c /usr/$user/tmp /tmp`. Not a seeded scratch wiped per boot |
 | **customisation is three sourced files** | `/lib/namespace.local`, `/lib/namespace.$sysname`, `/cfg/$sysname/namespace`. That is Plan 9's answer to "where do my overrides go" |
 
-**`/home` is not Plan 9's.** There is no `/home` in the file; a person's tree
-is `/usr/$user`, and the last line before the includes is `cd /usr/$user`. The
-`/home`-bound-to-`/usr/<me>` design below, and the union-of-system-and-yours
-rule it rests on, are **deviations** — plausible ones, and userspace either
-way, but not endorsed and not Plan 9's.
+**`/home` is not Plan 9's, and is approved anyway** (2026-09-18). There is no
+`/home` in the file; a person's tree is `/usr/$user` and the last line before
+the includes is `cd /usr/$user`. The `/home`-bound-to-`/usr/<me>` design below,
+and the union-of-system-and-yours rule it rests on, are ours. Both are
+userspace — a namespace file and a set of binds — so nothing in the kernel
+follows from them.
 
 **`#R` is not a device.** `/` in Plan 9 is `mount -aC #s/boot /root` followed
 by `bind -a $rootdir /` — a file server posted in `#s`, mounted. Not a ramfs
