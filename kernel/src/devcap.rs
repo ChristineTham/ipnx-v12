@@ -72,6 +72,10 @@ impl Dev for CapDev {
         DevId::Cap
     }
 
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn attach(&mut self, _spec: &str) -> Result<Chan, String> {
         Ok(Chan::attach(DevId::Cap, 0))
     }

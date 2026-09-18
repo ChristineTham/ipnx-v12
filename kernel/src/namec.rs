@@ -51,6 +51,17 @@ impl Devtab {
     pub fn get(&mut self, id: DevId) -> Option<&mut Box<dyn Dev>> {
         self.devs.get_mut(&id)
     }
+
+    /// Take a device out of the table for the length of one operation, so it
+    /// can use the rest of the table. Only the mount driver needs this, and
+    /// only because it is the one device that talks to another.
+    pub fn take(&mut self, id: DevId) -> Option<Box<dyn Dev>> {
+        self.devs.remove(&id)
+    }
+
+    pub fn put(&mut self, d: Box<dyn Dev>) {
+        self.devs.insert(d.id(), d);
+    }
 }
 
 /// Where a walk starts and what it walks.
@@ -342,6 +353,9 @@ mod tests {
         fn id(&self) -> DevId {
             DevId::Srv
         }
+        fn as_any(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
         fn attach(&mut self, _s: &str) -> Result<Chan, String> {
             Ok(Chan::attach(DevId::Srv, 0))
         }
@@ -371,8 +385,6 @@ mod tests {
         }
         fn close(&mut self, _c: &mut Chan) {}
     }
-
-
 
     #[test]
     fn opening_for_writing_is_refused_by_the_root() {

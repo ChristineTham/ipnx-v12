@@ -117,6 +117,11 @@ impl DevId {
 pub trait Dev {
     fn id(&self) -> DevId;
 
+    /// So the kernel can reach the mount driver's own methods. Plan 9 needs
+    /// no equivalent: `devtab[]` is an array of `Dev*` and `mntattach` is
+    /// reached directly.
+    fn as_any(&mut self) -> &mut dyn std::any::Any;
+
     /// `attach(2)`'s device half: produce the channel that is this device's
     /// root. `spec` is the text after the letter, which most devices ignore.
     fn attach(&mut self, spec: &str) -> Result<Chan, String>;

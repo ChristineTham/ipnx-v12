@@ -68,6 +68,10 @@ impl Dev for EnvDev {
         DevId::Env
     }
 
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn attach(&mut self, _spec: &str) -> Result<Chan, String> {
         Ok(Chan::attach(DevId::Env, 0))
     }

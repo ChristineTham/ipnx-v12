@@ -59,6 +59,10 @@ impl Dev for PipeDev {
         DevId::Pipe
     }
 
+    fn as_any(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     /// `pipeattach` — the allocation. Every attach is a NEW pipe.
     fn attach(&mut self, _spec: &str) -> Result<Chan, String> {
         self.pipes.push(Pipe::default());

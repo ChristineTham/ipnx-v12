@@ -40,6 +40,7 @@ pub mod chan;
 pub mod dev;
 pub mod devcap;
 pub mod devcons;
+pub mod devmnt;
 pub mod devdup;
 pub mod devenv;
 pub mod devpipe;
@@ -501,8 +502,15 @@ impl Kernel {
             }
 
             // ---- not yet
-            Call::Mount { .. } => Err("no mount driver yet — P2".into()),
-            Call::Fversion { .. } => Err("no mount driver yet — P2".into()),
+            // The 9P client is built and proven (`devmnt.rs`), but it is not
+            // reachable from here yet. `#M` is the one device that talks to
+            // ANOTHER device — Plan 9 does it through the global
+            // `devtab[m->c->type]` (`mountio`) — and this kernel's device
+            // table is owned, not global, so the mount driver cannot hold a
+            // transport onto a channel the table also serves. See
+            // `docs/when.md`; the shape of the answer is Christine's.
+            Call::Mount { .. } => Err("mount(2) is not wired to #M yet".into()),
+            Call::Fversion { .. } => Err("fversion is mntversion's, done at mount".into()),
             Call::Sleep { .. } | Call::Alarm { .. } => Err("no scheduler yet — P3".into()),
             Call::Notify | Call::Noted { .. } => Err("no notes yet — P3".into()),
             Call::Rendezvous { .. } => Err("no rendezvous yet — P3".into()),
