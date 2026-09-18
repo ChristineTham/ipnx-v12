@@ -11,7 +11,7 @@ apply the lenses to the whole project, the reading is logged here, dated.
 
 | date | design thinking | six hats | virtue ethics | subject |
 |---|---|---|---|---|
-| [2026-08-29](2026-08-29.md) | ✓ | ✓ | ✓ | at the PoC declaration — all three lenses, the only complete ritual so far |
+| [2026-08-29](2026-08-29.md) | ✓ | ✓ | ✓ | all three lenses — taken against the implementation since removed, so its findings are historical |
 | [2026-08-30](2026-08-30.md) | ✓ | — | — | the canvas brainstorm |
 | [2026-08-31](2026-08-31.md) | ✓ | — | ✓ | the emca session |
 | [2026-09-02](2026-09-02.md) | ✓ | ✓ | ✓ | **bounded**: is the design enough to rebuild the demo? — the second complete ritual |
