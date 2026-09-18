@@ -5,7 +5,7 @@ other document carries it.
 
 Measured 2026-09-18.
 
-## The kernel — 3,495 lines of Rust, no dependencies
+## The kernel — 4,547 lines of Rust, no dependencies
 
 | | |
 |---|---|
@@ -13,6 +13,9 @@ Measured 2026-09-18.
 | `dev.rs` | the device table, Plan 9's `struct Dev`; nine letters (`/ \| s M p d e c ¤`) |
 | `devroot.rs` | `#/` — the read-only boot directory; every write is `Egreg` |
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed |
+| `devsrv.rs` | `#s` — post a file descriptor's NUMBER, and an open of the name answers with the channel behind it |
+| `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` returns the channel fd 3 holds, so a dup IS an open |
+| `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`. A **reporting** device: identity, this process's numbers, the clock, the kernel's log and name, the generators. The host supplies the clock, entropy, memory figures, its own drivers and `reboot`; the kernel names them |
 | `ns.rs` | the namespace, keyed by the identity of the channel mounted upon |
 | `namec.rs` | name → channel, with the mount check at every component |
@@ -21,7 +24,7 @@ Measured 2026-09-18.
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-75 kernel tests, and 3 in `hosts/ipnx` that run a guest against a real kernel.
+96 kernel tests, and 3 in `hosts/ipnx` that run a guest against a real kernel.
 
 ## The host — `hosts/ipnx`, 116 lines
 
@@ -79,7 +82,7 @@ built.
 nanoseconds, the fast-tick counter and its frequency; `exec` stamps a
 process's start from it, so `/dev/cputime`'s `TReal` is wall time.
 
-No mount, srv, proc, dup, env or cap device. No shell, no userspace, no
+No mount, proc or cap device. No shell, no userspace, no
 surface. `#c`'s `cons` and `consctl` wait for a host to serve them (P4).
 
 `/dev/sysstat`'s interrupt, page-fault, tlb and load counters are zero, and

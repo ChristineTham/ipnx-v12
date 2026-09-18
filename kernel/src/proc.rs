@@ -90,6 +90,11 @@ impl Fds {
     pub fn count(&self) -> usize {
         self.slots.iter().filter(|s| s.is_some()).count()
     }
+
+    /// How far the table reaches — `fgrp->maxfd`, which `dupgen` walks to.
+    pub fn slots(&self) -> Fd {
+        self.slots.len() as Fd
+    }
 }
 
 /// A process.

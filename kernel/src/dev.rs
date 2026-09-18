@@ -139,6 +139,38 @@ pub trait Dev {
     fn close(&mut self, c: &mut Chan);
 }
 
+/// `devpermcheck` — `dev.c:339`, verbatim in behaviour:
+///
+/// ```c
+/// static int access[] = { 0400, 0200, 0600, 0100 };
+/// if(strcmp(up->user, fileuid) == 0)   perm <<= 0;   /* owner */
+/// else if(strcmp(up->user, eve) == 0)  perm <<= 3;   /* GROUP bits */
+/// else                                 perm <<= 6;   /* other bits */
+/// t = access[omode&3];
+/// if((t&perm) != t) error(Eperm);
+/// ```
+///
+/// The perm is shifted **left** and tested against the owner's mask, so a
+/// non-owner is judged by its own class's bits moved into that position. eve
+/// gets the GROUP bits, which is why the host owner is not root: on a file of
+/// mode `0700` eve is denied.
+pub fn permcheck(user: &str, fileuid: &str, eve: &str, perm: u32, omode: u16) -> Result<(), String> {
+    const ACCESS: [u32; 4] = [0o400, 0o200, 0o600, 0o100];
+    let perm = if user == fileuid {
+        perm
+    } else if user == eve {
+        perm << 3
+    } else {
+        perm << 6
+    };
+    let t = ACCESS[(omode & 3) as usize];
+    if perm & t == t {
+        Ok(())
+    } else {
+        Err("permission denied".into())
+    }
+}
+
 /// Split a device path into its device and the path below it: `#s/store` is
 /// `Srv` and `store`. `None` if this is not a device path.
 ///
@@ -158,6 +190,25 @@ pub fn split(path: &str) -> Option<(DevId, &str)> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `devpermcheck`'s shift is LEFT, and eve gets the group bits. A right
+    /// shift passes an owner's own open and fails everything else, which is
+    /// how this was first written.
+    #[test]
+    fn a_permission_check_shifts_the_mode_as_plan_nine_does() {
+        // the owner reading and writing its own 0600 file
+        assert!(permcheck("kitty", "kitty", "eve", 0o600, 0).is_ok());
+        assert!(permcheck("kitty", "kitty", "eve", 0o600, 1).is_ok());
+        // eve is judged by the GROUP bits, so 0700 denies it
+        assert!(permcheck("eve", "kitty", "eve", 0o700, 0).is_err(), "eve is not root");
+        assert!(permcheck("eve", "kitty", "eve", 0o640, 0).is_ok(), "group r");
+        // anyone else, by the other bits
+        assert!(permcheck("none", "kitty", "eve", 0o640, 0).is_err());
+        assert!(permcheck("none", "kitty", "eve", 0o644, 0).is_ok());
+        // OEXEC is its own bit, not a read
+        assert!(permcheck("kitty", "kitty", "eve", 0o400, 3).is_err());
+        assert!(permcheck("kitty", "kitty", "eve", 0o500, 3).is_ok());
+    }
 
     #[test]
     fn a_device_path_splits_at_the_letter() {
