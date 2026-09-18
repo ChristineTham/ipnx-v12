@@ -22,12 +22,25 @@ use crate::ninep::Qid;
 /// place by being part of how processes are made, connected and named, and by
 /// nothing else.
 ///
-/// **What is absent, and why it is not an omission.** `#c` cons, `#i` draw,
-/// `#m` mouse: Plan 9 has them because its kernel drives hardware, and this
-/// one drives none. The host serves those — *"I have a screen, a keyboard and
-/// a mouse. I will serve these as virtual devices to the IPNX kernel"* — and
-/// the kernel reaches them the way it reaches anything, by mounting what a
-/// server offers. A letter Plan 9 lacks entirely is not a device at all.
+/// **What is absent.** `#i` draw and `#m` mouse: Plan 9 has them because its
+/// kernel drives hardware, and this one drives none. The host serves those —
+/// *"I have a screen, a keyboard and a mouse. I will serve these as virtual
+/// devices to the IPNX kernel"* — and the kernel reaches them the way it
+/// reaches anything, by mounting what a server offers.
+///
+/// **`#c` and `#¤` are absent WITHOUT a reason that holds, and that is an
+/// open decision, not a settled one.** The hardware argument was applied to
+/// `#c` and does not fit it: `consdir[]` (`devcons.c:605`) is 23 files of
+/// which two are the console. The rest is kernel state as files — `user`,
+/// `hostowner`, `hostdomain` (identity); `pid`, `ppid`, `pgrpid`, `cputime`
+/// (orchestration); `time`, `bintime`; `sysname`, `kmesg`, `sysstat`,
+/// `reboot`. `#¤` (devcap) touches no hardware at all and its exclusion was
+/// never argued anywhere.
+///
+/// The effect: **this kernel cannot express identity.** Without `#c` nothing
+/// can drop to `none` (`auth.c:107`); without `#¤` nothing can become another
+/// user (`devcap.c:215`). Excluding a Plan 9 device is itself a deviation and
+/// needs Christine's approval.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DevId {
     /// `#/` — the root a namespace starts from, before anything is mounted.

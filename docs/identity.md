@@ -49,6 +49,10 @@ across `devcap`, `devcons`, `devenv`, `devkbin`, `devkbmap`, `devmouse`,
 `devproc`, `devsd` and `devsegment`. Each device decides what eve may do at its
 own files. Authority lives at the resource.
 
+**This kernel has neither `#c` nor `#¤`**, so it has no interface for any of
+the above: nothing can drop to `none`, nothing can become another user. That
+exclusion is an open decision — [implementation.md](implementation.md) P2.
+
 Everything below is userspace.
 
 ## What a "user" is

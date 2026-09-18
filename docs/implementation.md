@@ -98,7 +98,7 @@ final state; design resumes after it. **Don't overengineer.**
 | | |
 |---|---|
 | **builds** | **`Chan`** — a walk produces one, an fd holds one, a mount point is one, and every device operation takes one; the **device table**, Plan 9's `struct Dev`; the **namespace**, keyed as Plan 9 keys it; the **process table** with `rfork`'s share/copy/clear; the **9P codec**, the only place the wire exists |
-| **the letters** | `#/` `#\|` `#s` `#M` `#p` `#d` `#e` — seven, each part of how processes are made, connected or named. `#c`, `#i`, `#m` are **absent**: Plan 9 has them because its kernel drives hardware and this one drives none |
+| **the letters** | `#/` `#\|` `#s` `#M` `#p` `#d` `#e` — seven, each part of how processes are made, connected or named. `#i` and `#m` are absent because Plan 9 has them to drive hardware and this kernel drives none. **`#c` and `#¤` are absent without a reason that holds — an open decision, see P2** |
 | **depends on** | — |
 | **acceptance** | 14 unit tests of the structures, where they live. **P0 does not pass conformance and cannot**: not one of the twelve behaviours is reachable without `exec`, a device and a userspace. The suite FAILS, and that is correct |
 | **exposes** | no device is implemented, and `exec` needs something to instantiate a process |
@@ -116,7 +116,7 @@ So the host **serves** the machine and the kernel **consumes** it, over 9P
 because *"9P is the only protocol"*. `/dev/cons` exists on the IPNX side
 without the kernel holding a console driver.
 
-The device table holds no `#c`: a console is served, not driven. The namespace
+The namespace
 keys a mount by the identity of the channel mounted upon (`chan.c:855`,
 `findmount`) and checks at every component — not by path text.
 
@@ -147,6 +147,32 @@ of the twelve needs a shell, and there is no userspace. Still 0 of 12.
 | **acceptance** | two processes talk over a pipe; one posts a channel at `/srv` and the other mounts it; a namespace built by `bind` and `mount` resolves |
 | **exposes** | there is nothing to run yet — no libc, no commands |
 
+**Open decision — `#c` and `#¤`, and it is Christine's.** The seven letters
+were chosen by one rule: a letter earns its place by being part of how
+processes are made, connected and named. `#c` was excluded as hardware, and
+that is wrong on measurement — `consdir[]` (`devcons.c:605`) is 23 files of
+which **two** are the console:
+
+| | |
+|---|---|
+| console | `cons` `consctl` |
+| identity | `user` `hostowner` `hostdomain` |
+| orchestration | `pid` `ppid` `pgrpid` `cputime` |
+| kernel state | `sysname` `osversion` `drivers` `kmesg` `kprint` `sysstat` `swap` `config` `reboot` |
+| time | `time` `bintime` |
+| generators | `null` `zero` `random` |
+
+`#¤` (`devcap.c:267`) touches no hardware at all; its exclusion was never
+argued.
+
+**Without them the kernel cannot express identity**: nothing can drop to `none`
+(`/dev/user`, `auth.c:107`) and nothing can become another user
+(`/dev/capuse`, `devcap.c:215`). `docs/identity.md` describes a model the
+kernel has no interface for.
+
+Excluding a Plan 9 device is a deviation from Plan 9. This one was made without
+approval and stands open until Christine decides it.
+
 ## P3 — the userspace
 
 | | |
@@ -160,7 +186,7 @@ of the twelve needs a shell, and there is no userspace. Still 0 of 12.
 
 | | |
 |---|---|
-| **builds** | the console, storage and the clock as **userspace file servers**, reached by mounting what the embedding serves. Plan 9 puts these in `#c` because it drives hardware; this system has none, so they are processes |
+| **builds** | the console, storage and the clock as **userspace file servers**, reached by mounting what the embedding serves. The console *hardware* is the host's; `cons` and `consctl` are 2 of `#c`'s 23 files |
 | **depends on** | P3 |
 | **acceptance** | `rc` reads and writes `/dev/cons`; a file written through the storage server survives a boot |
 | **exposes** | nothing assembles these at boot yet |
