@@ -1,90 +1,50 @@
 # Proposals — designs awaiting review
 
-> **PROPOSED — not reviewed.** Claude wrote this. Nothing in it is endorsed, and
-> nothing in it approves a deviation from Plan 9. What is built is
-> [when.md](when.md).
->
-> The device letters below are not Plan 9's: `H`, `Z` and `R` name no device;
-> `V` is the TV capture device (`plan9/sys/src/9/pc/devtv.c`) and `w` the
-> watchdog (`plan9/sys/src/9/port/devwd.c`).
-
-**META — a REGISTER, not one of the six questions.** It holds proposed answers to
-them — designs written but not reviewed — so that specs carry only what is
+**META — a REGISTER, not one of the six questions.** It holds proposed answers
+to them — designs written but not reviewed — so that specs carry only what is
 endorsed.
 
-**Role: the middle state.** Christine's rule (2026-09-02, CLAUDE.md's
-Conventions): everything is **spec'd** (discussed and endorsed), **proposed** (a
-design exists, unreviewed), or a **gap** (undesigned). Specs carry only what is
-endorsed, so proposals live here until they are reviewed — then they move into
-the relevant spec, or they are dropped.
+**Check `plan9/` before writing anything here.** Most questions that look like
+design questions are lookups: Plan 9 built this system and the source is in the
+tree. A proposal is for what Plan 9 genuinely does not answer. Everything that
+was in this register on 2026-09-18 turned out to be answered at file and line.
 
-**Nothing in this document is agreed. Do not build from it.**
+## Open
 
-## What the host needs when the window device leaves the kernel (after the demo)
+Nothing.
 
-**Reframed 2026-09-03 by the rule that the kernel does not grow.** a3 was
-scoped as *"the rasteriser moves to the host"*. Applying the test — **the
-kernel only orchestrates processes; everything else is host or userspace** —
-says the scope is larger and simpler: **`#w` leaves the kernel entirely.**
+## Answered by reading `plan9/` — 2026-09-18
 
-**Measured:** `#w` is **~1,100 lines, 22% of the kernel** — 745 in `wsys_*`,
-`win_*`, `cv_*` and `drawmsgs`, plus `draw.rs`'s 364 — across **29 `WKind`
-variants**. None of it is process orchestration. the legacy a1 and a2 steps already took
-the tree out this way; the rest goes the same way.
+**Does a per-operation crossing to the host need batching?** No, and it is not
+a protocol question. Plan 9 batches in **userspace**: `bufimage`
+(`libdraw/init.c:453`) appends into a buffer whose size is `iounit(datafd)`
+(`init.c:291`, falling back to 8000) and calls `doflush` when the next
+operation will not fit. The library accumulates, the channel's I/O unit sets
+the batch, and the kernel sees whole writes.
 
-**Two questions of mine dissolved when the rule was applied**, which is worth
-recording because it is what the rule is for:
+**What does a window device leave behind in the kernel?** Nothing — Plan 9 has
+no window device. `rio` is an ordinary userspace file server: it posts its
+channel to `/srv` (`rio/fsys.c:170`), mounts itself at `/mnt/wsys`
+(`fsys.c:237`), and binds that over `/dev` with `MBEFORE` (`fsys.c:241`). A
+window is a namespace, assembled by a program with `mount` and `bind`.
 
-- *"Should the host also serve `/dev/window/<n>/rgb`?"* — malformed. `rgb` in
-  the kernel is already wrong; it is a raster file. The question was only ever
-  where it lands, and there is one answer.
-- *"Should the kernel forward draw ops through `HostOp`?"* — struck out. It
-  grows the kernel.
+**What is a posted server called?** rio's own convention: `/srv/riowctl.%s.%d`
+— name, user, pid (`fsys.c:152`). `#s` is one table for the whole kernel, and
+the pid is what keeps a second instance from colliding.
 
-### What is still genuinely open
+**What answers `/` at boot, and how does `/dev` get filled?** `#/` is a fixed
+table of two entries, `#/` and `boot` (`devroot.c:27`), plus whatever
+`addbootfile` (`devroot.c:80`) embedded. Everything else is mounted by the boot
+process, and `/dev` is assembled in the shell:
 
-| | |
-|---|---|
-| **Chattiness** | libdraw issues many small operations; today each is a direct call. Whether a per-op crossing needs batching is **unmeasured**, and worth measuring against real acme rather than designing around |
-| **What `#w` leaves behind, if anything** | a window still needs an identity a process can name. Whether that is a thin kernel device or nothing at all is undesigned — and the rule says to try nothing first |
+```
+# bind all likely devices (#S was bound in boot)
+for(i in f t m v L P u U '$' Σ κ)
+	/bin/bind -a '#'^$i /dev
+```
 
-**A shared rasteriser, or native per host? — GONE, it was already decided**
-(emptied 2026-09-04). The question outlived its answer by a day: *"the host
-renders `/dev/draw`; the kernel does not know how to draw"* and *"we don't use
-`/dev/draw` — we use `/dev/canvas`"*, both 2026-09-03 in
-[design.md](archive/design-log-claude-written.md). There is no rasteriser inside IPNX to place, so the
-two horns never pulled against each other. Left standing here, it invited
-exactly the mistake it got: being re-derived from Plan 9's own drawterm, whose
-portable `libmemdraw` is a renderer in precisely the place those decisions
-emptied ([RESEARCH §9.19](../RESEARCH.md)).
-
-**None of this is urgent.** a3 is heritage work for acme and samterm; the demo
-carries text and the host renders it, so nothing waits on this.
-
-## GAP — where the ramfs goes, and what answers `/` at boot — FILLED
-
-**Emptied 2026-09-04.** This gap asked for a design and one now exists: it is
-[implementation.md](implementation.md)'s **P2 steps 1–2** — `#/`, Plan 9's
-root device (a fixed read-only table, `rootwrite` is `error(Egreg)`), and a
-**userspace** root file server over the seed the host provides through `#Z`.
-That is the split this block was asking for, written down. The evidence is
-[RESEARCH §9.12](../RESEARCH.md); the bootstrap-ordering worry it raised is
-answered by the boot path in P2 step 3.
-
-## Resolved, and therefore gone
-
-Four proposals were made and settled on 2026-09-03: **that the host renders
-`/dev/draw`** (the kernel does not know how to draw — the shape of the raster's move, after the demo, with
-three questions inside it still open above); **how the window tree is
-observed from outside emca** (it is files, at `/dev/emca/<n>/`, positional kids
-— the founding principle leaves no exemption for a window manager), **where
-emca's file server
-is posted** (`/srv/emca.<user>.<pid>` — `#s` is one table for the whole kernel,
-so a fixed name collides the moment emca nests) and everything proposed on
-2026-09-02 — the manager interface, the `/type` file syntax, `properties`,
-`pkg`/`template`/`project`, `/store`, `inode/system`'s layout, the `shell` type
-and `inode/directory`'s listing. All of it moved into the specs; the reasoning
-is dated in [design.md](archive/design-log-claude-written.md).
+— `rc/bin/termrc:11–13`. Note `Σ` and `κ`: non-ASCII device letters are
+ordinary in Plan 9, which is why `#¤` is not a special case.
 
 *A proposal is written here, reviewed, and then **leaves**. Adding to this file
 instead of emptying it is how stale blocks accumulate and how a reader ends up
