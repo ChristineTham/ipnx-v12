@@ -20,6 +20,10 @@ struct Entry {
     perm: u32,
 }
 
+/// `rootdir[]`'s two entries (`devroot.c:27`): `#/` and `boot`.
+const QROOT: u64 = 0;
+const QBOOT: u64 = 0x1000;
+
 pub struct Root {
     files: Vec<Entry>,
     next_qid: u64,
@@ -38,6 +42,10 @@ impl Root {
 
     /// `addbootfile`. The only way anything gets in here, and it happens before
     /// the kernel starts running processes.
+    /// `addbootfile` (`devroot.c:80`) adds to `bootlist`, whose base is
+    /// `Qboot` — so a boot file is at **`#/boot/<name>`**, not `#/<name>`.
+    /// `rootdir[]` is two entries, `#/` and `boot`, and both are directories
+    /// (`devroot.c:27`).
     pub fn addbootfile(&mut self, name: &str, contents: Vec<u8>) {
         let qid = Qid { qtype: 0, vers: 0, path: self.next_qid };
         self.next_qid += 1;
@@ -74,9 +82,17 @@ impl Dev for Root {
         if !c.qid.is_dir() {
             return Err("not a directory".into());
         }
-        if name == ".." {
-            // devroot has one level; `..` from it is itself, as `/..` is `/`.
-            return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: 0 }));
+        if name == ".." || name == "." {
+            // Two levels, and `..` from either lands at `#/`, as `/..` is `/`.
+            return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: QROOT }));
+        }
+        // At `#/` the only name is `boot`; the files are inside it.
+        if c.qid.path == QROOT {
+            return Ok(if name == "boot" {
+                Some(Qid { qtype: QTDIR, vers: 0, path: QBOOT })
+            } else {
+                None
+            });
         }
         Ok(self.files.iter().find(|e| e.name == name).map(|e| e.qid))
     }
@@ -94,12 +110,28 @@ impl Dev for Root {
     }
 
     fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
-        let e = self.find(c.qid).ok_or("no such file")?;
+        let owned;
+        let data: &[u8] = match c.qid.path {
+            QROOT => b"boot\n",
+            QBOOT => {
+                owned = self
+                    .files
+                    .iter()
+                    .map(|e| format!("{}\n", e.name))
+                    .collect::<String>()
+                    .into_bytes();
+                &owned
+            }
+            _ => {
+                let e = self.find(c.qid).ok_or("no such file")?;
+                &e.data
+            }
+        };
         let off = off as usize;
-        if off >= e.data.len() {
+        if off >= data.len() {
             return Ok(Vec::new());
         }
-        Ok(e.data[off..(off + n).min(e.data.len())].to_vec())
+        Ok(data[off..(off + n).min(data.len())].to_vec())
     }
 
     fn write(&mut self, _c: &mut Chan, _d: &[u8], _o: u64) -> Result<usize, String> {
@@ -137,12 +169,18 @@ mod tests {
     use super::*;
 
     #[test]
+    /// `addbootfile` puts a file in `boot`, not at the root — `bootlist`'s
+    /// base is `Qboot` (`devroot.c:80`), and `rootdir[]` is `#/` and `boot`,
+    /// both directories (`:27`).
     fn a_boot_file_can_be_walked_to_and_read() {
         let mut r = Root::new();
         r.addbootfile("init", b"the image".to_vec());
         let c = r.attach("").unwrap();
-        let qid = r.walk(&c, "init").unwrap().expect("init is there");
-        let f = c.walked("init", qid);
+        assert!(r.walk(&c, "init").unwrap().is_none(), "not at the root");
+        let bq = r.walk(&c, "boot").unwrap().expect("#/boot");
+        let b = c.walked("boot", bq);
+        let qid = r.walk(&b, "init").unwrap().expect("#/boot/init");
+        let f = b.walked("init", qid);
         let mut f = r.open(f, crate::chan::mode::OEXEC).unwrap();
         assert_eq!(r.read(&mut f, 100, 0).unwrap(), b"the image");
     }

@@ -14,6 +14,14 @@ use std::cell::RefCell;
 
 pub type Pid = u32;
 
+/// `ERRMAX` — *"max length of error string"* (`libc.h:553`). `sysexits`
+/// copies a status through `char buf[ERRMAX]` (`sysproc.c:668`), so a status
+/// is bounded by the same thing an error string is.
+pub const ERRMAX: usize = 128;
+
+/// `NFD` — *"per process file descriptors"* (`portdat.h:476`).
+pub const NFD: usize = 100;
+
 /// `Proc.time`'s slots (`portdat.h:630`).
 pub const TUSER: usize = 0;
 pub const TSYS: usize = 1;
@@ -35,6 +43,12 @@ pub mod rf {
     pub const CNAMEG: i32 = 1 << 10;
     pub const CENVG: i32 = 1 << 11;
     pub const CFDG: i32 = 1 << 12;
+    /// `RFREND` — a new rendezvous group.
+    pub const REND: i32 = 1 << 13;
+    /// `RFNOMNT` — sandboxing: this namespace may attach no device but
+    /// `#| #d #e #c #p` (`chan.c:1376`). Once set it is never unset, and a
+    /// copied namespace carries it (`sysproc.c:38`).
+    pub const NOMNT: i32 = 1 << 14;
 }
 
 /// A process's file descriptors. Shared or copied per `rfork`, which is why it
@@ -45,7 +59,12 @@ pub struct Fds {
 }
 
 impl Fds {
+    /// `newfd`. `NFD` bounds the table, so a process that leaks descriptors
+    /// fails rather than growing without limit.
     pub fn add(&mut self, c: Chan) -> Fd {
+        if self.count() >= NFD {
+            return -1;
+        }
         let c = Rc::new(RefCell::new(c));
         for (i, s) in self.slots.iter_mut().enumerate() {
             if s.is_none() {
@@ -245,6 +264,16 @@ impl Procs {
         let parent = self.tab.get(&pid)?.clone();
 
         let ns = Self::table(&parent.ns, flags & rf::CNAMEG != 0, flags & rf::NAMEG != 0);
+        // `sysproc.c:38` — a copied namespace carries `noattach`; `:42` —
+        // `RFNOMNT` sets it. It is never cleared, which is what makes it a
+        // sandbox rather than a mode.
+        if flags & (rf::NAMEG | rf::CNAMEG) != 0 {
+            let inherited = parent.ns.borrow().noattach();
+            ns.borrow_mut().set_noattach(inherited);
+        }
+        if flags & rf::NOMNT != 0 {
+            ns.borrow_mut().set_noattach(true);
+        }
         let env = Self::table(&parent.env, flags & rf::CENVG != 0, flags & rf::ENVG != 0);
         let fds = Self::table(&parent.fds, flags & rf::CFDG != 0, flags & rf::FDG != 0);
 
@@ -307,8 +336,15 @@ impl Procs {
 
     pub fn seterrstr(&mut self, pid: Pid, e: &str) {
         if let Some(p) = self.tab.get_mut(&pid) {
-            p.errstr = e.to_string();
+            // `ERRMAX` bounds it, as it bounds every error string Plan 9
+            // carries.
+            p.errstr = e[..e.len().min(ERRMAX - 1)].to_string();
         }
+    }
+
+    /// The status a process set with `exits`, before anything reaps it.
+    pub fn status(&self, pid: Pid) -> Option<String> {
+        self.tab.get(&pid).and_then(|p| p.status.clone())
     }
 
     /// Every living process, for `ls /proc`.
@@ -385,6 +421,7 @@ impl Procs {
     /// `TCUser`/`TCSys`/`TCReal`, which is what makes those three mean
     /// anything.
     pub fn exits(&mut self, pid: Pid, status: &str) {
+        let status = &status[..status.len().min(ERRMAX - 1)];
         let (ppid, time) = match self.tab.get_mut(&pid) {
             None => return,
             Some(p) => {
@@ -506,6 +543,45 @@ mod tests {
         let mut p = one();
         let c = p.rfork(1, rf::PROC | rf::CNAMEG).unwrap();
         assert!(!Rc::ptr_eq(&p.tab[&1].ns, &p.tab[&c].ns), "RFCNAMEG means CLEAR");
+    }
+
+    /// `RFNOMNT` sets `noattach` and it is never cleared; a copied namespace
+    /// carries it (`sysproc.c:38`, `:42`). A sandbox that a child could shed
+    /// by copying its namespace would not be one.
+    #[test]
+    fn nomnt_sets_noattach_and_a_copy_carries_it() {
+        let mut p = one();
+        assert!(!p.tab[&1].ns.borrow().noattach());
+        p.rfork(1, rf::NOMNT);
+        assert!(p.tab[&1].ns.borrow().noattach(), "RFNOMNT sets it");
+
+        let c = p.rfork(1, rf::PROC | rf::NAMEG).unwrap();
+        assert!(p.tab[&c].ns.borrow().noattach(), "a copy carries it");
+        let c2 = p.rfork(1, rf::PROC | rf::CNAMEG).unwrap();
+        assert!(p.tab[&c2].ns.borrow().noattach(), "and so does a cleared one");
+    }
+
+    /// `ERRMAX` (`libc.h:553`) bounds an error string and an exit status —
+    /// `sysexits` copies through `char buf[ERRMAX]` (`sysproc.c:668`).
+    #[test]
+    fn errmax_bounds_an_error_string_and_a_status() {
+        let mut p = one();
+        p.seterrstr(1, &"x".repeat(1000));
+        assert!(p.errstr(1).len() < ERRMAX);
+        let c = p.rfork(1, rf::PROC).unwrap();
+        p.exits(c, &"y".repeat(1000));
+        assert!(p.await_child(1).unwrap().1.len() < ERRMAX);
+    }
+
+    /// `NFD` = 100 (`portdat.h:476`). A process that leaks descriptors fails
+    /// rather than growing without limit.
+    #[test]
+    fn nfd_bounds_the_descriptor_table() {
+        let mut f = Fds::default();
+        for _ in 0..NFD {
+            assert!(f.add(Chan::attach(crate::dev::DevId::Root, 0)) >= 0);
+        }
+        assert_eq!(f.add(Chan::attach(crate::dev::DevId::Root, 0)), -1);
     }
 
     /// `sysrfork` checks its flags before it commits (`sysproc.c:43`). Asking

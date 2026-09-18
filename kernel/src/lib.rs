@@ -165,8 +165,16 @@ impl Kernel {
         let status = m.touser(pid, &image, args, self);
         self.machine = m;
         let status = status?;
-        self.procs.borrow_mut().exits(pid, &status);
-        Ok(status)
+        // **A status the process set stands.** `sysexec` never returns in
+        // Plan 9 — the process runs, and `sysexits` sets the status
+        // (`sysproc.c:668`). Here `touser` returns when the process is
+        // finished, and recording its return unconditionally would clobber
+        // what the process said on its way out.
+        let already = self.procs.borrow().status(pid).is_some();
+        if !already {
+            self.procs.borrow_mut().exits(pid, &status);
+        }
+        Ok(self.procs.borrow().status(pid).unwrap_or(status))
     }
 
     /// Steps 1 and 2 alone: resolve and read. Split out because it is entirely
@@ -270,7 +278,7 @@ mod tests {
     #[test]
     fn exec_resolves_through_the_namespace_and_reads_the_image() {
         let mut k = booted();
-        assert_eq!(k.exec_image(1, "/init").unwrap(), b"an image");
+        assert_eq!(k.exec_image(1, "/boot/init").unwrap(), b"an image");
     }
 
     /// `exec` must hand the machine the bytes it resolved. Asserting only on
@@ -280,7 +288,7 @@ mod tests {
     #[test]
     fn exec_runs_the_image_it_resolved() {
         let (mut k, log) = watched();
-        k.exec(1, "/init", &[]).unwrap();
+        k.exec(1, "/boot/init", &[]).unwrap();
         assert_eq!(log.borrow().ran, vec![(1, b"an image".to_vec())]);
     }
 
@@ -289,7 +297,7 @@ mod tests {
     #[test]
     fn procsetup_runs_before_touser() {
         let (mut k, log) = watched();
-        k.exec(1, "/init", &[]).unwrap();
+        k.exec(1, "/boot/init", &[]).unwrap();
         assert_eq!(log.borrow().order, vec!["procsetup", "touser"]);
     }
 
@@ -610,7 +618,7 @@ mod syscalls {
     #[test]
     fn a_process_can_open_a_file_and_read_it() {
         let mut k = booted();
-        let fd = match k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap() {
+        let fd = match k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap() {
             Ret::Fd(fd) => fd,
             r => panic!("{r:?}"),
         };
@@ -626,7 +634,7 @@ mod syscalls {
     #[test]
     fn reading_at_minus_one_advances_the_channel() {
         let mut k = booted();
-        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap()
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap()
         else {
             panic!()
         };
@@ -662,7 +670,7 @@ mod syscalls {
         else {
             panic!()
         };
-        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap()
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap()
         else {
             panic!()
         };
@@ -676,7 +684,7 @@ mod syscalls {
     #[test]
     fn dup_shares_the_offset_through_the_call_interface() {
         let mut k = booted();
-        let Ret::Fd(a) = k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap()
+        let Ret::Fd(a) = k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap()
         else {
             panic!()
         };
@@ -691,7 +699,7 @@ mod syscalls {
     fn chdir_moves_dot_and_a_relative_name_follows_it() {
         let mut k = booted();
         assert_eq!(k.syscall(1, Call::Chdir { path: "/".into() }).unwrap(), Ret::Ok);
-        let r = k.syscall(1, Call::Open { path: "init".into(), mode: 0 }).unwrap();
+        let r = k.syscall(1, Call::Open { path: "boot/init".into(), mode: 0 }).unwrap();
         assert!(matches!(r, Ret::Fd(_)), "{r:?}");
     }
 

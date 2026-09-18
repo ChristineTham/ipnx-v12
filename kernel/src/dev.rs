@@ -94,6 +94,23 @@ impl DevId {
         }
     }
 
+    /// `Dev.name` (`portdat.h:242`) — Plan 9 carries it beside the letter, and
+    /// `/dev/drivers` prints both: `#%C %s` from `->dc` and `->name`
+    /// (`devcons.c:198`).
+    pub fn name(self) -> &'static str {
+        match self {
+            DevId::Root => "root",
+            DevId::Pipe => "pipe",
+            DevId::Srv => "srv",
+            DevId::Mnt => "mnt",
+            DevId::Proc => "proc",
+            DevId::Dup => "dup",
+            DevId::Env => "env",
+            DevId::Cons => "cons",
+            DevId::Cap => "cap",
+        }
+    }
+
     pub fn from_letter(c: char) -> Option<DevId> {
         Some(match c {
             '/' => DevId::Root,

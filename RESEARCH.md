@@ -2885,6 +2885,29 @@ root where Plan 9 has a `boot` directory.
 | **`ERRMAX` = 128** | `libc.h:553`, *"max length of error string"*. `sysexits` copies a status through `char buf[ERRMAX]` (`sysproc.c:668`). Our `errstr` and exit status are unbounded `String`s |
 | **`NFD` = 100** | `portdat.h:476`, *"per process file descriptors"*. Our `Fds` grows without limit |
 
+### A fourteenth, found by fixing the others
+
+**`exec` clobbered the status the process set.** `sysexec` never returns in
+Plan 9 — the process runs and `sysexits` sets the status (`sysproc.c:668`).
+Here `touser` returns when the process is finished, and recording its return
+unconditionally overwrote what the process had said on its way out.
+
+It was invisible because the host test asserted only `is_ok()`. Strengthening
+that test to check *what the guest read* — after the `#/boot` move left the
+demo opening `/boot/` and printing a directory listing while the test stayed
+green — exposed both at once.
+
+### All fourteen are fixed, 2026-09-18
+
+With a test each that fails if the behaviour regresses: a channel carrying
+`CCEXEC`/`CRCLOSE` refused by `srvwrite`; a name opened `ORCLOSE` unposting
+itself on close; a second mount of one wire joining its session rather than
+sending a second `Tversion`; the wire's `iounit` bounding the session;
+`RFNOMNT` setting `noattach` and both a copied and a cleared namespace
+carrying it; `noattach` permitting exactly `"|decp"`; `ERRMAX` bounding an
+error string and an exit status; `NFD` bounding the descriptor table;
+`#/boot/init` rather than `#/init`; and a guest exiting with the bytes it read.
+
 ### What was checked and matches
 
 The pipe's permissions (`0500` on the directory, `0600` on each end,

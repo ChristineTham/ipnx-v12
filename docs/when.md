@@ -5,13 +5,13 @@ other document carries it.
 
 Measured 2026-09-18.
 
-## The kernel — 6,481 lines of Rust, no dependencies
+## The kernel — 6,846 lines of Rust, no dependencies
 
 | | |
 |---|---|
 | `chan.rs` | `Chan` — the object every name resolves to |
 | `dev.rs` | the device table, Plan 9's `struct Dev`; nine letters (`/ \| s M p d e c ¤`) |
-| `devroot.rs` | `#/` — the read-only boot directory; every write is `Egreg` |
+| `devroot.rs` | `#/` — two directories, `#/` and `boot`, as `rootdir[]` has them; every write is `Egreg` |
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed |
 | `devproc.rs` | `#p` — the process table as files: `status`, `ns` as the bind lines that rebuild it, `fd`, and `ctl` where a write kills |
 | `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user |
@@ -28,7 +28,7 @@ Measured 2026-09-18.
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-121 kernel tests, and 3 in `hosts/ipnx` that run a guest against a real kernel.
+129 kernel tests, and 3 in `hosts/ipnx` that run a guest against a real kernel.
 
 ## The host — `hosts/ipnx`, 116 lines
 

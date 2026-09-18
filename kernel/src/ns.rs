@@ -77,6 +77,8 @@ pub struct Ns {
     /// one from a global counter (`pgrp.c:53`, `incref(&pgrpid)`), which is
     /// what `/dev/pgrpid` reports.
     id: u32,
+    /// `Pgrp.noattach` (`portdat.h`, `struct Pgrp`).
+    noattach: bool,
 }
 
 /// The counter `newpgrp` draws from (`pgrp.c:12`, `static Ref pgrpid`).
@@ -87,7 +89,11 @@ static NEXT_ID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new
 /// not. Only sharing keeps the id, which is the point of the number.
 impl Clone for Ns {
     fn clone(&self) -> Ns {
-        Ns { mounts: self.mounts.clone(), id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed) }
+        Ns {
+            mounts: self.mounts.clone(),
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            noattach: self.noattach,
+        }
     }
 }
 
@@ -103,6 +109,7 @@ impl Ns {
         Ns {
             mounts: HashMap::new(),
             id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            noattach: false,
         }
     }
 
@@ -129,6 +136,15 @@ impl Ns {
         }
         out.sort();
         out
+    }
+
+    /// `Pgrp.noattach` — `RFNOMNT`'s sandbox. Set, never cleared.
+    pub fn noattach(&self) -> bool {
+        self.noattach
+    }
+
+    pub fn set_noattach(&mut self, on: bool) {
+        self.noattach |= on;
     }
 
     /// `pgrpid` — this namespace group's number.

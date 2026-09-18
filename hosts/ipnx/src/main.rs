@@ -222,15 +222,15 @@ const INIT: &str = r#"
   (import "sys" "exits"  (func $exits  (param i32 i32)))
   (memory (export "memory") 1)
 
-  (data (i32.const 8)  "/hello")
+  (data (i32.const 8)  "/boot/hello")
   (data (i32.const 32) "init: ")
 
   (global $fd (mut i32) (i32.const 0))
   (global $n  (mut i32) (i32.const 0))
 
   (func (export "_start")
-    ;; fd = open("/hello", OREAD)
-    (global.set $fd (call $open (i32.const 8) (i32.const 6) (i32.const 0)))
+    ;; fd = open("/boot/hello", OREAD)
+    (global.set $fd (call $open (i32.const 8) (i32.const 11) (i32.const 0)))
     (if (i32.lt_s (global.get $fd) (i32.const 0))
       (then
         (call $write (i32.const 32) (i32.const 6))
@@ -279,7 +279,7 @@ fn main() {
         }
     };
 
-    match k.exec(1, "/init", &[]) {
+    match k.exec(1, "/boot/init", &[]) {
         Ok(_) => {}
         Err(e) => {
             eprintln!("ipnx: /init: {e}");
@@ -292,7 +292,9 @@ fn main() {
 mod tests {
     use super::*;
 
-    /// Run one module as pid 1 with `#/` holding whatever it should find.
+    /// Run one module as pid 1 with `#/boot` holding whatever it should find,
+    /// and answer with the status the PROCESS set — not the one `touser`
+    /// returned, which says only that the machine came back.
     fn run(wat: &str, files: &[(&str, &[u8])]) -> Result<String, String> {
         let mut root = Root::new();
         root.addbootfile("init", wat::parse_str(wat).map_err(|e| e.to_string())?);
@@ -300,16 +302,35 @@ mod tests {
             root.addbootfile(n, b.to_vec());
         }
         let mut k = Kernel::new(root, Box::new(Wasm::new()))?;
-        k.exec(1, "/init", &[])
+        k.exec(1, "/boot/init", &[])?;
+        let status = k.procs.borrow().status(1);
+        Ok(status.unwrap_or_default())
     }
 
     /// The path the demo takes: a guest resolves a name through its namespace,
-    /// reads what it finds, and closes it. Every step is a call into the
-    /// kernel from inside the machine.
+    /// reads what it finds, and closes it.
+    ///
+    /// **It exits with what it read**, so the test knows the bytes arrived.
+    /// Asserting only that the run succeeded let `/boot/` be opened in place
+    /// of `/boot/hello` — a directory, which opens fine — and the guest
+    /// printed the directory listing while this test stayed green.
     #[test]
     fn a_guest_reaches_the_kernel_and_reads_a_file_by_name() {
-        let r = run(INIT, &[("hello", b"read\n")]);
-        assert!(r.is_ok(), "{r:?}");
+        const READ: &str = r#"
+(module
+  (import "sys" "open"  (func $open  (param i32 i32 i32) (result i32)))
+  (import "sys" "pread" (func $pread (param i32 i32 i32 i64) (result i32)))
+  (import "sys" "exits" (func $exits (param i32 i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 8) "/boot/hello")
+  (global $n (mut i32) (i32.const 0))
+  (func (export "_start")
+    (global.set $n (call $open (i32.const 8) (i32.const 11) (i32.const 0)))
+    (global.set $n
+      (call $pread (global.get $n) (i32.const 256) (i32.const 256) (i64.const -1)))
+    (call $exits (i32.const 256) (global.get $n))))
+"#;
+        assert_eq!(run(READ, &[("hello", b"the bytes")]).unwrap(), "the bytes");
     }
 
     /// A call that fails answers −1 and leaves its reason where `errstr`

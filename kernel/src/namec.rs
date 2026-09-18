@@ -221,6 +221,7 @@ pub struct Start {
 /// reached through `mount()` and no other way.
 pub fn start(
     tab: &mut Devtab,
+    ns: &Ns,
     name: &str,
     slash: &Chan,
     dot: &Chan,
@@ -230,8 +231,24 @@ pub fn start(
     }
     if let Some(rest) = name.strip_prefix('#') {
         let (id, below) = dev::split(name).ok_or("bad # in file name")?;
+        // `chan.c:1374`. `#M` is never reachable by name: `mount(2)` supplies
+        // the channel, and there is no server to find by writing the letter.
         if id == DevId::Mnt {
-            return Err("not attached".into());
+            return Err(ENOATTACH.into());
+        }
+        // `chan.c:1376` — `RFNOMNT`'s sandbox, and the exception list is
+        // exactly Plan 9's, with its own reasoning:
+        //
+        //   the OK exceptions are:
+        //     |  it only gives access to pipes you create
+        //     d  this process's file descriptors
+        //     e  this process's environment
+        //   the iffy exceptions are:
+        //     c  time and pid, but also cons and consctl
+        //     p  control of your own processes (and unfortunately
+        //        any others left unprotected)
+        if ns.noattach() && !"|decp".contains(id.letter()) {
+            return Err(ENOATTACH.into());
         }
         // the spec is what follows the letter up to the first '/'
         let spec: String = rest.chars().skip(1).take_while(|c| *c != '/').collect();
@@ -305,7 +322,7 @@ pub fn namec(
     amode: A,
     omode: u16,
 ) -> Result<Chan, String> {
-    let (s, names) = start(tab, name, slash, dot)?;
+    let (s, names) = start(tab, ns, name, slash, dot)?;
     let mut c = walk(tab, ns, s.chan, &names, s.nomount)?;
     match amode {
         A::Access | A::Mount => {}
@@ -316,6 +333,15 @@ pub fn namec(
         }
         A::Open => {
             c = tab.dopen(c, omode)?;
+            // `namec`'s `Aopen`: the open modes that are really channel flags
+            // (`<libc.h>`, and `devdup.c`'s `if(omode & OCEXEC)`).
+            if omode & crate::chan::mode::ORCLOSE != 0 {
+                c.flag |= crate::chan::flag::CRCLOSE;
+            }
+            if omode & crate::chan::mode::OCEXEC != 0 {
+                c.flag |= crate::chan::flag::CCEXEC;
+            }
+            c.flag |= crate::chan::flag::COPEN;
         }
     }
     Ok(c)
@@ -371,8 +397,8 @@ mod tests {
     fn a_rooted_name_resolves_from_the_processs_root_channel() {
         let (mut tab, slash) = tab_with_root();
         let ns = Ns::new();
-        let c = namec(&mut tab, &ns, &slash, &slash, "/init", A::Access, 0).unwrap();
-        assert_eq!(c.path, "#/init", "the root device is `#/`, so the name joins without doubling");
+        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap();
+        assert_eq!(c.path, "#/boot/init", "the root device is `#/`, so the name joins without doubling");
     }
 
     #[test]
@@ -423,7 +449,7 @@ mod tests {
         let mut ns = Ns::new();
         ns.mount(&slash, Element::new(over), Bind::Replace);
 
-        let c = namec(&mut tab, &ns, &slash, &slash, "/init", A::Access, 0).expect("resolve");
+        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).expect("resolve");
         assert_eq!(
             c.dev,
             DevId::Srv,
@@ -443,7 +469,7 @@ mod tests {
         tab.add(Box::new(r));
 
         // the channel for /init — reached by a walk, not the starting point
-        let on = namec(&mut tab, &Ns::new(), &slash, &slash, "/init", A::Access, 0).unwrap();
+        let on = namec(&mut tab, &Ns::new(), &slash, &slash, "/boot/init", A::Access, 0).unwrap();
         assert_eq!(on.dev, DevId::Root);
 
         let mut other = Other::new();
@@ -453,12 +479,44 @@ mod tests {
         let mut ns = Ns::new();
         ns.mount(&on, Element::new(over), Bind::Replace);
 
-        let c = namec(&mut tab, &ns, &slash, &slash, "/init", A::Access, 0).unwrap();
+        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap();
         assert_eq!(
             c.dev,
             DevId::Srv,
             "a mount made on a walked-to component was not honoured there"
         );
+    }
+
+    /// `chan.c:1376` — `RFNOMNT`'s sandbox, and the exception list is exactly
+    /// `"|decp"`. A list that allowed anything more would let a sandboxed
+    /// process attach a server and escape through it.
+    #[test]
+    fn noattach_permits_exactly_pipe_dup_env_cons_and_proc() {
+        let mut tab = Devtab::new();
+        let mut r = Root::new();
+        r.addbootfile("init", b"x".to_vec());
+        let slash = r.attach("").unwrap();
+        tab.add(Box::new(r));
+        tab.add(Box::new(Other::new()));
+
+        let mut sandboxed = Ns::new();
+        sandboxed.set_noattach(true);
+        let open = Ns::new();
+
+        // `#s` is not in "|decp", so it is refused in the sandbox and not
+        // outside it. The device exists either way — this is the namespace
+        // saying no, not the table.
+        assert!(namec(&mut tab, &open, &slash, &slash, "#s", A::Access, 0).is_ok());
+        let e = namec(&mut tab, &sandboxed, &slash, &slash, "#s", A::Access, 0).unwrap_err();
+        assert_eq!(e, ENOATTACH);
+
+        // and `#M` is refused in both, always
+        for ns in [&open, &sandboxed] {
+            assert_eq!(
+                namec(&mut tab, ns, &slash, &slash, "#M", A::Access, 0).unwrap_err(),
+                ENOATTACH
+            );
+        }
     }
 
     /// The starting point of a relative name is the process's `dot`, not its
@@ -472,8 +530,8 @@ mod tests {
         tab.add(Box::new(r));
         let ns = Ns::new();
 
-        let rooted = namec(&mut tab, &ns, &slash, &slash, "/init", A::Access, 0).unwrap();
-        let relative = namec(&mut tab, &ns, &slash, &slash, "init", A::Access, 0)
+        let rooted = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap();
+        let relative = namec(&mut tab, &ns, &slash, &slash, "boot/init", A::Access, 0)
             .expect("a relative name must resolve from dot");
         assert_eq!(rooted.qid, relative.qid);
     }
@@ -531,7 +589,7 @@ mod tests {
     fn opening_for_writing_is_refused_by_the_root() {
         let (mut tab, slash) = tab_with_root();
         let ns = Ns::new();
-        let e = namec(&mut tab, &ns, &slash, &slash, "/init", A::Open,
+        let e = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Open,
                       crate::chan::mode::OWRITE);
         assert!(e.is_err(), "devroot refuses writing, as rootwrite does");
     }
@@ -580,3 +638,6 @@ impl crate::devmnt::Transport for Wire<'_> {
         Ok(out)
     }
 }
+
+/// `Enoattach` (`port/error.h`).
+const ENOATTACH: &str = "not attached";

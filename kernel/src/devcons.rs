@@ -64,8 +64,9 @@ pub struct Cons {
     /// kernel is in a position to keep honestly.
     pub syscalls: u64,
     pub cs: u64,
-    /// The device letters this kernel carries, for `/dev/drivers`.
-    letters: Vec<(char, &'static str)>,
+    /// The device letters this kernel carries, for `/dev/drivers`. The names
+    /// come from [`DevId::name`], so there is one list and not two.
+    letters: Vec<DevId>,
     /// How a device reaches `up`. Plan 9 uses a per-machine global; this is
     /// the same pointer, shared rather than ambient because Rust has no
     /// ambient mutable global.
@@ -155,7 +156,7 @@ impl Cons {
     pub fn new(
         eve: &str,
         up: Rc<RefCell<Up>>,
-        letters: Vec<(char, &'static str)>,
+        letters: Vec<DevId>,
         host: Box<dyn Console>,
     ) -> Cons {
         Cons {
@@ -284,8 +285,8 @@ impl Dev for Cons {
             // `#%C %s\n` per device (`devcons.c:198`), then the host's own.
             Q::Drivers => {
                 let mut s = String::new();
-                for (c, name) in &self.letters {
-                    s.push_str(&format!("#{c} {name}\n"));
+                for d in &self.letters {
+                    s.push_str(&format!("#{} {}\n", d.letter(), d.name()));
                 }
                 for d in self.host.drivers() {
                     s.push_str(&d);
@@ -481,7 +482,7 @@ mod tests {
     fn cons() -> (Cons, Rc<RefCell<Procs>>) {
         let procs = Rc::new(RefCell::new(Procs::new(Chan::attach(DevId::Root, 0))));
         let up = Rc::new(RefCell::new(Up { pid: 1, procs: procs.clone() }));
-        let letters = vec![('/', "root"), ('|', "pipe"), ('c', "cons")];
+        let letters = vec![DevId::Root, DevId::Pipe, DevId::Cons];
         (Cons::new("eve", up, letters, Box::new(FakeHost)), procs)
     }
 

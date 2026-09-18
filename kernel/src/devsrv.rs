@@ -21,7 +21,7 @@
 //! `/srv/riowctl.%s.%d` with the user and the pid (`rio/fsys.c:152`): a fixed
 //! name would collide the moment a second instance started.
 
-use crate::chan::Chan;
+use crate::chan::{flag, Chan};
 use crate::dev::{Dev, DevId};
 use crate::ninep::{Qid, QTDIR};
 use crate::proc::Up;
@@ -170,6 +170,12 @@ impl Dev for SrvDev {
         let fgrp = self.up.borrow().fgrp().ok_or("no such process")?;
         let cell = fgrp.borrow().get(fd).cloned().ok_or("fd out of range or not open")?;
         let posted = cell.borrow().clone();
+        // `srvwrite` (`devsrv.c:323`). A channel that goes away on exec or on
+        // close cannot be left behind a name: whoever opens the name later
+        // would get a channel its poster no longer holds.
+        if posted.flag & (flag::CCEXEC | flag::CRCLOSE) != 0 {
+            return Err("posted fd has remove-on-close or close-on-exec".into());
+        }
         let path = c.qid.path;
         let sp = self.srv.iter_mut().find(|s| s.path == path).ok_or(ENONEXIST)?;
         if sp.chan.is_some() {
@@ -215,7 +221,14 @@ impl Dev for SrvDev {
         Ok(())
     }
 
-    fn close(&mut self, _c: &mut Chan) {}
+    /// `srvclose` (`devsrv.c:280`): a channel opened with `ORCLOSE` unposts
+    /// its name when it closes. The comment there notes why no re-check is
+    /// needed — only the owner is checked, and an owner is immutable.
+    fn close(&mut self, c: &mut Chan) {
+        if c.flag & flag::CRCLOSE != 0 {
+            let _ = self.remove(c);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -296,6 +309,36 @@ mod tests {
         let mut root = d.attach("").unwrap();
         let s = String::from_utf8(d.read(&mut root, 256, 0).unwrap()).unwrap();
         assert_eq!(s, "factotum\nriowctl.kitty.12\n");
+    }
+
+    /// `srvwrite` (`devsrv.c:323`) refuses a channel that goes away on exec
+    /// or on close: whoever opens the name later would get a channel its
+    /// poster no longer holds.
+    #[test]
+    fn a_channel_that_vanishes_cannot_be_posted() {
+        for bad in [flag::CCEXEC, flag::CRCLOSE] {
+            let (mut d, procs) = srv();
+            let mut c = Chan::attach(DevId::Pipe, 7);
+            c.flag = bad;
+            let fd = procs.borrow().get(1).unwrap().fds.borrow_mut().add(c);
+            let mut dir = d.attach("").unwrap();
+            d.create(&mut dir, "x", OWRITE, 0o600).unwrap();
+            let e = d.write(&mut dir, fd.to_string().as_bytes(), 0).unwrap_err();
+            assert!(e.contains("remove-on-close or close-on-exec"), "{e}");
+        }
+    }
+
+    /// `srvclose` (`devsrv.c:286`): a name opened with `ORCLOSE` unposts
+    /// itself when the channel closes.
+    #[test]
+    fn a_name_opened_with_orclose_unposts_itself() {
+        let (mut d, _) = srv();
+        let mut dir = d.attach("").unwrap();
+        d.create(&mut dir, "gone", OWRITE, 0o600).unwrap();
+        dir.flag |= flag::CRCLOSE;
+        d.close(&mut dir);
+        let root = d.attach("").unwrap();
+        assert!(d.walk(&root, "gone").unwrap().is_none(), "close did not unpost it");
     }
 
     /// Unposting removes the name, so a later open finds nothing at all.

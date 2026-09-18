@@ -54,29 +54,41 @@ pub struct Mnt {
 impl Mnt {
     /// `mntversion` then `mntattach`: negotiate, then attach. Neither is
     /// optional — a server that has not agreed a version answers nothing.
-    pub fn attach(
-        wire: Chan,
-        t: &mut dyn Transport,
-        uname: &str,
-        aname: &str,
-    ) -> Result<(Mnt, Chan), String> {
+    /// `mntversion` (`devmnt.c:100`), and only when the wire has no session:
+    /// `mntattach` does it once and joins afterwards (`:317`, `m = c->mux`).
+    pub fn version(wire: &Chan, t: &mut dyn Transport) -> Result<u32, String> {
         // `mntversion` asks for MAXRPC (`devmnt.c:118`, `msize = MAXRPC`).
         // MAXCMNRPC is only the BUFFER the exchange itself uses
         // (`:155`, `msg = malloc(MAXCMNRPC)`) — asking for it instead would
         // cap every session at the old 8K and nothing would look wrong.
-        let req = W::new().u32(MAXRPC).s(VERSION).frame(T::Version as u8, !0);
+        let mut msize = MAXRPC;
+        // `if(msize > c->iounit && c->iounit != 0) msize = c->iounit`
+        // (`devmnt.c:119`): the wire's own chunk size bounds the session.
+        if wire.iounit != 0 && msize > wire.iounit {
+            msize = wire.iounit;
+        }
+        let req = W::new().u32(msize).s(VERSION).frame(T::Version as u8, !0);
         let reply = t.rpc(&req)?;
         let m = unframe(&reply).ok_or("malformed Rversion")?;
         if m.ty != T::Version.reply() {
-            return Err(rerror(&m.body).unwrap_or_else(|| "not Rversion".into()));
+            return Err(rerror(m.body).unwrap_or_else(|| "not Rversion".into()));
         }
         let mut r = R::new(m.body);
-        let msize = r.u32().ok_or("short Rversion")?;
+        let got = r.u32().ok_or("short Rversion")?;
         let version = r.s().ok_or("short Rversion")?;
         if version != VERSION {
             return Err(format!("server speaks {version}, not {VERSION}"));
         }
-        let msize = msize.min(MAXRPC);
+        Ok(got.min(msize))
+    }
+
+    pub fn attach(
+        wire: Chan,
+        msize: u32,
+        t: &mut dyn Transport,
+        uname: &str,
+        aname: &str,
+    ) -> Result<(Mnt, Chan), String> {
 
         let mut mnt = Mnt { msize, wire, tag: 0, nextfid: 1 };
         let fid = mnt.newfid();
@@ -232,17 +244,28 @@ impl MntDev {
         MntDev::default()
     }
 
-    /// `mntattach`. The channel handed in **is the wire**.
+    /// `mntattach` (`devmnt.c:303`). The channel handed in **is the wire**.
+    ///
+    /// **A wire already carrying a session is joined, not re-versioned**:
+    /// `m = c->mux`, and `mntversion` runs only when that is nil (`:317`).
+    /// Two mounts of one channel are two attaches over one 9P session.
     pub fn mount(
         &mut self,
-        wire: Chan,
+        mut wire: Chan,
         t: &mut dyn Transport,
         uname: &str,
         aname: &str,
     ) -> Result<Chan, String> {
-        let (m, mut c) = Mnt::attach(wire, t, uname, aname)?;
+        let msize = match wire.mux.and_then(|i| self.mounts.get(i as usize)) {
+            Some(m) => m.msize,
+            None => Mnt::version(&wire, t)?,
+        };
+        let joined = wire.mux;
+        wire.mux = Some(self.mounts.len() as u32);
+        let (m, mut c) = Mnt::attach(wire, msize, t, uname, aname)?;
         self.mounts.push(m);
         c.devno = (self.mounts.len() - 1) as u32;
+        c.mux = joined.or(Some(c.devno));
         Ok(c)
     }
 
@@ -388,6 +411,9 @@ mod tests {
         msize: u32,
         /// Every fid ever handed out, so a leak is visible.
         handed: usize,
+        /// How many times each was asked for, so joining a session is visible.
+        versions: usize,
+        attaches: usize,
     }
 
     impl Server {
@@ -395,7 +421,7 @@ mod tests {
             let mut files = HashMap::new();
             files.insert("hello".into(), b"from a server".to_vec());
             files.insert("big".into(), vec![b'x'; 5000]);
-            Server { files, fids: HashMap::new(), msize, handed: 0 }
+            Server { files, fids: HashMap::new(), msize, handed: 0, versions: 0, attaches: 0 }
         }
 
         fn reply(&mut self, req: &[u8]) -> Vec<u8> {
@@ -407,6 +433,7 @@ mod tests {
 
             match ty {
                 x if x == T::Version as u8 => {
+                    self.versions += 1;
                     let asked = r.u32().unwrap();
                     let v = r.s().unwrap();
                     let msize = asked.min(self.msize);
@@ -416,6 +443,7 @@ mod tests {
                     W::new().u32(msize).s(VERSION).frame(T::Version.reply(), tag)
                 }
                 x if x == T::Attach as u8 => {
+                    self.attaches += 1;
                     let fid = r.u32().unwrap();
                     let _afid = r.u32().unwrap();
                     self.fids.insert(fid, String::new());
@@ -558,6 +586,43 @@ mod tests {
         c.fid = 99; // a fid the server never handed out
         let e = d.read(&mut t, &mut c, 8, 0).unwrap_err();
         assert!(e.contains("unknown fid"), "{e}");
+    }
+
+    /// `mntattach` joins a session already on the wire rather than versioning
+    /// again: `m = c->mux`, and `mntversion` runs only when that is nil
+    /// (`devmnt.c:317`). Two mounts of one channel are two ATTACHES over one
+    /// session — a second `Tversion` would reset the server's state.
+    #[test]
+    fn a_second_mount_of_one_wire_joins_its_session() {
+        let s = std::rc::Rc::new(std::cell::RefCell::new(Server::new(MAXRPC)));
+        let mut d = MntDev::new();
+        let mut t = Loopback(s.clone());
+        let wire = Chan::attach(DevId::Pipe, 0);
+
+        let first = d.mount(wire.clone(), &mut t, "kitty", "").unwrap();
+        let versions = s.borrow().versions;
+        assert_eq!(versions, 1);
+
+        // the wire now carries the session
+        let mut again = wire.clone();
+        again.mux = first.mux;
+        d.mount(again, &mut t, "kitty", "").unwrap();
+        assert_eq!(s.borrow().versions, 1, "a second Tversion was sent");
+        assert_eq!(s.borrow().attaches, 2, "and the second attach was not");
+    }
+
+    /// `iounit` bounds the session: `if(msize > c->iounit && c->iounit != 0)`
+    /// (`devmnt.c:119`). A wire that can only carry so much per message says
+    /// so, and the mount must not ask for more.
+    #[test]
+    fn the_wires_iounit_bounds_the_session() {
+        let s = std::rc::Rc::new(std::cell::RefCell::new(Server::new(MAXRPC)));
+        let mut d = MntDev::new();
+        let mut t = Loopback(s.clone());
+        let mut wire = Chan::attach(DevId::Pipe, 0);
+        wire.iounit = 4096;
+        d.mount(wire, &mut t, "kitty", "").unwrap();
+        assert_eq!(d.mounts[0].msize, 4096, "the wire's own limit, not MAXRPC");
     }
 
     /// `#M` is not reachable by writing its letter in a path: `mount(2)`
