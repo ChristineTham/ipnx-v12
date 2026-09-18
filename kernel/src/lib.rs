@@ -38,6 +38,7 @@ use dev::Dev as _;
 
 pub mod chan;
 pub mod dev;
+pub mod devpipe;
 pub mod devroot;
 pub mod machine;
 pub mod namec;
