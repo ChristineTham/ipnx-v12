@@ -1,8 +1,9 @@
 # Window types and their managers
 
-> **PROPOSED — not reviewed.** Claude wrote this. Nothing in it is endorsed, and
-> nothing in it approves a deviation from Plan 9. What is built is
-> [when.md](when.md).
+> **MIXED.** *The design* below is **decided** — Christine answered its five
+> open questions on 2026-09-18. Everything after it is **proposed**: Claude
+> wrote it, it is not endorsed, and it approves no deviation from Plan 9. What
+> is built is [when.md](when.md).
 >
 > The device letters below are not Plan 9's: `H`, `Z` and `R` name no device;
 > `V` is the TV capture device (`plan9/sys/src/9/pc/devtv.c`) and `w` the
@@ -15,29 +16,107 @@ what fills them.
 
 ---
 
-## The agreed design, and what is not yet defined
+## The design — decided 2026-09-18
 
-Confirmed by Christine, 2026-09-02. **Agreed:**
+**A type is a plumb rule; a manager is a file server on a plumb port.** Both
+halves are Plan 9's, so almost nothing here is new.
 
-1. **A window's type `x` is fully specified in `/type/x`** — a folder of
-   configuration files, plus an associated manager.
-2. **A type is a folder of text files.** Configuration is text, which is the
-   part of the Unix philosophy that is true. What it *declares* need not be.
-3. **A type needs a manager**, because a window type encapsulates things that
-   are not text.
-4. **The manager may live on both the host and the IPNX side.**
-5. **A manager is responsible for**: rendering the content, editing the
-   content, providing toolbar buttons, and supplying the semantics of the
-   standard buttons — Edit, Find, selection.
-6. **`text` is the default type; `edit` is its manager.**
-7. **A manager interface is a requirement**, not merely managers.
+### Recognition — `file(1)`, unchanged
 
-**Settled 2026-09-02, in the same conversation:** type names are **MIME
-types**; `text/plain` is the **default and the fallback**; `/` is
-**`inode/system`**, managed under the `manage` role; **`output` is not a type** —
-it is `text/plain` under a path convention; recognition is **from the file's
-contents**, never a suffix alone; and emca hardcodes exactly **two** facts —
-that `/` is `inode/system`, and that unrecognised content is `text/plain`.
+`file -m` names content from its bytes: `text/plain` for text (`file.c:206`),
+`application/octet-stream` for binary (`:205`), magic for the rest. **No suffix
+decides**, and the type system adds no recogniser of its own.
+
+### Dispatch — the plumber, unchanged
+
+**A type's name is a plumb port, and opening a window is a plumb.** The
+plumber already answers *"what is this and who handles it"*: 22 words of rules
+language (`plumb/rules.c`), first match wins, a rule ending `plumb to <port>`
+(`/sys/lib/plumb/basic`), ports as files under `/mnt/plumb`
+(`plumb/fsys.c:219`). `Plumbmsg` already carries what an open needs
+(`include/plumb.h`): `src`, `dst` — the port, empty meaning *let the rules
+decide* — `wdir`, `type`, `attr`, `data`.
+
+Christine, on binding the type system to the plumber this way: *"yes for now
+until we find an issue."*
+
+### The type — `/type/<name>/`, four text files
+
+| file | language | holds |
+|---|---|---|
+| `rules` | the plumber's | how content becomes this type; concatenated into the plumber's rule set |
+| `manager` | one line | the program to start when nothing is listening on the port |
+| `namespace` | `/lib/namespace`'s `bind`/`mount` lines | what a window of this type gets bound into it before the manager runs |
+| `verbs` | one per line | what the toolbar offers, and what the manager will be sent |
+
+Nothing declares *rendering*: **the host renders**, and what it renders is the
+content file.
+
+**`verbs` is a declared list** (*"declare verb list"*) — and it is a departure
+from acme, where the tag is editable text and any word is executable. It exists
+because a toolbar must be drawn from something. The tag stays editable
+alongside it.
+
+### The manager — acme's shape, one per window
+
+**A manager runs per window** (*"per window"*), not one server for many as acme
+and rio do. It serves one directory, and acme's per-window set
+(`acme/fsys.c:76`) is that directory:
+
+| file | |
+|---|---|
+| `addr` `data` | the content, addressed. acme's interface exactly; no new addressing language |
+| `ctl` | one verb per line, as `wctl` is |
+| `event` | what the person did — a program reading this drives the window |
+| `tag` | the window's own text, **editable**, as acme's is |
+| `status` | what the window reports about itself |
+
+It posts at `/srv/<manager>.<user>.<pid>` — rio's convention
+(`rio/fsys.c:152`), where the pid is what stops a second instance colliding.
+
+### Manager to window manager
+
+*"type managers may communicate with window managers (over 9P of course)."*
+rio defines that direction already: **twelve verbs** written to a window's
+`wctl` (`rio/wctl.c:35`) — `new resize move scroll noscroll set top bottom
+current hide unhide delete` — with thirteen parameters (`:68`). Use them, and
+add nothing until something needs it.
+
+### The host half
+
+*"host half lives in saranos app (swiftui, browser app via node etc.)"* — so a
+manager's rendering and editing half is part of the Saranos application on each
+surface, not a separate IPNX-side program. Its contract with the IPNX half is
+the mirror buffer: *"we must notify emca of every edit, so essentially emca and
+the host are maintaining mirror buffers."*
+
+### The root window
+
+**It has a manager** (*"yes"*). `/` is `inode/system`, and its manager is a
+manager like any other — which is separate from every window also being a
+compositor (*"each window itself is a compositor that can further decompose
+into windows"*). Being special in type does not make it special in interface.
+
+### Three consequences
+
+**A type may have several managers, and one is default.** *"the same directory
+can be an `ls` window or, if you want to edit the listing, an `edit` window."*
+Recognition names a type, not a program; several rules may reach different
+ports from the same content, and `dst` lets a caller name one.
+
+**The fallback is offered, not silent.** *"file type not displayable, want me
+to display as text?"* Unrecognised content is `text/plain`, and the person is
+asked.
+
+**Some verbs are not the manager's.** *"may be commands outside manager, eg. a
+shell."* A verb no manager claims is a command, run as `Edit` runs one in acme.
+
+### Settled earlier, and unchanged
+
+Type names are **MIME types**; `text/plain` is the default and the fallback;
+`/` is **`inode/system`**; **`output` is not a type** — it is `text/plain`
+under a path convention; emca hardcodes exactly **two** facts — that `/` is
+`inode/system`, and that unrecognised content is `text/plain`.
 
 **STILL NOT DEFINED — gaps, not proposals:**
 

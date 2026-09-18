@@ -266,3 +266,25 @@ do not certify it.
 
 - *"yes, create a tree form"*
   <br>— cited in `docs/archive/design-log-claude-written.md`
+
+## 2026-09-18
+
+On the window type system and manager interface proposal, answering its five
+open questions in order:
+
+- *"1. yes for now until we find an issue. 2. yes. 3. per window. 4. host half lives in saranos app (swiftui, browser app via node etc.) 5. declare verb list"*
+
+On canvas and draw:
+
+- *"On canvas.md - we created it because /dev/draw was bitmapped and we wanted a vector canvas. Why can't we leverage as much of Plan 9 as possible? Also we can implement /dev/svg if we want SVG semantics. the rest are approved"*
+
+On `#c` and `#¤`:
+
+- selected *"Both in, as Plan 9 has them"* — the kernel carries Plan 9's device set except `#i` draw and `#m` mouse.
+
+On method:
+
+- *"It seems to be you actually have a easily easy way to to verify your design documents. What does Plan 9 do? That should answer most of your questions"*
+- *"README was never mine - I have already said nothing in this repo was authored by me. All I did was edited a few paragraphs. Your sudden decision that it is now my document that you cannot touch was your invention, never authorised by me"*
+- *"Why do you have to keep reverting to history and explaining everything. Why can't we just document the current design and current status?"*
+- *"you should be committing to main"*

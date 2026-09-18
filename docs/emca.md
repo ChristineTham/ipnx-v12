@@ -95,9 +95,11 @@ content. The concept is Christine's — *"a window type is encapsulating things
 that are not text, that's why we need a manager"* — so there is nothing to
 check it against.
 
-**A proposal now exists** — [proposals.md](proposals.md), 2026-09-18: a type is
-a plumb rule, a manager is a file server on a plumb port. **It is not agreed
-and must not be built from.** Five questions inside it need Christine.
+**Decided 2026-09-18** and specified in [type.md](type.md): a type is a plumb
+rule, a manager is a file server on a plumb port, one manager per window, the
+host half inside the Saranos app, the root window with a manager like any
+other, and a declared `verbs` list. The individual types — `root`, `ls`,
+`edit`, `shell`, `output`, `pkg`, `project` — are still undesigned.
 
 - **The window type specification itself** — what a type declares, in what
   files, and what a manager's interface is. The manager is agreed to be
