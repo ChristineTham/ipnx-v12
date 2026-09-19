@@ -209,6 +209,20 @@ execforkexec(void)
 				strcat(file, argv[1]);
 				pid = ForkExecute(file, argv+1, mapfd(0), mapfd(1), mapfd(2));
 				if(pid >= 0){
+					/*
+					 * `havefork.c:230` does this and this file
+					 * does not. Without it `havewaitpid` says
+					 * no, `Waitfor` returns before it waits,
+					 * and `setstatus` is never reached — so
+					 * $status keeps whatever it held and no
+					 * command's exit status is ever seen.
+					 *
+					 * The fourth thing found by compiling a
+					 * file that had never been compiled: -S,
+					 * the backquote's subtree, the separator
+					 * list, and this.
+					 */
+					addwaitpid(pid);
 					free(argv);
 					return pid;
 				}

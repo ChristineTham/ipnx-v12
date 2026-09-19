@@ -12,6 +12,7 @@
 mod machine;
 
 use ipnx_kernel::{
+    chan,
     devcap::CapDev,
     devcons::{Cons, Console},
     devdup::DupDev,
@@ -22,7 +23,7 @@ use ipnx_kernel::{
     devroot::Root,
     devsrv::SrvDev,
     dev::DevId,
-    Call, Kernel, Ret,
+    Call, Kernel,
 };
 use std::rc::Rc;
 
@@ -32,6 +33,34 @@ use std::rc::Rc;
 struct Host;
 
 impl Console for Host {
+    /// `screenputs` (`devcons.c:12`). The screen this machine has is the
+    /// terminal it was started from, and it is flushed at once: a prompt has
+    /// no newline, and a prompt nobody sees is not a prompt.
+    fn putstrn(&mut self, s: &[u8]) {
+        use std::io::Write;
+        let mut out = std::io::stdout();
+        let _ = out.write_all(s);
+        let _ = out.flush();
+    }
+
+    /// The keyboard. Plan 9's driver calls `kbdputc` at interrupt time and
+    /// `consread` blocks on the queue; this machine has no interrupts, so the
+    /// kernel asks here and this blocks instead — the same wait, made at the
+    /// same point (`devcons.rs`'s `Console::kbdchars`).
+    ///
+    /// A line at a time, because that is what a terminal in its own cooked
+    /// mode gives. The kernel runs its OWN discipline over whatever arrives,
+    /// which is why `rawon` still works: raw mode is about what the kernel
+    /// does with the bytes, not how many arrive at once.
+    fn kbdchars(&mut self) -> Vec<u8> {
+        use std::io::BufRead;
+        let mut line = String::new();
+        match std::io::stdin().lock().read_line(&mut line) {
+            Ok(0) | Err(_) => Vec::new(),
+            Ok(_) => line.into_bytes(),
+        }
+    }
+
     fn now(&mut self) -> (u64, u64, u64) {
         let d = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -94,18 +123,43 @@ const LETTERS: [DevId; 9] = [
     DevId::Cap,
 ];
 
-/// The boot namespace. `#/boot` carries the commands until there is a file
-/// server (P5); the rest are the devices at the names every Plan 9 program
-/// expects to find them under.
-const BINDS: [(&str, &str); 5] = [
-    ("#/boot", "/bin"),
-    ("#c", "/dev"),
-    ("#e", "/env"),
-    ("#d", "/fd"),
-    ("#p", "/proc"),
+/// The boot namespace, from `plan9/sys/src/9/port/initcode.c:28`, which is
+/// the whole of what Plan 9's first process does before `exec`:
+///
+/// ```c
+/// bind(c, dev, MAFTER);            /* #c -> /dev  */
+/// bind(ec, env, MAFTER);           /* #ec -> /env */
+/// bind(e, env, MCREATE|MAFTER);    /* #e  -> /env */
+/// bind(s, srv, MREPL|MCREATE);     /* #s  -> /srv */
+/// ```
+///
+/// Three are added here, and each is a BOOT SCRIPT's job on Plan 9 rather
+/// than an invention: `#/boot` at `/bin` because there is no file server yet
+/// to hold the commands (P5), and `#d` at `/fd` and `#p` at `/proc` because
+/// rc reaches for both — `Fdprefix = "/fd/"` (`rc/ipnx.c`) and `getpid` reads
+/// `/dev/pid`. `/rc/bin/termrc` does them there (`init.c:178`).
+///
+/// `#ec` is absent: it is devenv attached with a spec, the environment group
+/// shared by every process, and this kernel's `#e` has only the per-process
+/// one. Naming it would be claiming something that is not there.
+const BINDS: [(&str, &str, i32); 5] = [
+    ("#c", "/dev", MAFTER),
+    ("#e", "/env", MCREATE | MAFTER),
+    ("#s", "/srv", MREPL | MCREATE),
+    ("#/boot", "/bin", MAFTER),
+    ("#d", "/fd", MAFTER),
 ];
 
-fn boot(root: Root) -> Result<Kernel, String> {
+/// `<libc.h>:556`.
+const MREPL: i32 = 0;
+const MAFTER: i32 = 2;
+const MCREATE: i32 = 4;
+
+/// `#c/cons`, opened three times — `initcode.c:28`. Not a dup: three opens,
+/// so each descriptor has its own offset, and the first is for reading.
+const CONS: &str = "#c/cons";
+
+fn boot(root: Root, host: Box<dyn Console>) -> Result<Kernel, String> {
     let m = machine::Wasm::new()?;
     let mut k = Kernel::new(root, Rc::new(m))?;
     k.tab.add(Box::new(PipeDev::new()));
@@ -119,7 +173,7 @@ fn boot(root: Root) -> Result<Kernel, String> {
         "eve",
         k.up.clone(),
         LETTERS.to_vec(),
-        Box::new(Host),
+        host,
     )));
     Ok(k)
 }
@@ -139,15 +193,21 @@ fn loadbin(root: &mut Root, dir: &std::path::Path) -> usize {
     n
 }
 
-/// Boot, run one command, and answer what it exited with and what it wrote.
+/// Boot, and run one command. `startboot` (`initcode.c:21`), which is the
+/// whole of what a Plan 9 kernel's first process does: open the console
+/// three times, bind the devices, and exec.
 ///
-/// This is the whole of `ipnx`, and it is a function rather than `main`'s body
-/// so that a test can run the real thing — the real kernel, the real
-/// namespace, the real binaries out of `userspace/root/bin`.
+/// It is a function rather than `main`'s body so that a test can run the real
+/// thing — the real kernel, the real namespace, the real binaries out of
+/// `userspace/root/bin` — with a terminal it can script and inspect.
 ///
 /// `extra` puts more files in the boot list, which is how a test gives rc a
 /// script to run without writing into a built tree.
-fn run(argv: &[String], extra: &[(&str, &[u8])]) -> Result<(String, String), String> {
+fn startboot(
+    argv: &[String],
+    extra: &[(&str, &[u8])],
+    host: Box<dyn Console>,
+) -> Result<String, String> {
     let mut root = Root::new();
     let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../userspace/root/bin");
@@ -158,39 +218,20 @@ fn run(argv: &[String], extra: &[(&str, &[u8])]) -> Result<(String, String), Str
         root.addbootfile(name, bytes.to_vec());
     }
 
-    let mut k = boot(root)?;
+    let mut k = boot(root, host)?;
 
-    // The boot namespace, built with binds and nothing else — which is what
-    // Plan 9's first process does (`init.c`, and `/rc/bin/termrc` after it).
-    // Every one of these is a device onto the empty directory `rootreset`
-    // made for it. A `/namespace` file that says this instead is P5.
-    for (what, at) in BINDS {
-        k.syscall(1, Call::Bind { name: what.into(), old: at.into(), flag: 0 })
-            .map_err(|e| format!("bind {what} {at}: {e}"))?;
+    // `open(cons, OREAD); open(cons, OWRITE); open(cons, OWRITE);` — three
+    // opens of `#c/cons`, before the binds, because `/dev` does not exist
+    // yet. They land on 0, 1 and 2 because those are the lowest free.
+    for mode in [chan::mode::OREAD, chan::mode::OWRITE, chan::mode::OWRITE] {
+        k.syscall(1, Call::Open { path: CONS.into(), mode: mode as i32 })
+            .map_err(|e| format!("open {CONS}: {e}"))?;
     }
 
-    // Until a console is served (P4) a process still needs to be heard, and
-    // fd 1 must be something. A pipe is something: the kernel's own `#|`,
-    // drained here when the process is done. Nothing about it is a console —
-    // it cannot be read from, and it arrives all at once.
-    let Ok(Ret::Two(a, b)) = k.syscall(1, Call::Pipe) else {
-        return Err("no pipe".into());
-    };
-    // `pipe` answers the two LOWEST free descriptors, which on a fresh
-    // process are 0 and 1 — so the write end must be moved before 1 and 2 are
-    // made to point at it, or closing the old name closes the new one. (It
-    // did: `echo` wrote to a closed descriptor and nothing printed.)
-    let Ok(Ret::Fd(w)) = k.syscall(1, Call::Dup { old: b, new: 15 }) else {
-        return Err("no descriptors".into());
-    };
-    let Ok(Ret::Fd(r)) = k.syscall(1, Call::Dup { old: a, new: 14 }) else {
-        return Err("no descriptors".into());
-    };
-    let _ = k.syscall(1, Call::Close { fd: a });
-    let _ = k.syscall(1, Call::Close { fd: b });
-    let _ = k.syscall(1, Call::Dup { old: w, new: 1 });
-    let _ = k.syscall(1, Call::Dup { old: w, new: 2 });
-    let _ = k.syscall(1, Call::Close { fd: w });
+    for (what, at, flag) in BINDS {
+        k.syscall(1, Call::Bind { name: what.into(), old: at.into(), flag })
+            .map_err(|e| format!("bind {what} {at}: {e}"))?;
+    }
 
     // **argv[0] is the PATH, not the bare name.** Plan 9's init passes "rc"
     // (`init.c`), and can, because rc forks there. rc cannot fork here, so it
@@ -201,20 +242,7 @@ fn run(argv: &[String], extra: &[(&str, &[u8])]) -> Result<(String, String), Str
     let path = format!("/bin/{}", argv[0]);
     let mut argv = argv.to_vec();
     argv[0] = path.clone();
-    let status = k.exec(1, &path, &argv);
-
-    // Drain what the process wrote. The write end was the process's, and it
-    // is gone; what is in the pipe is what it said.
-    let _ = k.syscall(1, Call::Close { fd: 1 });
-    let _ = k.syscall(1, Call::Close { fd: 2 });
-    let mut out = Vec::new();
-    while let Ok(Ret::Data(d)) = k.syscall(1, Call::Pread { fd: r, n: 8192, off: -1 }) {
-        if d.is_empty() {
-            break;
-        }
-        out.extend_from_slice(&d);
-    }
-    Ok((status?, String::from_utf8_lossy(&out).into_owned()))
+    k.exec(1, &path, &argv)
 }
 
 fn main() {
@@ -227,18 +255,66 @@ fn main() {
     let argv: Vec<String> =
         if args.len() > 1 { args[1..].to_vec() } else { vec!["rc".to_string()] };
 
-    match run(&argv, &[]) {
-        Ok((status, out)) => {
-            print!("{out}");
-            if !status.is_empty() {
-                eprintln!("ipnx: {}: {status}", argv[0]);
-                std::process::exit(1);
-            }
+    match startboot(&argv, &[], Box::new(Host)) {
+        Ok(status) if status.is_empty() => {}
+        Ok(status) => {
+            eprintln!("ipnx: {}: {status}", argv[0]);
+            std::process::exit(1);
         }
         Err(e) => {
             eprintln!("ipnx: {}: {e}", argv[0]);
             std::process::exit(1);
         }
+    }
+}
+
+/// A terminal a test can script and read back: `keys` is what the keyboard
+/// will produce, `out` is what `screenputs` was given. Everything else is the
+/// real `Host`, because everything else is a number the kernel only names.
+#[cfg(test)]
+#[derive(Default, Clone)]
+struct Term(std::rc::Rc<std::cell::RefCell<(Vec<u8>, Vec<u8>)>>);
+
+#[cfg(test)]
+impl Term {
+    fn typing(keys: &str) -> Term {
+        let t = Term::default();
+        t.0.borrow_mut().1 = keys.as_bytes().to_vec();
+        t
+    }
+    /// What the console was shown.
+    fn screen(&self) -> String {
+        String::from_utf8_lossy(&self.0.borrow().0).into_owned()
+    }
+}
+
+#[cfg(test)]
+impl Console for Term {
+    fn putstrn(&mut self, s: &[u8]) {
+        self.0.borrow_mut().0.extend_from_slice(s);
+    }
+    /// All of it at once, then nothing — which is end of input, and is what a
+    /// terminal being closed looks like.
+    fn kbdchars(&mut self) -> Vec<u8> {
+        std::mem::take(&mut self.0.borrow_mut().1)
+    }
+    fn now(&mut self) -> (u64, u64, u64) {
+        Host.now()
+    }
+    fn random(&mut self, n: usize) -> Vec<u8> {
+        Host.random(n)
+    }
+    fn drivers(&mut self) -> Vec<String> {
+        Host.drivers()
+    }
+    fn memory(&mut self) -> (u64, u64, u64) {
+        Host.memory()
+    }
+    fn config(&mut self) -> String {
+        Host.config()
+    }
+    fn reboot(&mut self, cmd: &str) -> Result<(), String> {
+        Host.reboot(cmd)
     }
 }
 
@@ -255,7 +331,7 @@ mod tests {
         for (n, b) in files {
             root.addbootfile(n, b.to_vec());
         }
-        let mut k = boot(root)?;
+        let mut k = boot(root, Box::new(Term::default()))?;
         k.exec(1, "/boot/init", &["init".to_string()])?;
         let status = k.procs.borrow().status(1);
         Ok(status.unwrap_or_default())
@@ -346,7 +422,7 @@ mod tests {
 "#;
         let mut root = Root::new();
         root.addbootfile("init", wat::parse_str(ARGS).unwrap());
-        let mut k = boot(root).unwrap();
+        let mut k = boot(root, Box::new(Term::default())).unwrap();
         k.exec(1, "/boot/init", &["init".into(), "second".into()]).unwrap();
         assert_eq!(k.procs.borrow().status(1).as_deref(), Some("second"));
     }
@@ -431,16 +507,27 @@ mod tests {
 mod userspace {
     use super::*;
 
+    /// Run a script, and answer with what the console was shown.
     fn rc(script: &str) -> String {
+        let term = Term::default();
         let argv = ["rc".to_string(), "/bin/test.rc".to_string()];
-        match run(
-            &argv,
-            &[("test.rc", script.as_bytes()), ("greeting", b"a file in the boot list\n")],
-        ) {
-            Ok((status, out)) => {
-                assert_eq!(status, "", "rc failed: {out}");
-                out
+        let files: &[(&str, &[u8])] =
+            &[("test.rc", script.as_bytes()), ("greeting", b"a file in the boot list\n")];
+        match startboot(&argv, files, Box::new(term.clone())) {
+            Ok(status) => {
+                assert_eq!(status, "", "rc failed: {}", term.screen());
+                term.screen()
             }
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    /// Type at the console instead, with no script at all — which is how
+    /// `ipnx` itself is started.
+    pub(super) fn typing(keys: &str) -> String {
+        let term = Term::typing(keys);
+        match startboot(&["rc".to_string()], &[], Box::new(term.clone())) {
+            Ok(_) => term.screen(),
             Err(e) => panic!("{e}"),
         }
     }
@@ -485,5 +572,73 @@ mod userspace {
     #[test]
     fn a_variable_reaches_a_child_through_the_environment_device() {
         assert_eq!(rc("x=through\necho `{echo $x}\n"), "through\n");
+    }
+}
+
+/// **P4's console acceptance, run against the real thing**: `rc` reads and
+/// writes `/dev/cons`.
+///
+/// Nothing here is given a script. The shell is started the way `ipnx` starts
+/// it — `startboot`, three opens of `#c/cons`, the binds — and the commands
+/// are TYPED, which is the whole claim.
+#[cfg(test)]
+mod console {
+    use super::*;
+    use userspace::typing;
+
+    /// **`rc` reads and writes `/dev/cons`.** A command typed at the console
+    /// runs, and what it prints comes back to the console.
+    #[test]
+    fn rc_reads_commands_from_the_console_and_writes_back_to_it() {
+        // The prompt is on the same stream, because the console is one
+        // screen: rc writes `% ` to fd 2 and echo writes to fd 1, and both
+        // are `#c/cons`.
+        assert_eq!(typing("echo typed at the console\n"), "% typed at the console\n% ");
+    }
+
+    /// The console is a stream of lines, so a session is more than one.
+    #[test]
+    fn a_session_is_more_than_one_command() {
+        assert_eq!(typing("echo one\necho two\n"), "% one\n% two\n% ");
+    }
+
+    /// **rc knows it is interactive without being told**, because `Isatty`
+    /// asks the file what it is: `stat(5)` carries the device letter, and the
+    /// console is `cons` served by `#c` (`rc/ipnx.c`). Plan 9 asks `fd2path`
+    /// for the same fact; this kernel has no such call.
+    ///
+    /// The prompt is the proof: `rcmain` sets `prompt=('% ' '\t')`, and rc
+    /// writes it only when `flag['i']`.
+    #[test]
+    fn the_console_makes_rc_interactive_and_it_prompts() {
+        let out = typing("echo hi\n");
+        assert!(out.contains("% "), "no prompt in {out:?}");
+        assert!(out.contains("hi\n"), "no output in {out:?}");
+    }
+
+    /// A pipeline typed at the console — two processes, the console, and the
+    /// pipe between them.
+    #[test]
+    fn a_pipeline_typed_at_the_console() {
+        assert!(typing("echo shouting | tr a-z A-Z\n").contains("SHOUTING\n"));
+    }
+
+    /// **The exit status of a command reaches the shell.** It did not: the
+    /// no-fork path never called `addwaitpid`, so `Waitfor` returned before
+    /// it waited and `$status` kept whatever it last held — a failing command
+    /// looked like a succeeding one to every `if` and `&&` in every script.
+    #[test]
+    fn a_commands_exit_status_reaches_the_shell() {
+        let out = typing("cat /nothing\necho after [$status]\necho ok\necho then [$status]\n");
+        assert!(out.contains("after [can't open /nothing"), "{out:?}");
+        assert!(out.contains("then []"), "a command that worked clears it: {out:?}");
+    }
+
+    /// `/dev/cons` is `#c/cons` reached through the bind, and a program
+    /// writing to it by NAME is writing to the same file.
+    #[test]
+    fn dev_cons_is_the_name_of_the_same_file() {
+        assert!(typing("echo through the name > /dev/cons\n")
+            .contains("through the name\n"));
     }
 }

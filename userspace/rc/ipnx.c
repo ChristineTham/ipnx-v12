@@ -663,16 +663,31 @@ Noerror(void)
 }
 
 /*
- * (3) `Isatty` — plan9.c asks `fd2path` whether the descriptor is `#c/cons`
- * or a `/dev/cons` mounted from elsewhere. Neither exists yet: `cons` is one
- * of `#c`'s twenty-three and it is the one a host must serve (P4). Nothing is
- * a console, so rc is never interactive, which is the truth right now.
+ * (3) `Isatty` — plan9.c asks `fd2path` whether the descriptor names
+ * `#c/cons` or a `/dev/cons` mounted from elsewhere. `fd2path` is not one of
+ * this kernel's calls: it was dispositioned out as *"a convenience over state
+ * the process already holds"* (docs/syscalls.md), and the state it is a
+ * convenience over is a `stat`.
+ *
+ * So the same question is asked of the file rather than of its name: `stat(5)`
+ * carries the DEVICE LETTER in `type` (`devdir`, `dev.c:40`), and the console
+ * is the file called `cons` served by `#c`. That is what plan9.c's two string
+ * comparisons are both trying to establish, and it holds however the file was
+ * reached — through `/dev/cons`, through `#c/cons`, or through a descriptor
+ * inherited from something that opened it.
  */
 int
 Isatty(int fd)
 {
-	USED(fd);
-	return 0;
+	Dir *d;
+	int ret;
+
+	d = dirfstat(fd);
+	if(d == nil)
+		return 0;
+	ret = d->type == 'c' && strcmp(d->name, "cons") == 0;
+	free(d);
+	return ret;
 }
 
 void

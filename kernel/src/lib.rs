@@ -421,7 +421,7 @@ impl Kernel {
                 let to = self.walk(up, &name, namec::A::Bind, 0)?;
                 let procs = self.procs.borrow();
                 let p = procs.get(up).ok_or("no such process")?;
-                p.ns.borrow_mut().mount(&on, ns::Element::new(to), bind_of(flag));
+                p.ns.borrow_mut().mount(&on, element_of(to, flag), bind_of(flag));
                 Ok(Ret::Ok)
             }
             Call::Unmount { name, old } => {
@@ -566,7 +566,7 @@ impl Kernel {
                 let to = self.tab.dmount(wire, &user, &aname)?;
                 let procs = self.procs.borrow();
                 let p = procs.get(up).ok_or("no such process")?;
-                p.ns.borrow_mut().mount(&on, ns::Element::new(to), bind_of(flag));
+                p.ns.borrow_mut().mount(&on, element_of(to, flag), bind_of(flag));
                 Ok(Ret::Ok)
             }
             Call::Fversion { .. } => Err("fversion is mntversion's, done at mount".into()),
@@ -627,13 +627,24 @@ const EISDIR: &str = "file is a directory";
 const EBADFD: &str = "fd out of range or not open";
 const ENODEV: &str = "no such device";
 
-/// `MREPL`, `MBEFORE`, `MAFTER` (`<libc.h>`).
+/// `MREPL`, `MBEFORE`, `MAFTER` (`<libc.h>:556`) — the low two bits.
 fn bind_of(flag: i32) -> ns::Bind {
     match flag & 3 {
         1 => ns::Bind::Before,
         2 => ns::Bind::After,
         _ => ns::Bind::Replace,
     }
+}
+
+/// `MCREATE` — *"permit creation in mounted directory"* (`libc.h:559`), a
+/// separate bit from the three above. It was being dropped, so `bind -c` did
+/// nothing and a create in a union landed wherever the walk did.
+const MCREATE: i32 = 0x0004;
+
+fn element_of(chan: Chan, flag: i32) -> ns::Element {
+    let mut e = ns::Element::new(chan);
+    e.create = flag & MCREATE != 0;
+    e
 }
 
 #[cfg(test)]

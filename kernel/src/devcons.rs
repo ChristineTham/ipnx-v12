@@ -39,6 +39,24 @@ pub fn readnum(val: u64, size: usize) -> Vec<u8> {
 /// What the host reports, so the kernel can name it. Plan 9 asks its
 /// architecture for exactly these.
 pub trait Console {
+    /// `screenputs` — `devcons.c:12` declares it as
+    /// `void (*screenputs)(char*, int) = nil`, a function pointer the
+    /// architecture fills in, and `putstrn0` calls it. This is that pointer.
+    fn putstrn(&mut self, s: &[u8]);
+
+    /// What the keyboard has produced, which Plan 9 gets asynchronously:
+    /// `kbdputc` (`devcons.c:525`) is called at interrupt time, stages the
+    /// runes and `qproduce`s them into `kbdq`; `consread` then BLOCKS in
+    /// `qread(kbdq, &ch, 1)` until there are some.
+    ///
+    /// **This machine has no interrupts**, so nothing can fill a queue behind
+    /// the kernel's back. The blocking read is therefore a call outward, made
+    /// at the same point in `consread` where Plan 9 blocks, with the same
+    /// meaning: return when there is input. An empty answer is end of input —
+    /// the terminal is gone — and `consread` treats it as the `^D` that Plan
+    /// 9's user would have typed.
+    fn kbdchars(&mut self) -> Vec<u8>;
+
     /// `todget` — nanoseconds since the epoch, and the fast-tick counter.
     fn now(&mut self) -> (u64, u64, u64);
     /// `randomread`.
@@ -58,6 +76,11 @@ pub trait Console {
 /// The device's own state — what Plan 9 keeps in globals beside `devcons.c`:
 /// `eve` (`auth.c:10`), `hostdomain` (`auth.c:11`), `sysname`, the kernel log.
 pub struct Cons {
+    /// `kbd` (`devcons.c:23`) — the console's own state, and the whole of the
+    /// line discipline. It is PORTABLE code in Plan 9, in `port/devcons.c`,
+    /// not in any architecture directory: what a backspace does is not the
+    /// machine's business.
+    kbd: Kbd,
     pub eve: String,
     pub hostdomain: String,
     pub sysname: String,
@@ -75,6 +98,33 @@ pub struct Cons {
     up: Rc<RefCell<Up>>,
     host: Box<dyn Console>,
 }
+
+/// `kbd` (`devcons.c:23`), with the fields this kernel has something to do
+/// with. The staging buffer is absent because it exists to amortise the cost
+/// of `qproduce` at interrupt time, and there are no interrupts here.
+#[derive(Default)]
+struct Kbd {
+    /// *"true if we shouldn't process input"*.
+    raw: bool,
+    /// `Ref ctl` — *"number of opens to the control file"*. The LAST close of
+    /// `consctl` turns raw off (`consclose`, `devcons.c:727`).
+    ctl: u32,
+    /// `x` and `line[1024]` — the line being edited.
+    line: Vec<u8>,
+    ctlpoff: bool,
+    /// `kbdq` — *"unprocessed console input"* (`devcons.c:14`).
+    kbdq: std::collections::VecDeque<u8>,
+    /// `lineq` — *"processed console input"* (`devcons.c:15`). What `Qcons`
+    /// reads from, and the reason a read answers whole lines.
+    lineq: std::collections::VecDeque<u8>,
+    /// Set once the machine says there is no more input. Plan 9 has no
+    /// counterpart because a keyboard does not end.
+    eof: bool,
+}
+
+/// `kbd.line`'s size (`devcons.c:29`). A line this long is sent whether or not
+/// it has been ended.
+const KBDLINE: usize = 1024;
 
 /// Qids, in `consdir[]`'s order (`devcons.c:606`).
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
@@ -156,6 +206,7 @@ impl Cons {
         host: Box<dyn Console>,
     ) -> Cons {
         Cons {
+            kbd: Kbd::default(),
             eve: eve.to_string(),
             hostdomain: String::new(),
             sysname: String::new(),
@@ -165,6 +216,104 @@ impl Cons {
             letters,
             up,
             host,
+        }
+    }
+
+    /// `putstrn0` (`devcons.c:144`) — every route a console write takes.
+    /// `kmesgputs` first, so the kernel's log holds it, then the screen.
+    fn putstrn(&mut self, s: &[u8]) {
+        // `kmesgputs(str, n)` (`devcons.c:155`) — the kernel's log holds
+        // everything that reaches the console, which is why `/dev/kmesg`
+        // survives a screen that was not there to read.
+        self.kmesg.extend_from_slice(s);
+        // Plan 9 copies through a 256-byte buffer *"Can't page fault in
+        // putstrn"* (`conswrite`, `devcons.c:993`). There are no page faults
+        // here and no reason to chop the bytes up.
+        self.host.putstrn(s);
+    }
+
+    /// `consread`'s line discipline (`devcons.c:762`), which is portable code
+    /// in Plan 9 and portable here: characters come off `kbdq` one at a time,
+    /// and a line goes onto `lineq` when it is ended.
+    ///
+    /// In raw mode every character ends the line, which is how a program that
+    /// wants keystrokes gets them.
+    fn linedisc(&mut self) {
+        while self.kbd.lineq.is_empty() {
+            if self.kbd.kbdq.is_empty() {
+                if self.kbd.eof {
+                    return;
+                }
+                let got = self.host.kbdchars();
+                if got.is_empty() {
+                    // End of input. Plan 9 never reaches this — a keyboard
+                    // does not end — so it is treated as the `^D` its user
+                    // would have typed: send what there is, and the empty
+                    // line after it is the end-of-file a reader sees.
+                    self.kbd.eof = true;
+                    self.sendline();
+                    return;
+                }
+                self.kbd.kbdq.extend(got);
+            }
+            let ch = match self.kbd.kbdq.pop_front() {
+                Some(ch) => ch,
+                None => return,
+            };
+            let mut send = false;
+            if ch == 0 {
+                // *"flush output on rawoff -> rawon"* (`devcons.c:772`).
+                if !self.kbd.line.is_empty() {
+                    send = self.kbd.kbdq.is_empty();
+                }
+            } else if self.kbd.raw {
+                self.kbd.line.push(ch);
+                send = self.kbd.kbdq.is_empty();
+            } else {
+                match ch {
+                    0x08 => {
+                        self.kbd.line.pop();
+                    }
+                    0x15 => self.kbd.line.clear(), // ^U
+                    b'\n' | 0x04 => {
+                        // ^D ends the line and is NOT part of it, which is
+                        // what makes an empty line mean end of file.
+                        if ch != 0x04 {
+                            self.kbd.line.push(ch);
+                        }
+                        send = true;
+                    }
+                    _ => self.kbd.line.push(ch),
+                }
+            }
+            if send || self.kbd.line.len() == KBDLINE {
+                self.sendline();
+            }
+        }
+    }
+
+    /// `qwrite(lineq, kbd.line, kbd.x); kbd.x = 0;`
+    fn sendline(&mut self) {
+        let line = std::mem::take(&mut self.kbd.line);
+        self.kbd.lineq.extend(line);
+    }
+
+    /// `conswrite`'s `Qconsctl` (`devcons.c:1008`): space-separated words,
+    /// and the four it knows.
+    fn consctl(&mut self, s: &str) {
+        for word in s.split(' ') {
+            if word.starts_with("rawon") {
+                self.kbd.raw = true;
+                // *"clumsy hack - wake up reader"* — a zero byte into `kbdq`,
+                // which the discipline above treats as a flush.
+                self.kbd.kbdq.push_back(0);
+            } else if word.starts_with("rawoff") {
+                self.kbd.raw = false;
+            } else if word.starts_with("ctlpon") {
+                self.kbd.ctlpoff = false;
+            } else if word.starts_with("ctlpoff") {
+                self.kbd.ctlpoff = true;
+            }
         }
     }
 
@@ -220,8 +369,13 @@ impl Dev for Cons {
             .map(|e| Qid { qtype: 0, vers: 0, path: e.1 as u64 }))
     }
 
+    /// `consopen` (`devcons.c:692`) — one file needs to know it was opened.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
         c.mode = mode;
+        if Q::from_path(c.qid.path) == Some(Q::Consctl) {
+            // `incref(&kbd.ctl)`.
+            self.kbd.ctl += 1;
+        }
         Ok(c)
     }
 
@@ -344,8 +498,23 @@ impl Dev for Cons {
             Q::Zero => vec![0u8; n],
             Q::Null => Vec::new(),
 
-            // the host's
-            Q::Cons | Q::Consctl => return Err("served by the host".into()),
+            // `consread`'s `Qcons` (`devcons.c:762`): run the line
+            // discipline until there is a processed line, then take from
+            // `lineq`. A read answers a WHOLE line and no more, which is why
+            // a shell gets a command rather than a character.
+            //
+            // An empty answer is end of file, and it is reached exactly where
+            // Plan 9 would have a `^D`: the line before it was sent, and this
+            // one is empty.
+            Q::Cons => {
+                self.linedisc();
+                let take = n.min(self.kbd.lineq.len());
+                self.kbd.lineq.drain(..take).collect()
+            }
+            // `consctl` is 0220 — write-only, and a read of it is `Eperm`
+            // as it is of anything else this device will not read
+            // (`consread`'s default, `devcons.c:968`).
+            Q::Consctl => return Err(EPERM.into()),
             Q::Reboot => return Err(EPERM.into()),
             // `devdirread` over `consdir[]` — the twenty-three files, in the
             // table's own order (`devcons.c:606`). Plan 9's table has "."
@@ -424,7 +593,12 @@ impl Dev for Cons {
                 self.cs = 0;
             }
             Q::Swap | Q::Time | Q::Bintime => {}
-            Q::Cons | Q::Consctl => return Err("served by the host".into()),
+            // `conswrite`'s `Qcons` (`devcons.c:992`).
+            Q::Cons => self.putstrn(data),
+            Q::Consctl => {
+                let s = String::from_utf8_lossy(data).to_string();
+                self.consctl(&s);
+            }
             _ => return Err(EPERM.into()),
         }
         Ok(data.len())
@@ -449,7 +623,19 @@ impl Dev for Cons {
         Err(EPERM.into())
     }
 
-    fn close(&mut self, _c: &mut Chan) {}
+    /// `consclose` (`devcons.c:722`) — *"last close of control file turns off
+    /// raw"*. A program that set raw mode and died must not leave the console
+    /// in it, and nothing else would put it back.
+    fn close(&mut self, c: &mut Chan) {
+        if Q::from_path(c.qid.path) == Some(Q::Consctl)
+            && c.flag & crate::chan::flag::COPEN != 0
+        {
+            self.kbd.ctl = self.kbd.ctl.saturating_sub(1);
+            if self.kbd.ctl == 0 {
+                self.kbd.raw = false;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -458,10 +644,27 @@ mod tests {
     use crate::chan::mode::{OREAD, OWRITE};
     use crate::dev::DevId;
 
+    /// The machine's terminal, as a test can inspect it: what the kernel put
+    /// on the screen, and what the keyboard will produce, one answer per
+    /// `kbdchars` call.
+    #[derive(Default)]
+    struct Term {
+        out: Vec<u8>,
+        keys: std::collections::VecDeque<Vec<u8>>,
+    }
+
     /// A host that reports fixed numbers, so a test can tell what came from
     /// where. The kernel computes none of this — it names it.
-    struct FakeHost;
+    #[derive(Default, Clone)]
+    struct FakeHost(Rc<RefCell<Term>>);
+
     impl Console for FakeHost {
+        fn putstrn(&mut self, s: &[u8]) {
+            self.0.borrow_mut().out.extend_from_slice(s);
+        }
+        fn kbdchars(&mut self) -> Vec<u8> {
+            self.0.borrow_mut().keys.pop_front().unwrap_or_default()
+        }
         fn now(&mut self) -> (u64, u64, u64) {
             (1_500_000_000_000_000_000, 42, 1_000_000)
         }
@@ -490,7 +693,16 @@ mod tests {
         let procs = Rc::new(RefCell::new(Procs::new(Chan::attach(DevId::Root, 0))));
         let up = Rc::new(RefCell::new(Up { pid: 1, procs: procs.clone() }));
         let letters = vec![DevId::Root, DevId::Pipe, DevId::Cons];
-        (Cons::new("eve", up, letters, Box::new(FakeHost)), procs)
+        (Cons::new("eve", up, letters, Box::new(FakeHost::default())), procs)
+    }
+
+    /// A console whose terminal the test still holds.
+    fn cons_term(keys: &[&str]) -> (Cons, FakeHost) {
+        let procs = Rc::new(RefCell::new(Procs::new(Chan::attach(DevId::Root, 0))));
+        let up = Rc::new(RefCell::new(Up { pid: 1, procs }));
+        let host = FakeHost::default();
+        host.0.borrow_mut().keys = keys.iter().map(|k| k.as_bytes().to_vec()).collect();
+        (Cons::new("eve", up, vec![DevId::Cons], Box::new(host.clone())), host)
     }
 
     fn open(d: &mut Cons, name: &str, mode: u16) -> Chan {
@@ -686,7 +898,7 @@ mod tests {
     fn cputime_reports_six_numbers_and_real_time_advances() {
         let (mut d, procs) = cons();
         // the fake host's clock is fixed; start the process one second before it
-        let (now, _, _) = FakeHost.now();
+        let (now, _, _) = FakeHost::default().now();
         procs.borrow_mut().started(1, now - 1_500_000_000);
         let s = read(&mut d, "cputime");
         assert_eq!(s.len(), 6 * NUMSIZE);
@@ -724,14 +936,72 @@ mod tests {
         assert_eq!(read(&mut d, "sysstat").split_whitespace().nth(3).unwrap(), "0");
     }
 
-    /// `cons` and `consctl` are the two of the 23 the host serves (P4), so
-    /// the kernel refuses rather than pretending.
+    /// **A read of `cons` answers a whole line**, because `consread` runs the
+    /// line discipline until `lineq` has one (`devcons.c:762`). A shell gets a
+    /// command, not a character.
     #[test]
-    fn the_console_itself_is_the_hosts() {
-        let (mut d, _) = cons();
+    fn a_read_of_cons_answers_a_line_at_a_time() {
+        let (mut d, _) = cons_term(&["echo hi\nls\n"]);
         let mut c = open(&mut d, "cons", OREAD);
+        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"echo hi\n");
+        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"ls\n");
+    }
+
+    /// The discipline itself: backspace erases, `^U` kills the line, and
+    /// neither reaches the reader. `^D` ends a line WITHOUT being part of it,
+    /// so an empty one is end of file.
+    #[test]
+    fn backspace_kill_and_end_of_file() {
+        let (mut d, _) = cons_term(&["abc\x08\x08X\n", "junk\x15kept\n", "\x04"]);
+        let mut c = open(&mut d, "cons", OREAD);
+        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"aX\n");
+        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"kept\n");
+        assert!(d.read(&mut c, 256, 0).unwrap().is_empty(), "^D on an empty line is EOF");
+    }
+
+    /// A terminal that ends is the `^D` its user never typed: what was typed
+    /// is delivered, and the read after it is the end.
+    #[test]
+    fn input_that_stops_delivers_the_last_line_then_ends() {
+        let (mut d, _) = cons_term(&["half typed"]);
+        let mut c = open(&mut d, "cons", OREAD);
+        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"half typed");
+        assert!(d.read(&mut c, 256, 0).unwrap().is_empty());
+    }
+
+    /// `rawon` turns the discipline off, and then every keystroke is a read.
+    /// That is how a program that wants keys gets them.
+    #[test]
+    fn rawon_delivers_keystrokes_and_the_last_close_turns_it_off() {
+        let (mut d, _) = cons_term(&["ab"]);
+        let mut ctl = open(&mut d, "consctl", OWRITE);
+        d.write(&mut ctl, b"rawon", 0).unwrap();
+        let mut c = open(&mut d, "cons", OREAD);
+        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"ab", "no line ending needed");
+
+        // *"last close of control file turns off raw"* (`devcons.c:722`).
+        ctl.flag |= crate::chan::flag::COPEN;
+        d.close(&mut ctl);
+        assert!(!d.kbd.raw, "a program that died in raw mode leaves a cooked console");
+    }
+
+    /// A write of `cons` reaches the screen — `screenputs` (`devcons.c:12`),
+    /// the function pointer the architecture fills — and the kernel's log,
+    /// because `putstrn0` calls `kmesgputs` first.
+    #[test]
+    fn a_write_of_cons_reaches_the_screen_and_the_log() {
+        let (mut d, host) = cons_term(&[]);
+        write(&mut d, "cons", "hello\n").unwrap();
+        assert_eq!(host.0.borrow().out, b"hello\n");
+        assert_eq!(read(&mut d, "kmesg"), "hello\n");
+    }
+
+    /// `consctl` is 0220. Reading it is refused, as `consread`'s default is.
+    #[test]
+    fn consctl_is_write_only() {
+        let (mut d, _) = cons_term(&[]);
+        let mut c = open(&mut d, "consctl", OWRITE);
         assert!(d.read(&mut c, 16, 0).is_err());
-        assert!(write(&mut d, "consctl", "rawon").is_err());
     }
 
     /// Nothing in `#c` is created or removed: the files are the kernel's
