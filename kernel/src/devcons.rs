@@ -16,7 +16,9 @@
 use crate::chan::Chan;
 use crate::dev::{Dev, DevId};
 use crate::ninep::{Qid, QTDIR};
-use crate::proc::{Pid, Procs, Up};
+use crate::proc::Up;
+#[cfg(test)]
+use crate::proc::Procs;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -345,7 +347,22 @@ impl Dev for Cons {
             // the host's
             Q::Cons | Q::Consctl => return Err("served by the host".into()),
             Q::Reboot => return Err(EPERM.into()),
-            Q::Dir => Vec::new(),
+            // `devdirread` over `consdir[]` — the twenty-three files, in the
+            // table's own order (`devcons.c:606`). Plan 9's table has "."
+            // first and `devgen` skips it; this one holds only the files, so
+            // there is nothing to skip.
+            Q::Dir => {
+                let user = self.up.borrow().user();
+                let eve = self.eve.clone();
+                let entries: Vec<crate::ninep::Dir> = CONSDIR
+                    .iter()
+                    .map(|(name, q, perm)| {
+                        let qid = Qid { qtype: 0, vers: 0, path: *q as u64 };
+                        crate::dev::devdir(c, qid, name, 0, &user, &eve, *perm)
+                    })
+                    .collect();
+                return Ok(crate::dev::devdirread(c, n, &entries));
+            }
         })
     }
 
@@ -415,17 +432,13 @@ impl Dev for Cons {
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
         let q = Q::from_path(c.qid.path).unwrap_or(Q::Dir);
-        Ok(crate::ninep::W::new()
-            .u16(0)
-            .u16(0)
-            .u32(0)
-            .raw(&c.qid.write(crate::ninep::W::new()).into_body())
-            .u32(if q == Q::Dir { 0o555 } else { q.perm() })
-            .u32(0)
-            .u32(0)
-            .u64(0)
-            .s(q.name())
-            .into_body())
+        let (name, perm) = if q == Q::Dir {
+            ("#c", crate::ninep::DMDIR | 0o555)
+        } else {
+            (q.name(), q.perm())
+        };
+        let user = self.up.borrow().user();
+        Ok(crate::dev::devdir(c, c.qid, name, 0, &user, &self.eve.clone(), perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {

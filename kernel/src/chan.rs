@@ -43,6 +43,9 @@ pub mod mode {
     /// `OCEXEC` — *"or'ed in, close on exec"* (`libc.h:568`).
     pub const OCEXEC: u16 = 32;
     pub const ORCLOSE: u16 = 64;
+    /// `OEXCL` — *"or'ed in, exclusive use (create only)"* (`libc.h:570`).
+    /// With it, `create` of a name that exists fails instead of truncating.
+    pub const OEXCL: u16 = 0x1000;
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,6 +60,12 @@ pub struct Chan {
     /// `Chan.flag` (`portdat.h`), the bits in [`flag`].
     pub flag: u16,
     pub offset: u64,
+    /// `Chan.dri` (`portdat.h`) — which directory entry the next read
+    /// resumes at. A directory is read as whole `Dir` entries and an entry is
+    /// never split, so a byte offset cannot say where to carry on; `sysseek`
+    /// clears this and allows no offset but 0 on a directory
+    /// (`sysfile.c:820`).
+    pub dri: u32,
     /// `iounit` — *"chunk size for i/o; 0==default"*. `mntversion` caps the
     /// negotiated msize by it (`devmnt.c:119`).
     pub iounit: u32,
@@ -88,6 +97,7 @@ impl Chan {
             mode: mode::OREAD,
             flag: 0,
             offset: 0,
+            dri: 0,
             iounit: 0,
             fid: crate::ninep::NOFID,
             mux: None,

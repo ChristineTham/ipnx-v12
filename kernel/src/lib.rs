@@ -460,37 +460,51 @@ impl Kernel {
                 }
             }
             Call::Pread { fd, n, off } => {
-                let mut c = self.chan(up, fd)?;
+                let cell = self.chancell(up, fd)?;
+                let mut c = cell.borrow_mut();
                 let at = if off < 0 { c.offset } else { off as u64 };
                 let d = self.tab.dread(&mut c, n, at)?;
                 if off < 0 {
-                    self.advance(up, fd, d.len() as u64);
+                    c.offset += d.len() as u64;
                 }
                 Ok(Ret::Data(d))
             }
             Call::Pwrite { fd, data, off } => {
-                let mut c = self.chan(up, fd)?;
+                let cell = self.chancell(up, fd)?;
+                let mut c = cell.borrow_mut();
                 let at = if off < 0 { c.offset } else { off as u64 };
                 let n = self.tab.dwrite(&mut c, &data, at)?;
                 if off < 0 {
-                    self.advance(up, fd, n as u64);
+                    c.offset += n as u64;
                 }
                 Ok(Ret::N(n))
             }
             // `seek` is fd-class, not 9P: the offset is kernel state in the
             // Chan, because `Tread`/`Twrite` carry theirs explicitly.
+            // `sysseek` (`sysfile.c:810`). **A DIRECTORY SEEKS ONLY TO 0**,
+            // and that is `Eisdir` otherwise, for every whence: entries vary
+            // in length, so a byte offset says nothing about where the next
+            // one begins. The position is `c->dri`, and a seek clears it
+            // (`sysfile.c:856`).
             Call::Seek { fd, off, whence } => {
                 let procs = self.procs.borrow();
                 let p = procs.get(up).ok_or("no such process")?;
                 let fds = p.fds.clone();
                 let cell = fds.borrow().get(fd).cloned().ok_or(EBADFD)?;
                 let mut c = cell.borrow_mut();
+                if c.is_dir() && !(whence == 0 && off == 0) {
+                    return Err(EISDIR.into());
+                }
                 let new = match whence {
                     0 => off as u64,
                     1 => (c.offset as i64 + off) as u64,
                     _ => return Err("bad whence".into()),
                 };
+                if (new as i64) < 0 {
+                    return Err("negative i/o offset".into());
+                }
                 c.offset = new;
+                c.dri = 0;
                 Ok(Ret::N(new as usize))
             }
             Call::Dup { old, new } => {
@@ -588,24 +602,28 @@ impl Kernel {
     }
 
     fn chan(&mut self, up: Pid, fd: Fd) -> Result<Chan, String> {
+        Ok(self.chancell(up, fd)?.borrow().clone())
+    }
+
+    /// The descriptor's channel ITSELF, not a copy of it.
+    ///
+    /// Plan 9 hands a device the `Chan*` an fd holds, so what a device records
+    /// on it stays recorded — `c->dri` after a directory read, `c->offset`,
+    /// `c->iounit` after a mount. Copying it and writing back one field is
+    /// what this kernel did, and a directory read then restarted from the
+    /// first entry every time, because `dri` went back with the copy.
+    fn chancell(&mut self, up: Pid, fd: Fd) -> Result<std::rc::Rc<std::cell::RefCell<Chan>>, String> {
         let procs = self.procs.borrow();
-                let p = procs.get(up).ok_or("no such process")?;
+        let p = procs.get(up).ok_or("no such process")?;
         let fds = p.fds.clone();
         let cell = fds.borrow().get(fd).cloned().ok_or(EBADFD)?;
-        let c = cell.borrow().clone();
-        Ok(c)
+        Ok(cell)
     }
 
-    /// A read or write at offset −1 uses and advances the Chan's own offset.
-    fn advance(&mut self, up: Pid, fd: Fd, by: u64) {
-        if let Some(p) = self.procs.borrow().get(up) {
-            if let Some(c) = p.fds.borrow().get(fd) {
-                c.borrow_mut().offset += by;
-            }
-        }
-    }
 }
 
+/// `Eisdir` (`error.h`) — *"file is a directory"*.
+const EISDIR: &str = "file is a directory";
 const EBADFD: &str = "fd out of range or not open";
 const ENODEV: &str = "no such device";
 
@@ -794,6 +812,35 @@ mod syscalls {
         let _ = k.syscall(1, Call::Errstr { buf: String::new() });
         let _ = k.syscall(1, Call::Open { path: "/nothing".into(), mode: 0 });
         assert_eq!(k.syscalls, 2, "a failed call is still a call");
+    }
+
+    /// **A directory seeks only to 0** (`sysfile.c:820`, `Eisdir`), and a
+    /// seek clears `c->dri` so the next read starts at the first entry. A
+    /// byte offset cannot say where an entry begins, because entries are not
+    /// all the same length.
+    #[test]
+    fn a_directory_seeks_only_to_the_beginning() {
+        let mut k = booted();
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/boot".into(), mode: 0 }).unwrap()
+        else {
+            panic!()
+        };
+        let first = k.syscall(1, Call::Pread { fd, n: 4096, off: -1 }).unwrap();
+        assert!(matches!(&first, Ret::Data(d) if !d.is_empty()));
+        assert!(
+            k.syscall(1, Call::Pread { fd, n: 4096, off: -1 })
+                .is_ok_and(|r| matches!(r, Ret::Data(d) if d.is_empty())),
+            "read to the end"
+        );
+
+        assert!(k.syscall(1, Call::Seek { fd, off: 8, whence: 0 }).is_err());
+        assert!(k.syscall(1, Call::Seek { fd, off: 0, whence: 1 }).is_err());
+        k.syscall(1, Call::Seek { fd, off: 0, whence: 0 }).expect("rewind");
+        assert_eq!(
+            k.syscall(1, Call::Pread { fd, n: 4096, off: -1 }).unwrap(),
+            first,
+            "and the rewind starts it over"
+        );
     }
 
     /// A device that is a 9P server: write it a request, read back the reply.

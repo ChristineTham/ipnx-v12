@@ -285,3 +285,71 @@ mod tests {
         }
     }
 }
+
+/// `eve` at boot (`auth.c:10`: `char *eve = "bootes"` — here, the name the
+/// host gives `#c`). A device that cannot reach `#c` uses this for the group
+/// of the files it serves, which is what Plan 9's kernel-wide `eve` holds.
+pub const EVE: &str = "eve";
+
+/// `devdir` (`dev.c:34`) — fill in a [`Dir`] for one file of a device.
+///
+/// Every field is Plan 9's:
+///
+/// * `type` is the device LETTER, from `devtab[c->type]->dc`.
+/// * `dev` is `c->dev`, which instance it is.
+/// * **`mode` is `perm | qid.type << 24`** — so `DMDIR` (0x80000000) is
+///   `QTDIR` (0x80) moved up, and a device sets the directory bit once, in the
+///   qid, rather than in two places that can disagree.
+/// * `uid` and `muid` are the user, `gid` is `eve`.
+///
+/// `eve` is a kernel-wide global in Plan 9 (`auth.c:10`); in this kernel it is
+/// `#c`'s, beside `/dev/hostowner` which writes it. A device that cannot reach
+/// it passes the boot value, and that is the one place where renaming eve
+/// would not show.
+pub fn devdir(
+    c: &Chan,
+    qid: crate::ninep::Qid,
+    name: &str,
+    length: u64,
+    user: &str,
+    eve: &str,
+    perm: u32,
+) -> crate::ninep::Dir {
+    crate::ninep::Dir {
+        dtype: c.dev.letter() as u16,
+        dev: c.devno,
+        qid,
+        mode: perm | ((qid.qtype as u32) << 24),
+        // Plan 9 puts `seconds()` and `kerndate` here. This kernel's clock
+        // reaches only `#c` (the machine has it), so a device that has no
+        // clock reports zero rather than inventing a date.
+        atime: 0,
+        mtime: 0,
+        length,
+        name: name.to_string(),
+        uid: user.to_string(),
+        gid: eve.to_string(),
+        muid: user.to_string(),
+    }
+}
+
+/// `devdirread` (`dev.c:306`) — a directory read is a run of `Dir` entries,
+/// packed by `convD2M`, stopping at the last one that fits WHOLE.
+///
+/// **An entry is never split**, which is what makes `c->dri` necessary: the
+/// read answers fewer bytes than asked for, and the next read must resume at
+/// the next ENTRY, not the next byte. `sysseek` resets `dri` and refuses any
+/// offset but 0 on a directory (`sysfile.c:820`, `Eisdir`), so the index is
+/// the whole of a directory's read position.
+pub fn devdirread(c: &mut Chan, n: usize, entries: &[crate::ninep::Dir]) -> Vec<u8> {
+    let mut out = Vec::new();
+    while (c.dri as usize) < entries.len() {
+        let b = entries[c.dri as usize].conv_d2m();
+        if out.len() + b.len() > n {
+            break;
+        }
+        out.extend_from_slice(&b);
+        c.dri += 1;
+    }
+    out
+}

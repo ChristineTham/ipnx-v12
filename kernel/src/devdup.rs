@@ -13,13 +13,17 @@
 //! `mkqid(&q, s+1, ...)` over a doubled index.
 
 use crate::chan::Chan;
-use crate::dev::{Dev, DevId};
+use crate::dev::{Dev, DevId, EVE};
 use crate::ninep::{Qid, QTDIR};
 use crate::proc::{Fd, Up};
 use std::cell::RefCell;
 use std::rc::Rc;
 
 const EPERM: &str = "permission denied";
+
+/// What a descriptor's file allows, by the mode it was opened with
+/// (`devdup.c:44`: `dupgen` reads `c->mode` and answers 0400, 0200 or 0600).
+const PERM: [u32; 4] = [0o400, 0o200, 0o600, 0];
 const EBADFD: &str = "fd out of range or not open";
 
 pub struct DupDev {
@@ -112,19 +116,33 @@ impl Dev for DupDev {
     }
 
     fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
-        let s = if c.qid.is_dir() {
-            // `dupgen`: every open slot, as `n` and `nctl`.
+        if c.qid.is_dir() {
+            // `dupgen` (`devdup.c:34`): every open slot, as `n` and `nctl`.
+            let user = self.up.borrow().user();
             let fgrp = self.up.borrow().fgrp().ok_or("no such process")?;
             let open: Vec<Fd> = {
                 let g = fgrp.borrow();
                 (0..g.slots()).filter(|fd| g.get(*fd).is_some()).collect()
             };
-            let mut s = String::new();
+            let mut entries = Vec::new();
             for fd in open {
-                s.push_str(&format!("{fd}\n{fd}ctl\n"));
+                let perm = self.chan(fd).map(|got| PERM[(got.mode & 3) as usize]).unwrap_or(0);
+                let q = Qid { qtype: 0, vers: 0, path: Self::qid(fd, false) };
+                let qctl = Qid { qtype: 0, vers: 0, path: Self::qid(fd, true) };
+                entries.push(crate::dev::devdir(c, q, &format!("{fd}"), 0, &user, EVE, perm));
+                entries.push(crate::dev::devdir(
+                    c,
+                    qctl,
+                    &format!("{fd}ctl"),
+                    0,
+                    &user,
+                    EVE,
+                    0o400,
+                ));
             }
-            s
-        } else {
+            return Ok(crate::dev::devdirread(c, n, &entries));
+        }
+        let s = {
             let (fd, ctl) = Self::slot(c.qid.path).ok_or(EBADFD)?;
             if !ctl {
                 // Reading `#d/3` itself never happens: the open answered with
@@ -149,9 +167,8 @@ impl Dev for DupDev {
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
         // `perm[] = { 0400, 0200, 0600, 0 }` indexed by the channel's mode
         // (`dupgen`, `devdup.c:14`); a ctl file is 0400.
-        const PERM: [u32; 4] = [0o400, 0o200, 0o600, 0];
         let (name, perm) = if c.qid.is_dir() {
-            (".".to_string(), 0o555)
+            ("#d".to_string(), crate::ninep::DMDIR | 0o555)
         } else {
             let (fd, ctl) = Self::slot(c.qid.path).ok_or(EBADFD)?;
             if ctl {
@@ -161,17 +178,8 @@ impl Dev for DupDev {
                 (format!("{fd}"), PERM[(got.mode & 3) as usize])
             }
         };
-        Ok(crate::ninep::W::new()
-            .u16(0)
-            .u16(0)
-            .u32(0)
-            .raw(&c.qid.write(crate::ninep::W::new()).into_body())
-            .u32(perm)
-            .u32(0)
-            .u32(0)
-            .u64(0)
-            .s(&name)
-            .into_body())
+        let user = self.up.borrow().user();
+        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, EVE, perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -266,8 +274,14 @@ mod tests {
         openfd(&procs, 1, 1);
         openfd(&procs, 2, 2);
         let mut dir = d.attach("").unwrap();
-        let s = String::from_utf8(d.read(&mut dir, 256, 0).unwrap()).unwrap();
-        assert_eq!(s, "0\n0ctl\n1\n1ctl\n");
+        let b = d.read(&mut dir, 256, 0).unwrap();
+        let all = crate::ninep::Dir::parse_all(&b);
+        let names: Vec<&str> = all.iter().map(|d| d.name.as_str()).collect();
+        assert_eq!(names, ["0", "0ctl", "1", "1ctl"]);
+        // The mode a descriptor was opened with, as `dupgen` reports it.
+        assert_eq!(all[0].mode, 0o600, "fd 0 was opened ORDWR");
+        assert_eq!(all[1].mode, 0o400, "and its ctl file is read-only");
+        assert_eq!(all[0].dtype, 'd' as u16, "the device letter");
     }
 
     /// Nothing here is created, written or removed: the files ARE the fd

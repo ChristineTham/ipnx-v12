@@ -12,7 +12,7 @@
 //! absent for the reason `#i` and `#m` are rather than by a separate rule.
 
 use crate::chan::Chan;
-use crate::dev::{Dev, DevId};
+use crate::dev::{Dev, DevId, EVE};
 use crate::ninep::{Qid, QTDIR};
 use crate::proc::{Fd, Pid, Up};
 use std::cell::RefCell;
@@ -168,17 +168,55 @@ impl Dev for ProcDev {
         let (pid, q) = split_qid(c.qid.path);
         let procs = self.up.borrow().procs.clone();
 
-        let s = if pid == 0 {
-            // `ls /proc` — one directory per living process.
+        // `ls /proc` — one directory per living process, each owned by
+        // whoever runs it (`procgen`, `devproc.c:300`).
+        if pid == 0 {
             let mut pids: Vec<Pid> = procs.borrow().pids();
             pids.sort();
-            pids.iter().map(|p| format!("{p}\n")).collect()
-        } else {
+            let p = procs.borrow();
+            let entries: Vec<crate::ninep::Dir> = pids
+                .iter()
+                .map(|pid| {
+                    let user = p.user(*pid).unwrap_or_default();
+                    let qid = Qid {
+                        qtype: QTDIR,
+                        vers: 0,
+                        path: qid_of(*pid, Q::Root),
+                    };
+                    crate::dev::devdir(
+                        c,
+                        qid,
+                        &pid.to_string(),
+                        0,
+                        &user,
+                        EVE,
+                        crate::ninep::DMDIR | 0o555,
+                    )
+                })
+                .collect();
+            drop(p);
+            return Ok(crate::dev::devdirread(c, n, &entries));
+        }
+        // A process's own directory: `procdir[]`, one entry per file.
+        if q == Q::Root && c.qid.is_dir() {
+            self.nonone(pid)?;
+            let user = procs.borrow().user(pid).ok_or(EPROCDIED)?;
+            let entries: Vec<crate::ninep::Dir> = PROCDIR
+                .iter()
+                .map(|(name, q, perm)| {
+                    let qid = Qid { qtype: 0, vers: 0, path: qid_of(pid, *q) };
+                    crate::dev::devdir(c, qid, name, 0, &user, EVE, *perm)
+                })
+                .collect();
+            return Ok(crate::dev::devdirread(c, n, &entries));
+        }
+
+        let s = {
             self.nonone(pid)?;
             let p = procs.borrow();
             let proc = p.get(pid).ok_or(EPROCDIED)?;
             match q {
-                Q::Root => PROCDIR.iter().map(|e| format!("{}\n", e.0)).collect(),
+                Q::Root => String::new(),
                 // `status`: text, user, state, then numbers — the fixed-width
                 // record `ps` parses (`devproc.c:867`, STATSIZE).
                 Q::Status => {
@@ -283,24 +321,19 @@ impl Dev for ProcDev {
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
         let (pid, q) = split_qid(c.qid.path);
         let (name, perm) = if pid == 0 {
-            ("#p".to_string(), 0o555)
+            ("#p".to_string(), crate::ninep::DMDIR | 0o555)
         } else if c.qid.is_dir() {
-            (pid.to_string(), 0o555)
+            (pid.to_string(), crate::ninep::DMDIR | 0o555)
         } else {
             let e = PROCDIR.iter().find(|e| e.1 == q).ok_or("no such file")?;
             (e.0.to_string(), e.2)
         };
-        Ok(crate::ninep::W::new()
-            .u16(0)
-            .u16(0)
-            .u32(0)
-            .raw(&c.qid.write(crate::ninep::W::new()).into_body())
-            .u32(perm)
-            .u32(0)
-            .u32(0)
-            .u64(0)
-            .s(&name)
-            .into_body())
+        let user = if pid == 0 {
+            EVE.to_string()
+        } else {
+            self.up.borrow().procs.borrow().user(pid).unwrap_or_else(|| EVE.to_string())
+        };
+        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, EVE, perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -344,14 +377,29 @@ mod tests {
     /// directory — the tree is generated from the table, not stored.
     #[test]
     fn the_directory_is_one_per_living_process() {
+        fn names(d: &mut ProcDev) -> Vec<String> {
+            let mut root = d.attach("").unwrap();
+            let b = d.read(&mut root, 4096, 0).unwrap();
+            crate::ninep::Dir::parse_all(&b).into_iter().map(|e| e.name).collect()
+        }
+
         let (mut d, procs) = proc();
-        let mut root = d.attach("").unwrap();
-        assert_eq!(String::from_utf8(d.read(&mut root, 256, 0).unwrap()).unwrap(), "1\n");
+        assert_eq!(names(&mut d), ["1"]);
         let c = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
-        assert_eq!(
-            String::from_utf8(d.read(&mut root, 256, 0).unwrap()).unwrap(),
-            format!("1\n{c}\n")
-        );
+        assert_eq!(names(&mut d), ["1", &c.to_string()]);
+
+        // Each is a DIRECTORY, owned by whoever runs it.
+        let mut root = d.attach("").unwrap();
+        let b = d.read(&mut root, 4096, 0).unwrap();
+        let first = &crate::ninep::Dir::parse_all(&b)[0];
+        assert!(first.qid.is_dir());
+        assert_eq!(first.uid, "eve");
+
+        // A read goes on where the last one stopped — `Chan.dri`, not a byte
+        // offset — so reading this channel again answers nothing more.
+        assert!(d.read(&mut root, 4096, 0).unwrap().is_empty());
+
+        let root = d.attach("").unwrap();
         assert!(d.walk(&root, "99").unwrap().is_none());
     }
 

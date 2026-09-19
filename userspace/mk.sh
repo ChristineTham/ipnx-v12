@@ -29,9 +29,9 @@ CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-ex
 	-I$here/include -I$here/libc/fmt
 	-Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-missing-braces
 	-Wno-unused-value -Wno-unused-but-set-variable -Wno-incompatible-pointer-types
-	-Wno-dangling-else -Wno-empty-body -Wno-implicit-int-float-conversion -Wno-implicit-int -Wno-implicit-function-declaration -Wno-incompatible-library-redeclaration -Wno-builtin-requires-header"
+	-Wno-dangling-else -Wno-empty-body -Wno-implicit-int-float-conversion -Wno-unused-variable -Wno-unused-parameter -Wno-unused-label -Wno-implicit-int -Wno-implicit-function-declaration -Wno-incompatible-library-redeclaration -Wno-builtin-requires-header"
 
-LDFLAGS="--no-entry --export=_start --export-memory --stack-first -z stack-size=65536"
+LDFLAGS="--no-entry --export=_start --export-memory --stack-first -z stack-size=65536 --allow-multiple-definition"
 
 mkdir -p "$build" "$root/bin"
 
@@ -83,7 +83,10 @@ for c in "$here"/cmd/*.c; do
 done
 
 # ---- rc -------------------------------------------------------------------
-if [ -d "$here/rc" ] && [ -f "$here/rc/rc.h" ]; then
+# rc is Plan 9's, taken entire. `ipnx.c` is its platform file — Plan 9 ships
+# three of those and the mkfile picks one — and `haventfork.c` is Plan 9's own
+# answer for a system that cannot fork, which this machine cannot.
+if [ -f "$here/rc/rc.h" ]; then
 	mkdir -p "$build/rc"
 	(cd "$build/rc" && bison -y -d "$here/rc/syn.y" >/dev/null 2>&1)
 	cp -f "$build/rc/y.tab.h" "$build/rc/x.tab.h"
@@ -93,6 +96,13 @@ if [ -d "$here/rc" ] && [ -f "$here/rc/rc.h" ]; then
 		$CC $CFLAGS -I"$here/rc" -I"$build/rc" -c "$src" -o "$obj"
 		objs+=("$obj")
 	done
+	# rc.h's tentative definitions are common symbols everywhere but here;
+	# common.py explains the whole of it and puts the objects in the only
+	# order that keeps an initialised definition.
+	cp -f "$here/rc/rcmain" "$root/bin/rcmain"
+	# rc.h's tentative definitions are common symbols everywhere but here;
+	# weaken.py explains the whole of it.
+	python3 "$here/weaken.py" "$WASI_SDK/bin/llvm-nm" "${objs[@]}"
 	link rc "${objs[@]}"
 fi
 

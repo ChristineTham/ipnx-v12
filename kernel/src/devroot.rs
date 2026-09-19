@@ -9,7 +9,7 @@
 //! first process, and that process mounts the real thing.
 
 use crate::chan::Chan;
-use crate::dev::{Dev, DevId};
+use crate::dev::{Dev, DevId, EVE};
 use crate::ninep::{Qid, QTDIR};
 
 /// One entry. Plan 9's `Dirtab`, with the fields a subset needs.
@@ -83,6 +83,30 @@ impl Root {
         });
     }
 
+    /// `rootgen` (`devroot.c:116`) — what each of the two directories holds.
+    /// `#/` lists `boot` and the ten `rootreset` made; `boot` lists the files
+    /// `addbootfile` put there.
+    fn entries(&mut self, c: &Chan) -> Vec<crate::ninep::Dir> {
+        let list: Vec<(&str, Qid, u64, u32)> = if c.qid.path == QROOT {
+            std::iter::once((
+                "boot",
+                Qid { qtype: QTDIR, vers: 0, path: QBOOT },
+                0,
+                crate::ninep::DMDIR | 0o555,
+            ))
+            .chain(self.dirs.iter().map(|e| (e.name.as_str(), e.qid, 0, e.perm)))
+            .collect()
+        } else {
+            self.files
+                .iter()
+                .map(|e| (e.name.as_str(), e.qid, e.data.len() as u64, e.perm))
+                .collect()
+        };
+        list.into_iter()
+            .map(|(name, qid, len, perm)| crate::dev::devdir(c, qid, name, len, EVE, EVE, perm))
+            .collect()
+    }
+
     fn find(&self, qid: Qid) -> Option<&Entry> {
         self.files.iter().chain(self.dirs.iter()).find(|e| e.qid == qid)
     }
@@ -135,29 +159,12 @@ impl Dev for Root {
     }
 
     fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
-        let owned;
-        let data: &[u8] = match c.qid.path {
-            QROOT => {
-                owned = std::iter::once("boot\n".to_string())
-                    .chain(self.dirs.iter().map(|e| format!("{}\n", e.name)))
-                    .collect::<String>()
-                    .into_bytes();
-                &owned
-            }
-            QBOOT => {
-                owned = self
-                    .files
-                    .iter()
-                    .map(|e| format!("{}\n", e.name))
-                    .collect::<String>()
-                    .into_bytes();
-                &owned
-            }
-            _ => {
-                let e = self.find(c.qid).ok_or("no such file")?;
-                &e.data
-            }
-        };
+        if c.qid.is_dir() {
+            let entries = self.entries(c);
+            return Ok(crate::dev::devdirread(c, n, &entries));
+        }
+        let e = self.find(c.qid).ok_or("no such file")?;
+        let data = &e.data;
         let off = off as usize;
         if off >= data.len() {
             return Ok(Vec::new());
@@ -170,18 +177,17 @@ impl Dev for Root {
     }
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
-        let e = self.find(c.qid).ok_or("no such file")?;
-        Ok(crate::ninep::W::new()
-            .u16(0)
-            .u16(0)
-            .u32(0)
-            .raw(&e.qid.write(crate::ninep::W::new()).into_body())
-            .u32(e.perm)
-            .u32(0)
-            .u32(0)
-            .u64(e.data.len() as u64)
-            .s(&e.name)
-            .into_body())
+        // `#/` and `boot` are `rootdir[]`'s own two entries, and neither is
+        // in a list this device can look up.
+        let (name, qid, len, perm) = match c.qid.path {
+            QROOT => ("#/", c.qid, 0, crate::ninep::DMDIR | 0o555),
+            QBOOT => ("boot", c.qid, 0, crate::ninep::DMDIR | 0o555),
+            _ => {
+                let e = self.find(c.qid).ok_or("no such file")?;
+                (e.name.as_str(), e.qid, e.data.len() as u64, e.perm)
+            }
+        };
+        Ok(crate::dev::devdir(c, qid, name, len, EVE, EVE, perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -228,8 +234,16 @@ mod tests {
             assert!(q.is_dir(), "#/{name} is a directory");
         }
         let mut c = r.open(c, crate::chan::mode::OREAD).unwrap();
-        let listing = String::from_utf8(r.read(&mut c, 4096, 0).unwrap()).unwrap();
-        assert_eq!(listing.lines().count(), 11, "boot, and the ten: {listing:?}");
+        let b = r.read(&mut c, 4096, 0).unwrap();
+        let mut names = Vec::new();
+        let mut at = 0;
+        while at < b.len() {
+            let d = crate::ninep::Dir::conv_m2d(&b[at..]).expect("an entry");
+            at += 2 + u16::from_le_bytes([b[at], b[at + 1]]) as usize;
+            names.push(d.name);
+        }
+        assert_eq!(names.len(), 11, "boot, and the ten: {names:?}");
+        assert_eq!(names[0], "boot");
     }
 
     #[test]

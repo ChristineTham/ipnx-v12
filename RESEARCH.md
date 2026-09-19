@@ -2941,3 +2941,79 @@ shift and mask (`dev.c:339`); `MAXRPC`/`MAXCMNRPC` and which one `mntversion`
 asks for (`devmnt.c:19,118`); the three `rfork` flag-pair checks
 (`sysproc.c:44–50`); `procdir[]`'s names and permissions; `capdir[]`'s two
 write-only files.
+
+---
+
+## §11 — What building the userspace measured, 2026-09-19
+
+P3 built a libc over the call list and ported Plan 9's rc to it. Everything
+below was found by running the result, and every item is a fact with a file and
+a line behind it.
+
+### The toolchain, re-measured on this machine
+
+| | |
+|---|---|
+| **`-fcommon` does not exist for wasm** | `clang --target=wasm32-unknown-unknown -fcommon -c a.c` → *"error: common symbols are not yet implemented for Wasm: runq"*. C89's tentative definitions — `int runq;` in every file that includes rc.h — therefore become ordinary strong definitions, and the link fails with a duplicate for each |
+| **`llvm-objcopy` cannot weaken one** | for wasm it supports *"only flags for section dumping, removal, and addition"* |
+| **`wasm-ld --allow-multiple-definition` keeps the FIRST** | measured both ways round with two objects, one holding `int Rcmain = 7;` and one holding `int Rcmain;`: `a.o b.o` → 7, `b.o a.o` → 0. **Ordering cannot fix it**, because `ipnx.c` initialises `Rcmain` and `Fdprefix` while `lex.c` initialises `doprompt`; whichever object goes first, the other's value is lost silently. That is how `havefork = 1` was once beaten by a zero |
+| **the weak bit can be set in place** | `WASM_SYM_BINDING_WEAK` lives in a LEB128 flags field in the `linking` section's symbol table, and setting bit 0 of an even number never lengthens a LEB128 — so no section size moves. `userspace/weaken.py` does exactly this, leaving strong the ONE definition whose bytes are in a `.data` segment rather than a `.bss` one, which is the difference between an initialiser and a tentative definition |
+| `-fms-extensions` | `port/pool.c` is written in kencc's anonymous struct members (`struct Free { Bhdr; … }`), and this is clang's name for them |
+| `-fno-builtin` | still load-bearing, as §9.4 measured: clang rewrites `strlen`'s own body into a call to `strlen` |
+
+### 9legacy's rc cannot be built without fork — three defects, none of them ours
+
+`rc/haventfork.c` is Plan 9's own file for a system that cannot fork, and this
+machine cannot (§5.2). **It has never been compiled against this edition of
+rc**, and building it found three things, each provable by putting it beside
+`havefork.c`:
+
+| | |
+|---|---|
+| **`-S` is passed and not accepted** | `rcargv` starts every stage as `rc -S -c '<text>'` (`haventfork.c:22`), and `S` appears NOWHERE else: not in `exec.c`'s `ARGBEGIN`, not as a `flag['S']` read, not in the usage line. Measured over `plan9/sys/src/cmd/rc/`: one hit, the one that passes it. Every pipeline stage died on the usage message, into the pipe, unseen |
+| **the backquote compiles the wrong subtree** | `code.c:147` — the fork branch compiles `c1`, the command; the no-fork branch emits `fnstr(c0)`, the SEPARATORS. For a bare `` `{…} `` c0 is nil, so the child was given nothing to run |
+| **and the separator list is never popped** | `havefork.c:133` has `poplist(); /* ditch split in "stop" */` and reads `stop` from `runq->argv->words`; `haventfork.c` reads `vlook("ifs")` instead and pops nothing. The pushed list stayed on the argument list and BECAME the substitution's result — every `` `{…} `` answered with the value of `$ifs` |
+
+### Six deviations in the kernel, all found by a program using it
+
+| | |
+|---|---|
+| **`up` was not set on a system call** | Plan 9 gets it free: `syscall()` runs on the trapping process's own kernel stack. Here `up` is a shared cell, and nothing set it — so `up->egrp` in devenv, `up->fgrp` in devdup and `up->user` in devsrv, devmnt, devproc and devcap all answered for whoever ran last. Invisible until a second process existed |
+| **`devcons` declared a second `Up`** | so `#c` read a different `up` than every other device. The same mistake as the namespace keyed by path text: the right word, a different thing |
+| **`errstr(2)` is an EXCHANGE** | `generrstr` (`sysproc.c:748`) puts the caller's buffer into `up->syserrstr` and answers the old one, returning **0**, not a length. Ours read-and-cleared, which makes `werrstr` — which is nothing but an exchange (`9sys/werrstr.c`) — impossible |
+| **`await` returned a pid and a status** | `sysawait` (`sysproc.c:727`) formats the whole message in the KERNEL: `"%d %lud %lud %lud %q"`, five fields that `wait(2)` splits back out with `tokenize` (`9sys/wait.c`). The `%q` matters: a status holding a space must come back as one field |
+| **`rootreset` was missing** | `devroot.c:95` adds ten empty directories — bin, dev, env, fd, mnt, net, net.alt, proc, root, srv — and they exist so a first process can bind onto them. Without `/bin`, the first bind of any boot fails |
+| **`create` of a name that exists must TRUNCATE** | `chan.c:1540`: `Acreate` walks the last element first and, if it is there, opens it `OTRUNC` unless `OEXCL`. Plan 9's comment names the very case that found this — *"it happens when two rc subshells simultaneously update the same environment variable"* |
+
+### And the largest: a directory is not a list of names
+
+**Every device here returned its directory as newline-separated text.** A Plan
+9 directory reads as a run of `Dir` entries in `stat(5)` form, packed by
+`convD2M` and parsed back by `convM2D` (`dev.c:306`, `devdirread`). Nothing in a
+Plan 9 userland can read anything else — `dirread(2)` is the only way to list a
+directory, and it calls `statcheck` on every entry.
+
+It surfaced as rc's `Vinit` reading `/env` and getting nonsense: every variable
+took another's value. Three further facts came with the fix:
+
+| | |
+|---|---|
+| **the stat entries were short three strings** | `uid`, `gid` and `muid` were never written, and the leading `size[2]` was zero. `statcheck` (`9sys/convM2D.c`) checks both |
+| **`mode` is `perm \| qid.type << 24`** | `devdir` (`dev.c:42`) sets the directory bit once, in the qid, and derives `DMDIR` from it |
+| **an entry is never split, so `Chan.dri` is the position** | a read stops at the last WHOLE entry and the next resumes at the next ENTRY. A byte offset cannot say where one begins, which is why `sysseek` refuses any offset but 0 on a directory (`sysfile.c:820`, `Eisdir`) and clears `dri` (`:856`) |
+| **and `pread` handed the device a COPY of the channel** | so `c->dri` went back with the copy and every directory read restarted at the first entry. Plan 9 passes the `Chan*` an fd holds; this kernel copied it and wrote one field back |
+
+### Still different, and named rather than hidden
+
+* **`eve` is `#c`'s, not the kernel's.** Plan 9 keeps it in `auth.c:10` and
+  every device reads it for a file's group. Devices here that cannot reach `#c`
+  use the boot value (`dev::EVE`), so renaming eve would not show in their
+  `gid`.
+* **`consdir[]` carries no lengths.** Plan 9's table gives `bintime` 24,
+  `cputime` `6*NUMSIZE` and `hostdomain` `DOMLEN` (`devcons.c:606`); ours
+  reports 0 for all twenty-three.
+* **A child runs to completion inside `procrfork`.** One memory, two processes,
+  one of them running — so a pipeline's stages are sequential and its pipe must
+  hold a whole stage's output. rc starts the WRITING stage first
+  (`haventfork.c:131`), so this is correct for two stages and bounded by the
+  pipe for large ones.

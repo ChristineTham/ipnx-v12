@@ -15,7 +15,7 @@
 //! password and no setuid bit — the authorisation happened when eve minted it.
 
 use crate::chan::Chan;
-use crate::dev::{Dev, DevId};
+use crate::dev::{Dev, DevId, EVE};
 use crate::ninep::{Qid, QTDIR};
 use crate::proc::Up;
 use crate::sha1::{hmac_sha1, HASHLEN};
@@ -112,13 +112,16 @@ impl Dev for CapDev {
         if !c.qid.is_dir() {
             return Err(EPERM.into());
         }
-        let s: String = CAPDIR.iter().map(|e| format!("{}\n", e.0)).collect();
-        let b = s.into_bytes();
-        let off = off as usize;
-        if off >= b.len() {
-            return Ok(Vec::new());
-        }
-        Ok(b[off..(off + n).min(b.len())].to_vec())
+        let _ = off;
+        let user = self.up.borrow().user();
+        let entries: Vec<crate::ninep::Dir> = CAPDIR
+            .iter()
+            .map(|(name, q, perm)| {
+                let qid = Qid { qtype: 0, vers: 0, path: *q as u64 };
+                crate::dev::devdir(c, qid, name, 0, &user, EVE, *perm)
+            })
+            .collect();
+        Ok(crate::dev::devdirread(c, n, &entries))
     }
 
     fn write(&mut self, c: &mut Chan, data: &[u8], _off: u64) -> Result<usize, String> {
@@ -168,22 +171,13 @@ impl Dev for CapDev {
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
         let (name, perm) = if c.qid.is_dir() {
-            ("#\u{a4}".to_string(), 0o555)
+            ("#\u{a4}".to_string(), crate::ninep::DMDIR | 0o555)
         } else {
             let e = CAPDIR.iter().find(|e| e.1 as u64 == c.qid.path).ok_or("no such file")?;
             (e.0.to_string(), e.2)
         };
-        Ok(crate::ninep::W::new()
-            .u16(0)
-            .u16(0)
-            .u32(0)
-            .raw(&c.qid.write(crate::ninep::W::new()).into_body())
-            .u32(perm)
-            .u32(0)
-            .u32(0)
-            .u64(0)
-            .s(&name)
-            .into_body())
+        let user = self.up.borrow().user();
+        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, EVE, perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -300,8 +294,10 @@ mod tests {
             assert!(d.read(&mut c, 64, 0).is_err(), "{name}");
         }
         let mut dir = d.attach("").unwrap();
-        let s = String::from_utf8(d.read(&mut dir, 64, 0).unwrap()).unwrap();
-        assert_eq!(s, "capuse\ncaphash\n");
+        let b = d.read(&mut dir, 512, 0).unwrap();
+        let names: Vec<String> =
+            crate::ninep::Dir::parse_all(&b).into_iter().map(|e| e.name).collect();
+        assert_eq!(names, ["capuse", "caphash"]);
         let _ = OREAD;
     }
 }

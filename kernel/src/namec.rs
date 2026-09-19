@@ -402,12 +402,29 @@ pub fn create(
         return Err("bad create name".into());
     }
     let parent = namec(tab, ns, slash, dot, dir, A::Todir, 0)?;
+
+    // **`create(2)` of a name that already exists is an OPEN with `OTRUNC`**
+    // (`chan.c:1540`): namec walks the last element first, and if it is
+    // there, opens it truncated — unless `OEXCL`, which is the only way to
+    // reach `create(5)`'s own semantics, where an existing name fails.
+    //
+    // Plan 9's comment names the very case that found this: *"The
+    // create/create race is quite common. For example, it happens when two rc
+    // subshells simultaneously update the same environment variable."* Here
+    // it was not even a race — one rc, writing `/env/status` twice, told it
+    // could not create what it had just created.
+    if omode & crate::chan::mode::OEXCL == 0 {
+        if let Ok(existing) = walk(tab, ns, parent.clone(), &[last.to_string()], false) {
+            return tab.dopen(existing, (omode & !crate::chan::mode::OEXCL) | crate::chan::mode::OTRUNC);
+        }
+    }
+
     // The create lands in the create element if this directory is a union.
     let mut target = match ns.create_element(&parent) {
         Some(e) => e.chan.clone(),
         None => parent,
     };
-    tab.dcreate(&mut target, last, omode, perm)?;
+    tab.dcreate(&mut target, last, omode & !crate::chan::mode::OEXCL, perm)?;
     Ok(target)
 }
 

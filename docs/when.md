@@ -3,15 +3,15 @@
 **Role: a *when* — the single authoritative statement of build status.** No
 other document carries it.
 
-Measured 2026-09-18.
+Measured 2026-09-19.
 
-## The kernel — 6,943 lines of Rust, no dependencies
+## The kernel — 7,483 lines of Rust, no dependencies
 
 | | |
 |---|---|
 | `chan.rs` | `Chan` — the object every name resolves to |
-| `dev.rs` | the device table, Plan 9's `struct Dev`; nine letters (`/ \| s M p d e c ¤`) |
-| `devroot.rs` | `#/` — two directories, `#/` and `boot`, as `rootdir[]` has them; every write is `Egreg` |
+| `dev.rs` | the device table, Plan 9's `struct Dev`; nine letters (`/ \| s M p d e c ¤`); `devdir`, `devdirread` and the permission check every device shares |
+| `devroot.rs` | `#/` — `#/` and `boot` from `rootdir[]`, plus the ten empty directories `rootreset` adds for a first process to bind onto; every write is `Egreg` |
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed |
 | `devproc.rs` | `#p` — the process table as files: `status`, `ns` as the bind lines that rebuild it, `fd`, and `ctl` where a write kills |
 | `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user |
@@ -24,26 +24,26 @@ Measured 2026-09-18.
 | `ns.rs` | the namespace, keyed by the identity of the channel mounted upon |
 | `namec.rs` | name → channel, with the mount check at every component; all seven of Plan 9's access modes |
 | `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser` |
-| `ninep.rs` | the 9P2000 codec |
+| `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-131 kernel tests, and 3 in `hosts/ipnx` that run a guest against a real kernel.
+137 kernel tests, and 10 in `hosts/ipnx` — five that run a guest module against a real kernel, and five that run the real rc.
 
-## The host — `hosts/ipnx`, 116 lines
+## The host — `hosts/ipnx`, 1,014 lines in two files
 
-Implements `Machine` over wasmtime. `cargo run -p ipnx` resolves a name through
-a namespace, reads the image out of `#/`, instantiates it and runs it. It
-prints:
+`machine.rs` is the machine: `procsetup`, `todget` and `touser` over wasmtime,
+and the import table that is this architecture's `9syscall`. `main.rs` is the
+boot: the device table — which is what a Plan 9 kernel's configuration file is,
+`mkdevc` turning a `dev` list into `devtab[]` — the binds, and one command.
 
 ```
-a process read a file it opened by name
+% cargo run -p ipnx -- echo hello
+hello
 ```
 
-That line is the point of it: `/init` is a wasm module that calls `open` with
-the name `/hello`, and the kernel resolves it through that process's namespace,
-reads it out of `#/`, and hands the bytes back. Nothing in the module knows
-where the file is.
+Nothing in `echo` knows where anything is: the kernel resolved `/bin/echo`
+through pid 1's namespace, where `#/boot` is bound at `/bin`.
 
 ## What is not built
 
@@ -101,29 +101,59 @@ kernel, lent for the duration — and turns whatever its trap looks like into a
 reaches the kernel through globals. Here the machine goes out of the kernel
 for the call and comes back before anything else can ask.
 
-`hosts/ipnx` exposes `open` `pread` `pwrite` `close` `errstr` `exits`, plus a
-`write` that is deliberately **not** a call — the kernel has none for writing
-to a console, because a console is a file something else serves (P4). A failed
-call answers −1 and leaves its reason for `errstr`, which is Plan 9's
-convention rather than an error type crossing the boundary.
+`hosts/ipnx` serves the whole call list as imports — the counterpart of
+`libc/9syscall/mkfile`'s generated assembly — plus **`procrfork`**, which is
+how a process makes a process on a machine that cannot return twice from one
+call (RESEARCH §5.2, §11). A failed call answers −1 and leaves its reason for
+`errstr`, which is Plan 9's convention rather than an error type crossing the
+boundary.
 
 **The kernel has a clock.** `Machine::todget` (`port/tod.c:153`) answers
 nanoseconds, the fast-tick counter and its frequency; `exec` stamps a
 process's start from it, so `/dev/cputime`'s `TReal` is wall time.
 
-No shell, no userspace, no
-surface. `#c`'s `cons` and `consctl` wait for a host to serve them (P4).
+No surface. `#c`'s `cons` and `consctl` wait for a host to serve them (P4),
+which is why `ipnx` gives its first process a pipe for fd 1 and prints what
+comes out of it when the process is done.
 
 `/dev/sysstat`'s interrupt, page-fault, tlb and load counters are zero, and
-`cputime`'s `TUser`/`TSys` are charged by nothing yet — there is no syscall
-path to charge them from until P3. Both count honestly rather than reporting
-a number nothing produced.
+`cputime`'s `TUser`/`TSys` are charged by nothing yet. Both count honestly
+rather than reporting a number nothing produced.
+
+## The userspace — `userspace/`
+
+| | |
+|---|---|
+| `include/u.h` | the **wasm32 architecture header**. Plan 9 keeps one per architecture; this is 386's, with clang's `va_list`, because wasm passes arguments in the engine's value stack and only the compiler knows where a variadic one is |
+| `libc/wasm/` | the machine-dependent half. Plan 9 generates it from `9syscall/sys.h`; this machine's trap instruction is an import (`sys.c`), its `brk_` is `memory.grow` (`sbrk.c`), its `main9.s` is called with the argument block's address (`main9.c`), and `procrfork.c` is how a process makes a process |
+| `libc/{port,fmt,9sys}/` | vendored verbatim from `plan9/sys/src/libc/` |
+| `rc/` | Plan 9's rc, with `ipnx.c` as its platform file — it ships three of those and the mkfile picks one — and `haventfork.c`, Plan 9's own file for a system that cannot fork |
+| `cmd/` | `echo`, `cat`, `ls`, a cut-down `tr`, and `args` |
+| `mk.sh` | the build. `weaken.py` beside it restores common-symbol semantics for rc.h's tentative definitions, which the wasm backend has none of |
+
+**`rc` runs.** `cargo run -p ipnx -- rc <script>` boots the kernel, binds the
+namespace with `#/boot` at `/bin` and `#c #e #d #p` at `/dev /env /fd /proc`,
+and executes Plan 9's rc — compiled to wasm, over a libc whose system calls
+are this machine's imports:
+
+```
+% ipnx rc /bin/pipe.rc
+HELLO FROM A PIPELINE
+```
+
+Five tests in `hosts/ipnx` run the real thing: a script, a pipeline of two
+commands, a loop with a variable, a command reading a file the kernel resolved
+by name, and a variable reaching a child through `#e`. They need
+`userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
+and say so rather than passing quietly.
 
 ## Functional equivalence to the demo — 0 of 12
 
 The conformance suite lists twelve capabilities and reaches none of them. It
 fails, and will until it does.
 
-The phases are in [implementation.md](implementation.md). P0 and P1 are done.
-**P2 is done**: nine devices, and its acceptance passes. P3 is the userspace —
-a libc over the call list, and `rc`.
+The phases are in [implementation.md](implementation.md). P0, P1 and P2 are
+done. **P3 is done**: a libc over the call list, and `rc` — its acceptance is
+*"rc runs a script; a pipeline of two commands works"*, and both do. What it
+exposed is what it said it would: rc needs a console, and the console is not
+in the kernel. That is P4.

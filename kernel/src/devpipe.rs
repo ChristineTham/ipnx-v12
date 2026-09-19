@@ -12,7 +12,7 @@
 //! other, which is the whole of what a pipe is.
 
 use crate::chan::Chan;
-use crate::dev::{Dev, DevId};
+use crate::dev::{Dev, DevId, EVE};
 use crate::ninep::{Qid, QTDIR};
 use std::collections::VecDeque;
 
@@ -94,6 +94,22 @@ impl Dev for PipeDev {
     /// `qread`. A pipe is a stream, so the offset is ignored — Plan 9's
     /// `piperead` takes a `vlong` it never names.
     fn read(&mut self, c: &mut Chan, n: usize, _off: u64) -> Result<Vec<u8>, String> {
+        // `piperead` (`devpipe.c:243`) answers `pipedir[]` for the directory
+        // — two entries, and their lengths are what is queued in each.
+        if c.qid.is_dir() {
+            let queued = {
+                let p = self.pipe(c)?;
+                [p.q[0].len() as u64, p.q[1].len() as u64]
+            };
+            let entries: Vec<crate::ninep::Dir> = [("data", QDATA0, 0), ("data1", QDATA1, 1)]
+                .into_iter()
+                .map(|(name, path, i)| {
+                    let qid = Qid { qtype: 0, vers: 0, path };
+                    crate::dev::devdir(c, qid, name, queued[i], EVE, EVE, 0o600)
+                })
+                .collect();
+            return Ok(crate::dev::devdirread(c, n, &entries));
+        }
         let (from, _) = Self::ends(c.qid.path).ok_or("cannot read that")?;
         let p = self.pipe(c)?;
         let take = n.min(p.q[from].len());
@@ -114,17 +130,21 @@ impl Dev for PipeDev {
             QDATA1 => "data1",
             _ => ".",
         };
-        Ok(crate::ninep::W::new()
-            .u16(0)
-            .u16(0)
-            .u32(0)
-            .raw(&c.qid.write(crate::ninep::W::new()).into_body())
-            .u32(if c.qid.path == QDIR { 0o500 } else { 0o600 })
-            .u32(0)
-            .u32(0)
-            .u64(0)
-            .s(name)
-            .into_body())
+        let perm = if c.qid.path == QDIR {
+            crate::ninep::DMDIR | 0o500
+        } else {
+            0o600
+        };
+        // A pipe end's LENGTH is what is queued in it, which is how a reader
+        // can tell there is something there (`pipestat`, `devpipe.c:196`).
+        let length = match Self::ends(c.qid.path) {
+            Some((from, _)) => {
+                let p = self.pipe(c)?;
+                p.q[from].len() as u64
+            }
+            None => 0,
+        };
+        Ok(crate::dev::devdir(c, c.qid, name, length, EVE, EVE, perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {

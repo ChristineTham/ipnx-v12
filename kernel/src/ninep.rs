@@ -186,3 +186,90 @@ impl Qid {
         Some(Qid { qtype: r.u8()?, vers: r.u32()?, path: r.u64()? })
     }
 }
+
+/// `Dir` (`libc.h:590`) — a file's description, as `stat(5)` defines it and
+/// `dirread(2)` returns it.
+///
+/// **Every directory in this system reads as a sequence of these**, never as
+/// text. That is not a style choice: `convM2D` in libc parses exactly this,
+/// and a listing of names is not something any Plan 9 program can read. It
+/// was text here until rc's `Vinit` tried to read `/env` and got nonsense.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Dir {
+    /// The device LETTER (`devtab[c->type]->dc`), not an index.
+    pub dtype: u16,
+    /// `c->dev` — which instance of that device.
+    pub dev: u32,
+    pub qid: Qid,
+    pub mode: u32,
+    pub atime: u32,
+    pub mtime: u32,
+    pub length: u64,
+    pub name: String,
+    pub uid: String,
+    pub gid: String,
+    pub muid: String,
+}
+
+impl Dir {
+    /// `convD2M` (`libc/9sys/convD2M.c`) — the wire form, `size[2]` first,
+    /// where the size counts everything after itself.
+    ///
+    /// The leading size is why a directory can be read a buffer at a time: it
+    /// is how the reader finds where one entry ends and the next begins.
+    pub fn conv_d2m(&self) -> Vec<u8> {
+        let body = W::new()
+            .u16(self.dtype)
+            .u32(self.dev)
+            .raw(&self.qid.write(W::new()).into_body())
+            .u32(self.mode)
+            .u32(self.atime)
+            .u32(self.mtime)
+            .u64(self.length)
+            .s(&self.name)
+            .s(&self.uid)
+            .s(&self.gid)
+            .s(&self.muid)
+            .into_body();
+        W::new().u16(body.len() as u16).raw(&body).into_body()
+    }
+
+    /// Every entry in a directory read, which is what `dirread(2)` does with
+    /// what a read gives it: take the leading size, parse, step on.
+    pub fn parse_all(b: &[u8]) -> Vec<Dir> {
+        let mut out = Vec::new();
+        let mut at = 0;
+        while at + 2 <= b.len() {
+            let size = 2 + u16::from_le_bytes([b[at], b[at + 1]]) as usize;
+            match Dir::conv_m2d(&b[at..]) {
+                Some(d) => out.push(d),
+                None => break,
+            }
+            at += size;
+        }
+        out
+    }
+
+    /// `convM2D` — the other direction, for a `wstat` a device must read and
+    /// for the mount driver's replies.
+    pub fn conv_m2d(b: &[u8]) -> Option<Dir> {
+        let mut r = R::new(b);
+        let size = r.u16()? as usize;
+        if size + 2 > b.len() {
+            return None;
+        }
+        Some(Dir {
+            dtype: r.u16()?,
+            dev: r.u32()?,
+            qid: Qid::read(&mut r)?,
+            mode: r.u32()?,
+            atime: r.u32()?,
+            mtime: r.u32()?,
+            length: r.u64()?,
+            name: r.s()?.to_string(),
+            uid: r.s()?.to_string(),
+            gid: r.s()?.to_string(),
+            muid: r.s()?.to_string(),
+        })
+    }
+}

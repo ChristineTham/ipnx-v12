@@ -144,19 +144,24 @@ impl Dev for SrvDev {
             // read of the door rather than through it.
             return Err(EPERM.into());
         }
-        let mut s = String::new();
-        let mut names: Vec<&str> = self.srv.iter().map(|s| s.name.as_str()).collect();
-        names.sort();
-        for name in names {
-            s.push_str(name);
-            s.push('\n');
-        }
-        let b = s.into_bytes();
-        let off = off as usize;
-        if off >= b.len() {
-            return Ok(Vec::new());
-        }
-        Ok(b[off..(off + n).min(b.len())].to_vec())
+        let _ = off;
+        // `srvgen` (`devsrv.c:60`) — one entry per posted name, owned by
+        // whoever posted it.
+        let mut list: Vec<(String, u64, String, u32)> = self
+            .srv
+            .iter()
+            .map(|sp| (sp.name.clone(), sp.path, sp.owner.clone(), sp.perm))
+            .collect();
+        list.sort();
+        let eve = self.eve.clone();
+        let entries: Vec<crate::ninep::Dir> = list
+            .into_iter()
+            .map(|(name, path, owner, perm)| {
+                let qid = crate::ninep::Qid { qtype: 0, vers: 0, path };
+                crate::dev::devdir(c, qid, &name, 0, &owner, &eve, perm)
+            })
+            .collect();
+        Ok(crate::dev::devdirread(c, n, &entries))
     }
 
     /// `srvwrite`: the text is a **file descriptor number**. `fdtochan` turns
@@ -186,23 +191,13 @@ impl Dev for SrvDev {
     }
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
-        let (name, perm) = if c.qid.is_dir() {
-            ("#s".to_string(), 0o555)
+        let (name, owner, perm) = if c.qid.is_dir() {
+            ("#s".to_string(), self.eve.clone(), crate::ninep::DMDIR | 0o555)
         } else {
             let sp = self.lookup(c.qid.path).ok_or(ENONEXIST)?;
-            (sp.name.clone(), sp.perm)
+            (sp.name.clone(), sp.owner.clone(), sp.perm)
         };
-        Ok(crate::ninep::W::new()
-            .u16(0)
-            .u16(0)
-            .u32(0)
-            .raw(&c.qid.write(crate::ninep::W::new()).into_body())
-            .u32(perm)
-            .u32(0)
-            .u32(0)
-            .u64(0)
-            .s(&name)
-            .into_body())
+        Ok(crate::dev::devdir(c, c.qid, &name, 0, &owner, &self.eve.clone(), perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -307,8 +302,10 @@ mod tests {
         let mut dir2 = d.attach("").unwrap();
         d.create(&mut dir2, "factotum", OWRITE, 0o600).unwrap();
         let mut root = d.attach("").unwrap();
-        let s = String::from_utf8(d.read(&mut root, 256, 0).unwrap()).unwrap();
-        assert_eq!(s, "factotum\nriowctl.kitty.12\n");
+        let b = d.read(&mut root, 256, 0).unwrap();
+        let names: Vec<String> =
+            crate::ninep::Dir::parse_all(&b).into_iter().map(|d| d.name).collect();
+        assert_eq!(names, ["factotum", "riowctl.kitty.12"]);
     }
 
     /// `srvwrite` (`devsrv.c:323`) refuses a channel that goes away on exec

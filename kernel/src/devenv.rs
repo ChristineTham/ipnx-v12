@@ -63,6 +63,28 @@ impl EnvDev {
     }
 }
 
+impl EnvDev {
+    /// The directory's children, in `devdirread`'s order. `#e` has no static
+    /// `Dirtab` — the environment group IS the table — so this is `envgen`
+    /// (`devenv.c:33`), which walks the group.
+    fn entries(&mut self, c: &Chan) -> Vec<crate::ninep::Dir> {
+        let user = self.up.borrow().user();
+        let mut named: Vec<(String, usize)> = {
+            let eg = self.egrp();
+            let g = eg.borrow();
+            g.iter().map(|(k, v)| (k.clone(), v.len())).collect()
+        };
+        named.sort();
+        named
+            .into_iter()
+            .map(|(name, len)| {
+                let qid = Qid { qtype: 0, vers: 0, path: self.qid(&name) };
+                crate::dev::devdir(c, qid, &name, len as u64, &user, crate::dev::EVE, 0o666)
+            })
+            .collect()
+    }
+}
+
 impl Dev for EnvDev {
     fn id(&self) -> DevId {
         DevId::Env
@@ -112,22 +134,9 @@ impl Dev for EnvDev {
     }
 
     fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
-        // A read of the directory is the list of names, one per line — what
-        // `devdirread` gives, in the form this kernel's `stat` uses.
         if c.qid.is_dir() {
-            let mut s = String::new();
-            let mut names: Vec<String> = self.egrp().borrow().keys().cloned().collect();
-            names.sort();
-            for name in names {
-                s.push_str(&name);
-                s.push('\n');
-            }
-            let b = s.into_bytes();
-            let off = off as usize;
-            if off >= b.len() {
-                return Ok(Vec::new());
-            }
-            return Ok(b[off..(off + n).min(b.len())].to_vec());
+            let entries = self.entries(c);
+            return Ok(crate::dev::devdirread(c, n, &entries));
         }
         let name = self.name(c.qid.path).ok_or(ENONEXIST)?.clone();
         let eg = self.egrp();
@@ -162,24 +171,14 @@ impl Dev for EnvDev {
     }
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
-        let (name, len) = if c.qid.is_dir() {
-            ("#e".to_string(), 0)
-        } else {
-            let n = self.name(c.qid.path).ok_or(ENONEXIST)?.clone();
-            let l = self.egrp().borrow().get(&n).map(|v| v.len()).unwrap_or(0);
-            (n, l)
-        };
-        Ok(crate::ninep::W::new()
-            .u16(0)
-            .u16(0)
-            .u32(0)
-            .raw(&c.qid.write(crate::ninep::W::new()).into_body())
-            .u32(if c.qid.is_dir() { 0o775 } else { 0o666 })
-            .u32(0)
-            .u32(0)
-            .u64(len as u64)
-            .s(&name)
-            .into_body())
+        if c.qid.is_dir() {
+            let user = self.up.borrow().user();
+            return Ok(crate::dev::devdir(c, c.qid, "#e", 0, &user, crate::dev::EVE, 0o775).conv_d2m());
+        }
+        let name = self.name(c.qid.path).ok_or(ENONEXIST)?.clone();
+        let len = self.egrp().borrow().get(&name).map(|v| v.len()).unwrap_or(0);
+        let user = self.up.borrow().user();
+        Ok(crate::dev::devdir(c, c.qid, &name, len as u64, &user, crate::dev::EVE, 0o666).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -293,13 +292,46 @@ mod tests {
 
     /// Reading the directory lists the names, so `ls /env` works.
     #[test]
-    fn reading_the_directory_lists_the_names() {
+    /// **A directory reads as `Dir` entries, not as text.** `dirread(2)`
+    /// parses exactly this with `convM2D`, and nothing in a Plan 9 userland
+    /// can read a list of names. It WAS a list of names here, and rc's
+    /// `Vinit` — which reads `/env` to find its variables — got nonsense:
+    /// every variable took the value of another.
+    #[test]
+    fn reading_the_directory_gives_dir_entries() {
         let (mut d, _) = env();
         make(&mut d, "path", b"/bin");
         make(&mut d, "user", b"kitty");
         let mut dir = d.attach("").unwrap();
-        let s = String::from_utf8(d.read(&mut dir, 256, 0).unwrap()).unwrap();
-        assert_eq!(s, "path\nuser\n");
+        let b = d.read(&mut dir, 256, 0).unwrap();
+
+        let first = crate::ninep::Dir::conv_m2d(&b).expect("an entry");
+        assert_eq!((first.name.as_str(), first.length), ("path", 4));
+        assert_eq!(first.dtype, 'e' as u16, "the device letter, not an index");
+
+        let n = 2 + u16::from_le_bytes([b[0], b[1]]) as usize;
+        let second = crate::ninep::Dir::conv_m2d(&b[n..]).expect("the next entry");
+        assert_eq!((second.name.as_str(), second.length), ("user", 5));
+        assert_eq!(2 + u16::from_le_bytes([b[n], b[n + 1]]) as usize, b.len() - n);
+    }
+
+    /// An entry is never split. A read too small for the next one stops, and
+    /// the read after it resumes at that ENTRY — which is what `Chan.dri` is
+    /// for, a byte offset being no use when entries vary in length.
+    #[test]
+    fn a_directory_read_stops_at_a_whole_entry_and_resumes_there() {
+        let (mut d, _) = env();
+        make(&mut d, "path", b"/bin");
+        make(&mut d, "user", b"kitty");
+        let mut dir = d.attach("").unwrap();
+        let whole = d.read(&mut dir, 4096, 0).unwrap();
+        let first = 2 + u16::from_le_bytes([whole[0], whole[1]]) as usize;
+
+        let mut dir = d.attach("").unwrap();
+        let a = d.read(&mut dir, first + 1, 0).unwrap();
+        assert_eq!(a.len(), first, "one whole entry, not a byte more");
+        let b = d.read(&mut dir, 4096, a.len() as u64).unwrap();
+        assert_eq!([a, b].concat(), whole, "and the rest follows it exactly");
     }
 
     #[test]

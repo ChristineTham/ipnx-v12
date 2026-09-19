@@ -63,5 +63,13 @@ typedef	__builtin_va_list	va_list;
  * compiler, so the two are defined here — in the machine's header, which is
  * where this build's difference from kencc belongs.
  */
-#define USED(x)	if(x){}else{}
-#define SET(x)	((x) = 0)
+#define USED(...)	_USED(0, __VA_ARGS__)
+#define SET(x)		((x) = 0)
+
+/*
+ * kencc's `USED` takes any number of arguments — `<arg.h>`'s ARGEND is
+ * `USED(_args, _argt, _argc);` — so this one does too. It cannot reference
+ * them the way kencc's does (they are of no one type), so the build turns off
+ * the diagnostics kencc would have used them to silence: see mk.sh.
+ */
+#define _USED(...)	do{}while(0)
