@@ -20,12 +20,24 @@ struct Entry {
     perm: u32,
 }
 
-/// `rootdir[]`'s two entries (`devroot.c:27`): `#/` and `boot`.
+/// `rootdir[]`'s two static entries (`devroot.c:27`): `#/` and `boot`.
 const QROOT: u64 = 0;
 const QBOOT: u64 = 0x1000;
 
+/// `rootreset` (`devroot.c:95`) — the ten directories every Plan 9 root has,
+/// in that order. They are EMPTY and they are the point: `/bin`, `/dev`,
+/// `/env`, `/srv` and the rest exist so that the first process has somewhere
+/// to bind onto. Without them a boot script's very first `bind #/boot /bin`
+/// fails, which is how their absence was found here.
+const ROOTDIRS: [&str; 10] = [
+    "bin", "dev", "env", "fd", "mnt", "net", "net.alt", "proc", "root", "srv",
+];
+
 pub struct Root {
     files: Vec<Entry>,
+    /// The empty directories of `rootlist`, which is a different list from
+    /// `bootlist`: `addrootdir` adds here, `addbootfile` adds there.
+    dirs: Vec<Entry>,
     next_qid: u64,
 }
 
@@ -37,7 +49,21 @@ impl Default for Root {
 
 impl Root {
     pub fn new() -> Root {
-        Root { files: Vec::new(), next_qid: 1 }
+        let mut r = Root { files: Vec::new(), dirs: Vec::new(), next_qid: 1 };
+        // `rootreset` — `reset` is one of `struct Dev`'s seventeen, and this
+        // is the whole of devroot's.
+        for (i, name) in ROOTDIRS.iter().enumerate() {
+            r.dirs.push(Entry {
+                name: (*name).to_string(),
+                // `addlist`: `d->qid.path = ++l->ndir + l->base`, and
+                // rootlist's base is 0. The two static entries are already
+                // counted, so these start at 3.
+                qid: Qid { qtype: QTDIR, vers: 0, path: (i + 3) as u64 },
+                data: Vec::new(),
+                perm: crate::ninep::DMDIR | 0o555,
+            });
+        }
+        r
     }
 
     /// `addbootfile`. The only way anything gets in here, and it happens before
@@ -58,7 +84,7 @@ impl Root {
     }
 
     fn find(&self, qid: Qid) -> Option<&Entry> {
-        self.files.iter().find(|e| e.qid == qid)
+        self.files.iter().chain(self.dirs.iter()).find(|e| e.qid == qid)
     }
 }
 
@@ -88,11 +114,10 @@ impl Dev for Root {
         }
         // At `#/` the only name is `boot`; the files are inside it.
         if c.qid.path == QROOT {
-            return Ok(if name == "boot" {
-                Some(Qid { qtype: QTDIR, vers: 0, path: QBOOT })
-            } else {
-                None
-            });
+            if name == "boot" {
+                return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: QBOOT }));
+            }
+            return Ok(self.dirs.iter().find(|e| e.name == name).map(|e| e.qid));
         }
         Ok(self.files.iter().find(|e| e.name == name).map(|e| e.qid))
     }
@@ -112,7 +137,13 @@ impl Dev for Root {
     fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
         let owned;
         let data: &[u8] = match c.qid.path {
-            QROOT => b"boot\n",
+            QROOT => {
+                owned = std::iter::once("boot\n".to_string())
+                    .chain(self.dirs.iter().map(|e| format!("{}\n", e.name)))
+                    .collect::<String>()
+                    .into_bytes();
+                &owned
+            }
             QBOOT => {
                 owned = self
                     .files
@@ -183,6 +214,22 @@ mod tests {
         let f = b.walked("init", qid);
         let mut f = r.open(f, crate::chan::mode::OEXEC).unwrap();
         assert_eq!(r.read(&mut f, 100, 0).unwrap(), b"the image");
+    }
+
+    /// `rootreset` (`devroot.c:95`) adds ten empty directories, and they are
+    /// what a first process binds onto. `bind #/boot /bin` is the first thing
+    /// any boot does, and before this it failed with "'bin' does not exist".
+    #[test]
+    fn the_root_carries_the_ten_directories_rootreset_adds() {
+        let mut r = Root::new();
+        let c = r.attach("").unwrap();
+        for name in ROOTDIRS {
+            let q = r.walk(&c, name).unwrap().unwrap_or_else(|| panic!("#/{name}"));
+            assert!(q.is_dir(), "#/{name} is a directory");
+        }
+        let mut c = r.open(c, crate::chan::mode::OREAD).unwrap();
+        let listing = String::from_utf8(r.read(&mut c, 4096, 0).unwrap()).unwrap();
+        assert_eq!(listing.lines().count(), 11, "boot, and the ten: {listing:?}");
     }
 
     #[test]

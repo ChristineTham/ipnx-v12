@@ -1,0 +1,60 @@
+/*
+ * `procrfork` for the wasm32 architecture — making a process on a machine
+ * whose stack cannot be duplicated.
+ *
+ * `rfork(RFPROC)` returns TWICE: once into the parent with the child's pid,
+ * once into the child with 0. Every other thing it does — copying the file
+ * descriptor table, the namespace, the environment group — is table work in
+ * the kernel, and this machine does all of it. What it cannot do is the
+ * double return. A wasm call returns into the engine's own stack, and nothing
+ * outside the engine can duplicate one: the stack-switching proposal excludes
+ * process duplication by name, and JSPI suspends a stack rather than copying
+ * it (RESEARCH §5.2, measured).
+ *
+ * So the child is told WHERE TO START instead of resuming a copy of the
+ * parent — which is Plan 9's own shape for the same thing:
+ *
+ *	int procrfork(void (*f)(void*), void *arg, uint stacksize, int rforkflag)
+ *		— libthread/create.c:103
+ *
+ * Two differences from libthread's, both because there are no threads here:
+ * it answers the child's PID where libthread answers a thread id, and
+ * `stacksize` is accepted and ignored, because the child runs on the memory
+ * it was made from.
+ *
+ * That last part is `RFMEM`, and it is declared: the kernel is asked for
+ * `RFPROC|RFMEM` whatever the caller passed, because one memory is the truth
+ * of it. vfork's discipline applies — the child must exec or exit, and must
+ * not expect the parent to see what it wrote. It is less dangerous here than
+ * vfork ever was on Unix, because the descriptors, the namespace and the
+ * working directory are the KERNEL's and the child asked for its own by flag.
+ */
+#include <u.h>
+#include <libc.h>
+
+__attribute__((import_module("sys"), import_name("procrfork")))
+extern int __procrfork(void (*)(void*), void*, uint, int);
+
+int
+procrfork(void (*f)(void *), void *arg, uint stacksize, int rforkflag)
+{
+	return __procrfork(f, arg, stacksize, rforkflag);
+}
+
+/*
+ * Where the child starts. The machine calls this, on this instance, with the
+ * process now being the child: `f` is a function pointer, which on this
+ * machine is an index into the module's one table, and calling it is the
+ * `call_indirect` the compiler emits for any indirect call.
+ *
+ * It returns only if the child's function does. A child that execs or exits
+ * never comes back here — the machine unwinds it — which is exactly what
+ * happens on Plan 9, by a different route.
+ */
+__attribute__((export_name("__childstart")))
+void
+__childstart(void (*f)(void*), void *arg)
+{
+	(*f)(arg);
+	exits("child returned");
+}

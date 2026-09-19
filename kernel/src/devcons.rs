@@ -16,7 +16,7 @@
 use crate::chan::Chan;
 use crate::dev::{Dev, DevId};
 use crate::ninep::{Qid, QTDIR};
-use crate::proc::{Pid, Procs};
+use crate::proc::{Pid, Procs, Up};
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -72,12 +72,6 @@ pub struct Cons {
     /// ambient mutable global.
     up: Rc<RefCell<Up>>,
     host: Box<dyn Console>,
-}
-
-/// The current process, as `up` names it.
-pub struct Up {
-    pub pid: Pid,
-    pub procs: Rc<RefCell<Procs>>,
 }
 
 /// Qids, in `consdir[]`'s order (`devcons.c:606`).
@@ -695,7 +689,7 @@ mod tests {
         let (mut d, procs) = cons();
         let c = procs.borrow_mut().rfork(1, crate::proc::rf::PROC).unwrap();
         procs.borrow_mut().charge(c, crate::proc::TUSER, 250);
-        procs.borrow_mut().exits(c, "");
+        procs.borrow_mut().exits(c, "", None);
         let s = read(&mut d, "cputime");
         let v: Vec<&str> = s.split_whitespace().collect();
         assert_eq!(v[crate::proc::TCUSER], "250", "the child's user time came across");

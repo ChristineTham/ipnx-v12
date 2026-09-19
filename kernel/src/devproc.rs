@@ -247,7 +247,7 @@ impl Dev for ProcDev {
         let procs = self.up.borrow().procs.clone();
         match (q, cmd) {
             (Q::Ctl, "kill") => {
-                procs.borrow_mut().exits(pid, "killed");
+                procs.borrow_mut().exits(pid, "killed", None);
             }
             (Q::Ctl, "close") => {
                 let fd: Fd = word.next().and_then(|w| w.parse().ok()).ok_or("bad fd")?;
@@ -363,7 +363,7 @@ mod tests {
         let s = read(&mut d, 1, "status");
         assert!(s.contains("eve"), "{s}");
         assert!(s.contains("Running"), "{s}");
-        procs.borrow_mut().exits(1, "");
+        procs.borrow_mut().exits(1, "", None);
         assert!(read(&mut d, 1, "status").contains("Broken"));
     }
 
@@ -407,7 +407,8 @@ mod tests {
         let c = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
         let mut ctl = open(&mut d, c, "ctl", OWRITE);
         d.write(&mut ctl, b"kill", 0).unwrap();
-        assert_eq!(procs.borrow_mut().await_child(1), Some((c, "killed".to_string())));
+        let w = procs.borrow_mut().await_child(1).expect("the killed child is reaped");
+        assert_eq!((w.pid, w.msg.as_str()), (c, "killed"));
     }
 
     /// `close` and `closefiles` act on the target's fd table.

@@ -117,6 +117,50 @@ impl Fds {
 }
 
 /// A process.
+/// `Waitmsg` (`portdat.h:645`) — what a reaped child leaves behind. Plan 9's
+/// kernel fills one in `pexit` and `sysawait` formats it; the shape is the
+/// same one `wait(2)` parses back out (`9sys/wait.c`).
+pub struct Waitmsg {
+    pub pid: Pid,
+    /// user, sys and real, in milliseconds.
+    pub time: [u64; 3],
+    pub msg: String,
+}
+
+impl Waitmsg {
+    /// `sysawait` (`sysproc.c:727`), verbatim: `"%d %lud %lud %lud %q"`.
+    pub fn format(&self) -> String {
+        format!(
+            "{} {} {} {} {}",
+            self.pid,
+            self.time[0],
+            self.time[1],
+            self.time[2],
+            quote(&self.msg)
+        )
+    }
+}
+
+/// `%q` — Plan 9's quoted string (`fmt/fmtquote.c:_quotesetup`). A string is
+/// quoted when it is empty or holds any rune `<= ' '` or a quote; inside the
+/// quotes a quote doubles. `wait(2)` undoes it with `tokenize`, so getting
+/// this wrong loses every status containing a space.
+pub fn quote(s: &str) -> String {
+    let needs = s.is_empty() || s.chars().any(|c| c <= ' ' || c == '\'');
+    if !needs {
+        return s.to_string();
+    }
+    let mut out = String::from("'");
+    for c in s.chars() {
+        if c == '\'' {
+            out.push('\'');
+        }
+        out.push(c);
+    }
+    out.push('\'');
+    out
+}
+
 #[derive(Clone)]
 pub struct Proc {
     pub pid: Pid,
@@ -327,9 +371,14 @@ impl Procs {
     /// `errstr(2)`: the per-process error string. Plan 9 exchanges it —
     /// reading clears what was there — which is why a second `errstr` after a
     /// failure says nothing.
-    pub fn errstr(&mut self, pid: Pid) -> String {
+    /// `generrstr` (`sysproc.c:748`) — an EXCHANGE, not a read: the caller's
+    /// buffer becomes `up->errstr` and the old one is answered. Both halves
+    /// are used. `rerrstr` reads by exchanging twice, putting back what it
+    /// took; `werrstr` writes by exchanging once and dropping what it got.
+    pub fn errstr(&mut self, pid: Pid, new: &str) -> String {
+        let new = new[..new.len().min(ERRMAX - 1)].to_string();
         match self.tab.get_mut(&pid) {
-            Some(p) => std::mem::take(&mut p.errstr),
+            Some(p) => std::mem::replace(&mut p.errstr, new),
             None => String::new(),
         }
     }
@@ -420,12 +469,22 @@ impl Procs {
     /// `exits(2)`. Plan 9 folds an exited child's times into its parent's
     /// `TCUser`/`TCSys`/`TCReal`, which is what makes those three mean
     /// anything.
-    pub fn exits(&mut self, pid: Pid, status: &str) {
+    pub fn exits(&mut self, pid: Pid, status: &str, now_nsec: Option<u64>) {
         let status = &status[..status.len().min(ERRMAX - 1)];
         let (ppid, time) = match self.tab.get_mut(&pid) {
             None => return,
             Some(p) => {
                 p.status = Some(status.to_string());
+                // `TReal` stops here. Plan 9 fills the wait message in
+                // `pexit` from `up->time` (`proc.c:1149`), and wall time is
+                // meaningless once the process is gone, so it is fixed at the
+                // moment it goes rather than recomputed from a clock later.
+                // `None` where nothing at hand has a clock — `/proc/n/ctl`'s
+                // kill runs inside a device, and a device cannot read the
+                // machine. Plan 9's `pexit` always can (`MACHP(0)->ticks`).
+                if let (Some(start), Some(now)) = (p.started, now_nsec) {
+                    p.time[TREAL] = now.saturating_sub(start) / 1_000_000;
+                }
                 (p.ppid, p.time)
             }
         };
@@ -442,14 +501,18 @@ impl Procs {
     /// child waits for its pid.
     ///
     /// A child forked with `RFNOWAIT` is never reported and leaves no zombie.
-    pub fn await_child(&mut self, pid: Pid) -> Option<(Pid, String)> {
+    pub fn await_child(&mut self, pid: Pid) -> Option<Waitmsg> {
         let cpid = *self
             .tab
             .iter()
             .find(|(_, p)| p.ppid == pid && !p.waited && p.status.is_some())
             .map(|(cpid, _)| cpid)?;
         let p = self.tab.remove(&cpid)?;
-        Some((cpid, p.status.unwrap_or_default()))
+        Some(Waitmsg {
+            pid: cpid,
+            time: [p.time[TUSER], p.time[TSYS], p.time[TREAL]],
+            msg: p.status.unwrap_or_default(),
+        })
     }
 }
 
@@ -567,10 +630,10 @@ mod tests {
     fn errmax_bounds_an_error_string_and_a_status() {
         let mut p = one();
         p.seterrstr(1, &"x".repeat(1000));
-        assert!(p.errstr(1).len() < ERRMAX);
+        assert!(p.errstr(1, "").len() < ERRMAX);
         let c = p.rfork(1, rf::PROC).unwrap();
-        p.exits(c, &"y".repeat(1000));
-        assert!(p.await_child(1).unwrap().1.len() < ERRMAX);
+        p.exits(c, &"y".repeat(1000), None);
+        assert!(p.await_child(1).unwrap().msg.len() < ERRMAX);
     }
 
     /// `NFD` = 100 (`portdat.h:476`). A process that leaks descriptors fails
@@ -622,10 +685,11 @@ mod tests {
     fn a_child_that_exits_is_reaped_by_its_parent_with_its_status() {
         let mut p = one();
         let c = p.rfork(1, rf::PROC).unwrap();
-        assert_eq!(p.await_child(1), None, "nothing to reap before it exits");
-        p.exits(c, "oops");
-        assert_eq!(p.await_child(1), Some((c, "oops".to_string())));
-        assert_eq!(p.await_child(1), None, "reaped once, and gone");
+        assert!(p.await_child(1).is_none(), "nothing to reap before it exits");
+        p.exits(c, "oops", None);
+        let w = p.await_child(1).expect("the exited child is reaped");
+        assert_eq!((w.pid, w.msg.as_str()), (c, "oops"));
+        assert!(p.await_child(1).is_none(), "reaped once, and gone");
     }
 
     /// `RFNOWAIT`: the child is never reported and leaves no zombie.
@@ -633,8 +697,27 @@ mod tests {
     fn a_child_forked_with_nowait_is_never_reaped() {
         let mut p = one();
         let c = p.rfork(1, rf::PROC | rf::NOWAIT).unwrap();
-        p.exits(c, "gone");
-        assert_eq!(p.await_child(1), None);
+        p.exits(c, "gone", None);
+        assert!(p.await_child(1).is_none());
+    }
+
+    /// The wait message is `sysawait`'s, verbatim (`sysproc.c:727`):
+    /// `"%d %lud %lud %lud %q"`. `wait(2)` splits it with `tokenize` into
+    /// exactly five fields (`9sys/wait.c`), so a status holding a space must
+    /// come back as ONE field or every such status is lost.
+    #[test]
+    fn the_wait_message_is_the_one_wait_2_parses() {
+        let w = Waitmsg { pid: 7, time: [1, 2, 3], msg: String::new() };
+        assert_eq!(w.format(), "7 1 2 3 ''", "an empty status is quoted");
+
+        let w = Waitmsg { pid: 7, time: [0, 0, 0], msg: "oops".into() };
+        assert_eq!(w.format(), "7 0 0 0 oops", "a plain word is not");
+
+        let w = Waitmsg { pid: 7, time: [0, 0, 0], msg: "no such file".into() };
+        assert_eq!(w.format(), "7 0 0 0 'no such file'");
+
+        let w = Waitmsg { pid: 7, time: [0, 0, 0], msg: "it's gone".into() };
+        assert_eq!(w.format(), "7 0 0 0 'it''s gone'", "a quote doubles");
     }
 
     /// A process reaps its own children and nobody else's.
@@ -643,8 +726,9 @@ mod tests {
         let mut p = one();
         let a = p.rfork(1, rf::PROC).unwrap();
         let b = p.rfork(a, rf::PROC).unwrap();
-        p.exits(b, "b");
-        assert_eq!(p.await_child(1), None, "b is a's child, not 1's");
-        assert_eq!(p.await_child(a), Some((b, "b".to_string())));
+        p.exits(b, "b", None);
+        assert!(p.await_child(1).is_none(), "b is a's child, not 1's");
+        let w = p.await_child(a).expect("a reaps its own child");
+        assert_eq!((w.pid, w.msg.as_str()), (b, "b"));
     }
 }

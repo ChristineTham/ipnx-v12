@@ -31,10 +31,18 @@ pub trait Syscalls {
     fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String>;
 }
 
+/// **Every method takes `&self`, and that is load-bearing.** Plan 9's machine
+/// half is a set of functions, not an object: `touser` is reachable from
+/// anywhere and re-entering it is not a special case. Taking `&mut self` here
+/// made the kernel lend the machine out for the duration of a process, and an
+/// `exec` from inside that process then found no machine to run the new image
+/// on — a shell could not start a command. `&self` restores what Plan 9 has:
+/// the machine is always there, and a machine needing state of its own keeps
+/// it behind a cell.
 pub trait Machine {
     /// `procsetup` — whatever state this machine needs for a new process,
     /// before anything of it runs.
-    fn procsetup(&mut self, pid: Pid) -> Result<(), String>;
+    fn procsetup(&self, pid: Pid) -> Result<(), String>;
 
     /// `touser` — start the process running. It returns when the process has
     /// finished, carrying the status `exits` would have set.
@@ -43,7 +51,7 @@ pub trait Machine {
     /// machine must arrange: turn whatever its trap looks like into a
     /// [`Call`], hand it over, and turn the answer back.
     fn touser(
-        &mut self,
+        &self,
         pid: Pid,
         image: &[u8],
         args: &[String],
@@ -57,7 +65,7 @@ pub trait Machine {
     /// from `port/` (`devcons.c:1239`, `devloopback.c:563`) and the numbers
     /// come from the architecture. It is here for the same reason `touser`
     /// is — portable code needs it, and only a machine can supply it.
-    fn todget(&mut self) -> Tod;
+    fn todget(&self) -> Tod;
 }
 
 /// What `todget` answers.
@@ -69,28 +77,4 @@ pub struct Tod {
     pub ticks: u64,
     /// `fasthz` — that counter's frequency.
     pub hz: u64,
-}
-
-/// Stands in while the real machine is running a process. Plan 9 has no
-/// counterpart because it needs none: nothing there takes the machine out of
-/// the kernel to enter it. Every call fails, and none is reachable — the
-/// machine is back before anything could ask.
-pub struct Nowhere;
-
-impl Machine for Nowhere {
-    fn procsetup(&mut self, _pid: Pid) -> Result<(), String> {
-        Err("no machine".into())
-    }
-    fn todget(&mut self) -> Tod {
-        Tod::default()
-    }
-    fn touser(
-        &mut self,
-        _pid: Pid,
-        _image: &[u8],
-        _args: &[String],
-        _sys: &mut dyn Syscalls,
-    ) -> Result<String, String> {
-        Err("no machine".into())
-    }
 }

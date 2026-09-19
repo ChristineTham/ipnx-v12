@@ -103,7 +103,11 @@ pub enum Call {
     Wstat { path: String, edir: Vec<u8> },
     Fwstat { fd: Fd, edir: Vec<u8> },
     Fversion { fd: Fd, msize: u32, version: String },
-    Errstr,
+    /// `errstr(2)` EXCHANGES: what the caller's buffer holds becomes the
+    /// process's error string, and the old one is answered (`generrstr`,
+    /// `sysproc.c:748`). That is what makes `werrstr` a library function and
+    /// not a call of its own — it formats into a buffer and hands it here.
+    Errstr { buf: String },
 }
 
 /// The kernel.
@@ -114,7 +118,7 @@ pub struct Kernel {
     /// which is what Plan 9 gets from its being a global.
     pub procs: std::rc::Rc<std::cell::RefCell<proc::Procs>>,
     pub tab: namec::Devtab,
-    machine: Box<dyn machine::Machine>,
+    machine: std::rc::Rc<dyn machine::Machine>,
     /// `Mach.syscall` (`pc/dat.h:234`) — what `/dev/sysstat` reports.
     pub syscalls: u64,
     /// `up` — the calling process, which the devices that need it read
@@ -127,7 +131,7 @@ impl Kernel {
     /// first process needs, and pid 1 starts with that as its `slash`. This is
     /// Plan 9's arrangement — the kernel has just enough of a root to start
     /// something, and that something mounts the real file server.
-    pub fn new(root: devroot::Root, machine: Box<dyn machine::Machine>)
+    pub fn new(root: devroot::Root, machine: std::rc::Rc<dyn machine::Machine>)
         -> Result<Kernel, String>
     {
         let mut tab = namec::Devtab::new();
@@ -158,13 +162,12 @@ impl Kernel {
         self.procs.borrow_mut().started(pid, now);
         // The machine runs the process, and the process calls back here while
         // it does. Plan 9 needs no arrangement for that — a trap lands in
-        // `syscall()` and reaches the kernel through globals. Rust needs the
-        // machine out of the kernel for the duration, so the kernel can be
-        // lent to it as the thing to call.
-        let mut m = std::mem::replace(&mut self.machine, Box::new(machine::Nowhere));
-        let status = m.touser(pid, &image, args, self);
-        self.machine = m;
-        let status = status?;
+        // `syscall()` and reaches the kernel through globals. Here the kernel
+        // is lent to the machine as the thing to call, and the machine stays
+        // where it is: a process that `exec`s reaches this line again from
+        // inside it, and must find the same machine still here.
+        let m = self.machine.clone();
+        let status = m.touser(pid, &image, args, self)?;
         // **A status the process set stands.** `sysexec` never returns in
         // Plan 9 — the process runs, and `sysexits` sets the status
         // (`sysproc.c:668`). Here `touser` returns when the process is
@@ -172,7 +175,7 @@ impl Kernel {
         // what the process said on its way out.
         let already = self.procs.borrow().status(pid).is_some();
         if !already {
-            self.procs.borrow_mut().exits(pid, &status);
+            self.procs.borrow_mut().exits(pid, &status, Some(now));
         }
         Ok(self.procs.borrow().status(pid).unwrap_or(status))
     }
@@ -228,15 +231,15 @@ mod tests {
     pub(crate) struct Recorder(Rc<RefCell<Log>>);
 
     impl machine::Machine for Recorder {
-        fn procsetup(&mut self, _pid: Pid) -> Result<(), String> {
+        fn procsetup(&self, _pid: Pid) -> Result<(), String> {
             self.0.borrow_mut().order.push("procsetup");
             Ok(())
         }
-        fn todget(&mut self) -> machine::Tod {
+        fn todget(&self) -> machine::Tod {
             machine::Tod { nsec: 1_500_000_000_000_000_000, ticks: 42, hz: 1_000_000 }
         }
         fn touser(
-            &mut self,
+            &self,
             pid: Pid,
             image: &[u8],
             _a: &[String],
@@ -254,14 +257,14 @@ mod tests {
         let log = Rc::new(RefCell::new(Log::default()));
         let mut root = devroot::Root::new();
         root.addbootfile("init", b"an image".to_vec());
-        let k = Kernel::new(root, Box::new(Recorder(log.clone()))).unwrap();
+        let k = Kernel::new(root, Rc::new(Recorder(log.clone()))).unwrap();
         (k, log)
     }
 
     fn booted() -> Kernel {
         let mut root = devroot::Root::new();
         root.addbootfile("init", b"an image".to_vec());
-        Kernel::new(root, Box::new(Recorder::silent())).unwrap()
+        Kernel::new(root, Rc::new(Recorder::silent())).unwrap()
     }
 
     impl Recorder {
@@ -369,6 +372,13 @@ impl Kernel {
     /// device an ambient mutable global — the same information, made explicit.
     pub fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
         self.syscalls += 1;
+        // **`up` is the calling process, and it is set on the way in.** Plan 9
+        // does not have to: `syscall()` (`pc/trap.c:665`) runs on the trapping
+        // process's own kernel stack, so the per-machine `up` already names
+        // it. Here `up` is a shared cell the devices read through — `up->user`
+        // in `devsrv`, `up->fgrp` in `devdup`, `up->egrp` in `devenv` — and if
+        // it is not set, every one of them answers for whoever ran last.
+        self.up.borrow_mut().pid = up;
         let r = self.dispatch(up, call);
         if let Err(e) = &r {
             self.procs.borrow_mut().seterrstr(up, e);
@@ -388,14 +398,19 @@ impl Kernel {
             },
             Call::Exec { path, args } => Ok(Ret::Str(self.exec(up, &path, &args)?)),
             Call::Exits { status } => {
-                self.procs.borrow_mut().exits(up, &status);
+                let now = self.machine.todget().nsec;
+                self.procs.borrow_mut().exits(up, &status, Some(now));
                 Ok(Ret::Ok)
             }
+            // `sysawait` (`sysproc.c:715`) formats the message in the KERNEL
+            // and answers its length; `wait(2)` parses it back with
+            // `tokenize`. The times belong to the reaped child and nothing
+            // outside here has them.
             Call::Await => match self.procs.borrow_mut().await_child(up) {
-                Some((pid, status)) => Ok(Ret::Wait(pid, status)),
+                Some(w) => Ok(Ret::Str(w.format())),
                 None => Err("no living children".into()),
             },
-            Call::Errstr => Ok(Ret::Str(self.procs.borrow_mut().errstr(up))),
+            Call::Errstr { buf } => Ok(Ret::Str(self.procs.borrow_mut().errstr(up, &buf))),
 
             // ---- the namespace
             // `bindmount` (`sysfile.c`): the SOURCE is `Abind` and the
@@ -612,9 +627,49 @@ mod syscalls {
         let mut root = devroot::Root::new();
         root.addbootfile("init", b"an image".to_vec());
         root.addbootfile("hello", b"greetings".to_vec());
-        let mut k = Kernel::new(root, Box::new(tests::Recorder::silent())).unwrap();
+        let mut k = Kernel::new(root, std::rc::Rc::new(tests::Recorder::silent())).unwrap();
         k.tab.add(Box::new(devpipe::PipeDev::new()));
+        k.tab.add(Box::new(devenv::EnvDev::new(k.up.clone())));
         k
+    }
+
+    /// **`up` names the CALLING process, on every call.** Plan 9 gets this for
+    /// nothing — `syscall()` runs on the trapping process's own kernel stack,
+    /// so `up` already names it. Here it is a shared cell, and the devices
+    /// that read through it (`up->egrp` in `devenv`, `up->fgrp` in `devdup`,
+    /// `up->user` in `devsrv`, `devmnt`, `devproc`, `devcap`) answer for
+    /// whoever it names.
+    ///
+    /// Until this test there was nothing to notice: one process had run, and
+    /// the cell held its pid from boot. A child with its own environment
+    /// group read its PARENT's variables.
+    #[test]
+    fn a_device_reading_up_answers_for_the_process_that_called() {
+        let mut k = booted();
+        let fd = match k
+            .syscall(1, Call::Create { path: "#e/x".into(), mode: 1, perm: 0o666 })
+            .unwrap()
+        {
+            Ret::Fd(fd) => fd,
+            r => panic!("{r:?}"),
+        };
+        k.syscall(1, Call::Pwrite { fd, data: b"one".to_vec(), off: -1 }).unwrap();
+        k.syscall(1, Call::Close { fd }).unwrap();
+
+        // `RFCENVG`: the child starts with an EMPTY environment group.
+        let Ret::Pid(child) =
+            k.syscall(1, Call::Rfork { flags: rf::PROC | rf::CENVG }).unwrap()
+        else {
+            panic!("no child")
+        };
+        assert!(
+            k.syscall(child, Call::Open { path: "#e/x".into(), mode: 0 }).is_err(),
+            "the child's environment group is its own and holds nothing"
+        );
+        assert!(
+            k.syscall(1, Call::Open { path: "#e/x".into(), mode: 0 }).is_ok(),
+            "and the parent's is untouched"
+        );
     }
 
     /// The point of the whole exercise: a process opens a file by name and
@@ -713,10 +768,22 @@ mod syscalls {
     fn a_failed_call_leaves_an_errstr_and_reading_it_clears_it() {
         let mut k = booted();
         assert!(k.syscall(1, Call::Open { path: "/nothing".into(), mode: 0 }).is_err());
-        let Ret::Str(e) = k.syscall(1, Call::Errstr).unwrap() else { panic!() };
+        let Ret::Str(e) = k.syscall(1, Call::Errstr { buf: String::new() }).unwrap() else {
+            panic!()
+        };
         assert!(!e.is_empty(), "the failure said nothing");
-        let Ret::Str(again) = k.syscall(1, Call::Errstr).unwrap() else { panic!() };
+        let Ret::Str(again) = k.syscall(1, Call::Errstr { buf: String::new() }).unwrap() else {
+            panic!()
+        };
         assert!(again.is_empty(), "errstr exchanges; it does not repeat");
+
+        // The other half of the exchange, which is the whole of `werrstr`:
+        // what the caller hands over becomes the error string.
+        k.syscall(1, Call::Errstr { buf: "mine now".into() }).unwrap();
+        let Ret::Str(mine) = k.syscall(1, Call::Errstr { buf: String::new() }).unwrap() else {
+            panic!()
+        };
+        assert_eq!(mine, "mine now");
     }
 
     /// Every call goes through one door, and `/dev/sysstat` counts them.
@@ -724,7 +791,7 @@ mod syscalls {
     fn the_kernel_counts_the_calls_it_answers() {
         let mut k = booted();
         assert_eq!(k.syscalls, 0);
-        let _ = k.syscall(1, Call::Errstr);
+        let _ = k.syscall(1, Call::Errstr { buf: String::new() });
         let _ = k.syscall(1, Call::Open { path: "/nothing".into(), mode: 0 });
         assert_eq!(k.syscalls, 2, "a failed call is still a call");
     }
