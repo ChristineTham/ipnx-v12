@@ -18,7 +18,6 @@
 
 use crate::chan::Chan;
 use crate::dev::{self, Dev, DevId};
-use crate::ninep::Qid;
 use crate::ns::Ns;
 use std::collections::HashMap;
 
@@ -103,7 +102,19 @@ impl Devtab {
     /// `devtab[c->type]->walk(...)` and the rest. Every device operation goes
     /// through these, so `#M` is dispatched the same way as anything else
     /// from a caller's point of view.
-    pub fn dwalk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+    /// `cclone` — see [`crate::dev::Dev::cclone`].
+    pub fn dcclone(&mut self, c: &Chan) -> Result<Chan, String> {
+        if c.dev == DevId::Mnt {
+            let c = c.clone();
+            return self.with_mnt(|m, tab| {
+                let mut w = Wire::new(&c, m, tab)?;
+                m.cclone(&mut w, &c)
+            })?;
+        }
+        self.get(c.dev).ok_or("no such device")?.cclone(c)
+    }
+
+    pub fn dwalk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String> {
         if c.dev == DevId::Mnt {
             let (c, name) = (c.clone(), name.to_string());
             return self.with_mnt(|m, tab| {
@@ -282,14 +293,22 @@ fn elems(path: &str) -> Vec<String> {
 /// This is where the namespace and the device table meet, and it is checked at
 /// EVERY component rather than once against a prefix — which is what makes a
 /// bind visible through every path that reaches the file.
-fn domount(ns: &Ns, c: Chan) -> Chan {
+/// `domount` — step onto whatever is mounted here.
+///
+/// **What comes back is the caller's OWN copy** (`cunique`, `chan.c:586`).
+/// The channel in a mount table is shared by everything that resolves through
+/// it, and a `create` MOVES a channel — so handing out the namespace's own
+/// would move the mount itself. It did: a `create` through a mount walked the
+/// server's root fid onto the new file, and nothing resolved through that
+/// mount again.
+fn domount(tab: &mut Devtab, ns: &Ns, c: Chan) -> Result<Chan, String> {
     match ns.findmount(&c) {
         Some(els) if !els.is_empty() => {
-            let mut m = els[0].chan.clone();
+            let mut m = tab.dcclone(&els[0].chan)?;
             m.path = c.path.clone(); // the name is how we got here, not where we landed
-            m
+            Ok(m)
         }
-        _ => c,
+        _ => Ok(c),
     }
 }
 
@@ -310,15 +329,15 @@ pub fn walk(
         // from; this subset does not carry that yet, so `..` walks the device
         // and is honest about only that.
         if name != ".." && !nomount {
-            c = domount(ns, c);
+            c = domount(tab, ns, c)?;
         }
         match tab.dwalk(&c, name)? {
-            Some(qid) => c = c.walked(name, qid),
+            Some(next) => c = next,
             None => return Err(format!("'{}' does not exist", name)),
         }
     }
     if !nomount {
-        c = domount(ns, c);
+        c = domount(tab, ns, c)?;
     }
     Ok(c)
 }
@@ -608,8 +627,8 @@ mod tests {
         fn attach(&mut self, _s: &str) -> Result<Chan, String> {
             Ok(Chan::attach(DevId::Srv, 0))
         }
-        fn walk(&mut self, _c: &Chan, _n: &str) -> Result<Option<crate::ninep::Qid>, String> {
-            Ok(Some(self.qid))
+        fn walk(&mut self, c: &Chan, n: &str) -> Result<Option<Chan>, String> {
+            Ok(Some(c.walked(n, self.qid)))
         }
         fn open(&mut self, c: Chan, _m: u16) -> Result<Chan, String> {
             Ok(c)

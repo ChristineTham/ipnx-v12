@@ -117,32 +117,33 @@ impl Dev for ProcDev {
     }
 
     /// Two levels: `#p` holds a directory per pid, and each holds its files.
-    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String> {
         if !c.qid.is_dir() {
             return Err("not a directory".into());
         }
         if name == "." {
-            return Ok(Some(c.qid));
+            return Ok(Some(c.walked(name, c.qid)));
         }
         let (pid, _) = split_qid(c.qid.path);
         if pid == 0 {
             // at `#p`, a name is a pid
             if name == ".." {
-                return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: 0 }));
+                return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: 0 })));
             }
             let Ok(want): Result<Pid, _> = name.parse() else { return Ok(None) };
             if !self.alive(want) {
                 return Ok(None);
             }
-            return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: qid_of(want, Q::Root) }));
+            let q = Qid { qtype: QTDIR, vers: 0, path: qid_of(want, Q::Root) };
+            return Ok(Some(c.walked(name, q)));
         }
         if name == ".." {
-            return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: 0 }));
+            return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: 0 })));
         }
         Ok(PROCDIR
             .iter()
             .find(|e| e.0 == name)
-            .map(|e| Qid { qtype: 0, vers: 0, path: qid_of(pid, e.1) }))
+            .map(|e| c.walked(name, Qid { qtype: 0, vers: 0, path: qid_of(pid, e.1) })))
     }
 
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
@@ -291,7 +292,12 @@ impl Dev for ProcDev {
                 let fd: Fd = word.next().and_then(|w| w.parse().ok()).ok_or("bad fd")?;
                 let p = procs.borrow();
                 let proc = p.get(pid).ok_or(EPROCDIED)?;
-                if !proc.fds.borrow_mut().close(fd) {
+                // `procctl`'s "close n" (`devproc.c:1010`). The device this
+                // channel belongs to is not told here: `#p` cannot reach the
+                // device table, which is exactly what `devtab` being a global
+                // gives Plan 9 and what this kernel has instead in `namec`.
+                // A close through `close(2)` does tell it (`sysfile.c:285`).
+                if proc.fds.borrow_mut().close(fd).is_none() {
                     return Err("fd out of range or not open".into());
                 }
             }
@@ -361,10 +367,8 @@ mod tests {
 
     fn open(d: &mut ProcDev, pid: Pid, name: &str, mode: u16) -> Chan {
         let root = d.attach("").unwrap();
-        let mut dir = root.clone();
-        dir.qid = d.walk(&root, &pid.to_string()).unwrap().expect("no such pid");
-        let mut c = dir.clone();
-        c.qid = d.walk(&dir, name).unwrap().expect(name);
+        let dir = d.walk(&root, &pid.to_string()).unwrap().expect("no such pid");
+        let c = d.walk(&dir, name).unwrap().expect(name);
         d.open(c, mode).unwrap()
     }
 
@@ -483,10 +487,8 @@ mod tests {
         procs.borrow_mut().setuser(1, "none");
         assert!(read(&mut d, 1, "status").contains("none"), "its own is fine");
         let root = d.attach("").unwrap();
-        let mut dir = root.clone();
-        dir.qid = d.walk(&root, &other.to_string()).unwrap().unwrap();
-        let mut c = dir.clone();
-        c.qid = d.walk(&dir, "status").unwrap().unwrap();
+        let dir = d.walk(&root, &other.to_string()).unwrap().unwrap();
+        let c = d.walk(&dir, "status").unwrap().unwrap();
         assert!(d.open(c, OREAD).is_err(), "none must not read another's state");
     }
 

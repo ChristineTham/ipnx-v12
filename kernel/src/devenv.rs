@@ -98,18 +98,18 @@ impl Dev for EnvDev {
         Ok(Chan::attach(DevId::Env, 0))
     }
 
-    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String> {
         if !c.qid.is_dir() {
             return Err("not a directory".into());
         }
         if name == ".." || name == "." {
-            return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: 0 }));
+            return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: 0 })));
         }
         if !self.egrp().borrow().contains_key(name) {
             return Ok(None);
         }
         let path = self.qid(name);
-        Ok(Some(Qid { qtype: 0, vers: 0, path }))
+        Ok(Some(c.walked(name, Qid { qtype: 0, vers: 0, path })))
     }
 
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
@@ -227,8 +227,7 @@ mod tests {
         let (mut d, _) = env();
         make(&mut d, "path", b"/bin");
         let dir = d.attach("").unwrap();
-        let mut c = dir.clone();
-        c.qid = d.walk(&dir, "path").unwrap().expect("no /env/path");
+        let mut c = d.walk(&dir, "path").unwrap().expect("no /env/path");
         assert_eq!(d.read(&mut c, 64, 0).unwrap(), b"/bin");
     }
 
@@ -242,8 +241,7 @@ mod tests {
         procs.borrow_mut().get_mut(1).unwrap().env = g;
         let mut b = EnvDev::new(Rc::new(RefCell::new(Up { pid: 1, procs })));
         let dir = b.attach("").unwrap();
-        let mut c = dir.clone();
-        c.qid = b.walk(&dir, "user").unwrap().expect("not shared");
+        let mut c = b.walk(&dir, "user").unwrap().expect("not shared");
         assert_eq!(b.read(&mut c, 64, 0).unwrap(), b"kitty");
     }
 

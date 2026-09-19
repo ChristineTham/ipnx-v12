@@ -5,12 +5,12 @@ other document carries it.
 
 Measured 2026-09-19.
 
-## The kernel — 7,483 lines of Rust, no dependencies
+## The kernel — 8,176 lines of Rust, no dependencies
 
 | | |
 |---|---|
 | `chan.rs` | `Chan` — the object every name resolves to |
-| `dev.rs` | the device table, Plan 9's `struct Dev`; nine letters (`/ \| s M p d e c ¤`); `devdir`, `devdirread` and the permission check every device shares |
+| `dev.rs` | the device table, Plan 9's `struct Dev`; ten letters (`/ \| s M p d e c ¤ 9`); `devdir`, `devdirread`, `cclone` and the permission check every device shares |
 | `devroot.rs` | `#/` — `#/` and `boot` from `rootdir[]`, plus the ten empty directories `rootreset` adds for a first process to bind onto; every write is `Egreg` |
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed |
 | `devproc.rs` | `#p` — the process table as files: `status`, `ns` as the bind lines that rebuild it, `fd`, and `ctl` where a write kills |
@@ -18,6 +18,7 @@ Measured 2026-09-19.
 | `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, clunk. Reached through the table's dispatcher, which takes it out while it runs |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
 | `devsrv.rs` | `#s` — post a file descriptor's NUMBER, and an open of the name answers with the channel behind it |
+| `devvirtio9p.rs` | `#9` — a channel to a 9P server the MACHINE provides. It marshals nothing: `#M` writes a T-message down it and reads the R-message back, as it would down a TCP connection |
 | `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` returns the channel fd 3 holds, so a dup IS an open |
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators |
@@ -28,14 +29,17 @@ Measured 2026-09-19.
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-142 kernel tests, and 16 in `hosts/ipnx` — five that run a guest module against a real kernel, and eleven that run the real rc.
+144 kernel tests, and 21 in `hosts/ipnx` — five that run a guest module against a real kernel, and sixteen that run the real rc.
 
-## The host — `hosts/ipnx`, 1,014 lines in two files
+## The host — `hosts/ipnx`, three files
 
 `machine.rs` is the machine: `procsetup`, `todget` and `touser` over wasmtime,
-and the import table that is this architecture's `9syscall`. `main.rs` is the
-boot: the device table — which is what a Plan 9 kernel's configuration file is,
-`mkdevc` turning a `dev` list into `devtab[]` — the binds, and one command.
+and the import table that is this architecture's `9syscall`. `store.rs` is the
+filesystem the machine serves — qemu's `-fsdev local` half, a host directory
+exported over 9P. `main.rs` is `startboot` (`initcode.c:21`): the device
+table — which is what a Plan 9 kernel's configuration file is, `mkdevc`
+turning a `dev` list into `devtab[]` — three opens of `#c/cons`, the binds,
+the mount, and `exec`.
 
 ```
 % cargo run -p ipnx -- echo hello
@@ -126,10 +130,10 @@ rather than reporting a number nothing produced.
 | `libc/wasm/` | the machine-dependent half. Plan 9 generates it from `9syscall/sys.h`; this machine's trap instruction is an import (`sys.c`), its `brk_` is `memory.grow` (`sbrk.c`), its `main9.s` is called with the argument block's address (`main9.c`), and `procrfork.c` is how a process makes a process |
 | `libc/{port,fmt,9sys}/` | vendored verbatim from `plan9/sys/src/libc/` |
 | `rc/` | Plan 9's rc, with `ipnx.c` as its platform file — it ships three of those and the mkfile picks one — and `haventfork.c`, Plan 9's own file for a system that cannot fork |
-| `cmd/` | `echo`, `cat`, `ls`, a cut-down `tr`, and `args` |
+| `cmd/` | `echo`, `cat`, `ls`, `mkdir`, `rm`, a cut-down `tr`, and `args` |
 | `mk.sh` | the build. `weaken.py` beside it restores common-symbol semantics for rc.h's tentative definitions, which the wasm backend has none of |
 
-**`rc` runs, and it runs on the console.** `cargo run -p ipnx` boots the
+**`rc` runs, and it runs on the console, with a filesystem under it.** `cargo run -p ipnx` boots the
 kernel, opens `#c/cons` three times, binds the namespace, and executes Plan
 9's rc — compiled to wasm, over a libc whose system calls are this machine's
 imports. rc works out that it is interactive by asking what fd 0 is:
@@ -140,10 +144,17 @@ imports. rc works out that it is interactive by asking what fd 0 is:
 hello
 % echo shouting | tr a-z A-Z
 SHOUTING
+% echo kept > /root/note
 ```
 
-Eleven tests in `hosts/ipnx` run the real thing — five typing at a scripted
-console, five running a script, and one making a second process. They need
+`/root` is what the machine serves: `hosts/ipnx/src/store.rs` exports a host
+directory (`$HOME/lib/ipnx`, or `IPNX_STORE`) over 9P, `#9/0` is the channel
+to it, and boot mounts it exactly as `boot.c:171` does. A file written there
+is a file on the host, so it is still there after the next boot.
+
+Twenty-one tests in `hosts/ipnx` run the real thing — six typing at a scripted
+console, five booting twice into a real store, five running a script, and five
+driving a guest module directly. They need
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
 and say so rather than passing quietly.
 
@@ -154,9 +165,10 @@ fails, and will until it does.
 
 The phases are in [implementation.md](implementation.md). P0–P3 are done.
 
-**P4 is half done.** Its acceptance is two things. *"`rc` reads and writes
-`/dev/cons`"* — it does, and `ipnx` boots to an interactive shell on the
-terminal. *"A file written through the storage server survives a boot"* — not
-yet: it needs a way for the embedding's filesystem to reach a mount, and Plan
-9's own answer to that is a device this kernel does not carry
-(`#9`, `pc/devvirtio9p.c:1227`). Proposed, not built.
+**P4 is done.** Both halves of its acceptance: *"`rc` reads and writes
+`/dev/cons`"* — it does, and `ipnx` boots to an interactive shell — and *"a
+file written through the storage server survives a boot"* — it does, through
+`#9` and an ordinary `mount`. What P4 said it would expose is what is left:
+nothing assembles any of this at boot except `hosts/ipnx` itself, in Rust.
+That is P5 — `/namespace` and `/rc/bin/termrc`, the boot in the system's own
+terms.

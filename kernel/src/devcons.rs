@@ -356,17 +356,17 @@ impl Dev for Cons {
         Ok(Chan::attach(DevId::Cons, 0))
     }
 
-    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String> {
         if c.qid.path != Q::Dir as u64 {
             return Err("not a directory".into());
         }
         if name == ".." || name == "." {
-            return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: Q::Dir as u64 }));
+            return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: Q::Dir as u64 })));
         }
         Ok(CONSDIR
             .iter()
             .find(|e| e.0 == name)
-            .map(|e| Qid { qtype: 0, vers: 0, path: e.1 as u64 }))
+            .map(|e| c.walked(name, Qid { qtype: 0, vers: 0, path: e.1 as u64 })))
     }
 
     /// `consopen` (`devcons.c:692`) — one file needs to know it was opened.
@@ -707,8 +707,7 @@ mod tests {
 
     fn open(d: &mut Cons, name: &str, mode: u16) -> Chan {
         let dir = d.attach("").unwrap();
-        let mut c = dir.clone();
-        c.qid = d.walk(&dir, name).unwrap().expect(name);
+        let c = d.walk(&dir, name).unwrap().expect(name);
         d.open(c, mode).unwrap()
     }
 

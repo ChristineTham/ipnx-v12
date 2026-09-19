@@ -69,31 +69,43 @@ ABI. The conformance suite binds all three.
   creates. Flagless `rfork` **shares** the namespace; `RFNAMEG` copies;
   `RFCNAMEG` starts it empty — the same three-way rule the fd table and the
   environment follow.
-- **The Dev table** is `struct Dev` (`portdat.h`): `attach walk stat open
-  create close read write remove wstat`. Omitted from it are `reset`, `init`,
-  `shutdown` and `power` (hardware lifecycle), `bread`/`bwrite` (the block fast
-  path) and `config`.
+- **The Dev table** is `struct Dev` (`portdat.h:241`): a letter, a name and
+  seventeen function pointers, **and no state**. That is why it can be reached
+  from anywhere: a device's own state lives in its file's globals, outside the
+  table — `static Srv *srv` (`devsrv.c:21`), `pipealloc` (`devpipe.c:22`),
+  `struct Mntalloc` (`devmnt.c:48`). Omitted from the seventeen are `reset`,
+  `init`, `shutdown` and `power` (hardware lifecycle) and `bread`/`bwrite`
+  (the block fast path, which takes a `Block` this kernel has none of).
+- **A walk produces the new CHANNEL**, as `devwalk` fills in `nc`
+  (`dev.c:169`). Not a qid: a channel through `#M` carries the FID the server
+  knows it by, and a walk is what mints one.
+- **`cclone` is how a channel becomes the caller's own** — a walk of NO names
+  (`chan.c:837`). `namec` takes one before it opens, removes or creates, and
+  the reason is in Plan 9's own comment: *"We need our own copy of the Chan
+  because we're about to send a create, which will move it."* A channel taken
+  out of a mount table is shared by everything that resolves through it.
 
 **THE DEVICE LETTERS ARE PLAN 9'S, AND THERE IS NO EXCEPTION.** A device exists
 here only if Plan 9 has one, means the same by it, and spells it with the same
-letter. Seven, each because orchestrating processes requires it:
+letter. Ten:
 
   | dev | why the kernel has it |
   |---|---|
-  | `/` | **devroot** — a namespace starts somewhere. A fixed table of empty mount points to bind over; writes refused, as `rootwrite` refuses them |
+  | `/` | **devroot** — a namespace starts somewhere. `rootdir[]`'s two entries plus the ten empty directories `rootreset` adds for a first process to bind over; writes refused, as `rootwrite` refuses them |
   | `\|` | **devpipe** — two processes talk when neither serves the other. `pipe(2)` IS an attach of this device, not a second mechanism |
   | `s` | **devsrv** — a posted channel kept alive by name, so a process that did not inherit it can find a server |
   | `M` | **devmnt** — the mount driver, and the only place wire 9P is marshalled. Not attachable by name: `mntattach` takes an internal struct, so it is reached only through `mount()` |
   | `p` | **devproc** — processes as files. The kernel holds that state, so the kernel serves it |
   | `d` | **devdup** — a process's own descriptors as files |
   | `e` | **devenv** — the environment group, which `rfork`'s `ENVG` and `CENVG` exist to share, copy or clear |
+  | `c` | **devcons** — all 23 of `consdir[]`. The console's line discipline is here because `port/devcons.c` keeps it there; the machine supplies only `screenputs` and the keyboard's characters. The rest is the kernel's own state as files |
+  | `¤` | **devcap** — the only way a process becomes another user: eve mints a capability, a process spends it once |
+  | `9` | **devvirtio9p** — a CHANNEL to a 9P server the machine provides, and nothing else. `pc/devvirtio9p.c:1227`; its own comment is this system's situation, *"mount a host directory … with no network in the path"*. A 9legacy device, absent from `plan9-stock` |
 
-**What is NOT here, and why it is not an omission.** `#c` cons: Plan 9 has it
-because its kernel drives a uart and a screen, and this one drives nothing — a
-console is a file server. `#i` draw, `#m` mouse: the same, and emca is
-userspace entirely. Any letter Plan 9 lacks — a fetcher, a versioning layer,
-host files — is not a device at all; it is a file server, which is what Plan 9
-would have made it.
+**What is NOT here, and why it is not an omission.** `#i` draw and `#m` mouse
+are hardware this machine has none of, and emca is userspace entirely. Any
+letter Plan 9 lacks — a fetcher, a versioning layer, host files — is not a
+device at all; it is a file server, which is what Plan 9 would have made it.
 
 > **Every deviation from this needs Christine's approval, and the default
 > answer is no.** A structure can be Plan 9's in vocabulary and something else

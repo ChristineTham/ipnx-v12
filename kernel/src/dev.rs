@@ -12,7 +12,6 @@
 //! block fast path, `config` is device configuration at boot.
 
 use crate::chan::Chan;
-use crate::ninep::Qid;
 
 /// The device letters this kernel has: nine. Plan 9 has twenty-four.
 ///
@@ -77,6 +76,24 @@ pub enum DevId {
     /// capability into `caphash`; a process spends it through `capuse`
     /// (`devcap.c:215`). One use each — `remcap` unlinks it.
     Cap,
+    /// `#9` — virtio9p: a CHANNEL to a 9P server the machine provides, and
+    /// nothing else. `pc/devvirtio9p.c:1227`, whose own comment is this
+    /// system's situation exactly:
+    ///
+    /// > *mount a host directory exported by qemu's `-device
+    /// > virtio-9p-pci` / `-fsdev local` directly over a virtqueue, with no
+    /// > network in the path.*
+    /// >
+    /// > ```text
+    /// > bind -a '#9' /dev
+    /// > mount -c '#9/0' /n/host
+    /// > ```
+    ///
+    /// It marshals nothing: `#M` writes a whole T-message down the channel
+    /// and reads the R-message back, exactly as it would down a TCP
+    /// connection. This is a 9legacy device — not in `plan9-stock` — and it
+    /// is configured into the shipped kernels (`pc/pcf:11`).
+    Virtio9p,
 }
 
 impl DevId {
@@ -91,6 +108,7 @@ impl DevId {
             DevId::Env => 'e',
             DevId::Cons => 'c',
             DevId::Cap => '\u{a4}',
+            DevId::Virtio9p => '9',
         }
     }
 
@@ -108,6 +126,7 @@ impl DevId {
             DevId::Env => "env",
             DevId::Cons => "cons",
             DevId::Cap => "cap",
+            DevId::Virtio9p => "virtio9p",
         }
     }
 
@@ -122,6 +141,7 @@ impl DevId {
             'e' => DevId::Env,
             'c' => DevId::Cons,
             '\u{a4}' => DevId::Cap,
+            '9' => DevId::Virtio9p,
             _ => return None,
         })
     }
@@ -145,7 +165,36 @@ pub trait Dev {
 
     /// Walk one name. `None` means "no such file" — an ordinary answer, not an
     /// error, because that is how a union walk tries the next element.
-    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String>;
+    /// `walk` — **the device produces the NEW CHANNEL**, as `devwalk` fills
+    /// in `nc` (`dev.c:169`, `Walkqid* (*walk)(Chan*, Chan*, char**, int)`).
+    ///
+    /// It returned a qid and let the caller build the channel, which works
+    /// for every device whose channels carry nothing of the device's own —
+    /// and not for `#M`, where a walk MINTS A FID and the channel is the only
+    /// place to keep it. The mount driver walked to a new fid and dropped it,
+    /// so every channel through a mount carried the mount root's fid: a
+    /// `create` then moved the root onto the new file, and the next name
+    /// resolved through it was "unknown fid".
+    ///
+    /// `Ok(None)` is *"no such name here"*, which a union walk answers by
+    /// trying the next element — not an error.
+    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String>;
+
+    /// `cclone` (`chan.c:837`) — *"our own copy"*, which Plan 9 gets by
+    /// walking NO names: `devtab[c->type]->walk(c, nil, nil, 0)`.
+    ///
+    /// `namec` takes one before it opens, removes or creates (`chan.c:1479`,
+    /// `:1611`), and the comment there says why: *"We need our own copy of
+    /// the Chan because we're about to send a create, which will move it."*
+    ///
+    /// **The default is the copy itself**, because a channel to a device in
+    /// this kernel carries nothing the device also knows about — the same
+    /// reason `devclone` is a `memmove` for them. `#M` overrides it, where a
+    /// channel carries a fid the server holds and a copy of the number is not
+    /// a copy of the file.
+    fn cclone(&mut self, c: &Chan) -> Result<Chan, String> {
+        Ok(c.clone())
+    }
 
     /// `Chan* (*open)(Chan*, int)` (`portdat.h:250`). **It returns a
     /// channel**, which is not ceremony: `devdup`'s open answers with the

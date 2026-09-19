@@ -128,22 +128,26 @@ impl Dev for Root {
         Ok(Chan::attach(DevId::Root, 0))
     }
 
-    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String> {
         if !c.qid.is_dir() {
             return Err("not a directory".into());
         }
         if name == ".." || name == "." {
             // Two levels, and `..` from either lands at `#/`, as `/..` is `/`.
-            return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: QROOT }));
+            return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: QROOT })));
         }
         // At `#/` the only name is `boot`; the files are inside it.
         if c.qid.path == QROOT {
             if name == "boot" {
-                return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: QBOOT }));
+                return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: QBOOT })));
             }
-            return Ok(self.dirs.iter().find(|e| e.name == name).map(|e| e.qid));
+            return Ok(self
+                .dirs
+                .iter()
+                .find(|e| e.name == name)
+                .map(|e| c.walked(name, e.qid)));
         }
-        Ok(self.files.iter().find(|e| e.name == name).map(|e| e.qid))
+        Ok(self.files.iter().find(|e| e.name == name).map(|e| c.walked(name, e.qid)))
     }
 
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
@@ -214,10 +218,8 @@ mod tests {
         r.addbootfile("init", b"the image".to_vec());
         let c = r.attach("").unwrap();
         assert!(r.walk(&c, "init").unwrap().is_none(), "not at the root");
-        let bq = r.walk(&c, "boot").unwrap().expect("#/boot");
-        let b = c.walked("boot", bq);
-        let qid = r.walk(&b, "init").unwrap().expect("#/boot/init");
-        let f = b.walked("init", qid);
+        let b = r.walk(&c, "boot").unwrap().expect("#/boot");
+        let f = r.walk(&b, "init").unwrap().expect("#/boot/init");
         let mut f = r.open(f, crate::chan::mode::OEXEC).unwrap();
         assert_eq!(r.read(&mut f, 100, 0).unwrap(), b"the image");
     }

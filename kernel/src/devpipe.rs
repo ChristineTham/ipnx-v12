@@ -69,7 +69,7 @@ impl Dev for PipeDev {
         Ok(Chan::attach(DevId::Pipe, (self.pipes.len() - 1) as u32))
     }
 
-    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String> {
         if c.qid.path != QDIR {
             return Err("not a directory".into());
         }
@@ -78,7 +78,8 @@ impl Dev for PipeDev {
             "data1" => Some(Qid { qtype: 0, vers: 0, path: QDATA1 }),
             ".." | "." => Some(Qid { qtype: QTDIR, vers: 0, path: QDIR }),
             _ => None,
-        })
+        }
+        .map(|q| c.walked(name, q)))
     }
 
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
@@ -168,10 +169,8 @@ mod tests {
     fn pipe() -> (PipeDev, Chan, Chan) {
         let mut d = PipeDev::new();
         let dir = d.attach("").unwrap();
-        let mut a = dir.clone();
-        a.qid = d.walk(&dir, "data").unwrap().unwrap();
-        let mut b = dir.clone();
-        b.qid = d.walk(&dir, "data1").unwrap().unwrap();
+        let a = d.walk(&dir, "data").unwrap().unwrap();
+        let b = d.walk(&dir, "data1").unwrap().unwrap();
         let a = d.open(a, ORDWR).unwrap();
         let b = d.open(b, ORDWR).unwrap();
         (d, a, b)
@@ -206,8 +205,7 @@ mod tests {
     fn each_attach_mints_its_own_pipe() {
         let (mut d, mut a, _) = pipe();
         let dir = d.attach("").unwrap();
-        let mut other = dir.clone();
-        other.qid = d.walk(&dir, "data1").unwrap().unwrap();
+        let mut other = d.walk(&dir, "data1").unwrap().unwrap();
         d.write(&mut a, b"mine", 0).unwrap();
         assert!(d.read(&mut other, 16, 0).unwrap().is_empty(), "two pipes shared a queue");
     }

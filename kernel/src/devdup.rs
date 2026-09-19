@@ -72,12 +72,12 @@ impl Dev for DupDev {
 
     /// Names are `n` and `nctl`, generated from the fd table rather than
     /// stored — so a walk to a slot that is not open finds nothing.
-    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String> {
         if !c.qid.is_dir() {
             return Err("not a directory".into());
         }
         if name == ".." || name == "." {
-            return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: 0 }));
+            return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: 0 })));
         }
         let (digits, ctl) = match name.strip_suffix("ctl") {
             Some(d) => (d, true),
@@ -90,7 +90,7 @@ impl Dev for DupDev {
         if self.chan(fd).is_none() {
             return Ok(None);
         }
-        Ok(Some(Qid { qtype: 0, vers: 0, path: Self::qid(fd, ctl) }))
+        Ok(Some(c.walked(name, Qid { qtype: 0, vers: 0, path: Self::qid(fd, ctl) })))
     }
 
     /// **The whole device.** `dupopen` returns the channel the fd holds, so
@@ -219,8 +219,7 @@ mod tests {
         let (mut d, procs) = dup();
         let fd = openfd(&procs, 7, 99);
         let dir = d.attach("").unwrap();
-        let mut c = dir.clone();
-        c.qid = d.walk(&dir, &fd.to_string()).unwrap().expect("no such slot");
+        let c = d.walk(&dir, &fd.to_string()).unwrap().expect("no such slot");
         let got = d.open(c, OREAD).unwrap();
         assert_eq!(
             (got.dev, got.devno, got.qid.path),
@@ -259,8 +258,7 @@ mod tests {
         let (mut d, procs) = dup();
         let fd = openfd(&procs, 7, 99);
         let dir = d.attach("").unwrap();
-        let mut c = dir.clone();
-        c.qid = d.walk(&dir, &format!("{fd}ctl")).unwrap().unwrap();
+        let c = d.walk(&dir, &format!("{fd}ctl")).unwrap().unwrap();
         let mut got = d.open(c, OREAD).unwrap();
         assert_eq!(got.dev, DevId::Dup, "the ctl file is #d's own");
         assert_eq!(d.read(&mut got, 16, 0).unwrap(), b"2\n", "ORDWR");

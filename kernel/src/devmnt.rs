@@ -278,7 +278,18 @@ impl MntDev {
         self.mounts.get_mut(c.devno as usize).ok_or_else(|| "not mounted".into())
     }
 
-    pub fn walk(&mut self, t: &mut dyn Transport, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+    /// **The walked channel carries the FID the walk minted**, which is the
+    /// whole reason a device produces the new channel rather than a qid
+    /// (`devwalk` fills `nc`, `dev.c:169`). A `Twalk` names a new fid for the
+    /// file it reached; drop it and every channel through this mount carries
+    /// the mount ROOT's fid, so a `Tcreate` moves the root onto the new file
+    /// and nothing resolves through the mount again.
+    pub fn walk(
+        &mut self,
+        t: &mut dyn Transport,
+        c: &Chan,
+        name: &str,
+    ) -> Result<Option<Chan>, String> {
         let m = self.mnt(c)?;
         let (fid, qids) = m.walk(t, c.fid, &[name])?;
         if qids.is_empty() {
@@ -287,7 +298,20 @@ impl MntDev {
             let _ = m.clunk(t, fid);
             return Ok(None);
         }
-        Ok(Some(qids[0]))
+        let mut nc = c.walked(name, qids[0]);
+        nc.fid = fid;
+        Ok(Some(nc))
+    }
+
+    /// `cclone` — a `Twalk` with NO names, which is how 9P says *"another
+    /// name for this same file"* (`cclone`, `chan.c:842`:
+    /// `devtab[c->type]->walk(c, nil, nil, 0)`).
+    pub fn cclone(&mut self, t: &mut dyn Transport, c: &Chan) -> Result<Chan, String> {
+        let m = self.mnt(c)?;
+        let (fid, _) = m.walk(t, c.fid, &[])?;
+        let mut nc = c.clone();
+        nc.fid = fid;
+        Ok(nc)
     }
 
     pub fn open(&mut self, t: &mut dyn Transport, mut c: Chan, mode: u16) -> Result<Chan, String> {
@@ -365,7 +389,7 @@ impl Dev for MntDev {
     fn attach(&mut self, _spec: &str) -> Result<Chan, String> {
         Err("#M cannot be attached by name — use mount(2)".into())
     }
-    fn walk(&mut self, _c: &Chan, _n: &str) -> Result<Option<Qid>, String> {
+    fn walk(&mut self, _c: &Chan, _n: &str) -> Result<Option<Chan>, String> {
         Err(DIRECT.into())
     }
     fn open(&mut self, _c: Chan, _m: u16) -> Result<Chan, String> {
@@ -526,8 +550,7 @@ mod tests {
     #[test]
     fn a_mounted_server_answers_a_walk_and_a_read() {
         let (mut d, mut t, root, _) = mounted(MAXRPC);
-        let mut c = root.clone();
-        c.qid = d.walk(&mut t, &root, "hello").unwrap().expect("no hello");
+        let mut c = d.walk(&mut t, &root, "hello").unwrap().expect("no hello");
         c.fid = 2;
         let mut c = d.open(&mut t, c, 0).unwrap();
         assert_eq!(d.read(&mut t, &mut c, 64, 0).unwrap(), b"from a server");
@@ -555,8 +578,7 @@ mod tests {
     #[test]
     fn a_read_larger_than_one_message_is_still_whole() {
         let (mut d, mut t, root, _) = mounted(IOHDRSZ as u32 + 1024);
-        let mut c = root.clone();
-        c.qid = d.walk(&mut t, &root, "big").unwrap().unwrap();
+        let mut c = d.walk(&mut t, &root, "big").unwrap().unwrap();
         c.fid = 2;
         let mut c = d.open(&mut t, c, 0).unwrap();
         let got = d.read(&mut t, &mut c, 5000, 0).unwrap();

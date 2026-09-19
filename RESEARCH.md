@@ -3017,3 +3017,118 @@ took another's value. Three further facts came with the fix:
   hold a whole stage's output. rc starts the WRITING stage first
   (`haventfork.c:131`), so this is correct for two stages and bounded by the
   pipe for large ones.
+
+---
+
+## §12 — What building the console and the store measured, 2026-09-19
+
+P4 put `rc` on a real console and a real filesystem. As in §11, everything
+below was found by running the result.
+
+### The console belongs in the kernel, and the plan said otherwise
+
+`docs/implementation.md` had P4 build *"the console and storage as **userspace
+file servers**"*. The reference says otherwise and that decides it: Plan 9's
+`cons` and `consctl` are `#c`'s, in `port/devcons.c`, and what the machine
+supplies is two named things —
+
+| | |
+|---|---|
+| `screenputs` | `devcons.c:12`: `void (*screenputs)(char*, int) = nil`, a function pointer the architecture fills, called by `putstrn0` |
+| the keyboard's characters | `kbdputc` (`devcons.c:525`) is called at interrupt time, stages runes, and `qproduce`s them into `kbdq`; `consread` blocks in `qread(kbdq, &ch, 1)` |
+
+Everything between them — `kbd.raw`, backspace, `^U`, `^D`, the `kbdq`/`lineq`
+split that makes a read answer one whole line — is PORTABLE code in
+`port/devcons.c`. Putting the console in userspace would have been the
+deviation, not avoiding one.
+
+**The one difference, named where it is:** Plan 9's `consread` blocks while an
+interrupt fills a queue behind it. This machine has no interrupts, so the
+blocking read is a call outward, made at the same point with the same meaning.
+A terminal that ends has no Plan 9 counterpart — a keyboard does not end — so
+it is treated as the `^D` its user would have typed.
+
+### `initcode.c` is the boot, and it is nine lines
+
+`plan9/sys/src/9/port/initcode.c:21` is the whole of what a Plan 9 kernel's
+first process does, and `startboot` here is the same nine lines: three opens
+of `#c/cons` (**three opens, not dups** — each descriptor gets its own
+offset), `bind #c /dev`, `bind #e /env` with `MCREATE`, `bind #s /srv`, then
+`exec`. Three binds are added on top, each a boot script's job on Plan 9
+rather than an invention.
+
+Which measured a defect: **`bind(2)`'s `MCREATE` (`libc.h:559`) was being
+dropped**, so `bind -c` did nothing and a create in a union landed wherever
+the walk did.
+
+### A fourth defect in 9legacy's no-fork path
+
+Joining the three in §11, and found by asking the shell what it thought a
+command's status was:
+
+| | |
+|---|---|
+| **`addwaitpid` is never called** | `havefork.c:230` calls it after forking; `haventfork.c`'s `execforkexec` does not. So `havewaitpid` says no, `Waitfor` returns before it waits, `setstatus` is never reached — and `$status` keeps whatever it last held. **Every failing command looked like a succeeding one** to every `if` and `&&` in every script |
+
+### `#9` — how a host filesystem reaches a mount
+
+Plan 9's own answer, and it is in 9legacy: **`bootvirtio9p.c`**, a boot method
+whose whole body is `open("#9/0", ORDWR)`, and `boot.c:171` mounting what it
+returns. The device behind it is `pc/devvirtio9p.c:1227`, `Dev
+virtio9pdevtab = { '9', "virtio9p", … }`, whose comment is this system's
+situation word for word:
+
+> *mount a host directory exported by qemu's `-device virtio-9p-pci` /
+> `-fsdev local` directly over a virtqueue, with no network in the path.*
+>
+> *devmnt drives this chan like a tcp connection: it `write()`s a whole
+> T-message and reads the reply back as a byte stream reassembled by the
+> `size[4]` prefix.*
+
+So the device marshals nothing. It is absent from `plan9-stock` — a 9legacy
+addition — and configured into the shipped kernels (`pc/pcf:11`,
+`pc/pccpuf:11`). Two details of its contract are load-bearing and are kept:
+`v9open` is `Einuse` when the channel is already open (`:1110`), because one
+reply stream cannot be shared; and `v9read` answers bytes of ONE R-message and
+never spans two (`:1171`), which is what lets `#M` reassemble by the prefix.
+
+Its 9P2000.u shim (`tshim`, `rfixup`) has no counterpart here: that exists
+*"because qemu's 9pfs speaks only 9P2000.u"*, and the server this machine
+provides speaks 9P2000.
+
+### And the two defects mounting anything would have found
+
+Both are in the same place — a channel is the only thing that can carry what a
+server knows — and neither could be seen with a test server that ignores fids.
+
+| | |
+|---|---|
+| **a walk threw away the fid it minted** | `Dev::walk` answered a QID and let the caller build the channel. `struct Dev`'s walk is `Walkqid* (*walk)(Chan*, Chan*, char**, int)` and **fills in `nc`** (`dev.c:169`), because for `#M` a walk mints a fid and the channel is the only place to keep it. Every channel through a mount therefore carried the mount ROOT's fid |
+| **and `create` moves a fid** | so a create through a mount walked the server's root fid onto the new file, and nothing resolved through that mount again. Plan 9 takes `cunique` first (`chan.c:1611`) and says why: *"We need our own copy of the Chan because we're about to send a create, which will move it."* `cclone` is a walk of NO names (`chan.c:842`) |
+
+`cunique` is taken before an open or a remove too (`chan.c:1479`), and at the
+end of every walk (`:1118`). Here the equivalent place is `domount`: a channel
+taken out of a mount table is shared by definition, and that is where the
+clone goes.
+
+### `close(2)` never reached a device
+
+`sysclose` → `fdclose` → `cclose` (`sysfile.c:285`, `chan.c:490`), and the
+last of those is `devtab[c->type]->close(c)`. This kernel dropped the
+descriptor and told nobody, so **nothing any device does on a close ever
+happened**: `consctl` never put the console back out of raw mode, `#9` never
+took its server back. The count that decides it is the channel's own —
+`if(decref(c)) return;` — because a dup shares the channel and closing one
+name for it is not closing the file.
+
+### Still different, and named rather than hidden
+
+* **`Isatty` asks the file, not its name.** plan9.c uses `fd2path`, which this
+  kernel does not have (`docs/syscalls.md`: *"a convenience over state the
+  process already holds"*). The state it is a convenience over is a `stat`:
+  `stat(5)` carries the device letter, and the console is the file called
+  `cons` served by `#c` — which is what plan9.c's two string comparisons are
+  both trying to establish.
+* **`procctl`'s `close n` does not reach the device** (`devproc.c`), because
+  `#p` cannot reach the device table. That is exactly what `devtab` being a
+  global gives Plan 9 and what this kernel has in `namec` instead.

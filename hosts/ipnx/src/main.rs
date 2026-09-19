@@ -10,6 +10,7 @@
 //! chosen here and nowhere else.
 
 mod machine;
+mod store;
 
 use ipnx_kernel::{
     chan,
@@ -22,8 +23,9 @@ use ipnx_kernel::{
     devproc::ProcDev,
     devroot::Root,
     devsrv::SrvDev,
+    devvirtio9p::{Nineserver, Virtio9p},
     dev::DevId,
-    Call, Kernel,
+    Call, Kernel, Ret,
 };
 use std::rc::Rc;
 
@@ -111,7 +113,7 @@ impl Console for Host {
 ///
 /// Absent, and for one reason each: `#i` (draw) and `#m` (mouse) are hardware
 /// this machine has none of.
-const LETTERS: [DevId; 9] = [
+const LETTERS: [DevId; 10] = [
     DevId::Root,
     DevId::Pipe,
     DevId::Srv,
@@ -121,6 +123,7 @@ const LETTERS: [DevId; 9] = [
     DevId::Env,
     DevId::Cons,
     DevId::Cap,
+    DevId::Virtio9p,
 ];
 
 /// The boot namespace, from `plan9/sys/src/9/port/initcode.c:28`, which is
@@ -159,7 +162,18 @@ const MCREATE: i32 = 4;
 /// so each descriptor has its own offset, and the first is for reading.
 const CONS: &str = "#c/cons";
 
-fn boot(root: Root, host: Box<dyn Console>) -> Result<Kernel, String> {
+/// Where the machine's filesystem is mounted, and how: `boot.c:171` —
+/// `mount(fd, afd, "/root", MREPL|MCREATE, rp)`. The channel comes from
+/// `open("#9/0", ORDWR)`, which is the whole of `connectvirtio9p`
+/// (`boot/bootvirtio9p.c:20`).
+const STORE: &str = "#9/0";
+const ROOT: &str = "/root";
+
+fn boot(
+    root: Root,
+    host: Box<dyn Console>,
+    store: Option<Box<dyn Nineserver>>,
+) -> Result<Kernel, String> {
     let m = machine::Wasm::new()?;
     let mut k = Kernel::new(root, Rc::new(m))?;
     k.tab.add(Box::new(PipeDev::new()));
@@ -169,6 +183,13 @@ fn boot(root: Root, host: Box<dyn Console>) -> Result<Kernel, String> {
     k.tab.add(Box::new(DupDev::new(k.up.clone())));
     k.tab.add(Box::new(EnvDev::new(k.up.clone())));
     k.tab.add(Box::new(CapDev::new(k.up.clone())));
+    // `v9probe` (`v9reset`, `devvirtio9p.c:1066`) — what the machine found.
+    // One server, so one file: `#9/0`.
+    let mut v9 = Virtio9p::new();
+    if let Some(store) = store {
+        v9.add(store);
+    }
+    k.tab.add(Box::new(v9));
     k.tab.add(Box::new(Cons::new(
         "eve",
         k.up.clone(),
@@ -207,6 +228,7 @@ fn startboot(
     argv: &[String],
     extra: &[(&str, &[u8])],
     host: Box<dyn Console>,
+    store: Option<Box<dyn Nineserver>>,
 ) -> Result<String, String> {
     let mut root = Root::new();
     let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -218,7 +240,8 @@ fn startboot(
         root.addbootfile(name, bytes.to_vec());
     }
 
-    let mut k = boot(root, host)?;
+    let has_store = store.is_some();
+    let mut k = boot(root, host, store)?;
 
     // `open(cons, OREAD); open(cons, OWRITE); open(cons, OWRITE);` — three
     // opens of `#c/cons`, before the binds, because `/dev` does not exist
@@ -231,6 +254,29 @@ fn startboot(
     for (what, at, flag) in BINDS {
         k.syscall(1, Call::Bind { name: what.into(), old: at.into(), flag })
             .map_err(|e| format!("bind {what} {at}: {e}"))?;
+    }
+
+    // The root file system, mounted from what the machine serves —
+    // `connectvirtio9p` then `boot.c:171`. A boot with no store is a boot
+    // with nothing that survives it, and says so by having no `/root`.
+    if has_store {
+        let Ret::Fd(fd) = k
+            .syscall(1, Call::Open { path: STORE.into(), mode: chan::mode::ORDWR as i32 })
+            .map_err(|e| format!("open {STORE}: {e}"))?
+        else {
+            return Err("no channel to the machine's file server".into());
+        };
+        k.syscall(
+            1,
+            Call::Mount {
+                fd,
+                afd: -1,
+                old: ROOT.into(),
+                flag: MREPL | MCREATE,
+                aname: String::new(),
+            },
+        )
+        .map_err(|e| format!("mount {STORE} {ROOT}: {e}"))?;
     }
 
     // **argv[0] is the PATH, not the bare name.** Plan 9's init passes "rc"
@@ -255,7 +301,22 @@ fn main() {
     let argv: Vec<String> =
         if args.len() > 1 { args[1..].to_vec() } else { vec!["rc".to_string()] };
 
-    match startboot(&argv, &[], Box::new(Host)) {
+    // The machine's filesystem. `-fsdev local` names a host directory; this
+    // one is `$HOME/lib/ipnx`, and what a program writes under `/root`
+    // is a file there when the process is gone.
+    let dir = std::env::var_os("IPNX_STORE").map(std::path::PathBuf::from).unwrap_or_else(|| {
+        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+        home.unwrap_or_else(|| std::path::PathBuf::from(".")).join("lib/ipnx")
+    });
+    let store: Option<Box<dyn Nineserver>> = match store::Store::new(&dir) {
+        Ok(s) => Some(Box::new(s)),
+        Err(e) => {
+            eprintln!("ipnx: {}: {e}", dir.display());
+            None
+        }
+    };
+
+    match startboot(&argv, &[], Box::new(Host), store) {
         Ok(status) if status.is_empty() => {}
         Ok(status) => {
             eprintln!("ipnx: {}: {status}", argv[0]);
@@ -331,7 +392,7 @@ mod tests {
         for (n, b) in files {
             root.addbootfile(n, b.to_vec());
         }
-        let mut k = boot(root, Box::new(Term::default()))?;
+        let mut k = boot(root, Box::new(Term::default()), None)?;
         k.exec(1, "/boot/init", &["init".to_string()])?;
         let status = k.procs.borrow().status(1);
         Ok(status.unwrap_or_default())
@@ -422,7 +483,7 @@ mod tests {
 "#;
         let mut root = Root::new();
         root.addbootfile("init", wat::parse_str(ARGS).unwrap());
-        let mut k = boot(root, Box::new(Term::default())).unwrap();
+        let mut k = boot(root, Box::new(Term::default()), None).unwrap();
         k.exec(1, "/boot/init", &["init".into(), "second".into()]).unwrap();
         assert_eq!(k.procs.borrow().status(1).as_deref(), Some("second"));
     }
@@ -513,7 +574,7 @@ mod userspace {
         let argv = ["rc".to_string(), "/bin/test.rc".to_string()];
         let files: &[(&str, &[u8])] =
             &[("test.rc", script.as_bytes()), ("greeting", b"a file in the boot list\n")];
-        match startboot(&argv, files, Box::new(term.clone())) {
+        match startboot(&argv, files, Box::new(term.clone()), None) {
             Ok(status) => {
                 assert_eq!(status, "", "rc failed: {}", term.screen());
                 term.screen()
@@ -525,8 +586,17 @@ mod userspace {
     /// Type at the console instead, with no script at all — which is how
     /// `ipnx` itself is started.
     pub(super) fn typing(keys: &str) -> String {
+        typing_at(keys, None)
+    }
+
+    /// The same, with a filesystem the machine serves — which is what makes a
+    /// boot something a file can survive.
+    pub(super) fn typing_at(keys: &str, store: Option<&std::path::Path>) -> String {
         let term = Term::typing(keys);
-        match startboot(&["rc".to_string()], &[], Box::new(term.clone())) {
+        let store: Option<Box<dyn Nineserver>> = store.map(|d| {
+            Box::new(store::Store::new(d).expect("a store")) as Box<dyn Nineserver>
+        });
+        match startboot(&["rc".to_string()], &[], Box::new(term.clone()), store) {
             Ok(_) => term.screen(),
             Err(e) => panic!("{e}"),
         }
@@ -640,5 +710,90 @@ mod console {
     fn dev_cons_is_the_name_of_the_same_file() {
         assert!(typing("echo through the name > /dev/cons\n")
             .contains("through the name\n"));
+    }
+}
+
+/// **P4's storage acceptance**: a file written through the storage server
+/// survives a boot.
+///
+/// The server is what the embedding serves — `#9/0` is a channel to it, and
+/// `mount` does the rest (`boot.c:171`). Each test here boots TWICE into the
+/// same store, which is the only way to tell a file that persisted from a
+/// file that is still in memory.
+#[cfg(test)]
+mod storage {
+    use super::*;
+    use userspace::{typing, typing_at};
+
+    /// A directory of this test's own, gone when it ends.
+    struct Scratch(std::path::PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Scratch {
+            let d = std::env::temp_dir().join(format!("ipnx-test-{name}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&d);
+            std::fs::create_dir_all(&d).expect("a scratch directory");
+            Scratch(d)
+        }
+        fn path(&self) -> &std::path::Path {
+            &self.0
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// **The acceptance.** Two boots: one writes, the other reads. Nothing
+    /// carries over but the store itself.
+    #[test]
+    fn a_file_written_through_the_store_survives_a_boot() {
+        let s = Scratch::new("survives");
+        typing_at("echo kept > /root/note\n", Some(s.path()));
+        let second = typing_at("cat /root/note\n", Some(s.path()));
+        assert!(second.contains("kept\n"), "the second boot did not find it: {second:?}");
+    }
+
+    /// And it is a file on the machine, not a story the kernel tells: the
+    /// host can read it with no kernel in the way.
+    #[test]
+    fn what_was_written_is_a_file_the_machine_holds() {
+        let s = Scratch::new("realfile");
+        typing_at("echo on the disk > /root/thing\n", Some(s.path()));
+        let real = std::fs::read_to_string(s.path().join("thing")).expect("a real file");
+        assert_eq!(real, "on the disk\n");
+    }
+
+    /// A directory made through the mount is a directory on the machine, and
+    /// a name resolves through both.
+    #[test]
+    fn a_directory_made_through_the_mount_is_one() {
+        let s = Scratch::new("dirs");
+        typing_at("mkdir /root/sub\necho deep > /root/sub/file\n", Some(s.path()));
+        assert!(s.path().join("sub").is_dir(), "no directory on the machine");
+        let back = typing_at("cat /root/sub/file\n", Some(s.path()));
+        assert!(back.contains("deep\n"), "{back:?}");
+    }
+
+    /// `ls` reads the mounted directory as `Dir` entries, through `#M`, from
+    /// a server that packed them with `convD2M`. Every layer of the directory
+    /// contract at once.
+    #[test]
+    fn the_mounted_directory_lists() {
+        let s = Scratch::new("listing");
+        typing_at("echo a > /root/alpha\necho b > /root/beta\n", Some(s.path()));
+        let out = typing_at("ls /root\n", Some(s.path()));
+        assert!(out.contains("alpha"), "{out:?}");
+        assert!(out.contains("beta"), "{out:?}");
+    }
+
+    /// A boot with no store has no `/root`, and says so rather than
+    /// pretending to have one.
+    #[test]
+    fn a_boot_with_no_store_has_no_root() {
+        let out = typing("cat /root/anything\n");
+        assert!(out.contains("can't open"), "{out:?}");
     }
 }

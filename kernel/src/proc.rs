@@ -78,14 +78,24 @@ impl Fds {
     pub fn get(&self, fd: Fd) -> Option<&Rc<RefCell<Chan>>> {
         self.slots.get(fd as usize).and_then(|s| s.as_ref())
     }
-    pub fn close(&mut self, fd: Fd) -> bool {
-        match self.slots.get_mut(fd as usize) {
-            Some(s) if s.is_some() => {
-                *s = None;
-                true
-            }
-            _ => false,
-        }
+    /// `fdclose` (`sysfile.c:285`): take the descriptor out of the table and
+    /// `cclose` the channel.
+    ///
+    /// **The channel is answered when the LAST reference to it goes**, which
+    /// is `cclose`'s `if(decref(c)) return;` (`chan.c:496`). A dup shares the
+    /// channel, so closing one name for it must not tell the device the file
+    /// is closed — `Rc` is that reference count, and a count of one means this
+    /// was the last.
+    pub fn close(&mut self, fd: Fd) -> Option<Option<Chan>> {
+        let taken = match self.slots.get_mut(fd as usize) {
+            Some(s) if s.is_some() => s.take()?,
+            _ => return None,
+        };
+        // `decref(c)`: what is left when this handle is dropped.
+        Some(match Rc::try_unwrap(taken) {
+            Ok(cell) => Some(cell.into_inner()),
+            Err(_) => None,
+        })
     }
     /// `dup(2)`: to a given slot, or to the lowest free one when `new` is -1.
     pub fn dup(&mut self, old: Fd, new: Fd) -> Option<Fd> {
@@ -525,7 +535,10 @@ mod tests {
         let mut f = Fds::default();
         let a = f.add(Chan::attach(crate::dev::DevId::Root, 0));
         assert_eq!(f.dup(a, 9), Some(9));
-        assert!(f.close(a));
+        assert!(
+            f.close(a).expect("an open descriptor").is_none(),
+            "fd 9 still holds the channel, so this was not the last reference"
+        );
         assert_eq!(f.dup(9, -1), Some(0), "the lowest free slot");
     }
 

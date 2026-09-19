@@ -81,18 +81,18 @@ impl Dev for SrvDev {
         Ok(Chan::attach(DevId::Srv, 0))
     }
 
-    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String> {
         if !c.qid.is_dir() {
             return Err("not a directory".into());
         }
         if name == ".." || name == "." {
-            return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: 0 }));
+            return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: 0 })));
         }
         Ok(self
             .srv
             .iter()
             .find(|s| s.name == name)
-            .map(|s| Qid { qtype: 0, vers: 0, path: s.path }))
+            .map(|s| c.walked(name, Qid { qtype: 0, vers: 0, path: s.path })))
     }
 
     /// `srvopen`: **returns the posted channel**, not the one it was given.
@@ -255,8 +255,7 @@ mod tests {
 
         // a walk from a fresh attach, as a process that inherited nothing does
         let dir2 = d.attach("").unwrap();
-        let mut c = dir2.clone();
-        c.qid = d.walk(&dir2, "store").unwrap().expect("not posted");
+        let c = d.walk(&dir2, "store").unwrap().expect("not posted");
         let got = d.open(c, OREAD).unwrap();
         assert_eq!((got.dev, got.devno, got.qid.path), (DevId::Pipe, 7, 99));
     }

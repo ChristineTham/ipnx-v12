@@ -80,17 +80,17 @@ impl Dev for CapDev {
         Ok(Chan::attach(DevId::Cap, 0))
     }
 
-    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Qid>, String> {
+    fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String> {
         if !c.qid.is_dir() {
             return Err("not a directory".into());
         }
         if name == ".." || name == "." {
-            return Ok(Some(Qid { qtype: QTDIR, vers: 0, path: Q::Dir as u64 }));
+            return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: Q::Dir as u64 })));
         }
         Ok(CAPDIR
             .iter()
             .find(|e| e.0 == name)
-            .map(|e| Qid { qtype: 0, vers: 0, path: e.1 as u64 }))
+            .map(|e| c.walked(name, Qid { qtype: 0, vers: 0, path: e.1 as u64 })))
     }
 
     /// `capopen` (`devcap.c:95`): `caphash` is eve's alone.
@@ -205,8 +205,7 @@ mod tests {
 
     fn chan(d: &mut CapDev, name: &str) -> Chan {
         let dir = d.attach("").unwrap();
-        let mut c = dir.clone();
-        c.qid = d.walk(&dir, name).unwrap().expect(name);
+        let c = d.walk(&dir, name).unwrap().expect(name);
         c
     }
 

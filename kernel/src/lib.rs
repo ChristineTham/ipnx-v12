@@ -47,6 +47,7 @@ pub mod devpipe;
 pub mod devproc;
 pub mod devroot;
 pub mod devsrv;
+pub mod devvirtio9p;
 pub mod machine;
 pub mod namec;
 pub mod ninep;
@@ -450,14 +451,22 @@ impl Kernel {
                 let c = self.walk_create(up, &path, mode as u16, perm)?;
                 Ok(Ret::Fd(self.newfd(up, c)?))
             }
+            // `sysclose` → `fdclose` → `cclose` (`sysfile.c:285`,
+            // `chan.c:490`). **The device is told, when the last reference
+            // goes.** It was not told at all, so nothing a device does on a
+            // close ever happened: `consctl` never put the console back out
+            // of raw mode, and `#9` never took its server back.
             Call::Close { fd } => {
-                let procs = self.procs.borrow();
-                let p = procs.get(up).ok_or("no such process")?;
-                if p.fds.borrow_mut().close(fd) {
-                    Ok(Ret::Ok)
-                } else {
-                    Err(EBADFD.into())
+                let last = {
+                    let procs = self.procs.borrow();
+                    let p = procs.get(up).ok_or("no such process")?;
+                    let r = p.fds.borrow_mut().close(fd);
+                    r.ok_or(EBADFD)?
+                };
+                if let Some(mut c) = last {
+                    self.tab.dclose(&mut c);
                 }
+                Ok(Ret::Ok)
             }
             Call::Pread { fd, n, off } => {
                 let cell = self.chancell(up, fd)?;
@@ -521,9 +530,7 @@ impl Kernel {
                 let mut ends = Vec::new();
                 for name in ["data", "data1"] {
                     let d = self.tab.get(dev::DevId::Pipe).ok_or(ENODEV)?;
-                    let mut c = dir.clone();
-                    c.qid = d.walk(&dir, name)?.ok_or("no such file")?;
-                    let _ = d;
+                    let c = d.walk(&dir, name)?.ok_or("no such file")?;
                     let c = self.tab.dopen(c, chan::mode::ORDWR)?;
                     ends.push(c);
                 }
@@ -873,7 +880,7 @@ mod syscalls {
         fn attach(&mut self, _s: &str) -> Result<Chan, String> {
             Ok(Chan::attach(dev::DevId::Env, 0))
         }
-        fn walk(&mut self, _c: &Chan, _n: &str) -> Result<Option<ninep::Qid>, String> {
+        fn walk(&mut self, _c: &Chan, _n: &str) -> Result<Option<Chan>, String> {
             Ok(None)
         }
         fn open(&mut self, c: Chan, _m: u16) -> Result<Chan, String> {
@@ -995,6 +1002,80 @@ mod syscalls {
             k.syscall(1, Call::Pread { fd, n: 64, off: -1 }).unwrap(),
             Ret::Data(b"served over 9P".to_vec())
         );
+    }
+
+    /// **`#9` is the wire, and nothing else.** The machine provides a 9P
+    /// server; the device is a channel to it; `mount` does the rest. This is
+    /// `boot.c:171` — `mount(fd, afd, "/root", MREPL|MCREATE, rp)` — with the
+    /// channel got from `open("#9/0", ORDWR)` as `connectvirtio9p` gets it
+    /// (`boot/bootvirtio9p.c:20`).
+    #[test]
+    fn a_server_the_machine_provides_is_mounted_through_hash_nine() {
+        struct Host9P;
+        impl devvirtio9p::Nineserver for Host9P {
+            fn rpc(&mut self, t: &[u8]) -> Result<Vec<u8>, String> {
+                Ok(serve9p(t))
+            }
+        }
+
+        let mut k = booted();
+        let mut d = devvirtio9p::Virtio9p::new();
+        d.add(Box::new(Host9P));
+        k.tab.add(Box::new(d));
+        k.tab.add(Box::new(devmnt::MntDev::new()));
+
+        let Ret::Fd(wire) = k.syscall(1, Call::Open { path: "#9/0".into(), mode: 2 }).unwrap()
+        else {
+            panic!("no channel to the machine's server")
+        };
+        k.syscall(
+            1,
+            Call::Mount {
+                fd: wire,
+                afd: -1,
+                old: "/root".into(),
+                flag: MCREATE,
+                aname: String::new(),
+            },
+        )
+        .expect("mount");
+
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/root/answer".into(), mode: 0 }).unwrap()
+        else {
+            panic!("the server was not reached")
+        };
+        assert_eq!(
+            k.syscall(1, Call::Pread { fd, n: 64, off: -1 }).unwrap(),
+            Ret::Data(b"served over 9P".to_vec())
+        );
+    }
+
+    /// A server takes ONE client: `v9open` is `Einuse` when the channel is
+    /// already open (`devvirtio9p.c:1110`), because one reply stream cannot
+    /// be shared. Closing it hands the server back.
+    #[test]
+    fn hash_nine_serves_one_client_at_a_time() {
+        struct Quiet;
+        impl devvirtio9p::Nineserver for Quiet {
+            fn rpc(&mut self, _t: &[u8]) -> Result<Vec<u8>, String> {
+                Ok(Vec::new())
+            }
+        }
+        let mut k = booted();
+        let mut d = devvirtio9p::Virtio9p::new();
+        d.add(Box::new(Quiet));
+        k.tab.add(Box::new(d));
+
+        let Ret::Fd(first) = k.syscall(1, Call::Open { path: "#9/0".into(), mode: 2 }).unwrap()
+        else {
+            panic!()
+        };
+        assert!(
+            k.syscall(1, Call::Open { path: "#9/0".into(), mode: 2 }).is_err(),
+            "two mounts of one server would interleave their replies"
+        );
+        k.syscall(1, Call::Close { fd: first }).unwrap();
+        assert!(k.syscall(1, Call::Open { path: "#9/0".into(), mode: 2 }).is_ok());
     }
 
     /// `bindmount` resolves the source with `Abind` and the target with
