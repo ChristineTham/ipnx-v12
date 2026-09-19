@@ -20,7 +20,7 @@ Measured 2026-09-19.
 | `devsrv.rs` | `#s` — post a file descriptor's NUMBER, and an open of the name answers with the channel behind it |
 | `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` returns the channel fd 3 holds, so a dup IS an open |
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares |
-| `devcons.rs` | `#c` — all 23 of `consdir[]`. A **reporting** device: identity, this process's numbers, the clock, the kernel's log and name, the generators. The host supplies the clock, entropy, memory figures, its own drivers and `reboot`; the kernel names them |
+| `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators |
 | `ns.rs` | the namespace, keyed by the identity of the channel mounted upon |
 | `namec.rs` | name → channel, with the mount check at every component; all seven of Plan 9's access modes |
 | `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser` |
@@ -28,7 +28,7 @@ Measured 2026-09-19.
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, and `exec` |
 
-137 kernel tests, and 10 in `hosts/ipnx` — five that run a guest module against a real kernel, and five that run the real rc.
+142 kernel tests, and 16 in `hosts/ipnx` — five that run a guest module against a real kernel, and eleven that run the real rc.
 
 ## The host — `hosts/ipnx`, 1,014 lines in two files
 
@@ -112,9 +112,7 @@ boundary.
 nanoseconds, the fast-tick counter and its frequency; `exec` stamps a
 process's start from it, so `/dev/cputime`'s `TReal` is wall time.
 
-No surface. `#c`'s `cons` and `consctl` wait for a host to serve them (P4),
-which is why `ipnx` gives its first process a pipe for fd 1 and prints what
-comes out of it when the process is done.
+No surface.
 
 `/dev/sysstat`'s interrupt, page-fault, tlb and load counters are zero, and
 `cputime`'s `TUser`/`TSys` are charged by nothing yet. Both count honestly
@@ -131,19 +129,21 @@ rather than reporting a number nothing produced.
 | `cmd/` | `echo`, `cat`, `ls`, a cut-down `tr`, and `args` |
 | `mk.sh` | the build. `weaken.py` beside it restores common-symbol semantics for rc.h's tentative definitions, which the wasm backend has none of |
 
-**`rc` runs.** `cargo run -p ipnx -- rc <script>` boots the kernel, binds the
-namespace with `#/boot` at `/bin` and `#c #e #d #p` at `/dev /env /fd /proc`,
-and executes Plan 9's rc — compiled to wasm, over a libc whose system calls
-are this machine's imports:
+**`rc` runs, and it runs on the console.** `cargo run -p ipnx` boots the
+kernel, opens `#c/cons` three times, binds the namespace, and executes Plan
+9's rc — compiled to wasm, over a libc whose system calls are this machine's
+imports. rc works out that it is interactive by asking what fd 0 is:
 
 ```
-% ipnx rc /bin/pipe.rc
-HELLO FROM A PIPELINE
+% ipnx
+% echo hello
+hello
+% echo shouting | tr a-z A-Z
+SHOUTING
 ```
 
-Five tests in `hosts/ipnx` run the real thing: a script, a pipeline of two
-commands, a loop with a variable, a command reading a file the kernel resolved
-by name, and a variable reaching a child through `#e`. They need
+Eleven tests in `hosts/ipnx` run the real thing — five typing at a scripted
+console, five running a script, and one making a second process. They need
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
 and say so rather than passing quietly.
 
@@ -152,8 +152,11 @@ and say so rather than passing quietly.
 The conformance suite lists twelve capabilities and reaches none of them. It
 fails, and will until it does.
 
-The phases are in [implementation.md](implementation.md). P0, P1 and P2 are
-done. **P3 is done**: a libc over the call list, and `rc` — its acceptance is
-*"rc runs a script; a pipeline of two commands works"*, and both do. What it
-exposed is what it said it would: rc needs a console, and the console is not
-in the kernel. That is P4.
+The phases are in [implementation.md](implementation.md). P0–P3 are done.
+
+**P4 is half done.** Its acceptance is two things. *"`rc` reads and writes
+`/dev/cons`"* — it does, and `ipnx` boots to an interactive shell on the
+terminal. *"A file written through the storage server survives a boot"* — not
+yet: it needs a way for the embedding's filesystem to reach a mount, and Plan
+9's own answer to that is a device this kernel does not carry
+(`#9`, `pc/devvirtio9p.c:1227`). Proposed, not built.
