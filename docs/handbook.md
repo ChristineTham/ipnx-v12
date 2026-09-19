@@ -5,8 +5,12 @@ after. The *plan* is [implementation.md](implementation.md).
 
 ## Prerequisites
 
-A Rust toolchain, and the two Plan 9 trees, which are gitignored and never
-built or edited:
+A Rust toolchain; **wasi-sdk** at `~/.local/opt/wasi-sdk` (override with
+`WASI_SDK`), for its wasm backend and nothing else — no wasi is linked, and a
+built binary imports exactly the calls in `userspace/libc/wasm/sys.c`;
+**bison**, for rc's grammar; and **Python 3**, for `userspace/weaken.py`.
+
+And the two Plan 9 trees, which are gitignored and never built or edited:
 
 ```bash
 git clone --depth 1 https://github.com/0intro/9legacy plan9
@@ -18,13 +22,30 @@ difference between 9legacy and the final Labs release can be *attributed*.
 
 ## Build and run
 
+**The userspace first**, because the tests run the real binaries and `cargo`
+cannot build a wasm userspace:
+
 ```bash
-cargo test          # the kernel's own tests, and the conformance suite
-cargo run -p ipnx   # Saranos on this terminal
+bash userspace/mk.sh     # libc, the commands, rc  ->  userspace/root/bin
+cargo test               # the kernel, the host, and the conformance suite
+cargo run -p ipnx -- rc /bin/<script>.rc
+cargo run -p ipnx -- echo hello
 ```
+
+`userspace/build/` and `userspace/root/` are generated and gitignored. Guest
+binaries carry no `.wasm` extension: exec walks the namespace for `/bin/echo`,
+and a freshly built module is indistinguishable from a shipped one.
 
 `cargo test -p conformance -- --nocapture` prints the distance to the demo:
 a checklist of what the system can do, and how much of it is reached.
+
+### Three build flags are load-bearing
+
+| | |
+|---|---|
+| `-fno-builtin` | clang's libcall recogniser otherwise rewrites `strlen`'s own body into a call to `strlen` (RESEARCH §9.4) |
+| `-fms-extensions` | `port/pool.c` is written in kencc's anonymous struct members, and this is clang's name for them |
+| `weaken.py` | the wasm backend has no common symbols at all, so rc.h's tentative definitions each become a strong definition and the link fails with a duplicate for every variable rc declares. It sets the weak bit in the `linking` section, keeping strong the one definition that has an initialiser. RESEARCH §11 has the measurements, including why `--allow-multiple-definition` cannot do it |
 
 ## The working rules
 

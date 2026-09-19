@@ -80,43 +80,49 @@ what is built is [docs/when.md](docs/when.md). Everything else is design documen
 
 ## Commands
 
-Build the guest binaries (requires wasi-sdk at `~/.local/opt/wasi-sdk`, binaryen's
-wasm-opt at `~/.local/opt/binaryen` — override with `WASI_SDK`/`BINARYEN` — the
-host's `bison` for vendored yacc grammars, `go` for the wasip1 citizen, and
-network once for the CPython wasi build (a 26MB download cached in `build/`);
-Apple's clang has no wasm backend). `mk.sh`'s
-`ASYNCIFY` list names the binaries that may bare-fork. Compiling vendored libc source
-REQUIRES `-fno-builtin`: clang's libcall recogniser otherwise rewrites strlen's own body
-into a self-call (measured; RESEARCH §9.4). Two more findings are load-bearing
-(RESEARCH §9.5): `--table-base=4096` keeps wasm's small function-table indexes disjoint
-from rc's operand integers (`codefree` tells ops from operands by comparing `.f` slots),
-and `weaken.mjs` restores common-symbol semantics for rc.h's pre-ANSI tentative
-definitions — the wasm backend refuses `-fcommon` and wasm-ld's
-`--allow-multiple-definition` keeps the *first* definition even over a later
-initialized one (measured: plan9.o's zero `havefork` beat `havefork.c`'s `= 1`):
+Build the guest binaries — the libc, the commands and `rc` — into
+`userspace/root/bin` (requires wasi-sdk at `~/.local/opt/wasi-sdk`, overridable
+with `WASI_SDK`, for its wasm backend alone: nothing here links against wasi,
+and a built binary imports exactly the calls in `userspace/libc/wasm/sys.c`;
+plus `bison` for rc's grammar and Python 3 for `weaken.py`). Apple's clang has
+no wasm backend, which is why the SDK is a prerequisite:
 
 ```bash
 bash userspace/mk.sh
 ```
 
-The real implementation — the Rust kernel core (`kernel/`, RESEARCH §9.6) under the macOS wasmtime host
-(`hosts/macos/`), compiled to wasm for the browser (`hosts/browser/` +
-`demo/supervisor/rustkern.mjs` — THE DEMO'S KERNEL since 2026-08-31; the JS demo
-lineage is reference-in-tree), and driven headless by Node
-(`node demo/supervisor/main-rust.mjs userspace/rootfs`, which loads
-`target/wasm32-unknown-unknown/release/browserhost.wasm` and so needs the wasm
-build first) — builds and runs from the root Cargo workspace:
+Three flags are load-bearing, each measured (RESEARCH §9.4, §11):
+`-fno-builtin`, because clang's libcall recogniser rewrites strlen's own body
+into a self-call; `-fms-extensions`, because `port/pool.c` is written in
+kencc's anonymous struct members; and `weaken.py`, because **the wasm backend
+has no common symbols at all** — `-fcommon` is an error — so rc.h's tentative
+definitions each become a strong definition and the link fails with a duplicate
+for every variable rc declares. It sets the weak bit in the `linking` section,
+keeping strong the one definition that carries an initialiser; `wasm-ld
+--allow-multiple-definition` cannot do the job, because it keeps the FIRST
+definition even over a later initialised one and two different files here
+initialise something.
+
+`userspace/build/` and `userspace/root/` are generated and gitignored. Guest
+binaries carry no `.wasm` extension: exec walks the namespace for `/bin/cat`,
+and a freshly produced module is indistinguishable from a shipped one.
+
+Then the system itself — the Rust kernel core (`kernel/`, RESEARCH §9.6) under
+`hosts/ipnx`, which supplies the machine (wasmtime) and builds the device
+table. It runs the userspace built above:
 
 ```bash
-cargo run --release -p host -- userspace/rootfs
-cargo build --release --target wasm32-unknown-unknown -p browserhost
+cargo test                                  # the kernel, the host, conformance
+cargo run -p ipnx -- echo hello
+cargo run -p ipnx -- rc /bin/<script>.rc
 ```
 
-Node ≥ 22 (`worker_threads`, SAB, wasm `try_table` exception handling — the legacy EH
-encoding is *rejected* by these engines, so any new wasm emission must use `try_table`).
-`userspace/build/` and `userspace/rootfs/bin/` are generated and gitignored; `userspace/VERSIONS` records the measured toolchain and `mk.sh` warns on drift. Guest binaries carry no
-`.wasm` extension: exec walks the namespace for `/bin/cat`, and a freshly produced module
-is indistinguishable from a shipped one.
+**Build the userspace first**: the host's tests run the real binaries, and
+`cargo` cannot build a wasm userspace.
+
+Node ≥ 22 where it is used (`worker_threads`, SAB, wasm `try_table` exception
+handling — the legacy EH encoding is *rejected* by these engines, so any new
+wasm emission must use `try_table`).
 
 ## The documents
 
@@ -228,9 +234,9 @@ nearby is tuning: `devmnt.c`'s `MAXRPC` grows from `IOHDRSZ+8192` to
 `IOHDRSZ+16*1024`, with a `MAXCMNRPC` kept at the old size for initial
 negotiation.
 
-Note the distinction from `userspace/plan9/`, which is the **vendored** subset
-actually compiled into the system (libc, libdraw, libframe, the commands) and
-IS committed.
+Note the distinction from the **vendored** subset under `userspace/` — the
+parts of `libc/` and `cmd/` actually compiled into the system, copied verbatim
+from `plan9/` and committed. `plan9/` is read; `userspace/` is built.
 
 ## The parent repository
 
@@ -276,16 +282,20 @@ somewhere to start. They are a record of what was *thought*, not of what was
 cite — and **it cannot make a deviation from Plan 9 approved**. Only she can do
 that, and her default answer is no.
 
-## The tree (post-declaration, 2026-08-29)
+## The tree
 
-The implementation lives at the top level: `kernel/`
-(the Rust core), `hosts/macos/` (wasmtime host; the workspace root is `Cargo.toml`),
-with `hosts/{oci,ipados,browser}/` scaffolded per implementation.md's milestones. The
-guest world lives at `userspace/`: the
-libcs, the vendored trees (verbatim), `cmd/`, `wasi/`, the rootfs seed, `mk.sh`
-and `VERSIONS` — the real userspace shared by every host, not frozen. Work is
-sequenced by
-`docs/implementation.md`. The target is **functional equivalence to the demo**.
+The implementation lives at the top level: `kernel/` (the Rust core, no
+dependencies) and `hosts/ipnx/` (the machine — wasmtime — and the boot; the
+workspace root is `Cargo.toml`). The other hosts named in
+`docs/implementation.md` are not built yet.
+
+The guest world lives at `userspace/`: `include/` (the wasm32 architecture
+header, and the vendored Plan 9 headers), `libc/wasm/` (the machine-dependent
+half — this architecture's `9syscall`), `libc/{port,fmt,9sys}/` and `rc/`
+(vendored verbatim, except rc's own platform file `ipnx.c`), `cmd/`, and
+`mk.sh` with `weaken.py`. `userspace/build/` and `userspace/root/` are
+generated. Work is sequenced by `docs/implementation.md`; what is built is
+`docs/when.md`. The target is **functional equivalence to the demo**.
 
 ## Conventions
 
@@ -442,49 +452,14 @@ sequenced by
   Guest C is Plan 9 style (tabs, `nil`, no const clutter); the build silences the
   builtin-redeclaration warnings that style causes.
 
-## Current state — REPLANNED 2026-09-04
+## Current state
 
-**The code is legacy.** Everything below describes what it does today and is
-refactored toward the design under `docs/implementation.md`'s three layers, not
-built upon. Layer 1 has no window, no mouse, no draw, no canvas; the kernel is
-cut to a subset of Plan 9's measured against `plan9/`; Go and Python become
-packages; the demo is `ipnx` in a terminal plus the website, and iOS and the
-macOS app come after it.
+**[docs/when.md](docs/when.md) is the single authoritative statement of build
+status, and no other document carries it** — including this one. What was here
+described a tree that no longer exists.
 
-### What the legacy code does (design: 2026-08-31; code: 2026-09-03)
-
-**emca is designed AND the IPNX half of it runs** (2026-08-31): emca is the IPNX
-user interface — `/dev/canvas` narrows to genuine drawing, `/pkg` and `/project`
-split the old package concept, and the hosts become *surfaces* rather than demos
-([docs/emca.md](docs/emca.md), decision log 2026-08-31). Landed the same day
-(implementation.md M14a–c): the `/dev/window/<type>/<n>` control interface, `/type`
-as a real registry of four small files per type, the browser surface rebuilt as
-emca itself (top toolbar of managers, panes, tabs, a status line carrying the
-global tag), the editor component (CodeMirror behind a mirrored buffer), and
-**`userspace/cmd/emca.c`** — a file server with a workspace, not an editor: the
-window set, each window's one tag string, the core verbs merged with the type's,
-dirty state, aliasing buffers, and placement. It is a **watcher, not a
-gatekeeper** — with no emca running a window still opens in its type's default
-pane. **And the web surface (M14d)**: the floating bar at the selection with
-emca answering verb applicability (a path offers Open, an address Jump, a word
-neither — acme's `look` decomposed and SHOWN), the pin replacing the 2-1 chord,
-the responsive rules measured in CHARACTERS not pixels, and the keyboard grammar
-entire. **164 PASS / 0 FAIL** on all three hosts, plus two headless surface proofs
-(`winproof.mjs` with no emca, `emcaproof.mjs` with it). Still design-only:
-`/project` (M14e) and the SwiftUI surface (M14g).
-
-
-**The public demo is live: <https://christham.net/ipnx-v12/>** — the frozen
-browser port on GitHub Pages behind a COI service worker; redeploy per the
-handbook. **Work now follows `docs/implementation.md` as replanned on 2026-09-04**: the demo
-is the first milestone — **D1**, `ipnx` in a macOS terminal booting to `rc` with
-every Layer-1 command, and **D2**, the website with emca to spec — built from what
-is designed today and nothing undesigned. Layer 1 (the kernel cut to a subset of
-Plan 9's, the root the Plan 9 way, the personalities as userspace, the `ipnx` host)
-precedes Layer 2 (emca on the pure kernel, the browser surface reading files).
-After the demo the plan runs to the end state — IPNX and Saranos on browser, macOS
-app, iOS app, container, MicroVM and real hardware — through gaps documented in
-the plan and designed only when reached. The load-bearing
-engineering lessons live where they always did: RESEARCH §5 (fork, transport, SAB
-TextDecoder), §9.4–9.6 (toolchain, kencc call-site adjustment, the native core's
-findings), and the decision log for everything chosen.
+The plan is [docs/implementation.md](docs/implementation.md): P0–P7 to the
+demo. The load-bearing engineering lessons live where they always did:
+RESEARCH §5 (fork, the transport), §9.4–9.6 (the toolchain, kencc call-site
+adjustment, the native core's findings), §10 (the deviation audit) and §11
+(what building the userspace measured).
