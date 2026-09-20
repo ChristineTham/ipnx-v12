@@ -15,9 +15,14 @@
  * does the 9P version handshake and mounts it as the root."*
  *
  * WHAT IS NOT HERE, and each because there is nothing behind it yet:
- * authentication (`fauth`/`auth_proxy` — no factotum), `$rootspec` and
- * `$rootdir` (no `#ec`, so no configuration to read them from), the swap
- * process, and the partition tables.
+ * authentication (`fauth`/`auth_proxy` — no factotum), the swap process, and
+ * the partition tables.
+ *
+ * AND NO PROMPT. Plan 9's `rootserver` (`boot.c:328`) asks `root is from
+ * (local, tcp, ...)` and takes its default from `$bootargs`, or skips the
+ * question when `$nobootprompt` answers it — which is what plan9.ini is for.
+ * With one method there is no question to ask, and so nothing for `$rootspec`
+ * or `$rootdir` to answer: `#ec` is attachable and empty.
  */
 #include <u.h>
 #include <libc.h>

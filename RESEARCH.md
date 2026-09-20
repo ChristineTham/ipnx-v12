@@ -3310,22 +3310,71 @@ plan9.ini equivalent could have gone was already spent. Fixed: `/dev/config`
 is now `LETTERS` in `$CONF`'s own shape and `$terminal` is `wasm
 hosts/ipnx/src/main.rs`.
 
-**And why there is no plan9.ini.** Its mechanism answers a problem this system
-does not have. plan9.ini exists because **a PC kernel must be configured
-before it can read a filesystem** — which disk controller, which ethernet
-card, which partition holds the root — and the root is exactly what the
-configuration is for. So a program that runs *before* the kernel reads a file
-off the boot partition, leaves it at a fixed address, and vanishes. Here
-nothing has that problem: there is no hardware to enumerate, the device table
-is fixed in `LETTERS`, the host hands the kernel a `Root` and a `Nineserver`
-in Rust before `#/` has a first instruction, and `IPNX_STORE` already does
-what `rootdir=` does. Above all **the bootloader does not vanish** — the host
-is inside Saranos, not underneath it — so "leave a config in a known place for
-the thing that outlives you" is not the shape of anything here.
+**And why there is no plan9.ini.** A first draft of this entry said its
+mechanism answers a bootstrap problem — that a PC kernel must be configured
+before it can read a filesystem, so a program that runs earlier leaves the
+answer in memory and vanishes. Christine: *"Isn't plan9.ini just the default
+configuration so you don't have to specify it on the command line?"* **She is
+right, and `boot.c` says so in its own comment.** `rootserver` (`boot.c:328`)
+is the shape of the whole thing:
 
-**But the ROLE has a Plan 9 counterpart, and it is not the FAT file.** It is
-the branch above it in the same function (`pc/main.c:49`), for a multiboot
-loader that has no `plan9.ini` to read:
+```c
+/* look for required reply */
+dprint("read #e/nobootprompt...");
+readfile("#e/nobootprompt", reply, sizeof(reply));
+if(reply[0]){
+	mp = findmethod(reply);
+	if(mp)
+		goto HaveMethod;
+...
+/* create default reply */
+dprint("read #e/bootargs...");
+readfile("#e/bootargs", reply, sizeof(reply));
+...
+do{
+	outin(prompt, reply, sizeof(reply));
+	mp = findmethod(reply);
+}while(mp == nil);
+```
+
+`outin` (`boot/aux.c:157`) prints `"%s[%s]: "` and reads a line: the prompt
+with the default in brackets, and Enter accepts it. So **`bootargs` is the
+default answer and `nobootprompt` skips the question entirely** — which is
+what the man page says in as many words:
+
+> **`nobootprompt=`** *root* — Suppress the `root from` prompt and use *root*
+> as the answer instead.
+>
+> **`user=`** *user* — Suppress the `user` prompt and use *user* as the answer
+> instead.
+
+The hardware half — `etherX=`, `scsiX=`, `console=`, `*ncpu=` — was the
+original purpose and `plan9.ini(8)` itself says it has mostly lapsed:
+
+> The file is used by the bootstrap programs and the kernel to configure the
+> hardware available, **although nowadays the kernel can usually detect the
+> attached hardware by itself.**
+
+So plan9.ini is **stored answers**, and the bootstrap ordering is how they get
+delivered on a PC, not why they exist.
+
+**Which restates our gap, and makes it smaller.** A configuration is the
+answer to a question, and **this `boot` asks nothing**: one method
+(`#9/0` — `bootvirtio9p.c`, whose whole body is that one `open`), no
+authentication, no prompt, `rootdir` a `char*` in the file. There is no
+`root is from (local, tcp, virtio9p)` to answer because there is one method,
+and no `user` prompt because there is no factotum. `#ec` is empty because
+nothing yet asks anything for it to answer — not because the machine has no
+way to tell the kernel things.
+
+**When it earns its place** is when `boot` gains a second method, or a user to
+choose, or a root that is not the one the host handed over. Until then the
+honest statement is that the mechanism is in place (`#ec`, bound, attachable,
+eve-writable) and there is nothing to put in it.
+
+**How it would arrive, when there is something.** Not the FAT file — the
+branch above it in the same function (`pc/main.c:49`), for a multiboot loader
+with no `plan9.ini` to read:
 
 ```c
 if(mbi->flags & Fcmdline){
@@ -3336,10 +3385,20 @@ if(mbi->flags & Fcmdline){
 ```
 
 **The bootloader's command line, spaces turned into newlines, IS plan9.ini**
-on such a machine. `ipnx`'s argv is that command line. So the counterpart
-exists and is Plan 9's own; what it would take is deciding that the host's
-argv is the machine's configuration, which is a design decision and hers.
-**PROPOSED, not built.**
+on such a machine, and `ipnx`'s argv is that command line. Note the
+precedence: the cmdline is read *only* `if(BOOTARGS[0] == 0)` — the two are
+alternatives filling one slot, not a default and an override.
+
+**A second finding, from reading `glenda()` (`bootauth.c:56`).** `eve` starts
+as the **empty string** (`pc/main.c:285`, `kstrdup(&eve, "")`), and the first
+process's user is a copy of it (`:287`); `boot` then writes `#c/hostowner`
+with `$user` or, failing that, `"glenda"`. `hostownerwrite` permits it because
+`iseve()` compares two empty strings (`auth.c:19`, `:128`). Ours is
+`pub const EVE: &str = "eve"`, fixed at compile time, and the comment above it
+cites `auth.c:10` as `char *eve = "bootes"` — **which is not in this tree**;
+9legacy has a bare `char *eve;`. So the boot-time hostowner is a hardcoded
+constant where Plan 9 has an empty string a userspace program fills, and
+`$user` is one of the questions plan9.ini answers. **Not fixed; recorded.**
 
 ### Still different, and named rather than hidden
 

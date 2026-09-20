@@ -11,30 +11,39 @@ was in this register on 2026-09-18 turned out to be answered at file and line.
 
 ## Open
 
-**Is the host's command line the machine's configuration?** — proposed
-2026-09-20, from *"why is there no plan9.ini?"* (RESEARCH §13.2).
+**What should `boot` ask, and what answers it?** — proposed 2026-09-20,
+revised the same day (RESEARCH §13.2).
 
-`#ec` exists and is empty. On a Plan 9 PC it holds every line of `plan9.ini`
-(`pc/main.c:257`) — what the bootloader read off the boot partition and left
-in memory before the kernel existed. That mechanism answers a problem this
-system does not have: no hardware to enumerate, the device table fixed in
-`LETTERS`, the root handed to the kernel in Rust, and a host that does not
-vanish the way a bootloader does.
+`#ec` exists and is empty. plan9.ini is **the stored answers to the questions
+`boot` would otherwise ask**: `bootargs` is the default shown in the `root is
+from (...)` prompt (`boot/boot.c:354`, *"create default reply"*), and
+`nobootprompt` skips the question — *"Suppress the `root from` prompt and use
+root as the answer instead"* (`plan9.ini(8)`). `user=` does the same for the
+user prompt.
 
-**But Plan 9 has a second way in, in the same function** (`pc/main.c:49`): on
-a multiboot machine with no `plan9.ini` to read, the **bootloader's command
-line** becomes the configuration, spaces turned into newlines, `name=value`
-per line. `ipnx`'s argv is that command line.
+**This `boot` asks nothing.** One method — `#9/0`, `bootvirtio9p.c` entire —
+no authentication, `rootdir` a `char*` in the file. So there is nothing for a
+configuration to answer, and that, rather than any missing mechanism, is why
+`#ec` is empty.
 
-The proposal is to take it: `ipnx name=value ...` parses as plan9.ini,
-`ksetenv(name, val, 1)` for every line and `ksetenv(name, val, 0)` for the
-ones not beginning `*`. What it would buy immediately is `rootdir=` and
-`rootspec=`, which `boot` already reads (`boot/boot.c:161`, `:174`) and which
-`IPNX_STORE` currently stands in for.
+The open questions, in order:
 
-**Not built, and the decision is whether argv is the right thing to call the
-machine's configuration at all** — `ipnx` also takes a command to run, so the
-two would have to share the line.
+1. **Does `boot` get a second method?** A host directory over `#9` is one.
+   A different store, a read-only image, a namespace handed over whole — each
+   would make `root is from` a real question.
+2. **Is there a user to choose?** `eve` is a compile-time constant here where
+   Plan 9 starts it empty and has `boot` write `#c/hostowner` from `$user`,
+   defaulting to `"glenda"` (`bootauth.c:56`, `pc/main.c:285`).
+3. **If there is something to answer, how does it arrive?** Plan 9's own
+   second way in is the multiboot branch (`pc/main.c:49`): **the bootloader's
+   command line, spaces turned into newlines, IS plan9.ini** — and `ipnx`'s
+   argv is that command line. It is an alternative to the FAT file, not an
+   override of it (`if(BOOTARGS[0] == 0)`), which is exactly our situation.
+   `ipnx` also takes a command to run, so the two would have to share the
+   line.
+
+**Nothing here is built.** The mechanism is: `#ec` attaches, binds under `#e`,
+and takes writes from eve.
 
 ## Decided, and moved into the specs
 

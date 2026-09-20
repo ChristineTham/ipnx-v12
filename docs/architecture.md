@@ -141,8 +141,10 @@ are embedded in the kernel image (`port/portmkfile:53`) and read at
 (`pc/main.c:250`). **`plan9.ini` is the other one**: what the bootloader read
 before the kernel existed, exported to `#ec` entire and to `#e` for the names
 not beginning `*` (`pc/main.c:257`). Here the first is `LETTERS` in
-`hosts/ipnx/src/main.rs`; **the second is empty**, because nothing in this
-system has the bootloader's problem — see `docs/proposals.md`.
+`hosts/ipnx/src/main.rs`; **the second is empty**, because plan9.ini holds the
+stored answers to what `boot` would otherwise ask (`boot.c:354`, *"create
+default reply"*) and this `boot` asks nothing — one method, no prompt. See
+`docs/proposals.md`.
 
 ## Contract: the guest ABI
 
