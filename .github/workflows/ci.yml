@@ -70,10 +70,10 @@ jobs:
       # functional equivalence with the demo and fails until it is
       # conformant — an earlier version printed "0 of 12" and reported `ok`,
       # which is the false signal it exists to prevent. It turns green at
-      # P7, not before.
+      # P7, not before; the count in the log is the distance.
       - name: "conformance (red until P7)"
         continue-on-error: true
-        run: cargo test -p conformance
+        run: cargo test -p conformance -- --nocapture
 
       - name: measurements (for RESEARCH)
         run: |

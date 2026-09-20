@@ -187,20 +187,25 @@ their own, and five driving a guest module directly. They need
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
 and say so rather than passing quietly.
 
-## Functional equivalence to the demo — 0 of 12
+## Functional equivalence to the demo — 5 of 12
 
-The conformance suite lists twelve capabilities and reaches none of them. It
-fails, and will until it does.
+The conformance suite lists twelve capabilities and **runs a check for every
+one it claims**: it boots the whole system on a scripted console and types at
+it, so a line reads `reached` only when a person really can do the thing, on
+this boot. The five: boot to a shell, list a directory, read a file, a
+pipeline, and per-process namespaces (`@{rfork n; bind /tmp/alt /etc}` sees
+the bind; the shell outside it does not). The other seven are P6 and P7.
+
+It still fails, and will until all twelve are reached.
 
 The phases are in [implementation.md](implementation.md). P0–P3 are done.
 
-**The suite cannot record progress.** Marking a behaviour `Reached` panics —
-*"is claimed reached but has no check wired up"* — because `Behaviour` has no
-check to wire: there is no field for one. Five of the twelve are demonstrably
-reached today (boot to a shell, list a directory, read a file, a pipeline, and
-per-process namespaces, which `@{rfork n; bind /tmp/alt /etc}` shows), and the
-suite still says 0 of 12. **Until `Behaviour` carries its check, the number
-measures nothing.**
+**The suite records progress** (since 2026-09-20). `Behaviour` carries a
+`check`, and the rule the file always stated — *"is claimed reached but has
+no check wired up"* — is now satisfiable rather than unsatisfiable. A check
+boots the system and types at it, using `hosts/ipnx` as a **library**:
+`startboot` on a console the caller supplies. No kernel internals, no test
+fixtures, because a behaviour is reached when a person can do it.
 
 **P5 is done — the CLI.** Typing `ipnx` boots to `rc` on the terminal; `ls`,
 `cat /etc/motd` and the demo's commands run. The boot is the system's own:

@@ -13,3 +13,7 @@ publish = false
 
 [dependencies]
 ipnx-kernel = { path = "../kernel" }
+# The host, as a library: a behaviour is checked by BOOTING the system and
+# typing at it, which is the only way a claim that "a person can do this" can
+# be made good. It needs `userspace/mk.sh` to have run.
+ipnx = { path = "../hosts/ipnx" }
