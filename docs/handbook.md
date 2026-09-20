@@ -37,7 +37,21 @@ binaries carry no `.wasm` extension: exec walks the namespace for `/bin/echo`,
 and a freshly built module is indistinguishable from a shipped one.
 
 `cargo test -p conformance -- --nocapture` prints the distance to the demo:
-a checklist of what the system can do, and how much of it is reached.
+a checklist of what the system can do, and how much of it is reached. **It
+fails, and is meant to** — the suite asserts equivalence with the demo and
+goes green at P7, not before. `cargo test` therefore reports a failure on a
+perfectly healthy tree; for day-to-day work run `cargo test -p ipnx-kernel`
+and `cargo test -p ipnx`.
+
+### CI
+
+`.github/workflows/ci.yml` does exactly the above on every push: bison and a
+pinned wasi-sdk 34.0, `bash userspace/mk.sh`, then the kernel's tests, the
+host's tests on the world just built, and `RUSTFLAGS=-D warnings cargo build
+--workspace --all-targets`. Conformance runs with `continue-on-error` so its
+count is visible without gating the branch.
+
+**A green CI means the system builds and boots, not that it is conformant.**
 
 ### Three build flags are load-bearing
 

@@ -1,147 +1,81 @@
-# M1's second half: the floor stops being a manual discipline. Every push
-# builds the guest world once, then proves it twice — inside the FROM scratch
-# container (the Rust core on wasmtime, musl-static), and on the frozen JS
-# reference under a PINNED Node ("the oracle in amber": the engine version
-# never drifts, so a break here is a change in US, never in V8).
+# Every push builds the guest world, then runs the system's own tests
+# against it.
+#
+# The order is load-bearing and is the same one `CLAUDE.md` gives: **the
+# userspace first**, because the host's tests run the real binaries and
+# `cargo` cannot build a wasm userspace.
 name: ci
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 env:
+  # PINNED, and to the version measured on the development machine
+  # (`wasi-sdk/VERSION`: 34.0, llvm 23.1.0). It is here for its wasm backend
+  # alone — nothing links against wasi — so a move is a toolchain
+  # measurement, never a convenience.
   WASI_SDK_RELEASE: "34.0"
-  BINARYEN_RELEASE: "132"
 
 jobs:
-  world:
-    name: build the guest world
+  ci:
+    name: the system, and its tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: "1.27.x"
-      - name: cache the wasm toolchain
+      - uses: actions/checkout@v5
+
+      - name: bison, for rc's grammar
+        run: sudo apt-get update -q && sudo apt-get install -y -q bison
+
+      - name: cache wasi-sdk
         id: toolcache
         uses: actions/cache@v4
         with:
           path: ~/opt
-          key: wasi-sdk-${{ env.WASI_SDK_RELEASE }}-binaryen-${{ env.BINARYEN_RELEASE }}
-      - name: install wasi-sdk + binaryen
+          key: wasi-sdk-${{ env.WASI_SDK_RELEASE }}
+      - name: install wasi-sdk
         if: steps.toolcache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/opt && cd ~/opt
           curl -sL "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_RELEASE%%.*}/wasi-sdk-${WASI_SDK_RELEASE}-x86_64-linux.tar.gz" | tar xz
-          curl -sL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_RELEASE}/binaryen-version_${BINARYEN_RELEASE}-x86_64-linux.tar.gz" | tar xz
-      - name: cache the CPython wasi build
-        uses: actions/cache@v4
-        with:
-          path: userspace/build/python-wasi-3.14.7.zip
-          key: python-wasi-3.14.7
-      - name: build the world
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `userspace/build/` (objects) and `userspace/root/` (the files a
+      # booting system finds by name), both gitignored.
+      - name: build the guest world
         run: |
           export WASI_SDK=$HOME/opt/wasi-sdk-${WASI_SDK_RELEASE}-x86_64-linux
-          export BINARYEN=$HOME/opt/binaryen-version_${BINARYEN_RELEASE}
           bash userspace/mk.sh
-      - name: pack the rootfs
-        run: tar -C userspace -czf rootfs.tgz rootfs
-      - uses: actions/upload-artifact@v4
-        with:
-          name: rootfs
-          path: rootfs.tgz
-          retention-days: 3
 
-  container:
-    name: "M1: FROM scratch runs the floor"
-    needs: world
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: rootfs
-      - run: tar -C userspace -xzf rootfs.tgz
-      - name: musl toolchain
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q musl-tools
-          rustup target add x86_64-unknown-linux-musl
-      - uses: Swatinem/rust-cache@v2
-        with:
-          key: musl
-      - name: build the static host
-        run: cargo build --release -p host --target x86_64-unknown-linux-musl
-      - name: build the image
-        run: |
-          rm -rf hosts/oci/ctx && mkdir -p hosts/oci/ctx
-          cp target/x86_64-unknown-linux-musl/release/host hosts/oci/ctx/host
-          cp -R userspace/rootfs hosts/oci/ctx/rootfs
-          docker build -f hosts/oci/Dockerfile -t ipnx hosts/oci/ctx
-      - name: "acceptance: the suite in the container, exit 0"
-        run: |
-          docker run --rm ipnx | tee suite.out
-          test "$(grep -c '^PASS' suite.out)" -ge 131
-          ! grep -q '^FAIL' suite.out
-          echo "floor: $(grep -c '^PASS' suite.out) PASS (floor 131)"
-      - name: "acceptance: -i boots to rc"
-        run: |
-          echo 'echo M1 boots to rc' | docker run --rm -i ipnx -i | tee rc.out
-          grep -q 'M1 boots to rc' rc.out
+      # The kernel alone: no wasm, no host, no machine.
+      - name: the kernel
+        run: cargo test -p ipnx-kernel
+
+      # The host, which boots the world built above and types at it —
+      # `it_boots_to_a_shell`, `cat_etc_motd`, the pipeline, the store
+      # surviving a reboot.
+      - name: the host, on the real userspace
+        run: cargo test -p ipnx
+
+      # `-D warnings` rather than grepping the output, which goes quiet
+      # when the cache makes the build a no-op.
+      - name: no warnings
+        env:
+          RUSTFLAGS: "-D warnings"
+        run: cargo build --workspace --all-targets
+
+      # **Expected red**, and deliberately not hidden. The suite asserts
+      # functional equivalence with the demo and fails until it is
+      # conformant — an earlier version printed "0 of 12" and reported `ok`,
+      # which is the false signal it exists to prevent. It turns green at
+      # P7, not before.
+      - name: "conformance (red until P7)"
+        continue-on-error: true
+        run: cargo test -p conformance
+
       - name: measurements (for RESEARCH)
         run: |
-          echo "image: $(docker image inspect -f '{{.Size}}' ipnx) bytes"
-          echo "host binary: $(stat -c %s hosts/oci/ctx/host) bytes"
-          echo "rootfs: $(du -sb hosts/oci/ctx/rootfs | cut -f1) bytes"
-
-  container-arm64:
-    name: "M1 follow-up: the aarch64 image boots"
-    needs: world
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: rootfs
-      - run: tar -C userspace -xzf rootfs.tgz
-      - uses: taiki-e/install-action@v2
-        with:
-          tool: cross
-      - name: cross-build the aarch64 musl host
-        run: cross build --release -p host --target aarch64-unknown-linux-musl
-      - name: qemu + arm64 image
-        run: |
-          docker run --privileged --rm tonistiigi/binfmt --install arm64
-          rm -rf hosts/oci/ctx && mkdir -p hosts/oci/ctx
-          cp target/aarch64-unknown-linux-musl/release/host hosts/oci/ctx/host
-          cp -R userspace/rootfs hosts/oci/ctx/rootfs
-          docker build --platform linux/arm64 -f hosts/oci/Dockerfile -t ipnx-arm64 hosts/oci/ctx
-      - name: "smoke: boots to rc under qemu (the full suite runs on amd64)"
-        run: |
-          echo 'echo arm64 boots to rc' | docker run --platform linux/arm64 --rm -i ipnx-arm64 -i | tee rc64.out
-          grep -q 'arm64 boots to rc' rc64.out
-
-  oracle-amber:
-    name: "the oracle in amber (pinned Node)"
-    needs: world
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
-        with:
-          name: rootfs
-      - run: tar -C userspace -xzf rootfs.tgz
-      - uses: actions/setup-node@v4
-        with:
-          # PINNED to the MEASURED engine (userspace/VERSIONS) — never
-          # "latest". Moves only when the host measurement moves (as on
-          # 2026-08-29: 22.23.2 -> 24.20.0 with the host update, all
-          # suites re-proven first). The pin's first outing caught
-          # 22.12.0's flagged-off try_table. A failure here is ours.
-          node-version: "24.20.0"
-      - name: the frozen reference runs the floor
-        run: |
-          bash poc/run.sh | tee oracle.out
-          test "$(grep -c '^PASS' oracle.out)" -ge 131
-          ! grep -q '^FAIL' oracle.out
-          echo "oracle: $(grep -c '^PASS' oracle.out) PASS on pinned Node $(node --version)"
+          echo "guest binaries: $(du -sb userspace/root | cut -f1) bytes"
+          ls -l userspace/root/wasm/bin

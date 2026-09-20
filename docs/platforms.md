@@ -28,10 +28,18 @@ so a form is complete when a person can work in it, not merely when the suite
 runs green. The surface half is unbuilt (M14); the engines and states below
 are unaffected.
 
+> **THE STATES BELOW ARE DATED 2026-08-30 AND PREDATE THE REBUILD** (noted
+> 2026-09-20). The tree they describe — `hosts/macos`, `hosts/oci`,
+> `hosts/ipados`, `hosts/vscode` — does not exist; `hosts/ipnx` is the one
+> host built. **[when.md](when.md) is the authority on what is built**, and
+> CI (`.github/workflows/ci.yml`) builds and tests that host and nothing
+> else. This table is kept as the dated record it is, not as a present-tense
+> claim.
+
 | form | host | engine (guests) | state (2026-08-30) |
 |---|---|---|---|
 | **macOS** | `hosts/macos` | wasmtime 48, Cranelift JIT | **green, 149** (floor 131) headless — full canvas parity (M5); **IPNX.app runs** (M3): windows via winit/softbuffer, acme on screen, `--live` hostfs persistence (M4), snapshots, and the canvas presenter v0 renders the semantic tree natively (con's transcript verified by capture) |
-| **OCI container** | `hosts/oci` | wasmtime, Cranelift (or AOT `.cwasm`) | **green, 149** (floor 131) — `FROM scratch`, musl-static, 62.2MB image, proven on every push by CI (amd64 full suite; the aarch64 image smoke-boots under qemu) |
+| **OCI container** | `hosts/oci` | wasmtime, Cranelift (or AOT `.cwasm`) | **green, 149** (floor 131) — `FROM scratch`, musl-static, 62.2MB image (amd64 full suite; the aarch64 image smoke-boots under qemu) |
 | **iPadOS** | `hosts/ipados` (M6, **re-aimed 2026-08-30**) | WKWebView (JavaScriptCore, full JIT — sanctioned in the content process); SwiftUI presents | the webview is the engine room, not the display: kernel + binaries inside WebKit (WKURLSchemeHandler serves the bundled dist with real COOP/COEP; offline first boot), `/dev/canvas` crosses the bridge to a native SwiftUI presenter, and the app's file entitlements serve the local filesystem into hostfs (a security-scoped bookmark is a bind); Pulley demoted to fallback research |
 | **VSCode** | `hosts/vscode` (M13, designed 2026-08-30) | the extension host's Node (kernel-as-a-library) | unbuilt — FileSystemProvider ≈ 9P mounts the namespace as a workspace; Pseudoterminal is `/dev/cons`; tasks run process files; canvas panels after M5 |
 | **microVM** | (M11) | wasmtime over Firecracker/virtio, 9P-over-vsock | aspiration, research-first — the second OCI weight |
