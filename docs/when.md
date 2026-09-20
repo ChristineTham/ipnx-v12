@@ -3,7 +3,7 @@
 **Role: a *when* — the single authoritative statement of build status.** No
 other document carries it.
 
-Measured 2026-09-19.
+Measured 2026-09-20.
 
 ## The kernel — 8,456 lines of Rust, no dependencies
 
@@ -14,7 +14,7 @@ Measured 2026-09-19.
 | `ns.rs` | the namespace, keyed by the identity of the channel mounted upon — and a union is a LIST: `cmount` puts the directory itself in first, and copies a union when one is bound onto a directory |
 | `devroot.rs` | `#/` — `#/` and `boot` from `rootdir[]`, plus the ten empty directories `rootreset` adds for a first process to bind onto; every write is `Egreg` |
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed |
-| `devproc.rs` | `#p` — the process table as files: `status`, `ns` as the bind lines that rebuild it, `fd`, and `ctl` where a write kills |
+| `devproc.rs` | `#p` — the process table as files: **nine of `procdir[]`'s eighteen** (`devproc.c:79`) — `args` `ctl` `fd` `note` `noteid` `ns` `proc` `status` `wait`. `fpregs`/`kregs`/`regs` have no counterpart on a machine with no register set; `notepg` waits on notes; `mem`, `segment`, `text`, `profile` and `syscall` are simply not built. **`ns` does not yet print the bind lines**: it formats `#<letter>/<qid>` where Plan 9 prints `Chan.path`, calls a mount a bind, and infers the flag from list position because `Element` keeps a `create` bool where Plan 9's `Mount` keeps `mflag` and `spec` |
 | `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user |
 | `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, clunk. Reached through the table's dispatcher, which takes it out while it runs |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
@@ -29,7 +29,7 @@ Measured 2026-09-19.
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, `exec`, and `unionread` |
 
-148 kernel tests, and 19 in `hosts/ipnx` — five that run a guest module against a real kernel, and fourteen that boot the whole system.
+151 kernel tests, and 21 in `hosts/ipnx` — five that run a guest module against a real kernel, and sixteen that boot the whole system.
 
 ## The host — `hosts/ipnx`, three files
 
@@ -63,7 +63,12 @@ Answered: `rfork` `exec` `exits` `await` `errstr` `bind` `mount` `unmount`
 `errstr` finds it, and reading exchanges it as Plan 9's does.
 
 Refusing, and saying why rather than pretending: `sleep`, `alarm`, `notify`,
-`noted` and `rendezvous` want a scheduler (P3).
+`noted` and `rendezvous` want a scheduler. **They were assigned to P3 and P3
+shipped without them**, so the refusals still say "— P3" and should not. With
+them go `RFNOTEG` (absent from `rfork`'s flags), a write to `#p/<n>/note`, and
+`#p/<n>/ctl`'s `start`/`stop`/`waitstop`/`hang`/`nohang`. What it costs
+today: `init`'s loop ends where Plan 9's runs for ever on `sleep(1000)`, rc's
+`Trapinit` is a stub so nothing interrupts, and there is no `sleep` command.
 
 ### `#M`, and the refactor it needed
 
@@ -122,6 +127,16 @@ No surface.
 `cputime`'s `TUser`/`TSys` are charged by nothing yet. Both count honestly
 rather than reporting a number nothing produced.
 
+`#c/kprint` is not exclusive-use: Plan 9 declares it `{Qkprint, 0, QTEXCL}`
+with `DMEXCL|0440` (`devcons.c:614`) and `CONSDIR` here has no qid-type
+column, so a second open is not refused.
+
+**The root channel keeps the path `#/`.** Plan 9 renames it in as many words
+(`pc/main.c:242`): `up->slash = namec("#/", Atodir, 0, 0); pathclose(
+up->slash->path); up->slash->path = newpath("/")`. Without those three lines
+`cd` reports `#/` and every line of `#p/<n>/ns` names the device rather than
+the path.
+
 ## The userspace — `userspace/`
 
 | | |
@@ -131,7 +146,7 @@ rather than reporting a number nothing produced.
 | `libc/{port,fmt,9sys}/` | vendored verbatim from `plan9/sys/src/libc/` |
 | `libbio/`, `libauth/` | vendored: buffered i/o, and `newns` — which is all of libauth that is left once there is no factotum to talk to |
 | `rc/` | Plan 9's rc, with `ipnx.c` as its platform file — it ships three of those and the mkfile picks one — and `haventfork.c`, Plan 9's own file for a system that cannot fork. `termrc` and `rcmain` beside it |
-| `cmd/` | `boot`, `init`, and `bind`, `cat`, `echo`, `ls`, `mkdir`, `rm`, `unmount`, a cut-down `tr`, `args` |
+| `cmd/` | `boot`, `init`, and `bind`, `cat`, `echo`, `ls`, `mkdir`, `rm`, `unmount`, a cut-down `tr`, `args` — **ten, against the demo's "twenty-four real Plan 9 commands"**, and that list of twenty-four is written down nowhere. `mount` and `wc` are named in the demo and absent; so are `ps`, `pwd`, `cp`, `mv` and `date`, and `sleep` cannot exist until the call does |
 | `lib/namespace`, `etc/motd` | the instance's configuration, and something to read |
 | `mk.sh` | the build. `weaken.py` beside it restores common-symbol semantics for rc.h's tentative definitions, which the wasm backend has none of |
 
@@ -166,7 +181,7 @@ exactly as `boot.c:171` does. `ls /` shows both halves because `unionread`
 reads every element. A file written under `/tmp` is a file on the host, so it
 is still there after the next boot.
 
-Nineteen tests in `hosts/ipnx` run the real thing — eleven typing at a
+Twenty-one tests in `hosts/ipnx` run the real thing — thirteen typing at a
 scripted console after a full boot, three booting twice into a filesystem of
 their own, and five driving a guest module directly. They need
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
@@ -178,6 +193,14 @@ The conformance suite lists twelve capabilities and reaches none of them. It
 fails, and will until it does.
 
 The phases are in [implementation.md](implementation.md). P0–P3 are done.
+
+**The suite cannot record progress.** Marking a behaviour `Reached` panics —
+*"is claimed reached but has no check wired up"* — because `Behaviour` has no
+check to wire: there is no field for one. Five of the twelve are demonstrably
+reached today (boot to a shell, list a directory, read a file, a pipeline, and
+per-process namespaces, which `@{rfork n; bind /tmp/alt /etc}` shows), and the
+suite still says 0 of 12. **Until `Behaviour` carries its check, the number
+measures nothing.**
 
 **P5 is done — the CLI.** Typing `ipnx` boots to `rc` on the terminal; `ls`,
 `cat /etc/motd` and the demo's commands run. The boot is the system's own:
