@@ -241,12 +241,13 @@ pub fn boot(
         v9.add(store);
     }
     k.tab.add(Box::new(v9));
-    k.tab.add(Box::new(Cons::new(
-        "eve",
-        k.up.clone(),
-        LETTERS.to_vec(),
-        host,
-    )));
+    // **`eve` starts EMPTY**, as `userinit` leaves it (`pc/main.c:285`:
+    // `kstrdup(&eve, "")`). `boot` names the host owner by writing
+    // `#c/hostowner` — `glenda()` (`bootauth.c:56`), reached because there
+    // is no `/boot/factotum` here — and `hostownerwrite` allows the first
+    // one because `iseve()` is then comparing two empty strings
+    // (`auth.c:128`).
+    k.tab.add(Box::new(Cons::new(k.tab.eve(), k.up.clone(), LETTERS.to_vec(), host)));
     Ok(k)
 }
 

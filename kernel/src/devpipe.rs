@@ -12,7 +12,7 @@
 //! other, which is the whole of what a pipe is.
 
 use crate::chan::Chan;
-use crate::dev::{Dev, DevId, EVE};
+use crate::dev::{Dev, DevId, Eve};
 use crate::ninep::{Qid, QTDIR};
 use std::collections::VecDeque;
 
@@ -31,6 +31,10 @@ const QDATA1: u64 = 2;
 
 #[derive(Default)]
 pub struct PipeDev {
+    /// `eve` — the kernel-wide host owner (`auth.c:10`), shared rather than
+    /// copied, because writing `#c/hostowner` renames it for everyone.
+    eve: Eve,
+
     pipes: Vec<Pipe>,
 }
 
@@ -55,6 +59,10 @@ impl PipeDev {
 }
 
 impl Dev for PipeDev {
+    fn seteve(&mut self, eve: Eve) {
+        self.eve = eve;
+    }
+
     fn id(&self) -> DevId {
         DevId::Pipe
     }
@@ -102,11 +110,12 @@ impl Dev for PipeDev {
                 let p = self.pipe(c)?;
                 [p.q[0].len() as u64, p.q[1].len() as u64]
             };
+            let eve_ = self.eve.borrow().clone();
             let entries: Vec<crate::ninep::Dir> = [("data", QDATA0, 0), ("data1", QDATA1, 1)]
                 .into_iter()
                 .map(|(name, path, i)| {
                     let qid = Qid { qtype: 0, vers: 0, path };
-                    crate::dev::devdir(c, qid, name, queued[i], EVE, EVE, 0o600)
+                    crate::dev::devdir(c, qid, name, queued[i], &eve_, &eve_, 0o600)
                 })
                 .collect();
             return Ok(crate::dev::devdirread(c, n, &entries));
@@ -145,7 +154,7 @@ impl Dev for PipeDev {
             }
             None => 0,
         };
-        Ok(crate::dev::devdir(c, c.qid, name, length, EVE, EVE, perm).conv_d2m())
+        Ok(crate::dev::devdir(c, c.qid, name, length, &self.eve.borrow(), &self.eve.borrow(), perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {

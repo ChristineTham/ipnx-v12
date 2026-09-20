@@ -27,6 +27,12 @@ const MSIZE: u32 = 8192 + 24;
 
 pub struct Store {
     root: PathBuf,
+    /// The `uname` of the `Tattach`, and the owner of every file this server
+    /// reports. `u9fs` does the same: an exported tree has no users of its
+    /// own, so it answers with the one who attached. It was the fixed string
+    /// `"eve"`, which stopped being anybody's name once `boot` started
+    /// naming the host owner.
+    uname: String,
     /// The fids in play. 9P's whole state is here: a fid is a name the client
     /// chose for a file it has walked to.
     fids: HashMap<u32, Fid>,
@@ -45,7 +51,7 @@ impl Store {
     /// is a directory that survives a boot, which is the whole point.
     pub fn new(root: &Path) -> std::io::Result<Store> {
         std::fs::create_dir_all(root)?;
-        Ok(Store { root: root.to_path_buf(), fids: HashMap::new() })
+        Ok(Store { root: root.to_path_buf(), uname: String::new(), fids: HashMap::new() })
     }
 
     /// Where a fid's path really is. **Every name is checked against the
@@ -95,9 +101,9 @@ impl Store {
             mtime: 0,
             length: if dir { 0 } else { md.len() },
             name: name.to_string(),
-            uid: "eve".into(),
-            gid: "eve".into(),
-            muid: "eve".into(),
+            uid: self.uname.clone(),
+            gid: self.uname.clone(),
+            muid: self.uname.clone(),
         })
     }
 }
@@ -127,6 +133,12 @@ impl Nineserver for Store {
 
             x if x == T::Attach as u8 => {
                 let Some(fid) = r.u32() else { return Ok(err("short Tattach", tag)) };
+                // `afid[4] uname[s] aname[s]` — the afid is skipped and the
+                // uname kept.
+                r.u32();
+                if let Some(u) = r.s() {
+                    self.uname = u.to_string();
+                }
                 self.fids.insert(
                     fid,
                     Fid { path: PathBuf::new(), mode: 0, open: false },

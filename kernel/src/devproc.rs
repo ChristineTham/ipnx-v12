@@ -12,7 +12,7 @@
 //! absent for the reason `#i` and `#m` are rather than by a separate rule.
 
 use crate::chan::Chan;
-use crate::dev::{Dev, DevId, EVE};
+use crate::dev::{Dev, DevId, Eve};
 use crate::ninep::{Qid, QTDIR};
 use crate::proc::{Fd, Pid, Up};
 use std::cell::RefCell;
@@ -41,6 +41,15 @@ pub enum Q {
 }
 
 /// name, which file, permission — `procdir[]`'s own values.
+/// `procdir[]` (`devproc.c:79`) is eighteen; this is **nine**, and each of
+/// the nine absent is absent for a stated reason:
+///
+/// | | |
+/// |---|---|
+/// | `fpregs` `kregs` `regs` | a register set. There is none — the machine's registers are the engine's and a guest has no `Ureg`. This is the narrow case that needs no approval |
+/// | `mem` `segment` `text` | an address space. A guest has ONE linear memory and no segments, and `text` is the module — what each should mean here is a design question, not a gap to fill in passing |
+/// | `notepg` | a note group, and there are no notes (see `Call::Notify`) |
+/// | `profile` `syscall` | tracing. Plan 9 has both; neither is built |
 pub const PROCDIR: &[(&str, Q, u32)] = &[
     ("args", Q::Args, 0o660),
     ("ctl", Q::Ctl, 0o000),
@@ -74,7 +83,7 @@ fn split_qid(path: u64) -> (Pid, Q) {
 
 pub struct ProcDev {
     up: Rc<RefCell<Up>>,
-    pub eve: String,
+    eve: Eve,
     /// `#s`'s table, for `srvname` — which `devproc.c` calls to name the
     /// server behind a mount, and reaches because Plan 9's is a file-scope
     /// global with the function declared in `portfns.h`.
@@ -83,7 +92,7 @@ pub struct ProcDev {
 
 impl ProcDev {
     pub fn new(up: Rc<RefCell<Up>>) -> ProcDev {
-        ProcDev { up, eve: "eve".into(), srv: Default::default() }
+        ProcDev { up, eve: Eve::default(), srv: Default::default() }
     }
 
     /// Hand it `#s`'s table. Without one, a mount names its wire channel —
@@ -103,7 +112,7 @@ impl ProcDev {
             return Ok(());
         }
         let user = up.user();
-        if user != "none" || user == self.eve {
+        if user != "none" || crate::dev::iseve(&self.eve, &user) {
             return Ok(());
         }
         Err(EPERM.into())
@@ -142,6 +151,10 @@ fn int2flag(flag: i32) -> String {
 }
 
 impl Dev for ProcDev {
+    fn seteve(&mut self, eve: Eve) {
+        self.eve = eve;
+    }
+
     fn id(&self) -> DevId {
         DevId::Proc
     }
@@ -228,7 +241,7 @@ impl Dev for ProcDev {
                         &pid.to_string(),
                         0,
                         &user,
-                        EVE,
+                        &self.eve.borrow(),
                         crate::ninep::DMDIR | 0o555,
                     )
                 })
@@ -244,7 +257,7 @@ impl Dev for ProcDev {
                 .iter()
                 .map(|(name, q, perm)| {
                     let qid = Qid { qtype: 0, vers: 0, path: qid_of(pid, *q) };
-                    crate::dev::devdir(c, qid, name, 0, &user, EVE, *perm)
+                    crate::dev::devdir(c, qid, name, 0, &user, &self.eve.borrow(), *perm)
                 })
                 .collect();
             return Ok(crate::dev::devdirread(c, n, &entries));
@@ -376,13 +389,18 @@ impl Dev for ProcDev {
                 }
             }
             (Q::Note, _) => {
-                // A note is a string delivered to a process. There is no
-                // note group yet (P3), so this refuses rather than dropping
-                // it silently.
-                return Err("no notes yet — P3".into());
+                // `procwrite`'s `Qnote` is `postnote(p, 0, buf, NUser)`
+                // (`devproc.c`) — a string delivered to a process, taken on
+                // its way out of the kernel. Nothing here can take it: see
+                // `Call::Notify`.
+                return Err("notes need a mechanism this machine does not have yet".into());
             }
             (Q::Ctl, "start" | "stop" | "waitstop" | "hang" | "nohang") => {
-                return Err("no scheduler yet — P3".into());
+                // `procctlreq` (`devproc.c`) moves a process between
+                // `Running`, `Stopped` and `Broken` and `sched()`s. A
+                // process here runs inside one call on the machine and
+                // cannot be stopped part way through it.
+                return Err("a process cannot be stopped part way: no scheduler".into());
             }
             (Q::Ctl, _) => return Err("unknown control message".into()),
             _ => return Err(EPERM.into()),
@@ -401,11 +419,11 @@ impl Dev for ProcDev {
             (e.0.to_string(), e.2)
         };
         let user = if pid == 0 {
-            EVE.to_string()
+            self.eve.borrow().clone()
         } else {
-            self.up.borrow().procs.borrow().user(pid).unwrap_or_else(|| EVE.to_string())
+            self.up.borrow().procs.borrow().user(pid).unwrap_or_else(|| self.eve.borrow().clone())
         };
-        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, EVE, perm).conv_d2m())
+        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, &self.eve.borrow(), perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -437,8 +455,14 @@ mod tests {
 
     fn proc() -> (ProcDev, Rc<RefCell<Procs>>) {
         let procs = Rc::new(RefCell::new(Procs::new(root())));
+        // The running system starts `eve` empty (`pc/main.c:285`) and has
+        // `boot` name the host owner by writing `#c/hostowner`
+        // (`bootauth.c:56`). A unit test has no boot, so it names one.
+        procs.borrow_mut().get_mut(1).unwrap().user = "eve".into();
         let up = Rc::new(RefCell::new(Up { pid: 1, procs: procs.clone() }));
-        (ProcDev::new(up), procs)
+        let mut d = ProcDev::new(up);
+        d.seteve(crate::dev::Eve::new(RefCell::new("eve".to_string())));
+        (d, procs)
     }
 
     fn open(d: &mut ProcDev, pid: Pid, name: &str, mode: u16) -> Chan {

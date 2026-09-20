@@ -164,6 +164,12 @@ impl Machine for Wasm {
         Tod { nsec: d.as_nanos() as u64, ticks: d.as_nanos() as u64, hz: 1_000_000_000 }
     }
 
+    /// `delay` (`pc/fns.h:23`). The PC spins on the TSC; this machine is a
+    /// process on an operating system that can be asked to wait, so it asks.
+    fn delay(&self, ms: u64) {
+        std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+
     fn touser(
         &self,
         pid: Pid,
@@ -497,6 +503,23 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
 
     l.func_wrap("sys", "alarm", |mut c: Caller<'_, Guest>, ms: i32| {
         or_fail(call(&mut c, Call::Alarm { ms: ms.max(0) as u64 }), |_| 0) as i64
+    })?;
+
+    // The three the kernel refuses. They are imports all the same, so a
+    // program that calls one gets −1 and the kernel's reason in `errstr` —
+    // which is what a Plan 9 program does with a call that fails, and is
+    // not the same as a program that would not link.
+    l.func_wrap("sys", "notify", |mut c: Caller<'_, Guest>, _f: i32| {
+        or_fail(call(&mut c, Call::Notify), |_| 0)
+    })?;
+    l.func_wrap("sys", "noted", |mut c: Caller<'_, Guest>, v: i32| {
+        or_fail(call(&mut c, Call::Noted { how: v }), |_| 0)
+    })?;
+    l.func_wrap("sys", "rendezvous", |mut c: Caller<'_, Guest>, tag: i32, val: i32| {
+        or_fail(
+            call(&mut c, Call::Rendezvous { tag: tag as u64, val: val as u64 }),
+            |_| 0,
+        )
     })?;
 
     Ok(())

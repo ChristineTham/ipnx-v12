@@ -62,6 +62,42 @@ srvcreate(char *name, int fd)
 	close(f);
 }
 
+/*
+ * `authentication` (`boot/bootauth.c:7`) takes its first branch here and
+ * always will:
+ *
+ *	if(access("/boot/factotum", AEXEC) < 0){
+ *		glenda();
+ *		return;
+ *	}
+ *
+ * There is no factotum in `#/boot` — it carries one file — so this is
+ * `glenda()` (`:56`) and nothing else. **It is what names the host owner**:
+ * `eve` is the empty string until now (`pc/main.c:285`), every process is
+ * nobody, and `hostownerwrite` permits the write because `iseve()` is
+ * comparing two empty strings (`auth.c:128`).
+ *
+ * `$user` comes from `plan9.ini` by way of `#ec`, which exists here and is
+ * empty, so the name is the one Plan 9 falls back to.
+ */
+static void
+authentication(void)
+{
+	char *s;
+	int fd;
+
+	s = getenv("user");
+	if(s == nil)
+		s = "glenda";
+
+	fd = open("#c/hostowner", OWRITE);
+	if(fd >= 0){
+		if(write(fd, s, strlen(s)) != strlen(s))
+			fprint(2, "boot: setting #c/hostowner to %s: %r\n", s);
+		close(fd);
+	}
+}
+
 void
 main(int argc, char *argv[])
 {
@@ -101,6 +137,8 @@ main(int argc, char *argv[])
 
 	if(bind(rootdir, "/", MAFTER|MCREATE) < 0)
 		fatal("second bind /");
+
+	authentication();
 
 	/*
 	 * `execinit` (`boot.c:201`). With no `$init` to read, the name is the

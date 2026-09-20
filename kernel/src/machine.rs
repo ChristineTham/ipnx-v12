@@ -66,6 +66,13 @@ pub trait Machine {
     /// come from the architecture. It is here for the same reason `touser`
     /// is — portable code needs it, and only a machine can supply it.
     fn todget(&self) -> Tod;
+
+    /// `delay(int millisecs)` — the machine-dependent wait, declared beside
+    /// `touser` in the same list (`pc/fns.h:23`, `port/portfns.h:61`) and
+    /// implemented per architecture: the PC spins on the TSC
+    /// (`pc/i8253.c:320`, `aamloop`). A hosted machine has a better way and
+    /// uses it; the kernel does not know or care which.
+    fn delay(&self, ms: u64);
 }
 
 /// What `todget` answers.

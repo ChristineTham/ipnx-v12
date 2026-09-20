@@ -69,7 +69,7 @@ libc() {
 # Portable sources that do not belong to this machine: they reach for calls
 # this kernel does not have (segments, notes, semaphores, the network) or for
 # tables no command here needs.
-LIBCSKIP='@(port|9sys)/@(atnotify|hangup|lock|perror|profile|netcrypt|crypt|truerand|ntruerand|notify|postnote|announce|dial|pushssl|pushtls|getnetconninfo|setnetmtpt|syslog|qlock|privalloc|sbrk|read9pmsg|procsetname|fork|execl|readv|writev|byteserial|encodefmt|netmkaddr|mktemp).c'
+LIBCSKIP='@(port|9sys)/@(atnotify|hangup|lock|profile|netcrypt|crypt|truerand|ntruerand|notify|postnote|announce|dial|pushssl|pushtls|getnetconninfo|setnetmtpt|syslog|qlock|privalloc|sbrk|read9pmsg|procsetname|fork|execl|readv|writev|byteserial|encodefmt|netmkaddr|mktemp).c'
 shopt -s extglob
 
 # ---- the other libraries --------------------------------------------------

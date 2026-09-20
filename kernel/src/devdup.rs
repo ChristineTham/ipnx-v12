@@ -13,7 +13,7 @@
 //! `mkqid(&q, s+1, ...)` over a doubled index.
 
 use crate::chan::Chan;
-use crate::dev::{Dev, DevId, EVE};
+use crate::dev::{Dev, DevId, Eve};
 use crate::ninep::{Qid, QTDIR};
 use crate::proc::{Fd, Up};
 use std::cell::RefCell;
@@ -27,12 +27,16 @@ const PERM: [u32; 4] = [0o400, 0o200, 0o600, 0];
 const EBADFD: &str = "fd out of range or not open";
 
 pub struct DupDev {
+    /// `eve` — the kernel-wide host owner (`auth.c:10`), shared rather than
+    /// copied, because writing `#c/hostowner` renames it for everyone.
+    eve: Eve,
+
     up: Rc<RefCell<Up>>,
 }
 
 impl DupDev {
     pub fn new(up: Rc<RefCell<Up>>) -> DupDev {
-        DupDev { up }
+        DupDev { up, eve: Eve::default() }
     }
 
     /// `twicefd = c->qid.path - 1; fd = twicefd/2` — and the odd one is the
@@ -58,6 +62,10 @@ impl DupDev {
 }
 
 impl Dev for DupDev {
+    fn seteve(&mut self, eve: Eve) {
+        self.eve = eve;
+    }
+
     fn id(&self) -> DevId {
         DevId::Dup
     }
@@ -124,19 +132,20 @@ impl Dev for DupDev {
                 let g = fgrp.borrow();
                 (0..g.slots()).filter(|fd| g.get(*fd).is_some()).collect()
             };
+            let eve_ = self.eve.borrow().clone();
             let mut entries = Vec::new();
             for fd in open {
                 let perm = self.chan(fd).map(|got| PERM[(got.mode & 3) as usize]).unwrap_or(0);
                 let q = Qid { qtype: 0, vers: 0, path: Self::qid(fd, false) };
                 let qctl = Qid { qtype: 0, vers: 0, path: Self::qid(fd, true) };
-                entries.push(crate::dev::devdir(c, q, &format!("{fd}"), 0, &user, EVE, perm));
+                entries.push(crate::dev::devdir(c, q, &format!("{fd}"), 0, &user, &eve_, perm));
                 entries.push(crate::dev::devdir(
                     c,
                     qctl,
                     &format!("{fd}ctl"),
                     0,
                     &user,
-                    EVE,
+                    &self.eve.borrow(),
                     0o400,
                 ));
             }
@@ -179,7 +188,7 @@ impl Dev for DupDev {
             }
         };
         let user = self.up.borrow().user();
-        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, EVE, perm).conv_d2m())
+        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, &self.eve.borrow(), perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {

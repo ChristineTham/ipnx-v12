@@ -15,7 +15,7 @@
 
 use crate::chan::Chan;
 use crate::dev::{Dev, DevId};
-use crate::ninep::{Qid, QTDIR};
+use crate::ninep::{Qid, QTDIR, QTEXCL};
 use crate::proc::Up;
 #[cfg(test)]
 use crate::proc::Procs;
@@ -89,13 +89,16 @@ pub struct Cons {
     /// not in any architecture directory: what a backspace does is not the
     /// machine's business.
     kbd: Kbd,
-    pub eve: String,
+    eve: crate::dev::Eve,
     pub hostdomain: String,
     pub sysname: String,
     pub kmesg: Vec<u8>,
     /// `Mach.syscall` and `Mach.cs` (`pc/dat.h:233`), the two counters this
     /// kernel is in a position to keep honestly.
     pub syscalls: u64,
+    /// `kprintinuse` (`devcons.c`) — the one-reader lock `consopen` takes
+    /// with `tas` and `consclose` releases.
+    kprintinuse: bool,
     pub cs: u64,
     /// The device letters this kernel carries, for `/dev/drivers`. The names
     /// come from [`DevId::name`], so there is one list and not two.
@@ -164,31 +167,35 @@ pub enum Q {
     Config,
 }
 
-/// Name, qid and permission — `consdir[]` exactly (`devcons.c:606`).
-pub const CONSDIR: &[(&str, Q, u32)] = &[
-    ("bintime", Q::Bintime, 0o664),
-    ("cons", Q::Cons, 0o660),
-    ("consctl", Q::Consctl, 0o220),
-    ("cputime", Q::Cputime, 0o444),
-    ("drivers", Q::Drivers, 0o444),
-    ("hostdomain", Q::Hostdomain, 0o664),
-    ("hostowner", Q::Hostowner, 0o664),
-    ("kmesg", Q::Kmesg, 0o440),
-    ("kprint", Q::Kprint, 0o440),
-    ("null", Q::Null, 0o666),
-    ("osversion", Q::Osversion, 0o444),
-    ("pgrpid", Q::Pgrpid, 0o444),
-    ("pid", Q::Pid, 0o444),
-    ("ppid", Q::Ppid, 0o444),
-    ("random", Q::Random, 0o444),
-    ("reboot", Q::Reboot, 0o660),
-    ("swap", Q::Swap, 0o664),
-    ("sysname", Q::Sysname, 0o664),
-    ("sysstat", Q::Sysstat, 0o666),
-    ("time", Q::Time, 0o664),
-    ("user", Q::User, 0o666),
-    ("zero", Q::Zero, 0o444),
-    ("config", Q::Config, 0o444),
+/// Name, qid, **qid TYPE** and permission — `consdir[]` exactly
+/// (`devcons.c:606`). The type column is there for one entry:
+/// `"kprint", {Qkprint, 0, QTEXCL}, 0, DMEXCL|0440` (`:616`). `devdir` sets
+/// `mode = perm | qid.type<<24` and `DMEXCL` is `QTEXCL << 24`, so the one
+/// bit in the qid answers both — the table needs no `DMEXCL` of its own.
+pub const CONSDIR: &[(&str, Q, u8, u32)] = &[
+    ("bintime", Q::Bintime, 0, 0o664),
+    ("cons", Q::Cons, 0, 0o660),
+    ("consctl", Q::Consctl, 0, 0o220),
+    ("cputime", Q::Cputime, 0, 0o444),
+    ("drivers", Q::Drivers, 0, 0o444),
+    ("hostdomain", Q::Hostdomain, 0, 0o664),
+    ("hostowner", Q::Hostowner, 0, 0o664),
+    ("kmesg", Q::Kmesg, 0, 0o440),
+    ("kprint", Q::Kprint, QTEXCL, 0o440),
+    ("null", Q::Null, 0, 0o666),
+    ("osversion", Q::Osversion, 0, 0o444),
+    ("pgrpid", Q::Pgrpid, 0, 0o444),
+    ("pid", Q::Pid, 0, 0o444),
+    ("ppid", Q::Ppid, 0, 0o444),
+    ("random", Q::Random, 0, 0o444),
+    ("reboot", Q::Reboot, 0, 0o660),
+    ("swap", Q::Swap, 0, 0o664),
+    ("sysname", Q::Sysname, 0, 0o664),
+    ("sysstat", Q::Sysstat, 0, 0o666),
+    ("time", Q::Time, 0, 0o664),
+    ("user", Q::User, 0, 0o666),
+    ("zero", Q::Zero, 0, 0o444),
+    ("config", Q::Config, 0, 0o444),
 ];
 
 impl Q {
@@ -208,27 +215,30 @@ impl Q {
         CONSDIR.iter().find(|e| e.1 == self).map(|e| e.0).unwrap_or(".")
     }
     fn perm(self) -> u32 {
-        CONSDIR.iter().find(|e| e.1 == self).map(|e| e.2).unwrap_or(0o555)
+        CONSDIR.iter().find(|e| e.1 == self).map(|e| e.3).unwrap_or(0o555)
     }
 }
 
 const EPERM: &str = "permission denied";
+/// `Einuse` (`error.h`) — *"device or object already in use"*.
+const EINUSE: &str = "device or object already in use";
 const EBADARG: &str = "bad arg in system call";
 
 impl Cons {
     pub fn new(
-        eve: &str,
+        eve: crate::dev::Eve,
         up: Rc<RefCell<Up>>,
         letters: Vec<DevId>,
         host: Box<dyn Console>,
     ) -> Cons {
         Cons {
             kbd: Kbd::default(),
-            eve: eve.to_string(),
+            eve,
             hostdomain: String::new(),
             sysname: String::new(),
             kmesg: Vec::new(),
             syscalls: 0,
+            kprintinuse: false,
             cs: 0,
             letters,
             up,
@@ -337,7 +347,7 @@ impl Cons {
     /// `iseve()` — `strcmp(eve, up->user) == 0` (`auth.c:17`). A NAME
     /// comparison, not a bit.
     fn iseve(&self) -> bool {
-        self.user() == self.eve
+        crate::dev::iseve(&self.eve, &self.user())
     }
 
     fn user(&self) -> String {
@@ -383,15 +393,33 @@ impl Dev for Cons {
         Ok(CONSDIR
             .iter()
             .find(|e| e.0 == name)
-            .map(|e| c.walked(name, Qid { qtype: 0, vers: 0, path: e.1 as u64 })))
+            .map(|e| c.walked(name, Qid { qtype: e.2, vers: 0, path: e.1 as u64 })))
     }
 
     /// `consopen` (`devcons.c:692`) — one file needs to know it was opened.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
+        // `devopen`'s tail (`dev.c`): *"c->offset = 0; c->mode =
+        // openmode(omode); c->flag |= COPEN;"*. `close` acts on that bit,
+        // so a device that does not set it has a `close` that never fires.
+        c.offset = 0;
         c.mode = mode;
-        if Q::from_path(c.qid.path) == Some(Q::Consctl) {
-            // `incref(&kbd.ctl)`.
-            self.kbd.ctl += 1;
+        c.flag |= crate::chan::flag::COPEN;
+        match Q::from_path(c.qid.path) {
+            Some(Q::Consctl) => {
+                // `incref(&kbd.ctl)`.
+                self.kbd.ctl += 1;
+            }
+            // `consopen` (`devcons.c`): *"if(tas(&kprintinuse) != 0){
+            // c->flag &= ~COPEN; error(Einuse); }"*. `kprint` drains the
+            // kernel's log to ONE reader — two would each get part of it —
+            // which is what `DMEXCL` on the file announces.
+            Some(Q::Kprint) => {
+                if self.kprintinuse {
+                    return Err(EINUSE.into());
+                }
+                self.kprintinuse = true;
+            }
+            _ => {}
         }
         Ok(c)
     }
@@ -442,7 +470,7 @@ impl Dev for Cons {
 
             // identity
             Q::User => Self::readstr(&self.user(), n, off),
-            Q::Hostowner => Self::readstr(&self.eve.clone(), n, off),
+            Q::Hostowner => Self::readstr(&self.eve.borrow().clone(), n, off),
             Q::Hostdomain => Self::readstr(&self.hostdomain.clone(), n, off),
 
             // the kernel itself
@@ -546,11 +574,11 @@ impl Dev for Cons {
             // there is nothing to skip.
             Q::Dir => {
                 let user = self.up.borrow().user();
-                let eve = self.eve.clone();
+                let eve = self.eve.borrow().clone();
                 let entries: Vec<crate::ninep::Dir> = CONSDIR
                     .iter()
-                    .map(|(name, q, perm)| {
-                        let qid = Qid { qtype: 0, vers: 0, path: *q as u64 };
+                    .map(|(name, q, qtype, perm)| {
+                        let qid = Qid { qtype: *qtype, vers: 0, path: *q as u64 };
                         crate::dev::devdir(c, qid, name, 0, &user, &eve, *perm)
                     })
                     .collect();
@@ -590,10 +618,10 @@ impl Dev for Cons {
                 if s.is_empty() {
                     return Err(EBADARG.into());
                 }
-                let old = self.eve.clone();
+                let old = self.eve.borrow().clone();
                 let up = self.up.borrow();
                 up.procs.borrow_mut().renameuser(&old, &s);
-                self.eve = s;
+                *self.eve.borrow_mut() = s;
             }
             Q::Hostdomain => {
                 if !self.iseve() {
@@ -644,7 +672,7 @@ impl Dev for Cons {
             (q.name(), q.perm())
         };
         let user = self.up.borrow().user();
-        Ok(crate::dev::devdir(c, c.qid, name, 0, &user, &self.eve.clone(), perm).conv_d2m())
+        Ok(crate::dev::devdir(c, c.qid, name, 0, &user, &self.eve.borrow().clone(), perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -659,13 +687,20 @@ impl Dev for Cons {
     /// raw"*. A program that set raw mode and died must not leave the console
     /// in it, and nothing else would put it back.
     fn close(&mut self, c: &mut Chan) {
-        if Q::from_path(c.qid.path) == Some(Q::Consctl)
-            && c.flag & crate::chan::flag::COPEN != 0
-        {
-            self.kbd.ctl = self.kbd.ctl.saturating_sub(1);
-            if self.kbd.ctl == 0 {
-                self.kbd.raw = false;
+        if c.flag & crate::chan::flag::COPEN == 0 {
+            return;
+        }
+        match Q::from_path(c.qid.path) {
+            Some(Q::Consctl) => {
+                self.kbd.ctl = self.kbd.ctl.saturating_sub(1);
+                if self.kbd.ctl == 0 {
+                    self.kbd.raw = false;
+                }
             }
+            // `consclose`: *"case Qkprint: if(c->flag & COPEN){ kprintinuse
+            // = 0; ... }"*. The next open gets it.
+            Some(Q::Kprint) => self.kprintinuse = false,
+            _ => {}
         }
     }
 }
@@ -723,9 +758,13 @@ mod tests {
 
     fn cons() -> (Cons, Rc<RefCell<Procs>>) {
         let procs = Rc::new(RefCell::new(Procs::new(Chan::attach(DevId::Root, 0))));
+        // The running system starts `eve` empty (`pc/main.c:285`) and has
+        // `boot` name the host owner by writing `#c/hostowner`
+        // (`bootauth.c:56`). A unit test has no boot, so it names one.
+        procs.borrow_mut().get_mut(1).unwrap().user = "eve".into();
         let up = Rc::new(RefCell::new(Up { pid: 1, procs: procs.clone() }));
         let letters = vec![DevId::Root, DevId::Pipe, DevId::Cons];
-        (Cons::new("eve", up, letters, Box::new(FakeHost::default())), procs)
+        (Cons::new(eve_(), up, letters, Box::new(FakeHost::default())), procs)
     }
 
     /// A console whose terminal the test still holds.
@@ -734,7 +773,7 @@ mod tests {
         let up = Rc::new(RefCell::new(Up { pid: 1, procs }));
         let host = FakeHost::default();
         host.0.borrow_mut().keys = keys.iter().map(|k| k.as_bytes().to_vec()).collect();
-        (Cons::new("eve", up, vec![DevId::Cons], Box::new(host.clone())), host)
+        (Cons::new(eve_(), up, vec![DevId::Cons], Box::new(host.clone())), host)
     }
 
     fn open(d: &mut Cons, name: &str, mode: u16) -> Chan {
@@ -743,14 +782,25 @@ mod tests {
         d.open(c, mode).unwrap()
     }
 
+    /// The fixture's host owner. The running system starts `eve` empty and
+    /// has `boot` write `#c/hostowner` (`bootauth.c:56`); a unit test wants
+    /// somebody there already.
+    fn eve_() -> crate::dev::Eve {
+        crate::dev::Eve::new(std::cell::RefCell::new("eve".to_string()))
+    }
+
     fn read(d: &mut Cons, name: &str) -> String {
         let mut c = open(d, name, OREAD);
-        String::from_utf8_lossy(&d.read(&mut c, 4096, 0).unwrap()).to_string()
+        let got = String::from_utf8_lossy(&d.read(&mut c, 4096, 0).unwrap()).to_string();
+        d.close(&mut c);
+        got
     }
 
     fn write(d: &mut Cons, name: &str, s: &str) -> Result<usize, String> {
         let mut c = open(d, name, OWRITE);
-        d.write(&mut c, s.as_bytes(), 0)
+        let got = d.write(&mut c, s.as_bytes(), 0);
+        d.close(&mut c);
+        got
     }
 
     /// All 23 of `consdir[]` (`devcons.c:606`) are here, and walk to a qid.
@@ -883,6 +933,27 @@ mod tests {
     }
 
     /// The kernel's log is a file, and it appends.
+    /// `kprint` is **exclusive use**: `consopen` takes `kprintinuse` with
+    /// `tas` and answers `Einuse` to a second opener (`devcons.c`), and the
+    /// file says so — `{Qkprint, 0, QTEXCL}` with `DMEXCL|0440` (`:616`),
+    /// which `devdir` reports as one bit shifted into the mode. It drains
+    /// the kernel's log, so two readers would each get part of it.
+    #[test]
+    fn kprint_is_exclusive_use_and_says_so() {
+        let (mut d, _) = cons();
+        let dir = d.attach("").unwrap();
+        let c = d.walk(&dir, "kprint").unwrap().unwrap();
+        assert_eq!(c.qid.qtype, QTEXCL, "the qid carries it");
+
+        let stat = crate::ninep::Dir::conv_m2d(&d.stat(&c).unwrap()).unwrap();
+        assert!(stat.mode & crate::ninep::DMEXCL != 0, "and the mode reports it");
+
+        let mut first = d.open(c.clone(), OREAD).unwrap();
+        assert!(d.open(c.clone(), OREAD).is_err(), "a second open is Einuse");
+        d.close(&mut first);
+        assert!(d.open(c, OREAD).is_ok(), "and the next one gets it");
+    }
+
     #[test]
     fn kmesg_accumulates_and_reads_back() {
         let (mut d, _) = cons();

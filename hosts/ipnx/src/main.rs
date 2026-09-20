@@ -322,7 +322,11 @@ mod userspace {
     /// (`pc/main.c:252`), `$user` from `#c/user`, `$sysname` from termrc.
     #[test]
     fn the_environment_is_what_the_boot_put_there() {
-        assert!(typing("echo $objtype $user $sysname\n").contains("wasm eve gnot"));
+        // `glenda`, not `eve`: `eve` is the empty string until `boot` writes
+        // `#c/hostowner` (`bootauth.c:56`), and the name it writes is
+        // `$user` from the configuration or Plan 9's own fallback. `eve` is
+        // the role, not a person.
+        assert!(typing("echo $objtype $user $sysname\n").contains("wasm glenda gnot"));
     }
 
     /// **`/dev/config` is the KERNEL configuration file** — `$CONF`, the one

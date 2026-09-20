@@ -9,7 +9,7 @@
 //! first process, and that process mounts the real thing.
 
 use crate::chan::Chan;
-use crate::dev::{Dev, DevId, EVE};
+use crate::dev::{Dev, DevId, Eve};
 use crate::ninep::{Qid, QTDIR};
 
 /// One entry. Plan 9's `Dirtab`, with the fields a subset needs.
@@ -34,6 +34,10 @@ const ROOTDIRS: [&str; 10] = [
 ];
 
 pub struct Root {
+    /// `eve` — the kernel-wide host owner (`auth.c:10`), shared rather than
+    /// copied, because writing `#c/hostowner` renames it for everyone.
+    eve: Eve,
+
     files: Vec<Entry>,
     /// The empty directories of `rootlist`, which is a different list from
     /// `bootlist`: `addrootdir` adds here, `addbootfile` adds there.
@@ -49,7 +53,7 @@ impl Default for Root {
 
 impl Root {
     pub fn new() -> Root {
-        let mut r = Root { files: Vec::new(), dirs: Vec::new(), next_qid: 1 };
+        let mut r = Root { files: Vec::new(), dirs: Vec::new(), next_qid: 1, eve: Eve::default() };
         // `rootreset` — `reset` is one of `struct Dev`'s seventeen, and this
         // is the whole of devroot's.
         for (i, name) in ROOTDIRS.iter().enumerate() {
@@ -112,7 +116,7 @@ impl Root {
                 .collect()
         };
         list.into_iter()
-            .map(|(name, qid, len, perm)| crate::dev::devdir(c, qid, name, len, EVE, EVE, perm))
+            .map(|(name, qid, len, perm)| crate::dev::devdir(c, qid, name, len, &self.eve.borrow(), &self.eve.borrow(), perm))
             .collect()
     }
 
@@ -125,6 +129,10 @@ impl Root {
 const EGREG: &str = "it's a mystery to me";
 
 impl Dev for Root {
+    fn seteve(&mut self, eve: Eve) {
+        self.eve = eve;
+    }
+
     fn id(&self) -> DevId {
         DevId::Root
     }
@@ -200,7 +208,7 @@ impl Dev for Root {
                 (e.name.as_str(), e.qid, e.data.len() as u64, e.perm)
             }
         };
-        Ok(crate::dev::devdir(c, qid, name, len, EVE, EVE, perm).conv_d2m())
+        Ok(crate::dev::devdir(c, qid, name, len, &self.eve.borrow(), &self.eve.borrow(), perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {

@@ -7,7 +7,8 @@
  *	cpu = readenv("#e/cputype");  setenv("#e/objtype", cpu);
  *	user = readenv("#c/user");    systemname = readenv("#c/sysname");
  *	newns(user, 0);
- *	for(;;){ print("\ninit: starting /bin/rc\n"); fexec(rcexec); manual = 1; }
+ *	for(;;){ print("\ninit: starting /bin/rc\n"); fexec(rcexec); manual = 1;
+ *		cmd = 0; sleep(1000); }
  *
  * WHAT IS NOT HERE: `-c`/`-t`/`-m` and the cpu/terminal split (there is one
  * service), the priority write to `#p/n/ctl` (no scheduler to prioritise
@@ -118,12 +119,16 @@ main(int argc, char *argv[])
 	 * one — because a terminal does not end, so a shell that exited is a
 	 * shell that must be started again.
 	 *
-	 * **Input CAN end here** — a host terminal closes, and `#c`'s
-	 * `consread` answers that as the `^D` its user would have typed — so
-	 * the shell exiting for the second time is the end of the session
-	 * rather than a reason to start a third. Going round again would
-	 * spin, and `sleep`, which is what Plan 9 puts in the loop to stop
-	 * exactly that, is one of the calls this kernel still refuses.
+	 * **Input CAN end here**, and that is the one difference. A host
+	 * terminal closes, `#c`'s `consread` answers that as the `^D` its
+	 * user would have typed, and every shell after it reads the same
+	 * nothing — so the second exit is the end of the session rather than
+	 * a reason to start a third. Plan 9's terminal does not end, so its
+	 * loop does not need the test.
+	 *
+	 * `sleep(1000)` is Plan 9's own last line of the loop and is here for
+	 * the reason it is there: a shell that dies at once must not be
+	 * restarted at once.
 	 */
 	for(;;){
 		pid = procrfork(rcexec, nil, 0, RFFDG|RFREND);
@@ -142,5 +147,6 @@ main(int argc, char *argv[])
 		if(manual)
 			exits(nil);
 		manual = 1;
+		sleep(1000);
 	}
 }

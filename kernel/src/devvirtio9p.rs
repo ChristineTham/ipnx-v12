@@ -33,7 +33,7 @@
 //! configured into the shipped kernels (`pc/pcf:11`, `pc/pccpuf:11`).
 
 use crate::chan::Chan;
-use crate::dev::{Dev, DevId, EVE};
+use crate::dev::{Dev, DevId, Eve};
 use crate::ninep::{Qid, QTDIR};
 
 /// What the machine must supply: one 9P exchange.
@@ -53,6 +53,9 @@ const QDIR: u64 = 0;
 /// `#9` — one file per server the machine provides, named `0`, `1`, … as
 /// `v9gen` names them (`devvirtio9p.c:1059`: `snprint(buf, sizeof buf, "%d", s)`).
 pub struct Virtio9p {
+    /// `eve` — the kernel-wide host owner (`auth.c:10`), shared rather than
+    /// copied, because writing `#c/hostowner` renames it for everyone.
+    eve: Eve,
     servers: Vec<Server>,
 }
 
@@ -78,7 +81,7 @@ impl Default for Virtio9p {
 
 impl Virtio9p {
     pub fn new() -> Virtio9p {
-        Virtio9p { servers: Vec::new() }
+        Virtio9p { servers: Vec::new(), eve: Eve::default() }
     }
 
     /// `v9probe` (`v9reset`, `devvirtio9p.c:1066`) — what the machine found.
@@ -103,6 +106,10 @@ const ENONEXIST: &str = "file does not exist";
 const EINUSE: &str = "device or object already in use";
 
 impl Dev for Virtio9p {
+    fn seteve(&mut self, eve: Eve) {
+        self.eve = eve;
+    }
+
     fn id(&self) -> DevId {
         DevId::Virtio9p
     }
@@ -158,11 +165,11 @@ impl Dev for Virtio9p {
     /// across two. When one is used up the next read takes the next.
     fn read(&mut self, c: &mut Chan, n: usize, _off: u64) -> Result<Vec<u8>, String> {
         if c.qid.is_dir() {
-            let user = EVE.to_string();
+            let user = self.eve.borrow().clone();
             let entries: Vec<crate::ninep::Dir> = (0..self.servers.len())
                 .map(|i| {
                     let qid = Qid { qtype: 0, vers: 0, path: i as u64 + 1 };
-                    crate::dev::devdir(c, qid, &i.to_string(), 0, &user, EVE, 0o660)
+                    crate::dev::devdir(c, qid, &i.to_string(), 0, &user, &user, 0o660)
                 })
                 .collect();
             return Ok(crate::dev::devdirread(c, n, &entries));
@@ -207,7 +214,7 @@ impl Dev for Virtio9p {
             let i = self.index(c.qid.path).ok_or(ENONEXIST)?;
             (i.to_string(), 0o660)
         };
-        Ok(crate::dev::devdir(c, c.qid, &name, 0, EVE, EVE, perm).conv_d2m())
+        Ok(crate::dev::devdir(c, c.qid, &name, 0, &self.eve.borrow(), &self.eve.borrow(), perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {

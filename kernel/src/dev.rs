@@ -196,6 +196,14 @@ pub trait Dev {
         Ok(c.clone())
     }
 
+    /// Take the kernel's `eve` (`auth.c:10`). **Plan 9's devices just read
+    /// the global** — `devdir` passes it as every file's group
+    /// (`dev.c:106`), `iseve()` compares it, and `hostownerwrite` renames it
+    /// for all of them at once (`auth.c:135`). A Rust kernel cannot have an
+    /// ambient mutable global, so the table hands the one cell over as a
+    /// device joins it. A device with no use for it ignores this.
+    fn seteve(&mut self, _eve: crate::dev::Eve) {}
+
     /// `Chan* (*open)(Chan*, int)` (`portdat.h:250`). **It returns a
     /// channel**, which is not ceremony: `devdup`'s open answers with the
     /// channel the fd already holds (`devdup.c`, `dupopen` → `fdtochan`), so a
@@ -351,10 +359,24 @@ mod tests {
     }
 }
 
-/// `eve` at boot (`auth.c:10`: `char *eve = "bootes"` — here, the name the
-/// host gives `#c`). A device that cannot reach `#c` uses this for the group
-/// of the files it serves, which is what Plan 9's kernel-wide `eve` holds.
-pub const EVE: &str = "eve";
+/// `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and it starts
+/// EMPTY**: `kstrdup(&eve, "")` in `userinit` (`pc/main.c:285`), with the
+/// first process's user a copy of it (`:287`). It is `boot` that names the
+/// host owner, by writing `#c/hostowner` with `$user` or, failing that,
+/// `"glenda"` (`bootauth.c:56`); `hostownerwrite` lets it because `iseve()`
+/// is then comparing two empty strings (`auth.c:128`).
+///
+/// A comment here once cited `auth.c:10` as `char *eve = "bootes"`, which is
+/// **not in this tree** — 9legacy has a bare `char *eve;`. The value was a
+/// compile-time constant, so the host owner could not be set at all.
+///
+/// Rust spelling of a global every device reads: one cell, shared.
+pub type Eve = std::rc::Rc<std::cell::RefCell<String>>;
+
+/// `iseve()` (`auth.c:17`): *"return strcmp(eve, up->user) == 0"*.
+pub fn iseve(eve: &Eve, user: &str) -> bool {
+    *eve.borrow() == user
+}
 
 /// `devdir` (`dev.c:34`) — fill in a [`Dir`] for one file of a device.
 ///

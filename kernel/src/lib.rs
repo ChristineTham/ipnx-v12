@@ -243,9 +243,12 @@ mod tests {
     /// on the kernel's one machine-dependent boundary would be a deviation
     /// paid for by tests.
     #[derive(Default)]
-    struct Log {
+    pub(crate) struct Log {
         ran: Vec<(Pid, Vec<u8>)>,
         order: Vec<&'static str>,
+        /// What `delay` was asked to wait for, so a test can see that a
+        /// sleep reached the machine without one actually happening.
+        pub(crate) delayed: Vec<u64>,
     }
 
     pub(crate) struct Recorder(Rc<RefCell<Log>>);
@@ -257,6 +260,10 @@ mod tests {
         }
         fn todget(&self) -> machine::Tod {
             machine::Tod { nsec: 1_500_000_000_000_000_000, ticks: 42, hz: 1_000_000 }
+        }
+        /// A test machine does not wait; it records that it was asked to.
+        fn delay(&self, ms: u64) {
+            self.0.borrow_mut().delayed.push(ms);
         }
         fn touser(
             &self,
@@ -273,7 +280,7 @@ mod tests {
     }
 
     /// A kernel with one boot file, and the log its machine writes to.
-    fn watched() -> (Kernel, Rc<RefCell<Log>>) {
+    pub(crate) fn watched() -> (Kernel, Rc<RefCell<Log>>) {
         let log = Rc::new(RefCell::new(Log::default()));
         let mut root = devroot::Root::new();
         root.addbootfile("init", b"an image".to_vec());
@@ -310,7 +317,7 @@ mod tests {
     /// the returned status passes against a machine that ignored the image.
     #[test]
     fn exec_runs_the_image_it_resolved() {
-        let (mut k, log) = watched();
+        let (mut k, log) = tests::watched();
         k.exec(1, "/boot/init", &[]).unwrap();
         assert_eq!(log.borrow().ran, vec![(1, b"an image".to_vec())]);
     }
@@ -319,7 +326,7 @@ mod tests {
     /// then enter it.
     #[test]
     fn procsetup_runs_before_touser() {
-        let (mut k, log) = watched();
+        let (mut k, log) = tests::watched();
         k.exec(1, "/boot/init", &[]).unwrap();
         assert_eq!(log.borrow().order, vec!["procsetup", "touser"]);
     }
@@ -327,7 +334,7 @@ mod tests {
     /// A name that does not resolve must not reach the machine at all.
     #[test]
     fn a_failed_resolve_never_reaches_the_machine() {
-        let (mut k, log) = watched();
+        let (mut k, log) = tests::watched();
         assert!(k.exec(1, "/nothing", &[]).is_err());
         assert!(log.borrow().order.is_empty(), "the machine was touched for a name that does not exist");
     }
@@ -624,9 +631,58 @@ impl Kernel {
                 Ok(Ret::Ok)
             }
             Call::Fversion { .. } => Err("fversion is mntversion's, done at mount".into()),
-            Call::Sleep { .. } | Call::Alarm { .. } => Err("no scheduler yet — P3".into()),
-            Call::Notify | Call::Noted { .. } => Err("no notes yet — P3".into()),
-            Call::Rendezvous { .. } => Err("no rendezvous yet — P3".into()),
+
+            // `syssleep` (`sysproc.c`), and both of its branches are here:
+            //
+            // ```c
+            // n = arg[0];
+            // if(n <= 0) { ... yield(); return 0; }
+            // if(n < TK2MS(1)) n = TK2MS(1);
+            // tsleep(&up->sleep, return0, 0, n);
+            // ```
+            //
+            // **`yield` is a no-op here and that is not an approximation.**
+            // It gives up the processor to whatever else is runnable, and on
+            // this machine nothing else is: a child made by `procrfork` runs
+            // to its end inside the call that made it (`machine.rs`), so at
+            // any moment exactly one process can run. Yielding to nobody is
+            // returning.
+            //
+            // For the other branch Plan 9 has two mechanisms and this kernel
+            // has the second: `tsleep` puts the process on a queue and
+            // `sched()`s, which needs a scheduler; `delay` (`pc/fns.h:23`)
+            // waits where it stands. **With one runnable process they are
+            // observationally the same thing**, so the wait goes to the
+            // machine, which is where Plan 9 puts `delay` too.
+            Call::Sleep { ms } => {
+                if ms > 0 {
+                    // `if(n < TK2MS(1)) n = TK2MS(1)` — `TK2MS(1)` is
+                    // `1000/HZ`, 10ms at the PC's `HZ` of 100
+                    // (`pc/mem.h:31`). A sleep shorter than a tick is a
+                    // sleep of one tick.
+                    self.machine.delay(ms.max(TK2MS1));
+                }
+                Ok(Ret::Ok)
+            }
+
+            // The four that a scheduler is the whole of. Each says what Plan
+            // 9 does and why this machine cannot, rather than naming a phase.
+            //
+            // `sysalarm` is `procalarm` (`sysproc.c`), and an alarm arrives
+            // as a NOTE — so it is the note mechanism, on a timer.
+            Call::Alarm { .. } => Err(NONOTES.into()),
+            Call::Notify | Call::Noted { .. } => Err(NONOTES.into()),
+            // `sysrendezvous` (`sysproc.c`) either finds a waiting process
+            // and `ready()`s it, or sets `up->state = Rendezvous` and
+            // `sched()`s. Here the other process is BELOW this one on the
+            // host's call stack — `procrfork` called it — so it cannot be
+            // readied without returning to it, and this one cannot be
+            // suspended at all.
+            Call::Rendezvous { .. } => Err(
+                "rendezvous needs a scheduler: the other process is below this one on the \
+                 machine's call stack, and neither can be suspended"
+                    .into(),
+            ),
         }
     }
 
@@ -728,6 +784,19 @@ fn bind_of(flag: i32) -> ns::Bind {
         _ => ns::Bind::Replace,
     }
 }
+
+/// `TK2MS(1)` — *"#define TK2MS(x) ((x)*(1000/HZ))"* (`port/portfns.h`),
+/// with the PC's `HZ` of 100 (`pc/mem.h:31`). The shortest sleep there is.
+const TK2MS1: u64 = 10;
+
+/// What `notify`, `noted` and `alarm` are waiting on. A note is delivered on
+/// the way out of the kernel (`notify(Ureg*)`, `trap.c`) by rewriting the
+/// user stack so the handler runs and `noted` returns through it. **This
+/// machine has no user stack the kernel can write** — a guest's stack is the
+/// engine's — and a process that is not running is not suspended but
+/// finished, so there is nothing to deliver to. The design is a proposal,
+/// not a gap to be filled in passing.
+const NONOTES: &str = "notes need a mechanism this machine does not have yet";
 
 /// The element as `bind`/`mount` made it. **The flag WORD is kept**
 /// (`Mount.mflag`, `portdat.h:303`), not just its `MCREATE` bit, because
@@ -1235,16 +1304,37 @@ mod syscalls {
         assert!(e.contains("cannot exec directory"), "{e}");
     }
 
-    /// The calls P2 and P3 have not reached say so rather than pretending.
+    /// What is not built refuses rather than pretending — and **names what
+    /// Plan 9 does**, not a phase that has since shipped.
     #[test]
     fn what_is_not_built_refuses_rather_than_lying() {
         let mut k = booted();
         for c in [
             Call::Mount { fd: 0, afd: -1, old: "/n".into(), flag: 0, aname: String::new() },
-            Call::Sleep { ms: 1 },
             Call::Rendezvous { tag: 0, val: 0 },
+            Call::Notify,
+            Call::Alarm { ms: 5 },
         ] {
-            assert!(k.syscall(1, c).is_err());
+            let e = k.syscall(1, c).unwrap_err();
+            assert!(!e.contains("P3"), "a phase is not a reason: {e}");
         }
+    }
+
+    /// `syssleep` (`sysproc.c`), both branches.
+    ///
+    /// `n <= 0` is `yield()`, and yielding to nobody is returning: a child
+    /// made by `procrfork` runs to its end inside the call that made it, so
+    /// exactly one process is ever runnable. `n > 0` goes to the machine's
+    /// `delay` (`pc/fns.h:23`), raised to one tick — `TK2MS(1)`, 10ms at the
+    /// PC's `HZ` — because *"if(n < TK2MS(1)) n = TK2MS(1)"*.
+    #[test]
+    fn sleep_yields_for_nothing_and_delays_for_a_time() {
+        let (mut k, log) = tests::watched();
+        k.syscall(1, Call::Sleep { ms: 0 }).unwrap();
+        assert!(log.borrow().delayed.is_empty(), "a yield is not a wait");
+
+        k.syscall(1, Call::Sleep { ms: 250 }).unwrap();
+        k.syscall(1, Call::Sleep { ms: 1 }).unwrap();
+        assert_eq!(log.borrow().delayed, vec![250, 10], "and a tick is the floor");
     }
 }

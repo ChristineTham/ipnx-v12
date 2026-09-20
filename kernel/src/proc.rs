@@ -218,8 +218,13 @@ impl Proc {
         Proc {
             pid,
             ppid: 0,
-            // The first process is eve's. `proc.c:1467`: `kstrdup(&p->user, eve)`.
-            user: "eve".to_string(),
+            // The first process is eve's — `kstrdup(&p->user, eve)`
+            // (`pc/main.c:287`) — and **`eve` is the empty string at that
+            // point** (`:285`). So pid 1 starts with no name, `iseve()`
+            // compares two empty strings and is true, and `boot` can write
+            // `#c/hostowner` once. It was `"eve"`, a constant, which is the
+            // role's name rather than anybody's.
+            user: String::new(),
             time: [0; 6],
             started: None,
             errstr: String::new(),

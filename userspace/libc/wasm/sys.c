@@ -45,6 +45,18 @@ SYS(errstr)	extern int	__errstr(char*, uint);
 SYS(fversion)	extern int	__fversion(int, int, char*, int);
 SYS(sleep)	extern int	__sleep(long);
 SYS(alarm)	extern long	__alarm(ulong);
+/*
+ * `notify`, `noted` and `rendezvous` — NOTIFY is call 28 in
+ * `libc/9syscall/sys.h`, and Plan 9 generates their stubs from that file
+ * with no C source at all. They are declared here for the same reason the
+ * others are: so a program that calls one links, and gets −1 with the
+ * kernel's reason in `errstr` rather than a missing symbol at build time.
+ * The kernel refuses all three today; see `Call::Notify` for what they wait
+ * on.
+ */
+SYS(notify)	extern int	__notify(void*);
+SYS(noted)	extern int	__noted(int);
+SYS(rendezvous)	extern void*	__rendezvous(void*, void*);
 
 int	open(char *f, int m)			{ return __open(f, m); }
 int	create(char *f, int m, ulong p)		{ return __create(f, m, p); }
@@ -70,6 +82,9 @@ int	errstr(char *s, uint n)			{ return __errstr(s, n); }
 int	fversion(int fd, int m, char *v, int n)	{ return __fversion(fd, m, v, n); }
 int	sleep(long n)				{ return __sleep(n); }
 long	alarm(ulong n)				{ return __alarm(n); }
+int	notify(void (*f)(void*, char*))		{ return __notify(f); }
+int	noted(int v)				{ return __noted(v); }
+void*	rendezvous(void *tag, void *val)	{ return __rendezvous(tag, val); }
 
 /*
  * `exits` is the one call whose stub is not a forwarding call. Two things

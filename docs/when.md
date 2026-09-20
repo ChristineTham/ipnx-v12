@@ -14,7 +14,7 @@ Measured 2026-09-20.
 | `ns.rs` | the namespace, keyed by the identity of the channel mounted upon — and a union is a LIST: `cmount` puts the directory itself in first, and copies a union when one is bound onto a directory |
 | `devroot.rs` | `#/` — `#/` and `boot` from `rootdir[]`, plus the ten empty directories `rootreset` adds for a first process to bind onto; every write is `Egreg` |
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed |
-| `devproc.rs` | `#p` — the process table as files: **nine of `procdir[]`'s eighteen** (`devproc.c:79`) — `args` `ctl` `fd` `note` `noteid` `ns` `proc` `status` `wait`. `fpregs`/`kregs`/`regs` have no counterpart on a machine with no register set; `notepg` waits on notes; `mem`, `segment`, `text`, `profile` and `syscall` are simply not built. **`ns` does not yet print the bind lines**: it formats `#<letter>/<qid>` where Plan 9 prints `Chan.path`, calls a mount a bind, and infers the flag from list position because `Element` keeps a `create` bool where Plan 9's `Mount` keeps `mflag` and `spec` |
+| `devproc.rs` | `#p` — the process table as files: **nine of `procdir[]`'s eighteen** (`devproc.c:79`), and the table says why each of the other nine is absent. `ns` prints the bind lines that rebuild the namespace — paths, `int2flag`'s letters, and `mount <flag> <server> <on> <spec>` with `srvname` |
 | `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user |
 | `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, clunk. Reached through the table's dispatcher, which takes it out while it runs |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
@@ -22,6 +22,7 @@ Measured 2026-09-20.
 | `devvirtio9p.rs` | `#9` — a channel to a 9P server the MACHINE provides. It marshals nothing: `#M` writes a T-message down it and reads the R-message back, as it would down a TCP connection |
 | `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` returns the channel fd 3 holds, so a dup IS an open |
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares; and `#ec`, the kernel configuration group, which nothing fills yet |
+| `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. `boot` names the host owner by writing `#c/hostowner` (`bootauth.c:56`), so `$user` is `glenda` and not the role's own name |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators |
 | `namec.rs` | name → channel, with the mount check at every component; all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk |
 | `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser` |
@@ -62,13 +63,26 @@ Answered: `rfork` `exec` `exits` `await` `errstr` `bind` `mount` `unmount`
 `stat` `fstat` `wstat` `fwstat` — **22 of 28**. A failed call leaves its reason where
 `errstr` finds it, and reading exchanges it as Plan 9's does.
 
-Refusing, and saying why rather than pretending: `sleep`, `alarm`, `notify`,
-`noted` and `rendezvous` want a scheduler. **They were assigned to P3 and P3
-shipped without them**, so the refusals still say "— P3" and should not. With
-them go `RFNOTEG` (absent from `rfork`'s flags), a write to `#p/<n>/note`, and
-`#p/<n>/ctl`'s `start`/`stop`/`waitstop`/`hang`/`nohang`. What it costs
-today: `init`'s loop ends where Plan 9's runs for ever on `sleep(1000)`, rc's
-`Trapinit` is a stub so nothing interrupts, and there is no `sleep` command.
+**`sleep` is built** (2026-09-20), both branches of `syssleep`
+(`sysproc.c`). `n <= 0` is `yield()`, and yielding to nobody is returning:
+a child made by `procrfork` runs to its end inside the call that made it, so
+exactly one process is ever runnable. `n > 0` goes to `Machine::delay` —
+`delay(int)` is declared beside `touser` in the same machine-dependent list
+(`pc/fns.h:23`) and the PC spins on the TSC (`i8253.c:320`); with one
+runnable process `tsleep` and `delay` are the same thing. `init`'s loop is
+now Plan 9's, `sleep(1000)` and all.
+
+**Four still refuse, and a scheduler is the whole of what they want:**
+`alarm`, `notify`, `noted`, `rendezvous`. A note is delivered on the way out
+of the kernel by rewriting the user stack so the handler runs and `noted`
+returns through it (`notify(Ureg*)`, `trap.c`); **this machine has no user
+stack the kernel can write**, and a process that is not running is not
+suspended but finished. `rendezvous` would have to ready a process that is
+BELOW this one on the machine's call stack. With them go `RFNOTEG` (absent
+from `rfork`'s flags), a write to `#p/<n>/note`, and `#p/<n>/ctl`'s
+`start`/`stop`/`waitstop`/`hang`/`nohang` — each of which now names what
+Plan 9 does rather than a phase that has shipped. rc's `Trapinit` is still a
+stub, so nothing interrupts. **The design is a proposal, not a gap.**
 
 ### `#M`, and the refactor it needed
 
@@ -127,15 +141,16 @@ No surface.
 `cputime`'s `TUser`/`TSys` are charged by nothing yet. Both count honestly
 rather than reporting a number nothing produced.
 
-`#c/kprint` is not exclusive-use: Plan 9 declares it `{Qkprint, 0, QTEXCL}`
-with `DMEXCL|0440` (`devcons.c:614`) and `CONSDIR` here has no qid-type
-column, so a second open is not refused.
-
-**The root channel keeps the path `#/`.** Plan 9 renames it in as many words
-(`pc/main.c:242`): `up->slash = namec("#/", Atodir, 0, 0); pathclose(
-up->slash->path); up->slash->path = newpath("/")`. Without those three lines
-`cd` reports `#/` and every line of `#p/<n>/ns` names the device rather than
-the path.
+**`pread` with an explicit offset is not reliable**, and `date` is the only
+thing that does it: `nsec(2)` is `pread(open("/dev/bintime"), b, 8, 0)`,
+where everything else reads with the channel's own offset. Three `date -n`
+in one session answer `-1`, `0` and a real clock in any order — an
+uninitialised 8-byte stack buffer, so `pread` is returning without the bytes
+landing. **The kernel is not at fault**: instrumented, `#c` is reached with
+`n=8 off=0` and serves the right bytes every time, and `cat /dev/bintime`
+(`n=8192`, the same import) is exact every time. Adding a write to stderr
+between the calls makes it go away, which is a timing signature. Root cause
+unknown; `date <seconds>` is exact, `date` is not.
 
 ## The userspace — `userspace/`
 
@@ -146,7 +161,7 @@ the path.
 | `libc/{port,fmt,9sys}/` | vendored verbatim from `plan9/sys/src/libc/` |
 | `libbio/`, `libauth/` | vendored: buffered i/o, and `newns` — which is all of libauth that is left once there is no factotum to talk to |
 | `rc/` | Plan 9's rc, with `ipnx.c` as its platform file — it ships three of those and the mkfile picks one — and `haventfork.c`, Plan 9's own file for a system that cannot fork. `termrc` and `rcmain` beside it |
-| `cmd/` | `boot`, `init`, and `bind`, `cat`, `echo`, `ls`, `mkdir`, `rm`, `unmount`, a cut-down `tr`, `args` — **ten, against the demo's "twenty-four real Plan 9 commands"**, and that list of twenty-four is written down nowhere. `mount` and `wc` are named in the demo and absent; so are `ps`, `pwd`, `cp`, `mv` and `date`, and `sleep` cannot exist until the call does |
+| `cmd/` | `boot` and `init`; `bind`, `cat`, `echo`, `ls`, `mkdir`, `rm`, `unmount`, a cut-down `tr` and `args`; and **`cp`, `date`, `mount`, `mv`, `ps`, `sleep`, `wc`** — vendored verbatim from `plan9/sys/src/cmd/` except `mount`, whose `amount0` is `fauth` plus `auth_proxy` there and `mount(fd, -1, …)` here, for the reason `newns.c` already carries. **Seventeen, against the demo's "twenty-four real Plan 9 commands"**, and that list of twenty-four is written down nowhere. `pwd` is not among them: `getwd` is `fd2path`, one of the twelve calls this kernel omits |
 | `lib/namespace`, `etc/motd` | the instance's configuration, and something to read |
 | `mk.sh` | the build. `weaken.py` beside it restores common-symbol semantics for rc.h's tentative definitions, which the wasm backend has none of |
 

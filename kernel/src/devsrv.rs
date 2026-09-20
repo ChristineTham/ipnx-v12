@@ -84,7 +84,7 @@ pub fn srvname(tab: &Srvtab, c: &Chan) -> Option<String> {
 pub struct SrvDev {
     srv: Srvtab,
     /// `eve` — the machine's owner, for `devpermcheck`.
-    pub eve: String,
+    eve: crate::dev::Eve,
     /// `qidpath` (`srvinit`, `devsrv.c`), counting from 1.
     next: u64,
     up: Rc<RefCell<Up>>,
@@ -92,7 +92,7 @@ pub struct SrvDev {
 
 impl SrvDev {
     pub fn new(up: Rc<RefCell<Up>>) -> SrvDev {
-        SrvDev { srv: Srvtab::default(), eve: "eve".into(), next: 1, up }
+        SrvDev { srv: Srvtab::default(), eve: Default::default(), next: 1, up }
     }
 
     /// The table, for whoever else needs it — `srvname`'s callers.
@@ -103,11 +103,15 @@ impl SrvDev {
     /// `devpermcheck` (`dev.c:339`), shared in [`crate::dev::permcheck`].
     fn permcheck(&self, owner: &str, perm: u32, mode: u16) -> Result<(), String> {
         let user = self.up.borrow().user();
-        crate::dev::permcheck(&user, owner, &self.eve, perm, mode)
+        crate::dev::permcheck(&user, owner, &self.eve.borrow(), perm, mode)
     }
 }
 
 impl Dev for SrvDev {
+    fn seteve(&mut self, eve: crate::dev::Eve) {
+        self.eve = eve;
+    }
+
     fn id(&self) -> DevId {
         DevId::Srv
     }
@@ -194,7 +198,7 @@ impl Dev for SrvDev {
             .map(|sp| (sp.name.clone(), sp.path, sp.owner.clone(), sp.perm))
             .collect();
         list.sort();
-        let eve = self.eve.clone();
+        let eve = self.eve.borrow().clone();
         let entries: Vec<crate::ninep::Dir> = list
             .into_iter()
             .map(|(name, path, owner, perm)| {
@@ -234,13 +238,13 @@ impl Dev for SrvDev {
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
         let (name, owner, perm) = if c.qid.is_dir() {
-            ("#s".to_string(), self.eve.clone(), crate::ninep::DMDIR | 0o555)
+            ("#s".to_string(), self.eve.borrow().clone(), crate::ninep::DMDIR | 0o555)
         } else {
             let tab = self.srv.borrow();
             let sp = tab.iter().find(|s| s.path == c.qid.path).ok_or(ENONEXIST)?;
             (sp.name.clone(), sp.owner.clone(), sp.perm)
         };
-        Ok(crate::dev::devdir(c, c.qid, &name, 0, &owner, &self.eve.clone(), perm).conv_d2m())
+        Ok(crate::dev::devdir(c, c.qid, &name, 0, &owner, &self.eve.borrow().clone(), perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {

@@ -50,14 +50,29 @@ pub enum A {
 #[derive(Default)]
 pub struct Devtab {
     devs: HashMap<DevId, Box<dyn Dev>>,
+    /// `char *eve` (`auth.c:10`) — kernel-wide, and handed to every device
+    /// as it joins. It starts EMPTY, as `userinit` leaves it
+    /// (`pc/main.c:285`); `boot` names the host owner by writing
+    /// `#c/hostowner`.
+    eve: crate::dev::Eve,
 }
 
 impl Devtab {
     pub fn new() -> Devtab {
         Devtab::default()
     }
+    /// Add a device, and hand it the kernel's `eve` on the way in — which
+    /// is the one place a Rust kernel does what Plan 9 gets from a global.
     pub fn add(&mut self, d: Box<dyn Dev>) {
+        let mut d = d;
+        d.seteve(self.eve.clone());
         self.devs.insert(d.id(), d);
+    }
+
+    /// The kernel-wide `eve`, for whoever else needs it — the boot, and a
+    /// test that wants to know who the host owner is.
+    pub fn eve(&self) -> crate::dev::Eve {
+        self.eve.clone()
     }
     pub fn get(&mut self, id: DevId) -> Option<&mut Box<dyn Dev>> {
         self.devs.get_mut(&id)

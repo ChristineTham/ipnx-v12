@@ -170,10 +170,16 @@ pub struct Qid {
 /// `QTDIR` — the only qid bit the kernel itself reasons about. The rest belong
 /// to whoever set them.
 pub const QTDIR: u8 = 0x80;
+/// `QTEXCL` — *"type bit for exclusive use files"* (`libc.h:590`). `devdir`
+/// shifts it into the mode as `DMEXCL` (`libc.h:599`, `0x20000000`), so the
+/// bit is stated once, in the qid.
+pub const QTEXCL: u8 = 0x20;
 
 /// `DMDIR` — the directory bit in a mode (`libc.h`). `namec`'s `Acreate`
 /// requires it when the name ends in `/` or `/.`.
 pub const DMDIR: u32 = 0x8000_0000;
+/// `DMEXCL` — *"mode bit for exclusive use files"* (`libc.h:599`).
+pub const DMEXCL: u32 = 0x2000_0000;
 
 impl Qid {
     pub fn is_dir(self) -> bool {

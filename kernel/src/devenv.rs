@@ -51,6 +51,10 @@ const AUXCONF: u64 = 1;
 /// — or the configuration group, which the device owns as `static Egrp
 /// confegrp` (`devenv.c:16`) owns it.
 pub struct EnvDev {
+    /// `eve` — the kernel-wide host owner (`auth.c:10`), shared rather than
+    /// copied, because writing `#c/hostowner` renames it for everyone.
+    eve: crate::dev::Eve,
+
     up: Rc<RefCell<Up>>,
     /// `static Egrp confegrp` (`devenv.c:16`). One per kernel, not per
     /// process, which is the whole difference between `#ec` and `#e`.
@@ -62,7 +66,7 @@ pub struct EnvDev {
 
 impl EnvDev {
     pub fn new(up: Rc<RefCell<Up>>) -> EnvDev {
-        EnvDev { up, confegrp: Egrp::default(), names: Vec::new() }
+        EnvDev { up, confegrp: Egrp::default(), names: Vec::new(), eve: Default::default() }
     }
 
     /// `envgrp(c)` (`devenv.c:369`): *"if(c->aux == nil) return up->egrp;
@@ -78,7 +82,7 @@ impl EnvDev {
     /// nil"*. Your own environment is yours; the kernel's configuration is
     /// eve's, and everyone else reads it.
     fn writeable(&self, c: &Chan) -> bool {
-        c.aux != AUXCONF || self.up.borrow().user() == crate::dev::EVE
+        c.aux != AUXCONF || crate::dev::iseve(&self.eve, &self.up.borrow().user())
     }
 
     /// The qid path for a name — assigned once and kept, as `++eg->path` does.
@@ -111,13 +115,17 @@ impl EnvDev {
             .into_iter()
             .map(|(name, len)| {
                 let qid = Qid { qtype: 0, vers: 0, path: self.qid(&name) };
-                crate::dev::devdir(c, qid, &name, len as u64, &user, crate::dev::EVE, 0o666)
+                crate::dev::devdir(c, qid, &name, len as u64, &user, &self.eve.borrow(), 0o666)
             })
             .collect()
     }
 }
 
 impl Dev for EnvDev {
+    fn seteve(&mut self, eve: crate::dev::Eve) {
+        self.eve = eve;
+    }
+
     fn id(&self) -> DevId {
         DevId::Env
     }
@@ -222,12 +230,12 @@ impl Dev for EnvDev {
         if c.qid.is_dir() {
             let user = self.up.borrow().user();
             let name = if c.aux == AUXCONF { "#ec" } else { "#e" };
-            return Ok(crate::dev::devdir(c, c.qid, name, 0, &user, crate::dev::EVE, 0o775).conv_d2m());
+            return Ok(crate::dev::devdir(c, c.qid, name, 0, &user, &self.eve.borrow(), 0o775).conv_d2m());
         }
         let name = self.name(c.qid.path).ok_or(ENONEXIST)?.clone();
         let len = self.egrp(c).borrow().get(&name).map(|v| v.len()).unwrap_or(0);
         let user = self.up.borrow().user();
-        Ok(crate::dev::devdir(c, c.qid, &name, len as u64, &user, crate::dev::EVE, 0o666).conv_d2m())
+        Ok(crate::dev::devdir(c, c.qid, &name, len as u64, &user, &self.eve.borrow(), 0o666).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {

@@ -15,7 +15,7 @@
 //! password and no setuid bit — the authorisation happened when eve minted it.
 
 use crate::chan::Chan;
-use crate::dev::{Dev, DevId, EVE};
+use crate::dev::{Dev, DevId, Eve};
 use crate::ninep::{Qid, QTDIR};
 use crate::proc::Up;
 use crate::sha1::{hmac_sha1, HASHLEN};
@@ -42,16 +42,16 @@ pub struct CapDev {
     /// `capalloc.first` — the minted capabilities, by hash.
     caps: Vec<[u8; HASHLEN]>,
     up: Rc<RefCell<Up>>,
-    pub eve: String,
+    eve: Eve,
 }
 
 impl CapDev {
     pub fn new(up: Rc<RefCell<Up>>) -> CapDev {
-        CapDev { caps: Vec::new(), up, eve: "eve".into() }
+        CapDev { caps: Vec::new(), up, eve: Eve::default() }
     }
 
     fn iseve(&self) -> bool {
-        self.up.borrow().user() == self.eve
+        crate::dev::iseve(&self.eve, &self.up.borrow().user())
     }
 
     /// `remcap` — find the matching capability and **unlink it**, so it
@@ -68,6 +68,10 @@ impl CapDev {
 }
 
 impl Dev for CapDev {
+    fn seteve(&mut self, eve: Eve) {
+        self.eve = eve;
+    }
+
     fn id(&self) -> DevId {
         DevId::Cap
     }
@@ -118,7 +122,7 @@ impl Dev for CapDev {
             .iter()
             .map(|(name, q, perm)| {
                 let qid = Qid { qtype: 0, vers: 0, path: *q as u64 };
-                crate::dev::devdir(c, qid, name, 0, &user, EVE, *perm)
+                crate::dev::devdir(c, qid, name, 0, &user, &self.eve.borrow(), *perm)
             })
             .collect();
         Ok(crate::dev::devdirread(c, n, &entries))
@@ -177,7 +181,7 @@ impl Dev for CapDev {
             (e.0.to_string(), e.2)
         };
         let user = self.up.borrow().user();
-        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, EVE, perm).conv_d2m())
+        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, &self.eve.borrow(), perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -199,8 +203,18 @@ mod tests {
 
     fn cap() -> (CapDev, Rc<RefCell<Procs>>) {
         let procs = Rc::new(RefCell::new(Procs::new(Chan::attach(DevId::Root, 0))));
+        // The running system starts `eve` empty (`pc/main.c:285`) and has
+        // `boot` name the host owner by writing `#c/hostowner`
+        // (`bootauth.c:56`). A unit test has no boot, so it names one.
+        procs.borrow_mut().get_mut(1).unwrap().user = "eve".into();
         let up = Rc::new(RefCell::new(Up { pid: 1, procs: procs.clone() }));
-        (CapDev::new(up), procs)
+        let mut d = CapDev::new(up);
+        d.seteve(eve_());
+        (d, procs)
+    }
+
+    fn eve_() -> crate::dev::Eve {
+        crate::dev::Eve::new(RefCell::new("eve".to_string()))
     }
 
     fn chan(d: &mut CapDev, name: &str) -> Chan {

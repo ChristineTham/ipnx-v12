@@ -83,6 +83,26 @@ ABI. The conformance suite binds all three.
   to `attach`. So `#ec/cputype` is the env device, the spec `c`, and the name
   `cputype`. A device that does not understand a spec must say so:
   `envattach` errors `Ebadarg` (`devenv.c:73`).
+- **`eve` is kernel-wide, mutable, and empty at boot.** `char *eve`
+  (`auth.c:10`) is a global every device reads — `devdir` makes it every
+  file's group (`dev.c:106`), `iseve()` compares it, `hostownerwrite`
+  renames it for all of them (`auth.c:135`) — and `userinit` leaves it the
+  empty string (`pc/main.c:285`), with the first process's user a copy.
+  **It is `boot` that names the host owner**, by writing `#c/hostowner` with
+  `$user` or `"glenda"` (`bootauth.c:56`). A Rust kernel cannot have an
+  ambient mutable global, so the device table hands the one cell to each
+  device as it joins.
+- **A walk carries the path beside the channel**, not on it (`chan.c`,
+  `walk`): `path = c->path` before the loop, `addelem` per name, `c->path =
+  path` at the end — and `domount` does not touch the text, only the mount
+  point it records. So a name keeps the name it was walked by. `namec` puts
+  the saved path back after its own `domount` for `Aaccess`/`Aremove`/
+  `Aopen` (`:1480`); `Abind` does not, and says why.
+- **A mount point keeps the flag WORD and the spec.** `struct Mount` is
+  `Chan *to; int mflag; char *spec` (`portdat.h:295`) and `Mhead` keeps
+  `Chan *from` (`:307`), because `#p/<n>/ns` prints all four back as the
+  lines that rebuild the namespace. `int2flag` composes `-a`, `-bc`, `-aC`
+  and gives `MREPL` the empty string.
 - **`Chan.aux` is the device's own word on a channel** (`portdat.h`), copied
   by `devclone` (`dev.c`) and meaningless to everything else. Plan 9 holds a
   `void*`; a device here keeps its state in its own struct, so what the
