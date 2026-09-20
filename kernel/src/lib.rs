@@ -1085,13 +1085,15 @@ mod syscalls {
         let mut k = booted();
         k.tab.add(Box::new(devenv::EnvDev::new(k.up.clone())));
 
-        // `#e` has `x`; `#/boot` has `init`. Bind both onto `/n`, in order.
+        // `#e` has `x`; `#/` has `boot`. Bind both onto `/mnt`, in order.
+        // (`#/` and not `#/boot`: everything between the device letter and
+        // the first `/` is the ATTACH SPEC, so `#/boot` attaches the root
+        // device with the spec `boot` — see `dev::split`.)
         k.syscall(1, Call::Create { path: "#e/x".into(), mode: 1, perm: 0o666 }).unwrap();
         k.syscall(1, Call::Bind { name: "#e".into(), old: "/mnt".into(), flag: 0 }).unwrap();
         // `MAFTER` (`libc.h:556`) — this element answers after the ones
         // already there.
-        k.syscall(1, Call::Bind { name: "#/boot".into(), old: "/mnt".into(), flag: 2 })
-            .unwrap();
+        k.syscall(1, Call::Bind { name: "#/".into(), old: "/mnt".into(), flag: 2 }).unwrap();
 
         // the first element answers for its own name
         assert!(
@@ -1100,7 +1102,7 @@ mod syscalls {
         );
         // and a name it does not have falls through to the second
         assert!(
-            k.syscall(1, Call::Open { path: "/mnt/init".into(), mode: 0 }).is_ok(),
+            k.syscall(1, Call::Open { path: "/mnt/boot/init".into(), mode: 0 }).is_ok(),
             "the second element was never reached"
         );
         // a name in neither is still not there

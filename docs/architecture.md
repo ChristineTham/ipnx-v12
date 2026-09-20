@@ -76,6 +76,20 @@ ABI. The conformance suite binds all three.
   `struct Mntalloc` (`devmnt.c:48`). Omitted from the seventeen are `reset`,
   `init`, `shutdown` and `power` (hardware lifecycle) and `bread`/`bwrite`
   (the block fast path, which takes a `Block` this kernel has none of).
+- **A name beginning `#` carries an ATTACH SPEC, and it is the device's, not
+  a name to walk.** `namec` takes everything up to the first `/` together
+  (`chan.c:1348`, *"while(*name != '\\0' && (*name != '/' || n < 2))"* — the
+  `n < 2` is `#/`, whose letter IS a slash) and hands what follows the letter
+  to `attach`. So `#ec/cputype` is the env device, the spec `c`, and the name
+  `cputype`. A device that does not understand a spec must say so:
+  `envattach` errors `Ebadarg` (`devenv.c:73`).
+- **`Chan.aux` is the device's own word on a channel** (`portdat.h`), copied
+  by `devclone` (`dev.c`) and meaningless to everything else. Plan 9 holds a
+  `void*`; a device here keeps its state in its own struct, so what the
+  channel carries is only *which* of that state it means. `#e` is why it
+  exists: `envattach` puts `&confegrp` there for the spec `c` and nil
+  otherwise (`devenv.c:77`), and `envgrp`/`envwriteable` read it back
+  (`:371`, `:379`).
 - **A walk produces the new CHANNEL**, as `devwalk` fills in `nc`
   (`dev.c:169`). Not a qid: a channel through `#M` carries the FID the server
   knows it by, and a walk is what mints one.
@@ -105,7 +119,7 @@ letter. Ten:
   | `M` | **devmnt** — the mount driver, and the only place wire 9P is marshalled. Not attachable by name: `mntattach` takes an internal struct, so it is reached only through `mount()` |
   | `p` | **devproc** — processes as files. The kernel holds that state, so the kernel serves it |
   | `d` | **devdup** — a process's own descriptors as files |
-  | `e` | **devenv** — the environment group, which `rfork`'s `ENVG` and `CENVG` exist to share, copy or clear |
+  | `e` | **devenv** — the environment group, which `rfork`'s `ENVG` and `CENVG` exist to share, copy or clear. **Two groups, and the attach spec picks one**: no spec is the calling process's own, `c` is `confegrp`, *"the global environment group containing the kernel configuration"* (`devenv.c:16`) — so `#ec` — and any other spec is `Ebadarg` (`:73`). Only eve writes the configuration (`envwriteable`, `:377`) |
   | `c` | **devcons** — all 23 of `consdir[]`. The console's line discipline is here because `port/devcons.c` keeps it there; the machine supplies only `screenputs` and the keyboard's characters. The rest is the kernel's own state as files |
   | `¤` | **devcap** — the only way a process becomes another user: eve mints a capability, a process spends it once |
   | `9` | **devvirtio9p** — a CHANNEL to a 9P server the machine provides, and nothing else. `pc/devvirtio9p.c:1227`; its own comment is this system's situation, *"mount a host directory … with no network in the path"*. A 9legacy device, absent from `plan9-stock` |

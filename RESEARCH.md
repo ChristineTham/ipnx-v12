@@ -3196,13 +3196,87 @@ its rc forks and never has to find itself. Here `access("rc", 1)` fails and
 every pipeline dies. `ForkExecute` now searches `$path` for a name with no
 `/`, exactly as `execforkexec` searches for a command.
 
+### §13.1 — `#ec`, and three things wrong where one was named (2026-09-20)
+
+*"Why is #ec absent?"* — Christine, on a gap the P5 summary had just listed.
+The answer was that I never implemented it, and the note in `main.rs` had
+dressed that up as a finding: *"Naming it would be claiming something that is
+not there."* Reading `devenv.c` turned up **three** defects, not the one that
+had been named.
+
+**1. The spec was discarded.** `envattach` (`devenv.c:64`) is six lines:
+
+```c
+if(spec && *spec) {
+	if(strcmp(spec, "c") == 0)
+		egrp = &confegrp;
+	if(egrp == nil)
+		error(Ebadarg);
+}
+c = devattach('e', spec);
+c->aux = egrp;
+```
+
+Ours took `_spec: &str` and threw it away, so `#ec` attached the caller's own
+environment and `#ewhatever` did too — **wrong in both directions at once**:
+the configuration group was unreachable, and a misspelling Plan 9 rejects was
+silently accepted. `envgrp` (`:369`) and `envwriteable` (`:377`) are the other
+half, and both read `c->aux`: `confegrp` is *"the global environment group
+containing the kernel configuration"* (`:16`), writable by eve alone and
+readable by everyone.
+
+**2. `Chan` had no `aux`.** Plan 9's `struct Chan` carries `void *aux`, the
+device's own word on a channel, and `devclone` copies it. Ours omitted it, so
+there was nowhere to put the group choice. A Plan 9 device keeps its state in
+file-scope globals and `aux` points into them; a device here keeps its state
+in its own struct, so what a channel has to carry is only *which* of that
+state it means — `aux: u64`, and for `#e` that is the two-way choice Plan 9's
+nil/`&confegrp` already is.
+
+**3. The attach spec was being walked as a name** — the defect that would have
+bitten whatever added the next spec. `dev::split` took the device letter and
+called **everything after it** the path below, so `bind #ec /env` attached
+`#e` and then looked for a file called `c`. Plan 9 takes the letter and the
+spec together (`chan.c:1348`):
+
+> ```c
+> while(*name != '\0' && (*name != '/' || n < 2)){
+> ```
+
+Everything up to the first `/` is the device's business, and the `n < 2` is
+`#/`, the root device, whose letter IS a slash. Two consequences worth
+recording: `#/boot` parses as the root device **with the spec `boot`**, not as
+a walk to `boot` — which is why Plan 9 only ever writes `#/` bare
+(`pc/main.c:242`, and every other `main.c`), and why two of our own tests were
+written against a path form Plan 9 does not use; and `devattach` builds the
+path as `"#%C%s"`, so a channel to `#ec` says `#ec` and reports itself that
+way.
+
+**And `initcode.c:28` binds both**, which we had as three lines and not four:
+
+```c
+bind(ec, env, MAFTER);           /* #ec -> /env */
+bind(e, env, MCREATE|MAFTER);    /* #e  -> /env */
+```
+
+The configuration reads through `/env` underneath the process's own group, and
+`MCREATE` is on the second, so what you set is yours and the configuration is
+never written by accident. `ksetenv(name, val, conf)` (`:386`) writes to
+either — `"#e%s/%s"` with `conf?"c":""`.
+
+**What this does not close.** `#ec` is empty, because what fills it on a Plan 9
+machine is `plan9.ini` and this host has no counterpart. That is a gap, not a
+decision.
+
 ### Still different, and named rather than hidden
 
-* **`#ec` is absent.** It is devenv attached with a spec — the configuration
-  environment, which a Plan 9 kernel fills from `plan9.ini` — and this
-  kernel's `#e` has only the per-process group. `/lib/namespace`'s
-  `$rootspec` and `$rootdir` are absent with it, so `boot` has one root and
-  no way to be told otherwise.
+* **`#ec` exists, and nothing fills it** (closed 2026-09-20, §13.1). The
+  device and the bind are there; what a Plan 9 kernel copies into it is every
+  line of `plan9.ini` (`pc/main.c:257`), and this host has no counterpart to
+  `plan9.ini`. So `/lib/namespace`'s `$rootspec` and `$rootdir` are still
+  absent and `boot` still has one root. **What the host's configuration is,
+  is a gap** — the command line is not obviously it, and inventing one is
+  not on.
 * **`/` has no `MCREATE` element**, exactly as on Plan 9: `/lib/namespace`
   binds the root with `-a` and not `-ac`. A create goes in `/tmp`, which is
   the server's own directory and not a union.

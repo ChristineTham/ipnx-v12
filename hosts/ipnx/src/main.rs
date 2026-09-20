@@ -141,11 +141,15 @@ const LETTERS: [DevId; 10] = [
 /// namespace is, and `/rc/bin/termrc` binds the rest. This list used to carry
 /// three more, and each of them is now a line in one of those files.
 ///
-/// `#ec` is absent: it is devenv attached with a spec, the environment group
-/// shared by every process, and this kernel's `#e` has only the per-process
-/// one. Naming it would be claiming something that is not there.
-const BINDS: [(&str, &str, i32); 3] = [
+/// `#ec` is the configuration environment (`devenv.c:16`), bound under `#e`
+/// and without `MCREATE`, so the kernel's configuration reads through `/env`
+/// and a process's own `setenv` lands in its own group. **Nothing fills it
+/// yet**: it is `plan9.ini` that a Plan 9 kernel copies into it
+/// (`pc/main.c:257`), and this host has no counterpart to `plan9.ini` — so
+/// `$rootspec` and `$rootdir` are still absent and `boot` still has one root.
+const BINDS: [(&str, &str, i32); 4] = [
     ("#c", "/dev", MAFTER),
+    ("#ec", "/env", MAFTER),
     ("#e", "/env", MCREATE | MAFTER),
     ("#s", "/srv", MREPL | MCREATE),
 ];
@@ -163,11 +167,13 @@ const CONS: &str = "#c/cons";
 /// binaries live: `/$cputype/bin` on Plan 9 (`pc/main.c:252` says `"386"`).
 const OBJTYPE: &str = "wasm";
 
-/// `ksetenv` (`devenv.c:386`) — `namec("#e/<name>", Acreate, OWRITE, 0600)`
-/// and a write. The kernel's own way of putting something in the environment,
-/// which is how `pc/main.c` hands the architecture's name to userspace.
-fn ksetenv(k: &mut Kernel, name: &str, val: &str) -> Result<(), String> {
-    let path = format!("#e/{name}");
+/// `ksetenv` (`devenv.c:386`) — `namec("#e%s/<name>", Acreate, OWRITE, 0600)`
+/// and a write, where `%s` is `"c"` when `conf` is set. The kernel's own way
+/// of putting something in the environment, which is how `pc/main.c` hands
+/// the architecture's name to userspace — and, for every line of `plan9.ini`,
+/// how the configuration reaches `#ec` (`pc/main.c:257`).
+fn ksetenv(k: &mut Kernel, name: &str, val: &str, conf: bool) -> Result<(), String> {
+    let path = format!("#e{}/{name}", if conf { "c" } else { "" });
     let Ret::Fd(fd) = k
         .syscall(1, Call::Create { path: path.clone(), mode: 1, perm: 0o600 })
         .map_err(|e| format!("create {path}: {e}"))?
@@ -295,7 +301,7 @@ fn startboot(
         ("cputype", OBJTYPE.to_string()),
         ("service", "terminal".to_string()),
     ] {
-        ksetenv(&mut k, name, &val)?;
+        ksetenv(&mut k, name, &val, false)?;
     }
 
     // `exec(boot, argv)`. Everything after this line is the system's.

@@ -9,6 +9,15 @@
 //! An attach is **not** an allocation here, unlike `#|`: the group belongs to
 //! the process, and `envgrp(c)` (`devenv.c:13`) finds it. So the channel
 //! carries which group, and the kernel hands it over.
+//!
+//! **There are two groups, and the attach spec picks one.** `envattach`
+//! (`devenv.c:64`) takes `"c"` for `confegrp`, *"the global environment group
+//! containing the kernel configuration"* (`:16`), errors `Ebadarg` on any
+//! other spec, and takes the calling process's own group for no spec at all.
+//! That is what `#ec` is, and `initcode.c:28` binds both over `/env` — the
+//! configuration first, the process's own second and with `MCREATE`, so a
+//! variable you set is yours and the configuration is read underneath it.
+//! `ksetenv(name, val, conf)` (`:386`) is how the kernel writes to either.
 
 use crate::chan::Chan;
 use crate::dev::{Dev, DevId};
@@ -22,6 +31,7 @@ use std::rc::Rc;
 pub const MAXENVSIZE: usize = 16300;
 
 const EPERM: &str = "permission denied";
+const EBADARG: &str = "bad arg in system call";
 const EEXIST: &str = "file already exists";
 const ETOOBIG: &str = "value too big";
 const ENONEXIST: &str = "file does not exist";
@@ -30,10 +40,21 @@ const ENONEXIST: &str = "file does not exist";
 /// which is what `rfork` without `RFENVG` means.
 pub type Egrp = Rc<RefCell<HashMap<String, Vec<u8>>>>;
 
-/// `envgrp(c)` (`devenv.c:13`) finds the calling process's group. Here that is
-/// `up`, which the kernel sets before it dispatches.
+/// `Chan.aux` for a channel to the configuration group — Plan 9 puts
+/// `&confegrp` there and nil for the per-process one (`devenv.c:77`), and
+/// `envgrp` and `envwriteable` both read it back as exactly that two-way
+/// choice (`:371`, `:379`).
+const AUXCONF: u64 = 1;
+
+/// `envgrp(c)` (`devenv.c:13`) finds the group this channel means: the
+/// calling process's — here `up`, which the kernel sets before it dispatches
+/// — or the configuration group, which the device owns as `static Egrp
+/// confegrp` (`devenv.c:16`) owns it.
 pub struct EnvDev {
     up: Rc<RefCell<Up>>,
+    /// `static Egrp confegrp` (`devenv.c:16`). One per kernel, not per
+    /// process, which is the whole difference between `#ec` and `#e`.
+    confegrp: Egrp,
     /// Qid paths, so a file keeps its identity. `envcreate` numbers each from
     /// the group's counter (`devenv.c`).
     names: Vec<String>,
@@ -41,12 +62,23 @@ pub struct EnvDev {
 
 impl EnvDev {
     pub fn new(up: Rc<RefCell<Up>>) -> EnvDev {
-        EnvDev { up, names: Vec::new() }
+        EnvDev { up, confegrp: Egrp::default(), names: Vec::new() }
     }
 
-    /// `envgrp(c)`.
-    fn egrp(&self) -> Egrp {
+    /// `envgrp(c)` (`devenv.c:369`): *"if(c->aux == nil) return up->egrp;
+    /// return c->aux"*.
+    fn egrp(&self, c: &Chan) -> Egrp {
+        if c.aux == AUXCONF {
+            return self.confegrp.clone();
+        }
         self.up.borrow().egrp().unwrap_or_default()
+    }
+
+    /// `envwriteable(c)` (`devenv.c:377`): *"return iseve() || c->aux ==
+    /// nil"*. Your own environment is yours; the kernel's configuration is
+    /// eve's, and everyone else reads it.
+    fn writeable(&self, c: &Chan) -> bool {
+        c.aux != AUXCONF || self.up.borrow().user() == crate::dev::EVE
     }
 
     /// The qid path for a name — assigned once and kept, as `++eg->path` does.
@@ -70,7 +102,7 @@ impl EnvDev {
     fn entries(&mut self, c: &Chan) -> Vec<crate::ninep::Dir> {
         let user = self.up.borrow().user();
         let mut named: Vec<(String, usize)> = {
-            let eg = self.egrp();
+            let eg = self.egrp(c);
             let g = eg.borrow();
             g.iter().map(|(k, v)| (k.clone(), v.len())).collect()
         };
@@ -94,8 +126,19 @@ impl Dev for EnvDev {
         self
     }
 
-    fn attach(&mut self, _spec: &str) -> Result<Chan, String> {
-        Ok(Chan::attach(DevId::Env, 0))
+    /// `envattach` (`devenv.c:64`). **A spec that is not `"c"` is
+    /// `Ebadarg`** — it does not quietly mean the same as no spec, which is
+    /// what this device used to do, so `#ewhatever` attached the caller's own
+    /// environment and nothing said otherwise.
+    fn attach(&mut self, spec: &str) -> Result<Chan, String> {
+        let aux = match spec {
+            "" => 0,
+            "c" => AUXCONF,
+            _ => return Err(EBADARG.into()),
+        };
+        let mut c = Chan::attach_spec(DevId::Env, 0, spec);
+        c.aux = aux;
+        Ok(c)
     }
 
     fn walk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String> {
@@ -105,14 +148,19 @@ impl Dev for EnvDev {
         if name == ".." || name == "." {
             return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: 0 })));
         }
-        if !self.egrp().borrow().contains_key(name) {
+        if !self.egrp(c).borrow().contains_key(name) {
             return Ok(None);
         }
         let path = self.qid(name);
         Ok(Some(c.walked(name, Qid { qtype: 0, vers: 0, path })))
     }
 
+    /// `envopen` (`devenv.c:96`): the directory opens for reading only, and a
+    /// file opens for writing only if `envwriteable` says so.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
+        if mode != crate::chan::mode::OREAD && (c.qid.is_dir() || !self.writeable(&c)) {
+            return Err(EPERM.into());
+        }
         c.mode = mode;
         Ok(c)
     }
@@ -123,10 +171,10 @@ impl Dev for EnvDev {
         if !c.qid.is_dir() {
             return Err(EPERM.into());
         }
-        if self.egrp().borrow().contains_key(name) {
+        if self.egrp(c).borrow().contains_key(name) {
             return Err(EEXIST.into());
         }
-        self.egrp().borrow_mut().insert(name.to_string(), Vec::new());
+        self.egrp(c).borrow_mut().insert(name.to_string(), Vec::new());
         let path = self.qid(name);
         c.qid = Qid { qtype: 0, vers: 0, path };
         c.mode = mode;
@@ -139,7 +187,7 @@ impl Dev for EnvDev {
             return Ok(crate::dev::devdirread(c, n, &entries));
         }
         let name = self.name(c.qid.path).ok_or(ENONEXIST)?.clone();
-        let eg = self.egrp();
+        let eg = self.egrp(c);
         let g = eg.borrow();
         let v = g.get(&name).ok_or(ENONEXIST)?;
         let off = off as usize;
@@ -160,7 +208,7 @@ impl Dev for EnvDev {
             return Err(ETOOBIG.into());
         }
         let name = self.name(c.qid.path).ok_or(ENONEXIST)?.clone();
-        let eg = self.egrp();
+        let eg = self.egrp(c);
         let mut g = eg.borrow_mut();
         let v = g.get_mut(&name).ok_or(ENONEXIST)?;
         if v.len() < off + data.len() {
@@ -173,10 +221,11 @@ impl Dev for EnvDev {
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
         if c.qid.is_dir() {
             let user = self.up.borrow().user();
-            return Ok(crate::dev::devdir(c, c.qid, "#e", 0, &user, crate::dev::EVE, 0o775).conv_d2m());
+            let name = if c.aux == AUXCONF { "#ec" } else { "#e" };
+            return Ok(crate::dev::devdir(c, c.qid, name, 0, &user, crate::dev::EVE, 0o775).conv_d2m());
         }
         let name = self.name(c.qid.path).ok_or(ENONEXIST)?.clone();
-        let len = self.egrp().borrow().get(&name).map(|v| v.len()).unwrap_or(0);
+        let len = self.egrp(c).borrow().get(&name).map(|v| v.len()).unwrap_or(0);
         let user = self.up.borrow().user();
         Ok(crate::dev::devdir(c, c.qid, &name, len as u64, &user, crate::dev::EVE, 0o666).conv_d2m())
     }
@@ -191,7 +240,7 @@ impl Dev for EnvDev {
             return Err(EPERM.into());
         }
         let name = self.name(c.qid.path).ok_or(ENONEXIST)?.clone();
-        self.egrp().borrow_mut().remove(&name).ok_or(ENONEXIST)?;
+        self.egrp(c).borrow_mut().remove(&name).ok_or(ENONEXIST)?;
         Ok(())
     }
 
@@ -201,7 +250,7 @@ impl Dev for EnvDev {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chan::mode::{ORDWR, OWRITE};
+    use crate::chan::mode::{OREAD, OWRITE};
 
     fn env() -> (EnvDev, Egrp) {
         let procs = Rc::new(RefCell::new(crate::proc::Procs::new(Chan::attach(
@@ -289,7 +338,7 @@ mod tests {
     }
 
     /// Reading the directory lists the names, so `ls /env` works.
-    #[test]
+    ///
     /// **A directory reads as `Dir` entries, not as text.** `dirread(2)`
     /// parses exactly this with `convM2D`, and nothing in a Plan 9 userland
     /// can read a list of names. It WAS a list of names here, and rc's
@@ -339,4 +388,73 @@ mod tests {
         assert!(d.write(&mut dir, b"x", 0).is_err());
         assert!(d.remove(&mut dir).is_err());
     }
+
+    /// `envattach` (`devenv.c:69`): the spec `c` is the configuration group,
+    /// no spec is the calling process's own, and **anything else is
+    /// `Ebadarg`**. It used to accept every spec and mean the same thing by
+    /// all of them.
+    #[test]
+    fn the_attach_spec_picks_the_group_and_nothing_else_is_accepted() {
+        let (mut d, _) = env();
+        assert_eq!(d.attach("").unwrap().aux, 0);
+        assert_eq!(d.attach("c").unwrap().aux, AUXCONF);
+        assert_eq!(d.attach("").unwrap().path, "#e");
+        assert_eq!(d.attach("c").unwrap().path, "#ec", "the spec is in the path");
+        assert!(d.attach("x").is_err(), "Ebadarg, not the per-process group");
+        assert!(d.attach("conf").is_err());
+    }
+
+    /// The two groups are different groups. A variable set through `#ec` is
+    /// not in the process's own environment, and `rfork`'s `RFENVG` — which
+    /// replaces `up->egrp` — cannot touch the configuration.
+    #[test]
+    fn the_configuration_group_is_not_the_process_group() {
+        let (mut d, g) = env();
+        let mut conf = d.attach("c").unwrap();
+        d.create(&mut conf, "rootdir", OWRITE, 0o666).unwrap();
+        d.write(&mut conf, b"/root", 0).unwrap();
+
+        assert!(!g.borrow().contains_key("rootdir"), "not in the process's own");
+        let own = d.attach("").unwrap();
+        assert!(d.walk(&own, "rootdir").unwrap().is_none());
+
+        let dir = d.attach("c").unwrap();
+        let mut c = d.walk(&dir, "rootdir").unwrap().expect("no #ec/rootdir");
+        assert_eq!(d.read(&mut c, 64, 0).unwrap(), b"/root");
+    }
+
+    /// `envwriteable` (`devenv.c:377`): *"iseve() || c->aux == nil"*. Eve
+    /// writes the configuration; everyone else reads it and writes only their
+    /// own.
+    #[test]
+    fn only_eve_writes_the_configuration() {
+        let (mut d, _) = env();
+        let mut conf = d.attach("c").unwrap();
+        d.create(&mut conf, "cputype", OWRITE, 0o666).unwrap();
+
+        let dir = d.attach("c").unwrap();
+        let c = d.walk(&dir, "cputype").unwrap().unwrap();
+        assert!(d.open(c.clone(), OWRITE).is_ok(), "eve may write it");
+
+        d.up.borrow_mut().procs.borrow_mut().get_mut(1).unwrap().user = "kitty".into();
+        assert!(d.open(c.clone(), OREAD).is_ok(), "anyone may read it");
+        assert!(d.open(c, OWRITE).is_err(), "kitty is not eve");
+
+        let mut own = d.attach("").unwrap();
+        d.create(&mut own, "path", OWRITE, 0o666).unwrap();
+        let dir = d.attach("").unwrap();
+        let c = d.walk(&dir, "path").unwrap().unwrap();
+        assert!(d.open(c, OWRITE).is_ok(), "your own environment is yours");
+    }
+
+    /// `envopen` (`devenv.c:103`): the directory is read-only, whichever
+    /// group it is.
+    #[test]
+    fn the_directory_opens_for_reading_only() {
+        let (mut d, _) = env();
+        let dir = d.attach("").unwrap();
+        assert!(d.open(dir.clone(), OREAD).is_ok());
+        assert!(d.open(dir, OWRITE).is_err());
+    }
+
 }

@@ -101,11 +101,30 @@ pub struct Chan {
     /// The name this channel was reached by. Plan 9 keeps a `Path` so that
     /// `fd2path` can answer and `..` can be resolved without asking a server.
     pub path: String,
+    /// `Chan.aux` (`portdat.h`) — **the device's own word on this channel**,
+    /// meaningless to everything else and copied by `devclone`
+    /// (`dev.c:devclone`, `nc->aux = c->aux`). Plan 9 holds a `void*`; a
+    /// device here keeps its state in its own struct, so what a channel has
+    /// to carry is only *which* of that state it means, and a word says it.
+    ///
+    /// `#e` is the reason it exists: `envattach` puts `&confegrp` here for
+    /// the spec `c` and nil otherwise (`devenv.c:77`), and `envgrp` reads it
+    /// back (`:371`) to decide whether the channel means the configuration
+    /// environment or the calling process's own.
+    pub aux: u64,
 }
 
 impl Chan {
     /// A device's root, as `attach` returns it.
     pub fn attach(dev: DevId, devno: u32) -> Chan {
+        Chan::attach_spec(dev, devno, "")
+    }
+
+    /// `devattach(tc, spec)` (`dev.c`) — the same, with the attach spec kept
+    /// in the path: *`snprint(buf, n, "#%C%s", tc, spec)`*. So a channel to
+    /// `#ec` says `#ec` and not `#e`, which is what `fd2path` and every error
+    /// message then report.
+    pub fn attach_spec(dev: DevId, devno: u32, spec: &str) -> Chan {
         Chan {
             dev,
             devno,
@@ -122,7 +141,8 @@ impl Chan {
             mux: None,
             mchan: None,
             mqid: Qid { qtype: 0, vers: 0, path: 0 },
-            path: format!("#{}", dev.letter()),
+            path: format!("#{}{}", dev.letter(), spec),
+            aux: 0,
         }
     }
 

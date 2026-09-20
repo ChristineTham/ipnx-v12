@@ -251,8 +251,8 @@ pub fn start(
     if name.is_empty() {
         return Err("empty file name".into());
     }
-    if let Some(rest) = name.strip_prefix('#') {
-        let (id, below) = dev::split(name).ok_or("bad # in file name")?;
+    if name.starts_with('#') {
+        let (id, spec, below) = dev::split(name).ok_or("bad # in file name")?;
         // `chan.c:1374`. `#M` is never reachable by name: `mount(2)` supplies
         // the channel, and there is no server to find by writing the letter.
         if id == DevId::Mnt {
@@ -272,10 +272,8 @@ pub fn start(
         if ns.noattach() && !"|decp".contains(id.letter()) {
             return Err(ENOATTACH.into());
         }
-        // the spec is what follows the letter up to the first '/'
-        let spec: String = rest.chars().skip(1).take_while(|c| *c != '/').collect();
         let d = tab.get(id).ok_or("bad # in file name")?;
-        let chan = d.attach(&spec)?;
+        let chan = d.attach(spec)?;
         return Ok((Start { chan, nomount: true }, elems(below)));
     }
     if let Some(rest) = name.strip_prefix('/') {

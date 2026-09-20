@@ -258,20 +258,32 @@ pub fn permcheck(user: &str, fileuid: &str, eve: &str, perm: u32, omode: u16) ->
     }
 }
 
-/// Split a device path into its device and the path below it: `#s/store` is
-/// `Srv` and `store`. `None` if this is not a device path.
+/// Split a device path into its device, its ATTACH SPEC, and the path below:
+/// `#s/store` is `Srv`, no spec and `store`; `#ec/cputype` is `Env`, the spec
+/// `c` and `cputype`. `None` if this is not a device path.
 ///
-/// The letter is ONE character; anything after it belongs below.
-pub fn split(path: &str) -> Option<(DevId, &str)> {
+/// `namec` (`chan.c:1348`) takes the letter and the spec together — *"while(
+/// *name != '\0' && (*name != '/' || n < 2))"* — so everything up to the
+/// first `/` is the device's business and the walk starts after it. The
+/// `n < 2` is `#/`, the root device, whose letter IS a slash.
+///
+/// **The spec is not part of the path below.** It was, and `bind #ec /env`
+/// therefore attached `#e` and then walked to a file called `c`.
+pub fn split(path: &str) -> Option<(DevId, &str, &str)> {
     let rest = path.strip_prefix('#')?;
     let mut chars = rest.char_indices();
     let (_, letter) = chars.next()?;
     let dev = DevId::from_letter(letter)?;
-    let below = match chars.next() {
-        Some((i, _)) => &rest[i..],
-        None => "",
+    let after = match chars.next() {
+        Some((i, _)) => i,
+        None => rest.len(),
     };
-    Some((dev, below.trim_start_matches('/')))
+    let tail = &rest[after..];
+    let (spec, below) = match tail.find('/') {
+        Some(i) => (&tail[..i], &tail[i + 1..]),
+        None => (tail, ""),
+    };
+    Some((dev, spec, below))
 }
 
 #[cfg(test)]
@@ -299,10 +311,14 @@ mod tests {
 
     #[test]
     fn a_device_path_splits_at_the_letter() {
-        assert_eq!(split("#s/store"), Some((DevId::Srv, "store")));
-        assert_eq!(split("#p/1/ctl"), Some((DevId::Proc, "1/ctl")));
-        assert_eq!(split("#|"), Some((DevId::Pipe, "")));
+        assert_eq!(split("#s/store"), Some((DevId::Srv, "", "store")));
+        assert_eq!(split("#p/1/ctl"), Some((DevId::Proc, "", "1/ctl")));
+        assert_eq!(split("#|"), Some((DevId::Pipe, "", "")));
         assert_eq!(split("/srv/store"), None);
+        // The attach spec is the device's, not a name to walk
+        // (`chan.c:1348`).
+        assert_eq!(split("#ec"), Some((DevId::Env, "c", "")));
+        assert_eq!(split("#ec/cputype"), Some((DevId::Env, "c", "cputype")));
     }
 
     /// A guard on this kernel, after its author minted three letters in a day.
@@ -319,9 +335,9 @@ mod tests {
     /// byte-wise split would cut it in half.
     #[test]
     fn the_cap_device_splits_on_a_multibyte_letter() {
-        assert_eq!(split("#\u{a4}/capuse"), Some((DevId::Cap, "capuse")));
-        assert_eq!(split("#\u{a4}"), Some((DevId::Cap, "")));
-        assert_eq!(split("#c/user"), Some((DevId::Cons, "user")));
+        assert_eq!(split("#\u{a4}/capuse"), Some((DevId::Cap, "", "capuse")));
+        assert_eq!(split("#\u{a4}"), Some((DevId::Cap, "", "")));
+        assert_eq!(split("#c/user"), Some((DevId::Cons, "", "user")));
     }
 
     #[test]
