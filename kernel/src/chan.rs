@@ -66,6 +66,22 @@ pub struct Chan {
     /// clears this and allows no offset but 0 on a directory
     /// (`sysfile.c:820`).
     pub dri: u32,
+    /// `Chan.umh` (`portdat.h`) — the UNION this channel was reached through,
+    /// whole, with the element it landed on first. `namec` keeps it for two
+    /// things, and Plan 9 keeps it for the same two:
+    ///
+    /// * `Abind` (`chan.c:1462`), because `cmount` copies a union when
+    ///   binding it onto a directory (`:719`) — so `bind -a /root /` carries
+    ///   all of `/root` and not just whichever element answered first;
+    /// * `Aopen` (`chan.c:1502`), *"only save the mount head if it's a
+    ///   multiple element union"*, because reading such a directory means
+    ///   reading every element (`unionread`, `sysfile.c:323`).
+    pub umh: Vec<Chan>,
+    /// `Chan.uri` — which element of `umh` a union read is on.
+    pub uri: u32,
+    /// `Chan.umc` — that element, opened. One at a time, and closed when it
+    /// runs out (`sysfile.c:356`).
+    pub umc: Option<Box<Chan>>,
     /// `iounit` — *"chunk size for i/o; 0==default"*. `mntversion` caps the
     /// negotiated msize by it (`devmnt.c:119`).
     pub iounit: u32,
@@ -98,6 +114,9 @@ impl Chan {
             flag: 0,
             offset: 0,
             dri: 0,
+            umh: Vec::new(),
+            uri: 0,
+            umc: None,
             iounit: 0,
             fid: crate::ninep::NOFID,
             mux: None,
@@ -128,6 +147,8 @@ impl Chan {
                 }
             }
         };
-        Chan { qid, path, offset: 0, ..self.clone() }
+        // A walked channel is not the one the union was found on, so it
+        // carries no union of its own (`devclone` copies no `umh`).
+        Chan { qid, path, offset: 0, umh: Vec::new(), uri: 0, umc: None, ..self.clone() }
     }
 }

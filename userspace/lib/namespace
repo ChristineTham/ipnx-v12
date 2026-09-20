@@ -1,0 +1,26 @@
+# The namespace this instance is configured to have.
+#
+# `plan9/lib/namespace`, read by `newns()` (`libauth/newns.c:35`) which init
+# calls. Every line is a bind, a mount, a cd or a `.` — and the file is the
+# reason a boot is configuration rather than code.
+#
+# The lines boot has already run are here too, because `newns` starts from an
+# EMPTY namespace: `rfork(RFCNAMEG)` clears it and this file rebuilds it. That
+# is why the root is mounted from `#s/boot` — boot posted it there precisely
+# so it could be mounted again without knowing where it came from.
+
+# root
+mount -aC #s/boot /root
+bind -a /root /
+
+# kernel devices
+bind #c /dev
+bind #d /fd
+bind -c #e /env
+bind #p /proc
+bind -c #s /srv
+bind -a #¤ /dev
+
+# standard bin (`plan9/lib/namespace`: `bind /$cputype/bin /bin`)
+bind /$objtype/bin /bin
+bind -a /rc/bin /bin

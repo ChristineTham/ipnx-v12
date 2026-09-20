@@ -87,6 +87,15 @@ impl Root {
     /// `#/` lists `boot` and the ten `rootreset` made; `boot` lists the files
     /// `addbootfile` put there.
     fn entries(&mut self, c: &Chan) -> Vec<crate::ninep::Dir> {
+        // **The ten `rootreset` directories are EMPTY.** They exist to be
+        // bound over, and `rootgen` generates nothing for them
+        // (`devroot.c:116` switches on `Qdir` and `Qboot` and nothing else).
+        // Treating every directory that is not `#/` as `boot` made each of
+        // them list the boot files — so `ls /` showed them twice, once for
+        // `#/` and once for `#/root` in the union.
+        if c.qid.path != QROOT && c.qid.path != QBOOT {
+            return Vec::new();
+        }
         let list: Vec<(&str, Qid, u64, u32)> = if c.qid.path == QROOT {
             std::iter::once((
                 "boot",
@@ -246,6 +255,19 @@ mod tests {
         }
         assert_eq!(names.len(), 11, "boot, and the ten: {names:?}");
         assert_eq!(names[0], "boot");
+    }
+
+    /// `rootreset`'s ten are empty, and `rootgen` (`devroot.c:116`) knows
+    /// only `Qdir` and `Qboot`. Reading one of them as though it were `boot`
+    /// listed every boot file under every one of them.
+    #[test]
+    fn the_empty_root_directories_are_empty() {
+        let mut r = Root::new();
+        r.addbootfile("init", b"the image".to_vec());
+        let c = r.attach("").unwrap();
+        let mnt = r.walk(&c, "mnt").unwrap().expect("#/mnt");
+        let mut mnt = r.open(mnt, crate::chan::mode::OREAD).unwrap();
+        assert!(r.read(&mut mnt, 4096, 0).unwrap().is_empty());
     }
 
     #[test]

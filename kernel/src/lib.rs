@@ -197,16 +197,21 @@ impl Kernel {
             namec::A::Open,
             chan::mode::OEXEC,
         )?;
-        let d = self.tab.get(c.dev).ok_or("no such device")?;
+        // **Through the dispatcher, not at the device.** `sysexec` reads the
+        // image with `c->dev->read` reached from `devtab` (`sysproc.c:302`),
+        // which for a mounted file is the mount driver. Reaching the device
+        // directly worked for as long as every binary was in `#/boot`, and
+        // stopped the moment the commands moved onto a file server — which
+        // is what `/bin` IS on Plan 9.
         let mut image = Vec::new();
         loop {
-            let got = d.read(&mut c, 8192, image.len() as u64)?;
+            let got = self.tab.dread(&mut c, 8192, image.len() as u64)?;
             if got.is_empty() {
                 break;
             }
             image.extend_from_slice(&got);
         }
-        d.close(&mut c);
+        self.tab.dclose(&mut c);
         Ok(image)
     }
 }
@@ -470,22 +475,43 @@ impl Kernel {
             }
             Call::Pread { fd, n, off } => {
                 let cell = self.chancell(up, fd)?;
-                let mut c = cell.borrow_mut();
+                // **Taken out and put back, not held.** Plan 9 hands the
+                // device the `Chan*` an fd holds and nothing minds that the
+                // device may reach the same channel again through the fd
+                // table — `dupgen` reads `c->mode` of every open descriptor
+                // (`devdup.c:34`), which is exactly what `ls /dev` does when
+                // `#d` is in its union. Holding the borrow across the call
+                // makes that a panic; copying only the offset back loses
+                // `dri` and `uri`, which is how a directory read came to
+                // start over every time. The whole channel goes back.
+                let mut c = cell.borrow().clone();
                 let at = if off < 0 { c.offset } else { off as u64 };
-                let d = self.tab.dread(&mut c, n, at)?;
+                // `read` (`sysfile.c:672`): **a directory reached through a
+                // union is read from every element**, one after another.
+                // Without this `ls /` shows whichever element answered the
+                // walk and nothing else — which, once `/` is a union of the
+                // kernel's root and a file server, is most of the system
+                // missing.
+                let d = if c.is_dir() && !c.umh.is_empty() {
+                    self.unionread(&mut c, n)?
+                } else {
+                    self.tab.dread(&mut c, n, at)?
+                };
                 if off < 0 {
                     c.offset += d.len() as u64;
                 }
+                *cell.borrow_mut() = c;
                 Ok(Ret::Data(d))
             }
             Call::Pwrite { fd, data, off } => {
                 let cell = self.chancell(up, fd)?;
-                let mut c = cell.borrow_mut();
+                let mut c = cell.borrow().clone();
                 let at = if off < 0 { c.offset } else { off as u64 };
                 let n = self.tab.dwrite(&mut c, &data, at)?;
                 if off < 0 {
                     c.offset += n as u64;
                 }
+                *cell.borrow_mut() = c;
                 Ok(Ret::N(n))
             }
             // `seek` is fd-class, not 9P: the offset is kernel state in the
@@ -514,6 +540,13 @@ impl Kernel {
                 }
                 c.offset = new;
                 c.dri = 0;
+                // `unionrewind` (`sysfile.c:367`) — a rewind starts the union
+                // over too, or the next read carries on from the element the
+                // last one stopped in.
+                c.uri = 0;
+                if let Some(mut umc) = c.umc.take() {
+                    self.tab.dclose(&mut umc);
+                }
                 Ok(Ret::N(new as usize))
             }
             Call::Dup { old, new } => {
@@ -619,6 +652,45 @@ impl Kernel {
     /// `c->iounit` after a mount. Copying it and writing back one field is
     /// what this kernel did, and a directory read then restarted from the
     /// first entry every time, because `dri` went back with the copy.
+    /// `unionread` (`sysfile.c:323`) — read each element of a union in turn,
+    /// answering as soon as one gives anything. An element that gives nothing
+    /// is finished with and closed, and `c->uri` moves on.
+    ///
+    /// Each element is opened in its own right (`cclone` then `open`), which
+    /// is why a union read does not disturb the channel it was reached
+    /// through.
+    fn unionread(&mut self, c: &mut Chan, n: usize) -> Result<Vec<u8>, String> {
+        while (c.uri as usize) < c.umh.len() {
+            if c.umc.is_none() {
+                let alt = c.umh[c.uri as usize].clone();
+                let cl = self.tab.dcclone(&alt)?;
+                match self.tab.dopen(cl, chan::mode::OREAD) {
+                    Ok(o) => c.umc = Some(Box::new(o)),
+                    // *"Error causes component of union to be skipped"*
+                    // (`sysfile.c:340`).
+                    Err(_) => {
+                        c.uri += 1;
+                        continue;
+                    }
+                }
+            }
+            let mut umc = c.umc.take().expect("just opened");
+            let at = umc.offset;
+            match self.tab.dread(&mut umc, n, at) {
+                Ok(d) if !d.is_empty() => {
+                    umc.offset += d.len() as u64;
+                    c.umc = Some(umc);
+                    return Ok(d);
+                }
+                _ => {
+                    self.tab.dclose(&mut umc);
+                    c.uri += 1;
+                }
+            }
+        }
+        Ok(Vec::new())
+    }
+
     fn chancell(&mut self, up: Pid, fd: Fd) -> Result<std::rc::Rc<std::cell::RefCell<Chan>>, String> {
         let procs = self.procs.borrow();
         let p = procs.get(up).ok_or("no such process")?;
@@ -1002,6 +1074,37 @@ mod syscalls {
             k.syscall(1, Call::Pread { fd, n: 64, off: -1 }).unwrap(),
             Ret::Data(b"served over 9P".to_vec())
         );
+    }
+
+    /// **A union is searched, element by element** (`chan.c:1027`: *"try a
+    /// union mount, if any"*). `bind -a` puts an element in a list, and
+    /// without this nothing ever reaches it — which is what P5's very first
+    /// line needs, `bind -a /root /`, the root becoming a file server.
+    #[test]
+    fn a_walk_tries_every_element_of_a_union() {
+        let mut k = booted();
+        k.tab.add(Box::new(devenv::EnvDev::new(k.up.clone())));
+
+        // `#e` has `x`; `#/boot` has `init`. Bind both onto `/n`, in order.
+        k.syscall(1, Call::Create { path: "#e/x".into(), mode: 1, perm: 0o666 }).unwrap();
+        k.syscall(1, Call::Bind { name: "#e".into(), old: "/mnt".into(), flag: 0 }).unwrap();
+        // `MAFTER` (`libc.h:556`) — this element answers after the ones
+        // already there.
+        k.syscall(1, Call::Bind { name: "#/boot".into(), old: "/mnt".into(), flag: 2 })
+            .unwrap();
+
+        // the first element answers for its own name
+        assert!(
+            k.syscall(1, Call::Open { path: "/mnt/x".into(), mode: 0 }).is_ok(),
+            "the first element of the union"
+        );
+        // and a name it does not have falls through to the second
+        assert!(
+            k.syscall(1, Call::Open { path: "/mnt/init".into(), mode: 0 }).is_ok(),
+            "the second element was never reached"
+        );
+        // a name in neither is still not there
+        assert!(k.syscall(1, Call::Open { path: "/mnt/nothing".into(), mode: 0 }).is_err());
     }
 
     /// **`#9` is the wire, and nothing else.** The machine provides a 9P

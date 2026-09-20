@@ -185,6 +185,15 @@ pub const CONSDIR: &[(&str, Q, u32)] = &[
 
 impl Q {
     fn from_path(p: u64) -> Option<Q> {
+        // **`Qdir` is the directory itself, and it is not in the table.**
+        // Plan 9's `consdir[]` has `"."` as its zeroth entry (`devcons.c:607`)
+        // and `devgen` skips it; this table holds only the files, so the
+        // directory has to be answered here. Without this, reading `#c`
+        // itself was "no such file" — and `ls /dev` printed nothing, which
+        // looked like an empty directory rather than a failure.
+        if p == Q::Dir as u64 {
+            return Some(Q::Dir);
+        }
         CONSDIR.iter().map(|e| e.1).find(|q| *q as u64 == p)
     }
     fn name(self) -> &'static str {
@@ -385,7 +394,14 @@ impl Dev for Cons {
 
     fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
         let q = Q::from_path(c.qid.path).ok_or("no such file")?;
-        Ok(match q {
+        // **A file ends.** `readnum` and `readstr` both take the offset and
+        // answer 0 past the end (`devcons.c:640`, `:652`); the numbers here
+        // were formatted and handed back whole however far in the reader
+        // was, so `cat /dev/pid` printed the pid for ever. The generators and
+        // the console are the exception: they are streams, and Plan 9's
+        // `consread` gives them no offset either.
+        let stream = matches!(q, Q::Random | Q::Zero | Q::Null | Q::Cons | Q::Dir);
+        let got = match q {
             // `up`'s own numbers.
             Q::Pid => readnum(self.up.borrow().pid as u64, NUMSIZE),
             Q::Ppid => {
@@ -532,7 +548,15 @@ impl Dev for Cons {
                     .collect();
                 return Ok(crate::dev::devdirread(c, n, &entries));
             }
-        })
+        };
+        if stream {
+            return Ok(got);
+        }
+        let off = off as usize;
+        if off >= got.len() {
+            return Ok(Vec::new());
+        }
+        Ok(got[off..(off + n).min(got.len())].to_vec())
     }
 
     fn write(&mut self, c: &mut Chan, data: &[u8], _off: u64) -> Result<usize, String> {
@@ -982,6 +1006,36 @@ mod tests {
         ctl.flag |= crate::chan::flag::COPEN;
         d.close(&mut ctl);
         assert!(!d.kbd.raw, "a program that died in raw mode leaves a cooked console");
+    }
+
+    /// **A number is a FILE, and a file ends.** `readnum` answers 0 past the
+    /// end (`devcons.c:640`), so a second read of `/dev/pid` gives nothing.
+    /// Handing the formatted number back whatever the offset made `cat
+    /// /dev/pid` print the pid until something stopped it.
+    #[test]
+    fn a_number_file_ends() {
+        let (mut d, _) = cons_term(&[]);
+        let mut c = open(&mut d, "pid", OREAD);
+        let first = d.read(&mut c, 256, 0).unwrap();
+        assert_eq!(first.len(), NUMSIZE);
+        assert!(d.read(&mut c, 256, first.len() as u64).unwrap().is_empty());
+    }
+
+    /// **`#c` itself reads as a directory of 23.** `Qdir` is not in
+    /// `consdir[]` here — Plan 9's table has `"."` and `devgen` skips it — so
+    /// a read of the directory answered "no such file" and `ls /dev` showed
+    /// nothing at all.
+    #[test]
+    fn the_device_itself_lists_its_twenty_three_files() {
+        let (mut d, _) = cons_term(&[]);
+        let dir = d.attach("").unwrap();
+        let mut dir = d.open(dir, OREAD).unwrap();
+        let b = d.read(&mut dir, 8192, 0).unwrap();
+        let names: Vec<String> =
+            crate::ninep::Dir::parse_all(&b).into_iter().map(|e| e.name).collect();
+        assert_eq!(names.len(), CONSDIR.len());
+        assert!(names.contains(&"cons".to_string()));
+        assert!(names.contains(&"random".to_string()));
     }
 
     /// A write of `cons` reaches the screen — `screenputs` (`devcons.c:12`),

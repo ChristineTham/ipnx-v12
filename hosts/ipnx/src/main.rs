@@ -136,21 +136,18 @@ const LETTERS: [DevId; 10] = [
 /// bind(s, srv, MREPL|MCREATE);     /* #s  -> /srv */
 /// ```
 ///
-/// Three are added here, and each is a BOOT SCRIPT's job on Plan 9 rather
-/// than an invention: `#/boot` at `/bin` because there is no file server yet
-/// to hold the commands (P5), and `#d` at `/fd` and `#p` at `/proc` because
-/// rc reaches for both — `Fdprefix = "/fd/"` (`rc/ipnx.c`) and `getpid` reads
-/// `/dev/pid`. `/rc/bin/termrc` does them there (`init.c:178`).
+/// **Nothing else.** Everything the system needs beyond this is the system's
+/// own business now: `boot` mounts the root, `/lib/namespace` says what the
+/// namespace is, and `/rc/bin/termrc` binds the rest. This list used to carry
+/// three more, and each of them is now a line in one of those files.
 ///
 /// `#ec` is absent: it is devenv attached with a spec, the environment group
 /// shared by every process, and this kernel's `#e` has only the per-process
 /// one. Naming it would be claiming something that is not there.
-const BINDS: [(&str, &str, i32); 5] = [
+const BINDS: [(&str, &str, i32); 3] = [
     ("#c", "/dev", MAFTER),
     ("#e", "/env", MCREATE | MAFTER),
     ("#s", "/srv", MREPL | MCREATE),
-    ("#/boot", "/bin", MAFTER),
-    ("#d", "/fd", MAFTER),
 ];
 
 /// `<libc.h>:556`.
@@ -162,12 +159,30 @@ const MCREATE: i32 = 4;
 /// so each descriptor has its own offset, and the first is for reading.
 const CONS: &str = "#c/cons";
 
-/// Where the machine's filesystem is mounted, and how: `boot.c:171` —
-/// `mount(fd, afd, "/root", MREPL|MCREATE, rp)`. The channel comes from
-/// `open("#9/0", ORDWR)`, which is the whole of `connectvirtio9p`
-/// (`boot/bootvirtio9p.c:20`).
-const STORE: &str = "#9/0";
-const ROOT: &str = "/root";
+/// `arch->id` — what this machine is called, and therefore where its
+/// binaries live: `/$cputype/bin` on Plan 9 (`pc/main.c:252` says `"386"`).
+const OBJTYPE: &str = "wasm";
+
+/// `ksetenv` (`devenv.c:386`) — `namec("#e/<name>", Acreate, OWRITE, 0600)`
+/// and a write. The kernel's own way of putting something in the environment,
+/// which is how `pc/main.c` hands the architecture's name to userspace.
+fn ksetenv(k: &mut Kernel, name: &str, val: &str) -> Result<(), String> {
+    let path = format!("#e/{name}");
+    let Ret::Fd(fd) = k
+        .syscall(1, Call::Create { path: path.clone(), mode: 1, perm: 0o600 })
+        .map_err(|e| format!("create {path}: {e}"))?
+    else {
+        return Err(format!("create {path}"));
+    };
+    k.syscall(1, Call::Pwrite { fd, data: val.as_bytes().to_vec(), off: -1 })
+        .map_err(|e| format!("write {path}: {e}"))?;
+    k.syscall(1, Call::Close { fd }).map_err(|e| format!("close {path}: {e}"))?;
+    Ok(())
+}
+
+/// The first process, and the only file `#/boot` carries — as a Plan 9
+/// kernel carries `/boot/boot` and nothing else (`initcode.c:11`).
+const BOOT: &str = "/boot/boot";
 
 fn boot(
     root: Root,
@@ -214,16 +229,23 @@ fn loadbin(root: &mut Root, dir: &std::path::Path) -> usize {
     n
 }
 
-/// Boot, and run one command. `startboot` (`initcode.c:21`), which is the
-/// whole of what a Plan 9 kernel's first process does: open the console
-/// three times, bind the devices, and exec.
+/// **`startboot`** (`plan9/sys/src/9/port/initcode.c:21`), which is the whole
+/// of what a Plan 9 kernel's first process does — and now the whole of what
+/// this embedding does before the system takes over:
+///
+/// ```c
+/// open(cons, OREAD); open(cons, OWRITE); open(cons, OWRITE);
+/// bind(c, dev, MAFTER); bind(ec, env, MAFTER);
+/// bind(e, env, MCREATE|MAFTER); bind(s, srv, MREPL|MCREATE);
+/// exec(boot, argv);
+/// ```
 ///
 /// It is a function rather than `main`'s body so that a test can run the real
-/// thing — the real kernel, the real namespace, the real binaries out of
-/// `userspace/root/bin` — with a terminal it can script and inspect.
+/// thing — the real kernel, the real namespace, the real binaries — with a
+/// terminal it can script and inspect.
 ///
-/// `extra` puts more files in the boot list, which is how a test gives rc a
-/// script to run without writing into a built tree.
+/// `extra` puts more files in the boot list, for a test that wants the first
+/// process to be something other than `boot`.
 fn startboot(
     argv: &[String],
     extra: &[(&str, &[u8])],
@@ -231,16 +253,15 @@ fn startboot(
     store: Option<Box<dyn Nineserver>>,
 ) -> Result<String, String> {
     let mut root = Root::new();
-    let bin = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../userspace/root/bin");
-    if loadbin(&mut root, &bin) == 0 {
-        return Err(format!("nothing in {}: run userspace/mk.sh", bin.display()));
+    let bootdir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../userspace/build/boot");
+    if loadbin(&mut root, &bootdir) == 0 && extra.is_empty() {
+        return Err(format!("nothing in {}: run userspace/mk.sh", bootdir.display()));
     }
     for (name, bytes) in extra {
         root.addbootfile(name, bytes.to_vec());
     }
 
-    let has_store = store.is_some();
     let mut k = boot(root, host, store)?;
 
     // `open(cons, OREAD); open(cons, OWRITE); open(cons, OWRITE);` — three
@@ -256,39 +277,30 @@ fn startboot(
             .map_err(|e| format!("bind {what} {at}: {e}"))?;
     }
 
-    // The root file system, mounted from what the machine serves —
-    // `connectvirtio9p` then `boot.c:171`. A boot with no store is a boot
-    // with nothing that survives it, and says so by having no `/root`.
-    if has_store {
-        let Ret::Fd(fd) = k
-            .syscall(1, Call::Open { path: STORE.into(), mode: chan::mode::ORDWR as i32 })
-            .map_err(|e| format!("open {STORE}: {e}"))?
-        else {
-            return Err("no channel to the machine's file server".into());
-        };
-        k.syscall(
-            1,
-            Call::Mount {
-                fd,
-                afd: -1,
-                old: ROOT.into(),
-                flag: MREPL | MCREATE,
-                aname: String::new(),
-            },
-        )
-        .map_err(|e| format!("mount {STORE} {ROOT}: {e}"))?;
+    // **The machine names itself** (`pc/main.c:250`):
+    //
+    // ```c
+    // snprint(buf, sizeof(buf), "%s %s", arch->id, conffile);
+    // ksetenv("terminal", buf, 0);
+    // ksetenv("cputype", "386", 0);
+    // ksetenv("service", "terminal", 0);
+    // ```
+    //
+    // `ksetenv` is `namec("#e/<name>", Acreate, OWRITE, 0600)` and a write
+    // (`devenv.c:386`). These three are the whole of what a Plan 9 kernel
+    // puts in the environment, and `$objtype` — which `/lib/namespace` uses
+    // to find the binaries — is init's copy of `cputype`.
+    for (name, val) in [
+        ("terminal", format!("{OBJTYPE} {}", std::env::args().collect::<Vec<_>>().join(" "))),
+        ("cputype", OBJTYPE.to_string()),
+        ("service", "terminal".to_string()),
+    ] {
+        ksetenv(&mut k, name, &val)?;
     }
 
-    // **argv[0] is the PATH, not the bare name.** Plan 9's init passes "rc"
-    // (`init.c`), and can, because rc forks there. rc cannot fork here, so it
-    // re-executes ITSELF for every pipeline stage and subshell
-    // (`haventfork.c`, which is Plan 9's own file for systems in exactly this
-    // position) — and it finds itself by `argv0`. A bare name leaves it
-    // unable to start its own left-hand side, silently.
-    let path = format!("/bin/{}", argv[0]);
-    let mut argv = argv.to_vec();
-    argv[0] = path.clone();
-    k.exec(1, &path, &argv)
+    // `exec(boot, argv)`. Everything after this line is the system's.
+    let path = argv.first().map(String::as_str).unwrap_or(BOOT).to_string();
+    k.exec(1, &path, argv)
 }
 
 fn main() {
@@ -298,15 +310,24 @@ fn main() {
         eprintln!("  boots Saranos on this terminal and runs one command");
         return;
     }
-    let argv: Vec<String> =
-        if args.len() > 1 { args[1..].to_vec() } else { vec!["rc".to_string()] };
+    // With arguments, run that command instead of booting — which is how a
+    // single command is tried without a shell. Without, boot.
+    let argv: Vec<String> = if args.len() > 1 {
+        let mut v = vec![format!("/bin/{}", args[1])];
+        v.extend(args[2..].iter().cloned());
+        v
+    } else {
+        vec![BOOT.to_string()]
+    };
 
     // The machine's filesystem. `-fsdev local` names a host directory; this
     // one is `$HOME/lib/ipnx`, and what a program writes under `/root`
     // is a file there when the process is gone.
+    // The machine's filesystem — qemu's `-fsdev local` names a host
+    // directory, and `IPNX_STORE` names this one. The built rootfs is the
+    // default, so a fresh checkout boots into something.
     let dir = std::env::var_os("IPNX_STORE").map(std::path::PathBuf::from).unwrap_or_else(|| {
-        let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
-        home.unwrap_or_else(|| std::path::PathBuf::from(".")).join("lib/ipnx")
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../userspace/root")
     });
     let store: Option<Box<dyn Nineserver>> = match store::Store::new(&dir) {
         Ok(s) => Some(Box::new(s)),
@@ -554,149 +575,121 @@ mod tests {
     }
 }
 
-/// **P3's acceptance, run against the real thing.**
+/// **The demo, run against the real thing.**
 ///
-/// Not a model of rc and not a mock kernel: these boot the kernel, bind the
-/// namespace, and execute the rc that `userspace/mk.sh` built — Plan 9's rc,
-/// compiled to wasm, over a libc whose system calls are this machine's
-/// imports.
+/// Not a model of anything: these boot the kernel, run `boot`, `init`,
+/// `/lib/namespace` and `/rc/bin/termrc`, and then TYPE at the console —
+/// which is the whole of what `ipnx` does.
 ///
-/// They need that build. `cargo test` cannot do it (it needs wasi-sdk, which
-/// is a prerequisite and not a dependency), so a missing binary fails here
-/// and says which command to run rather than passing quietly.
+/// They need `userspace/mk.sh` to have run. `cargo test` cannot do it (it
+/// needs wasi-sdk, which is a prerequisite and not a dependency), so a
+/// missing rootfs fails here and says which command to run.
 #[cfg(test)]
 mod userspace {
     use super::*;
 
-    /// Run a script, and answer with what the console was shown.
-    fn rc(script: &str) -> String {
-        let term = Term::default();
-        let argv = ["rc".to_string(), "/bin/test.rc".to_string()];
-        let files: &[(&str, &[u8])] =
-            &[("test.rc", script.as_bytes()), ("greeting", b"a file in the boot list\n")];
-        match startboot(&argv, files, Box::new(term.clone()), None) {
-            Ok(status) => {
-                assert_eq!(status, "", "rc failed: {}", term.screen());
-                term.screen()
-            }
-            Err(e) => panic!("{e}"),
-        }
+    /// The rootfs `mk.sh` built — the machine's filesystem, as `ipnx` serves
+    /// it by default.
+    fn rootfs() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../userspace/root")
     }
 
-    /// Type at the console instead, with no script at all — which is how
-    /// `ipnx` itself is started.
+    /// Boot, type, and answer with what the console was shown.
     pub(super) fn typing(keys: &str) -> String {
-        typing_at(keys, None)
+        typing_at(keys, &rootfs())
     }
 
-    /// The same, with a filesystem the machine serves — which is what makes a
-    /// boot something a file can survive.
-    pub(super) fn typing_at(keys: &str, store: Option<&std::path::Path>) -> String {
+    /// The same, on a filesystem of this test's own.
+    pub(super) fn typing_at(keys: &str, store: &std::path::Path) -> String {
         let term = Term::typing(keys);
-        let store: Option<Box<dyn Nineserver>> = store.map(|d| {
-            Box::new(store::Store::new(d).expect("a store")) as Box<dyn Nineserver>
-        });
-        match startboot(&["rc".to_string()], &[], Box::new(term.clone()), store) {
+        let store = store::Store::new(store).expect("a store");
+        match startboot(
+            &[BOOT.to_string()],
+            &[],
+            Box::new(term.clone()),
+            Some(Box::new(store)),
+        ) {
             Ok(_) => term.screen(),
             Err(e) => panic!("{e}"),
         }
     }
 
-    /// **`rc` runs a script.** The first half of P3's acceptance.
+    /// **P5's acceptance: typing `ipnx` boots to `rc` on the terminal.** The
+    /// prompt is the proof that a shell is waiting for a command.
     #[test]
-    fn rc_runs_a_script() {
-        assert_eq!(rc("echo hello from rc\n"), "hello from rc\n");
+    fn it_boots_to_a_shell() {
+        let out = typing("echo it booted\n");
+        assert!(out.contains("% "), "no prompt: {out:?}");
+        assert!(out.contains("it booted\n"), "{out:?}");
     }
 
-    /// **A pipeline of two commands works.** The second half — and the one
-    /// that needs a second process, which this machine cannot make by
-    /// returning twice from `rfork`. rc starts its left-hand stage by
-    /// re-executing itself (`haventfork.c`), and that re-execution is
-    /// `procrfork`.
+    /// **`cat /etc/motd`** — a file that exists only on the file server, read
+    /// through the union `boot` made of `/`.
     #[test]
-    fn a_pipeline_of_two_commands_works() {
-        assert_eq!(
-            rc("echo hello from a pipeline | tr a-z A-Z\n"),
-            "HELLO FROM A PIPELINE\n"
-        );
+    fn cat_etc_motd() {
+        assert!(typing("cat /etc/motd\n").contains("Saranos."), "no motd");
     }
 
-    /// rc's own control flow, over commands that are separate processes.
+    /// **`ls`** — and what it lists is the union: the kernel's root AND the
+    /// server's, merged by `unionread`.
     #[test]
-    fn rc_runs_a_script_with_a_loop_and_a_variable() {
-        assert_eq!(
-            rc("x=world\nfor(i in a b c) echo $i $x\n"),
-            "a world\nb world\nc world\n"
-        );
+    fn ls_shows_both_halves_of_the_root() {
+        let out = typing("ls /\n");
+        for name in ["boot", "dev", "proc", "srv"] {
+            assert!(out.contains(&format!("{name}\n")), "no {name} from #/: {out:?}");
+        }
+        for name in ["etc", "lib", "rc", "wasm"] {
+            assert!(out.contains(&format!("{name}\n")), "no {name} from the server");
+        }
     }
 
-    /// A command reads a file the kernel resolved by name, and the shell
-    /// redirects where its output goes.
+    /// `/bin` is a union too, and it is the one `/lib/namespace` makes:
+    /// `bind /$objtype/bin /bin` then `bind -a /rc/bin /bin`.
     #[test]
-    fn redirection_and_a_command_that_reads_a_file() {
-        assert_eq!(rc("cat /bin/greeting\n"), "a file in the boot list\n");
+    fn bin_is_the_union_the_namespace_file_makes() {
+        let out = typing("ls /bin\n");
+        assert!(out.contains("echo\n"), "no commands: {out:?}");
+        assert!(out.contains("termrc\n"), "no /rc/bin: {out:?}");
     }
 
-    /// The environment is `#e`, bound at `/env`, and rc keeps its variables
-    /// there — so a variable set in one process is read by another.
+    /// The devices are where `/lib/namespace` and `/rc/bin/termrc` put them,
+    /// and `/dev` is `#c` with the terminal's own bound after it.
     #[test]
-    fn a_variable_reaches_a_child_through_the_environment_device() {
-        assert_eq!(rc("x=through\necho `{echo $x}\n"), "through\n");
-    }
-}
-
-/// **P4's console acceptance, run against the real thing**: `rc` reads and
-/// writes `/dev/cons`.
-///
-/// Nothing here is given a script. The shell is started the way `ipnx` starts
-/// it — `startboot`, three opens of `#c/cons`, the binds — and the commands
-/// are TYPED, which is the whole claim.
-#[cfg(test)]
-mod console {
-    use super::*;
-    use userspace::typing;
-
-    /// **`rc` reads and writes `/dev/cons`.** A command typed at the console
-    /// runs, and what it prints comes back to the console.
-    #[test]
-    fn rc_reads_commands_from_the_console_and_writes_back_to_it() {
-        // The prompt is on the same stream, because the console is one
-        // screen: rc writes `% ` to fd 2 and echo writes to fd 1, and both
-        // are `#c/cons`.
-        assert_eq!(typing("echo typed at the console\n"), "% typed at the console\n% ");
+    fn the_devices_are_bound_where_the_files_say() {
+        let out = typing("ls /dev\n");
+        assert!(out.contains("cons\n"), "no #c: {out:?}");
+        assert!(out.contains("random\n"), "no #c: {out:?}");
+        assert!(out.contains("0ctl\n"), "no #d, which termrc binds: {out:?}");
     }
 
-    /// The console is a stream of lines, so a session is more than one.
+    /// The environment the boot set: `$objtype` from the machine
+    /// (`pc/main.c:252`), `$user` from `#c/user`, `$sysname` from termrc.
     #[test]
-    fn a_session_is_more_than_one_command() {
-        assert_eq!(typing("echo one\necho two\n"), "% one\n% two\n% ");
+    fn the_environment_is_what_the_boot_put_there() {
+        assert!(typing("echo $objtype $user $sysname\n").contains("wasm eve gnot"));
     }
 
-    /// **rc knows it is interactive without being told**, because `Isatty`
-    /// asks the file what it is: `stat(5)` carries the device letter, and the
-    /// console is `cons` served by `#c` (`rc/ipnx.c`). Plan 9 asks `fd2path`
-    /// for the same fact; this kernel has no such call.
-    ///
-    /// The prompt is the proof: `rcmain` sets `prompt=('% ' '\t')`, and rc
-    /// writes it only when `flag['i']`.
-    #[test]
-    fn the_console_makes_rc_interactive_and_it_prompts() {
-        let out = typing("echo hi\n");
-        assert!(out.contains("% "), "no prompt in {out:?}");
-        assert!(out.contains("hi\n"), "no output in {out:?}");
-    }
-
-    /// A pipeline typed at the console — two processes, the console, and the
-    /// pipe between them.
+    /// A pipeline, typed — two processes and the pipe between them.
     #[test]
     fn a_pipeline_typed_at_the_console() {
         assert!(typing("echo shouting | tr a-z A-Z\n").contains("SHOUTING\n"));
     }
 
-    /// **The exit status of a command reaches the shell.** It did not: the
-    /// no-fork path never called `addwaitpid`, so `Waitfor` returned before
-    /// it waited and `$status` kept whatever it last held — a failing command
-    /// looked like a succeeding one to every `if` and `&&` in every script.
+    /// rc's own control flow, over commands that are separate processes.
+    #[test]
+    fn a_loop_and_a_variable() {
+        let out = typing("x=world\nfor(i in a b c) echo $i $x\n");
+        assert!(out.contains("a world\nb world\nc world\n"), "{out:?}");
+    }
+
+    /// Command substitution — a second rc, its output read back through a
+    /// pipe, split on `$ifs`.
+    #[test]
+    fn command_substitution() {
+        assert!(typing("echo `{echo through}\n").contains("through\n"));
+    }
+
+    /// **The exit status of a command reaches the shell.**
     #[test]
     fn a_commands_exit_status_reaches_the_shell() {
         let out = typing("cat /nothing\necho after [$status]\necho ok\necho then [$status]\n");
@@ -704,40 +697,51 @@ mod console {
         assert!(out.contains("then []"), "a command that worked clears it: {out:?}");
     }
 
-    /// `/dev/cons` is `#c/cons` reached through the bind, and a program
-    /// writing to it by NAME is writing to the same file.
+    /// A number in `#c` is a FILE, and a file ends — so `cat` of one returns.
     #[test]
-    fn dev_cons_is_the_name_of_the_same_file() {
-        assert!(typing("echo through the name > /dev/cons\n")
-            .contains("through the name\n"));
+    fn cat_of_a_device_file_ends() {
+        let out = typing("cat /dev/pid\necho done\n");
+        assert!(out.contains("done\n"), "cat never returned: {out:?}");
     }
 }
 
-/// **P4's storage acceptance**: a file written through the storage server
-/// survives a boot.
-///
-/// The server is what the embedding serves — `#9/0` is a channel to it, and
-/// `mount` does the rest (`boot.c:171`). Each test here boots TWICE into the
-/// same store, which is the only way to tell a file that persisted from a
-/// file that is still in memory.
+/// **P4's storage acceptance, and P5's boot on top of it**: what is written
+/// survives, because the file server is the machine's.
 #[cfg(test)]
 mod storage {
     use super::*;
-    use userspace::{typing, typing_at};
+    use userspace::typing_at;
 
-    /// A directory of this test's own, gone when it ends.
+    /// A rootfs of this test's own, copied so two boots can share it and
+    /// nothing else can.
     struct Scratch(std::path::PathBuf);
 
     impl Scratch {
         fn new(name: &str) -> Scratch {
             let d = std::env::temp_dir().join(format!("ipnx-test-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&d);
-            std::fs::create_dir_all(&d).expect("a scratch directory");
+            let from =
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../userspace/root");
+            copy(&from, &d).expect("a rootfs to boot from");
             Scratch(d)
         }
         fn path(&self) -> &std::path::Path {
             &self.0
         }
+    }
+
+    fn copy(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+        std::fs::create_dir_all(to)?;
+        for e in std::fs::read_dir(from)? {
+            let e = e?;
+            let dst = to.join(e.file_name());
+            if e.file_type()?.is_dir() {
+                copy(&e.path(), &dst)?;
+            } else {
+                std::fs::copy(e.path(), dst)?;
+            }
+        }
+        Ok(())
     }
 
     impl Drop for Scratch {
@@ -746,54 +750,31 @@ mod storage {
         }
     }
 
-    /// **The acceptance.** Two boots: one writes, the other reads. Nothing
-    /// carries over but the store itself.
+    /// **Two boots: one writes, the other reads.** Nothing carries over but
+    /// the filesystem itself.
     #[test]
     fn a_file_written_through_the_store_survives_a_boot() {
         let s = Scratch::new("survives");
-        typing_at("echo kept > /root/note\n", Some(s.path()));
-        let second = typing_at("cat /root/note\n", Some(s.path()));
+        typing_at("echo kept > /tmp/note\n", s.path());
+        let second = typing_at("cat /tmp/note\n", s.path());
         assert!(second.contains("kept\n"), "the second boot did not find it: {second:?}");
     }
 
-    /// And it is a file on the machine, not a story the kernel tells: the
-    /// host can read it with no kernel in the way.
+    /// And it is a file on the machine, not a story the kernel tells.
     #[test]
     fn what_was_written_is_a_file_the_machine_holds() {
         let s = Scratch::new("realfile");
-        typing_at("echo on the disk > /root/thing\n", Some(s.path()));
-        let real = std::fs::read_to_string(s.path().join("thing")).expect("a real file");
+        typing_at("echo on the disk > /tmp/thing\n", s.path());
+        let real = std::fs::read_to_string(s.path().join("tmp/thing")).expect("a real file");
         assert_eq!(real, "on the disk\n");
     }
 
-    /// A directory made through the mount is a directory on the machine, and
-    /// a name resolves through both.
+    /// A directory made through the mount is a directory on the machine.
     #[test]
     fn a_directory_made_through_the_mount_is_one() {
         let s = Scratch::new("dirs");
-        typing_at("mkdir /root/sub\necho deep > /root/sub/file\n", Some(s.path()));
-        assert!(s.path().join("sub").is_dir(), "no directory on the machine");
-        let back = typing_at("cat /root/sub/file\n", Some(s.path()));
-        assert!(back.contains("deep\n"), "{back:?}");
-    }
-
-    /// `ls` reads the mounted directory as `Dir` entries, through `#M`, from
-    /// a server that packed them with `convD2M`. Every layer of the directory
-    /// contract at once.
-    #[test]
-    fn the_mounted_directory_lists() {
-        let s = Scratch::new("listing");
-        typing_at("echo a > /root/alpha\necho b > /root/beta\n", Some(s.path()));
-        let out = typing_at("ls /root\n", Some(s.path()));
-        assert!(out.contains("alpha"), "{out:?}");
-        assert!(out.contains("beta"), "{out:?}");
-    }
-
-    /// A boot with no store has no `/root`, and says so rather than
-    /// pretending to have one.
-    #[test]
-    fn a_boot_with_no_store_has_no_root() {
-        let out = typing("cat /root/anything\n");
-        assert!(out.contains("can't open"), "{out:?}");
+        typing_at("mkdir /tmp/sub\necho deep > /tmp/sub/file\n", s.path());
+        assert!(s.path().join("tmp/sub").is_dir(), "no directory on the machine");
+        assert!(typing_at("cat /tmp/sub/file\n", s.path()).contains("deep\n"));
     }
 }

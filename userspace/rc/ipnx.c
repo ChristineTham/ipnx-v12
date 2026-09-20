@@ -7,15 +7,14 @@
  * win32.c — and the mkfile picks one; this is that file for this system, and
  * it began as a copy of plan9.c because this system IS Plan 9's interface.
  *
- * FOUR THINGS DIFFER, and nothing else:
+ * THREE THINGS DIFFER, and nothing else:
  *
  *   1. `ForkExecute` — this machine's `rfork` cannot return twice, so the
  *      child is told where to start. See `libc/wasm/procrfork.c`; the shape
  *      is Plan 9's own (`libthread/create.c:103`).
  *   2. `Trapinit` — there are no notes yet, so there is nothing to catch.
- *   3. `Isatty` — there is no console yet, so nothing is one (P4).
- *   4. `Rcmain` — there is no file server yet, so the only files are the
- *      kernel's boot list, and that is bound at /bin (P5).
+ *   3. `Isatty` — `fd2path` is not one of this kernel's calls, so the same
+ *      question is asked of the file rather than of its name.
  *
  * Note that `havefork` is NOT one of them: it is 0 here because this file is
  * built beside `haventfork.c`, which is Plan 9's own answer for a system
@@ -42,13 +41,8 @@ char *syssigname[] = {
 	"term",
 	0
 };
-/*
- * (4) Plan 9 has this at /rc/lib/rcmain, on the file server it mounted. This
- * system has no file server yet — the only files are the ones the kernel
- * carries in its boot list (`devroot.c`), and boot binds those at /bin. P5
- * puts the root back where Plan 9 has it and this line goes back with it.
- */
-char *Rcmain = "/bin/rcmain";
+/* Plan 9's own path, on the file server boot mounted. */
+char *Rcmain = "/rc/lib/rcmain";
 char *Fdprefix = "/fd/";
 
 void execfinit(void);
@@ -389,6 +383,34 @@ int
 ForkExecute(char *file, char **argv, int sin, int sout, int serr)
 {
 	Fe fe;
+	char buf[1024];
+	word *path;
+	int nc;
+
+	/*
+	 * **A bare name is searched for.** `haventfork.c` starts every
+	 * pipeline stage and subshell by re-executing `argv0` — and `argv0`
+	 * is whatever the program was invoked as, which for the shell init
+	 * starts is "rc" (`init.c:174`: `execl("/bin/rc", "rc", nil)`). Plan
+	 * 9 can pass a bare name there because its rc FORKS and never has to
+	 * find itself; this one does, so a name with no `/` is looked up in
+	 * `$path`, exactly as `execforkexec` looks a command up.
+	 */
+	if(strchr(file, '/') == nil){
+		for(path = searchpath(file); path; path = path->next){
+			nc = strlen(path->word);
+			if(nc >= sizeof buf - 1 - strlen(file))
+				continue;
+			strcpy(buf, path->word);
+			if(buf[0])
+				strcat(buf, "/");
+			strcat(buf, file);
+			if(access(buf, 1) == 0){
+				file = buf;
+				break;
+			}
+		}
+	}
 
 	if(access(file, 1) != 0)
 		return -1;

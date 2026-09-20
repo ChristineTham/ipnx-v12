@@ -79,6 +79,14 @@ ABI. The conformance suite binds all three.
 - **A walk produces the new CHANNEL**, as `devwalk` fills in `nc`
   (`dev.c:169`). Not a qid: a channel through `#M` carries the FID the server
   knows it by, and a walk is what mints one.
+- **A union is a LIST, and every part of it is Plan 9's**: `cmount` puts the
+  directory itself in first when a union is made on it (`chan.c:707`), and
+  copies a union when one is bound onto a directory (`:719`); a walk tries
+  each element in turn when the first has no such name (`:1027`); a read of
+  such a directory reads every element (`unionread`, `sysfile.c:323`); and
+  `Amount` and `Atodir` do NOT step onto a mount, so a second bind attaches
+  to the original directory and `cd` is left before the mount point
+  (`:1532`, `:1522`).
 - **`cclone` is how a channel becomes the caller's own** — a walk of NO names
   (`chan.c:837`). `namec` takes one before it opens, removes or creates, and
   the reason is in Plan 9's own comment: *"We need our own copy of the Chan

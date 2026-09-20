@@ -154,11 +154,45 @@ impl Ns {
 
     /// `bind(2)` and `mount(2)`: put `to` over the file `on`.
     pub fn mount(&mut self, on: &Chan, to: Element, how: Bind) {
+        let fresh = !self.mounts.contains_key(&Key::of(on));
         let list = self.mounts.entry(Key::of(on)).or_default();
+        // **`cmount` (`chan.c:707`), and the comment there is the whole of
+        // it:** *"if this is a union mount, add the old node to the mount
+        // chain."* Nothing was mounted here before, so the directory itself
+        // is what the union's first element must be — otherwise `bind -a x /`
+        // does not ADD to `/`, it replaces it, and every name that was there
+        // is gone. `bind -a /root /` is the line that found this: it is how a
+        // root becomes a file server, and it took `/dev` and `/env` with it.
+        //
+        // It is added with flags 0 (`newmount(m, old, 0, 0)`), so it never
+        // carries `MCREATE`.
+        if fresh && how != Bind::Replace {
+            list.push(Element::new(on.clone()));
+        }
+        // **"copy a union when binding it onto a directory"** (`chan.c:719`).
+        // The source channel landed on one element of a union and `Abind`
+        // kept the rest; all of them come along, or `bind -a /root /` binds
+        // whichever element happened to answer first and the others become
+        // unreachable. `/root` is a union — `/lib/namespace` mounts the
+        // server onto it with `-a` — so that is every file on the server.
+        //
+        // They follow the new element, and `MREPL` becomes `MAFTER` for
+        // them: `flg = order; if(order == MREPL) flg = MAFTER;`
+        // The union's FIRST element is the channel itself — `domount` landed
+        // on it — so the copy starts at the second: `for(um = um->next; um;
+        // um = um->next)` (`chan.c:727`).
+        let mut group = vec![to];
+        for extra in group[0].chan.umh.clone().into_iter().skip(1) {
+            group.push(Element::new(extra));
+        }
         match how {
-            Bind::Replace => *list = vec![to],
-            Bind::Before => list.insert(0, to),
-            Bind::After => list.push(to),
+            Bind::Replace => *list = group,
+            Bind::Before => {
+                for (i, e) in group.into_iter().enumerate() {
+                    list.insert(i, e);
+                }
+            }
+            Bind::After => list.extend(group),
         }
     }
 

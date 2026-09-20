@@ -64,12 +64,13 @@ typedef	__builtin_va_list	va_list;
  * where this build's difference from kencc belongs.
  */
 #define USED(...)	_USED(0, __VA_ARGS__)
-#define SET(x)		((x) = 0)
+#define SET(...)	_USED(0, __VA_ARGS__)
 
 /*
- * kencc's `USED` takes any number of arguments — `<arg.h>`'s ARGEND is
- * `USED(_args, _argt, _argc);` — so this one does too. It cannot reference
- * them the way kencc's does (they are of no one type), so the build turns off
- * the diagnostics kencc would have used them to silence: see mk.sh.
+ * kencc's `USED` and `SET` take any number of arguments — `<arg.h>`'s ARGEND
+ * is `USED(_args, _argt, _argc);` and `unmount.c:21` is `SET(new, old);` — so
+ * these do too. They cannot reference them the way kencc's does (they are of
+ * no one type), so the build turns off the diagnostics kencc would have used
+ * them to silence: see mk.sh.
  */
 #define _USED(...)	do{}while(0)

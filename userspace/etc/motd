@@ -1,0 +1,5 @@
+Saranos.
+
+The kernel is IPNX; the shell is rc, and it is Plan 9's.
+Everything you can see is a file, and every name you type is
+resolved through this process' own namespace.

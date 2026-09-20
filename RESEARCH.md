@@ -3132,3 +3132,81 @@ name for it is not closing the file.
 * **`procctl`'s `close n` does not reach the device** (`devproc.c`), because
   `#p` cannot reach the device table. That is exactly what `devtab` being a
   global gives Plan 9 and what this kernel has in `namec` instead.
+
+---
+
+## §13 — What building the boot measured, 2026-09-20
+
+P5 moved the boot out of Rust and into the system: `boot`, `init`,
+`/lib/namespace`, `/rc/bin/termrc`. The embedding is now `initcode.c:21` and
+nothing more.
+
+### The chain, at file and line
+
+| | |
+|---|---|
+| `initcode.c:21` | three opens of `#c/cons` (**three opens, not dups**), four binds, `exec`. This is the whole of the embedding now |
+| `boot.c:151` (`nsinit`) | `bind("/","/",MREPL)`, `mount(fd, afd, "/root", MREPL\|MCREATE)`, **`bind(rootdir, "/", MAFTER\|MCREATE)`** — that last line is what makes the root a file server |
+| `bootvirtio9p.c:20` | the whole of the method: `open("#9/0", ORDWR)` |
+| `aux.c:125` (`srvcreate`) | post the root channel at `#s/boot`, so a namespace built later can mount it again |
+| `boot.c:201` (`execinit`) | `"/%s/init"` with `$cputype` — **not `/bin/init`**, because `/bin` is a union `/lib/namespace` makes and nothing has read that file yet |
+| `pc/main.c:250` | `ksetenv("cputype", "386", 0)` — the MACHINE names itself, and `$objtype` is init's copy of it |
+| `init.c:23` | `readenv("#c/user")`, `newns(user, 0)`, then the loop: the first rc runs the startup, `manual` becomes 1, and every one after it is the bare interactive shell |
+| `libauth/newns.c:35` | `/lib/namespace` — the file is opened BEFORE `rfork(RFENVG\|RFCNAMEG)` clears the namespace, and read from the open fd afterwards |
+
+### Five deviations, and every one of them was in the union
+
+A union was a word here and not a thing. `bind -a` put an element in a list
+that nothing ever reached, and the first line of P5 — `bind -a /root /`, the
+root becoming a file server — needs all five of these to work.
+
+| | |
+|---|---|
+| **a walk never tried the other elements** | *"try a union mount, if any"* (`chan.c:1027`): when the first element has no such name, `walk` tries each one after it — `for(f = (f? f->next: f); f; f = f->next)` |
+| **the directory itself was not in its own union** | `cmount` (`chan.c:707`): *"if this is a union mount, add the old node to the mount chain."* Without it `bind -a x /` does not ADD to `/`, it replaces it |
+| **a union was not copied when bound onto a directory** | `cmount` (`chan.c:719`), and `Chan.umh` is kept by `namec`'s `Abind` for exactly this. `/root` is itself a union, so `bind -a /root /` bound one element of it and the server became unreachable |
+| **`Amount` and `Atodir` must NOT step onto a mount** | `chan.c:1532`: *"When mounting on an already mounted upon directory, one wants subsequent mounts to be attached to the original directory, not the replacement."* A second `bind -a x /n` attached to the first bind's channel, so a union could never have more than one element. `Atodir` has its own reason (`:1522`): *"Directories (e.g. for cd) are left before the mount point, so one may mount on / or . and see the effect"* |
+| **a union directory read only one element** | `unionread` (`sysfile.c:323`) opens each element in turn, answers as soon as one gives anything, and moves on when one runs out — `c->uri` and `c->umc`. `ls /` showed whichever element answered the walk, which once `/` is a union is most of the system missing |
+
+### Four more, each found by something failing to boot
+
+| | |
+|---|---|
+| **`exec` read the image at the device** | `sysexec` reads it through `devtab` (`sysproc.c:302`), which for a mounted file is the mount driver. Reaching the device directly worked while every binary was in `#/boot`, and stopped the moment `/bin` became what it is on Plan 9: a file server's |
+| **`rootreset`'s ten directories listed the boot files** | `rootgen` (`devroot.c:116`) switches on `Qdir` and `Qboot` and generates nothing for the rest. Treating everything that is not `#/` as `boot` made `ls /` show the boot files under `#/root` as well |
+| **`#c`'s own directory was "no such file"** | Plan 9's `consdir[]` has `"."` as its zeroth entry (`devcons.c:607`) and `devgen` skips it. This table holds only the files, so `Qdir` had to be answered separately — and until it was, `ls /dev` printed nothing and looked like an empty directory |
+| **a number in `#c` never ended** | `readnum` takes the offset and answers 0 past the end (`devcons.c:640`). Handing the formatted number back whatever the offset made `cat /dev/pid` print the pid for ever |
+
+### And one the union exposed in the kernel's own shape
+
+`Call::Pread` held a `RefCell` borrow on the descriptor's channel across the
+device call. That is Plan 9's `Chan*` handed to the device — and Plan 9 does
+not mind that the device may reach the same channel again through the fd
+table, which `dupgen` does for every open descriptor (`devdup.c:34`). `ls
+/dev` with `#d` in its union is exactly that, and it panicked. The channel is
+now copied out and the whole of it put back: copying only the offset back is
+what lost `dri` and `uri` and made a directory read start over every time.
+
+### A fifth defect in 9legacy's no-fork path
+
+Joining the four in §11 and §12: `haventfork.c` re-executes `argv0` for every
+pipeline stage, and `init` execs the shell as `"rc"` (`init.c:174`:
+`execl("/bin/rc", "rc", nil)`) — a bare name, which Plan 9 can pass because
+its rc forks and never has to find itself. Here `access("rc", 1)` fails and
+every pipeline dies. `ForkExecute` now searches `$path` for a name with no
+`/`, exactly as `execforkexec` searches for a command.
+
+### Still different, and named rather than hidden
+
+* **`#ec` is absent.** It is devenv attached with a spec — the configuration
+  environment, which a Plan 9 kernel fills from `plan9.ini` — and this
+  kernel's `#e` has only the per-process group. `/lib/namespace`'s
+  `$rootspec` and `$rootdir` are absent with it, so `boot` has one root and
+  no way to be told otherwise.
+* **`/` has no `MCREATE` element**, exactly as on Plan 9: `/lib/namespace`
+  binds the root with `-a` and not `-ac`. A create goes in `/tmp`, which is
+  the server's own directory and not a union.
+* **init's loop ends.** Plan 9's goes round forever because a terminal does
+  not end; input can end here, so the second exit is the end of the session
+  rather than a reason to start a third — and `sleep`, which is what Plan 9
+  puts in the loop to stop a spin, is one of the calls this kernel refuses.

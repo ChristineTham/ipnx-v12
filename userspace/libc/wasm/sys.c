@@ -72,22 +72,21 @@ int	sleep(long n)				{ return __sleep(n); }
 long	alarm(ulong n)				{ return __alarm(n); }
 
 /*
- * `exits` is the one call whose stub is not a forwarding call: it does not
- * return, and the compiler must know that or it will emit unreachable code
- * after every call to it. Plan 9's 386 stub is named `_exits` for a different
- * reason (`9syscall/mkfile`: "if(~ $i exits) i=_exits") — there, `exits` is a
- * portable wrapper that flushes atexit handlers first.
+ * `exits` is the one call whose stub is not a forwarding call. Two things
+ * differ, and Plan 9 has both:
+ *
+ *   * it does not return, and the compiler must know that or it emits
+ *     unreachable code after every call to it;
+ *   * **the stub is named `_exits`** — `9syscall/mkfile`: `if(~ $i exits)
+ *     i=_exits` — because `exits` is a PORTABLE function
+ *     (`port/atexit.c:46`) that runs the `atexit` handlers and then calls
+ *     this. Defining `exits` here would take that over and every handler
+ *     would be silently skipped, `Bflush` among them.
  */
 void
-exits(char *status)
+_exits(char *status)
 {
 	__exits(status);
 	for(;;)
 		;
-}
-
-void
-_exits(char *status)
-{
-	exits(status);
 }

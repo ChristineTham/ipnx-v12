@@ -293,26 +293,31 @@ fn elems(path: &str) -> Vec<String> {
 /// This is where the namespace and the device table meet, and it is checked at
 /// EVERY component rather than once against a prefix — which is what makes a
 /// bind visible through every path that reaches the file.
-/// `domount` — step onto whatever is mounted here.
+/// `domount` — step onto whatever is mounted here, and say what ELSE is
+/// mounted here.
 ///
-/// **What comes back is the caller's OWN copy** (`cunique`, `chan.c:586`).
-/// The channel in a mount table is shared by everything that resolves through
-/// it, and a `create` MOVES a channel — so handing out the namespace's own
-/// would move the mount itself. It did: a `create` through a mount walked the
-/// server's root fid onto the new file, and nothing resolved through that
-/// mount again.
-fn domount(tab: &mut Devtab, ns: &Ns, c: Chan) -> Result<Chan, String> {
-    match ns.findmount(&c) {
-        Some(els) if !els.is_empty() => {
-            let mut m = tab.dcclone(&els[0].chan)?;
-            m.path = c.path.clone(); // the name is how we got here, not where we landed
-            Ok(m)
-        }
-        _ => Ok(c),
-    }
+/// **What comes back first is the caller's OWN copy** (`cunique`,
+/// `chan.c:586`). The channel in a mount table is shared by everything that
+/// resolves through it, and a `create` MOVES a channel — so handing out the
+/// namespace's own would move the mount itself. It did: a `create` through a
+/// mount walked the server's root fid onto the new file, and nothing resolved
+/// through that mount again.
+///
+/// The rest are the union's other elements, in order, which a walk tries when
+/// the first has no such name (`chan.c:1034`). They are NOT cloned: walking a
+/// channel does not move it, and a walk is all they are used for.
+fn domount(tab: &mut Devtab, ns: &Ns, c: Chan) -> Result<(Chan, Vec<Chan>), String> {
+    let els: Vec<Chan> = match ns.findmount(&c) {
+        Some(els) if !els.is_empty() => els.iter().map(|e| e.chan.clone()).collect(),
+        _ => return Ok((c, Vec::new())),
+    };
+    let mut m = tab.dcclone(&els[0])?;
+    m.path = c.path.clone(); // the name is how we got here, not where we landed
+    Ok((m, els))
 }
 
-/// `walk`: the elements, one at a time, stepping through mounts.
+/// `walk` (`chan.c:965`): the elements, one at a time, stepping through
+/// mounts — and through UNIONS.
 pub fn walk(
     tab: &mut Devtab,
     ns: &Ns,
@@ -328,17 +333,38 @@ pub fn walk(
         // undomounts here, which needs the mount head a channel was derived
         // from; this subset does not carry that yet, so `..` walks the device
         // and is honest about only that.
+        let mut union = Vec::new();
         if name != ".." && !nomount {
-            c = domount(tab, ns, c)?;
+            let (first, rest) = domount(tab, ns, c)?;
+            c = first;
+            union = rest;
         }
         match tab.dwalk(&c, name)? {
             Some(next) => c = next,
-            None => return Err(format!("'{}' does not exist", name)),
+            None => {
+                // **"try a union mount, if any"** (`chan.c:1027`). The first
+                // element is the one just walked, so this starts at the next
+                // — `for(f = (f? f->next: f); f; f = f->next)` (`:1034`).
+                // Without it a `bind -a` puts an element in a list nothing
+                // ever reaches, and a union is a word rather than a thing.
+                let mut found = None;
+                for alt in union.into_iter().skip(1) {
+                    if let Ok(Some(next)) = tab.dwalk(&alt, name) {
+                        found = Some(next);
+                        break;
+                    }
+                }
+                match found {
+                    Some(next) => c = next,
+                    None => return Err(format!("'{}' does not exist", name)),
+                }
+            }
         }
     }
-    if !nomount {
-        c = domount(tab, ns, c)?;
-    }
+    // **The last element is NOT domounted here.** `walk` steps onto a mount
+    // at the top of each iteration, before walking that component
+    // (`chan.c:1020`); what to do about the last one is the access mode's
+    // business, and two of the seven answer "nothing".
     Ok(c)
 }
 
@@ -354,6 +380,26 @@ pub fn namec(
 ) -> Result<Chan, String> {
     let (s, names) = start(tab, ns, name, slash, dot)?;
     let mut c = walk(tab, ns, s.chan, &names, s.nomount)?;
+    // Whether the LAST element steps onto what is mounted there, per access
+    // mode (`chan.c:1456`). Two say no, and each says why:
+    //
+    // * **`Amount`** — *"When mounting on an already mounted upon directory,
+    //   one wants subsequent mounts to be attached to the original directory,
+    //   not the replacement"* (`:1532`). Without this a second `bind -a x /n`
+    //   attaches to the first bind's channel instead of to `/n`, and a union
+    //   can never have more than one element.
+    // * **`Atodir`** — *"Directories (e.g. for cd) are left before the mount
+    //   point, so one may mount on / or . and see the effect"* (`:1522`).
+    if !s.nomount && !matches!(amode, A::Mount | A::Todir) {
+        let (first, rest) = domount(tab, ns, c)?;
+        c = first;
+        // The union comes along for two of the modes, and for the reasons
+        // [`Chan::umh`] records. **Only when it has more than one element**
+        // (`chan.c:1502`), because one element is not a union.
+        if rest.len() > 1 && matches!(amode, A::Bind | A::Open) {
+            c.umh = rest;
+        }
+    }
     match amode {
         // `Aaccess`, `Abind`, `Amount` and `Aremove` resolve and stop.
         // **None requires a directory** — which is why `bind` can put a file
