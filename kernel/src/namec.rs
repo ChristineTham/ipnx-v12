@@ -304,12 +304,16 @@ fn elems(path: &str) -> Vec<String> {
 /// The rest are the union's other elements, in order, which a walk tries when
 /// the first has no such name (`chan.c:1034`). They are NOT cloned: walking a
 /// channel does not move it, and a walk is all they are used for.
-fn domount(tab: &mut Devtab, ns: &Ns, c: Chan) -> Result<(Chan, Vec<Chan>), String> {
-    let els: Vec<Chan> = match ns.findmount(&c) {
-        Some(els) if !els.is_empty() => els.iter().map(|e| e.chan.clone()).collect(),
+fn domount(
+    tab: &mut Devtab,
+    ns: &Ns,
+    c: Chan,
+) -> Result<(Chan, Vec<crate::ns::Element>), String> {
+    let els: Vec<crate::ns::Element> = match ns.findmount(&c) {
+        Some(els) if !els.is_empty() => els.to_vec(),
         _ => return Ok((c, Vec::new())),
     };
-    let mut m = tab.dcclone(&els[0])?;
+    let mut m = tab.dcclone(&els[0].chan)?;
     m.path = c.path.clone(); // the name is how we got here, not where we landed
     Ok((m, els))
 }
@@ -323,6 +327,14 @@ pub fn walk(
     names: &[String],
     nomount: bool,
 ) -> Result<Chan, String> {
+    // **The path is carried beside the channel, not taken from it**
+    // (`chan.c`, `walk`): `path = c->path` before the loop, `path =
+    // addelem(path, names[nhave+i], mtpt)` for each name, and `c->path =
+    // path` at the end. `domount` does not touch the text — it only records
+    // the mount point — so a name keeps the name it was walked by, and a
+    // file on the far side of a mount is `/root/wasm/bin` rather than the
+    // mount driver's `#M/wasm/bin`.
+    let mut path = c.path.clone();
     for name in names {
         if !c.is_dir() {
             return Err("not a directory".into());
@@ -347,7 +359,7 @@ pub fn walk(
                 // ever reaches, and a union is a word rather than a thing.
                 let mut found = None;
                 for alt in union.into_iter().skip(1) {
-                    if let Ok(Some(next)) = tab.dwalk(&alt, name) {
+                    if let Ok(Some(next)) = tab.dwalk(&alt.chan, name) {
                         found = Some(next);
                         break;
                     }
@@ -358,7 +370,10 @@ pub fn walk(
                 }
             }
         }
+        path = crate::chan::addelem(&path, name);
     }
+    // `pathclose(c->path); c->path = path;` (`chan.c`, end of `walk`).
+    c.path = path;
     // **The last element is NOT domounted here.** `walk` steps onto a mount
     // at the top of each iteration, before walking that component
     // (`chan.c:1020`); what to do about the last one is the access mode's
@@ -389,8 +404,17 @@ pub fn namec(
     // * **`Atodir`** — *"Directories (e.g. for cd) are left before the mount
     //   point, so one may mount on / or . and see the effect"* (`:1522`).
     if !s.nomount && !matches!(amode, A::Mount | A::Todir) {
+        // *"save&update the name; domount might change c"* (`chan.c:1470`),
+        // and after `cunique`: *"now it's our copy anyway, we can put the
+        // name back"* — `pathclose(c->path); c->path = path`. `Abind` is the
+        // one that does not, and says why: *"no need to maintain path —
+        // cannot dotdot an Abind"* (`:1458`).
+        let path = c.path.clone();
         let (first, rest) = domount(tab, ns, c)?;
         c = first;
+        if !matches!(amode, A::Bind) {
+            c.path = path;
+        }
         // The union comes along for two of the modes, and for the reasons
         // [`Chan::umh`] records. **Only when it has more than one element**
         // (`chan.c:1502`), because one element is not a union.

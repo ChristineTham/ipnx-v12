@@ -137,7 +137,21 @@ impl Kernel {
     {
         let mut tab = namec::Devtab::new();
         let mut root = root;
-        let slash = root.attach("")?;
+        let mut slash = root.attach("")?;
+        // **The root channel is renamed `/`** (`pc/main.c:242`):
+        //
+        // ```c
+        // up->slash = namec("#/", Atodir, 0, 0);
+        // pathclose(up->slash->path);
+        // up->slash->path = newpath("/");
+        // up->dot = cclone(up->slash);
+        // ```
+        //
+        // Not cosmetic. Every path built by a walk hangs off this one, so
+        // without the rename `cd` answers `#/`, `#p/<n>/ns` names devices
+        // where it should name paths, and an error message quotes a device
+        // for a file the caller asked for by name.
+        slash.path = "/".to_string();
         tab.add(Box::new(root));
         let procs = std::rc::Rc::new(std::cell::RefCell::new(proc::Procs::new(slash)));
         let up = std::rc::Rc::new(std::cell::RefCell::new(proc::Up { pid: 1, procs: procs.clone() }));
@@ -427,7 +441,7 @@ impl Kernel {
                 let to = self.walk(up, &name, namec::A::Bind, 0)?;
                 let procs = self.procs.borrow();
                 let p = procs.get(up).ok_or("no such process")?;
-                p.ns.borrow_mut().mount(&on, element_of(to, flag), bind_of(flag));
+                p.ns.borrow_mut().mount(&on, element_of(to, flag, ""), bind_of(flag));
                 Ok(Ret::Ok)
             }
             Call::Unmount { name, old } => {
@@ -606,7 +620,7 @@ impl Kernel {
                 let to = self.tab.dmount(wire, &user, &aname)?;
                 let procs = self.procs.borrow();
                 let p = procs.get(up).ok_or("no such process")?;
-                p.ns.borrow_mut().mount(&on, element_of(to, flag), bind_of(flag));
+                p.ns.borrow_mut().mount(&on, element_of(to, flag, &aname), bind_of(flag));
                 Ok(Ret::Ok)
             }
             Call::Fversion { .. } => Err("fversion is mntversion's, done at mount".into()),
@@ -662,7 +676,7 @@ impl Kernel {
     fn unionread(&mut self, c: &mut Chan, n: usize) -> Result<Vec<u8>, String> {
         while (c.uri as usize) < c.umh.len() {
             if c.umc.is_none() {
-                let alt = c.umh[c.uri as usize].clone();
+                let alt = c.umh[c.uri as usize].chan.clone();
                 let cl = self.tab.dcclone(&alt)?;
                 match self.tab.dopen(cl, chan::mode::OREAD) {
                     Ok(o) => c.umc = Some(Box::new(o)),
@@ -715,20 +729,18 @@ fn bind_of(flag: i32) -> ns::Bind {
     }
 }
 
-/// `MCREATE` — *"permit creation in mounted directory"* (`libc.h:559`), a
-/// separate bit from the three above. It was being dropped, so `bind -c` did
-/// nothing and a create in a union landed wherever the walk did.
-const MCREATE: i32 = 0x0004;
-
-fn element_of(chan: Chan, flag: i32) -> ns::Element {
-    let mut e = ns::Element::new(chan);
-    e.create = flag & MCREATE != 0;
-    e
+/// The element as `bind`/`mount` made it. **The flag WORD is kept**
+/// (`Mount.mflag`, `portdat.h:303`), not just its `MCREATE` bit, because
+/// `#p/<n>/ns` prints it back with `int2flag`. `spec` is `mount`'s aname and
+/// empty for a bind.
+fn element_of(chan: Chan, flag: i32, spec: &str) -> ns::Element {
+    ns::Element::with(chan, flag, spec)
 }
 
 #[cfg(test)]
 mod syscalls {
     use super::*;
+    use crate::ns::mflag::MCREATE;
     use crate::proc::rf;
 
     fn booted() -> Kernel {

@@ -76,7 +76,7 @@ pub struct Chan {
     /// * `Aopen` (`chan.c:1502`), *"only save the mount head if it's a
     ///   multiple element union"*, because reading such a directory means
     ///   reading every element (`unionread`, `sysfile.c:323`).
-    pub umh: Vec<Chan>,
+    pub umh: Vec<crate::ns::Element>,
     /// `Chan.uri` — which element of `umh` a union read is on.
     pub uri: u32,
     /// `Chan.umc` — that element, opened. One at a time, and closed when it
@@ -154,21 +154,38 @@ impl Chan {
     /// supplies the qid the device gave; the path bookkeeping is here so every
     /// device does not repeat it.
     pub fn walked(&self, name: &str, qid: Qid) -> Chan {
-        let path = match name {
-            ".." => match self.path.rfind('/') {
-                Some(i) if i > 0 => self.path[..i].to_string(),
-                _ => self.path.clone(),
-            },
-            n => {
-                if self.path.ends_with('/') {
-                    format!("{}{}", self.path, n)
-                } else {
-                    format!("{}/{}", self.path, n)
-                }
-            }
-        };
+        let path = addelem(&self.path, name);
         // A walked channel is not the one the union was found on, so it
         // carries no union of its own (`devclone` copies no `umh`).
         Chan { qid, path, offset: 0, umh: Vec::new(), uri: 0, umc: None, ..self.clone() }
+    }
+}
+
+/// `addelem` (`chan.c:addelem`) — one name onto a path.
+///
+/// * `"."` changes nothing: *"if(s[0]=='.' && s[1]=='\0') return p"*.
+/// * *"don't insert extra slash if one is present"*.
+/// * `".."` appends and then `fixdotdotname` takes the last element back off.
+///
+/// It is a free function because **a walk carries the path beside the
+/// channel**, not on it (`walk`, `chan.c`: `path = c->path` at the top, then
+/// `path = addelem(path, names[nhave+i], mtpt)` per name, then `c->path =
+/// path` at the end). Building it from whichever channel the walk landed on
+/// gives `#M/wasm/bin` for a file the caller asked for as `/root/wasm/bin`.
+pub fn addelem(path: &str, name: &str) -> String {
+    if name == "." {
+        return path.to_string();
+    }
+    if name == ".." {
+        return match path.rfind('/') {
+            Some(0) => "/".to_string(),
+            Some(i) => path[..i].to_string(),
+            None => path.to_string(),
+        };
+    }
+    if path.ends_with('/') {
+        format!("{path}{name}")
+    } else {
+        format!("{path}/{name}")
     }
 }

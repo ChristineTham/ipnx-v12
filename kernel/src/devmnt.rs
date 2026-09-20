@@ -109,6 +109,13 @@ impl Mnt {
         let mut c = Chan::attach(DevId::Mnt, 0);
         c.qid = qid;
         c.fid = fid;
+        // `c->mchan = m->c` (`devmnt.c:354`), and the file's own comment
+        // (`:14`): *"Each channel derived from the mount point has mchan set
+        // to c"*. It is how `#p/<n>/ns` names the server a mount speaks to —
+        // `srvname(mw->cm->to->mchan)` — and it was never set, so every
+        // mount printed as `#M`.
+        c.mchan = Some(Box::new(mnt.wire.clone()));
+        c.mqid = qid;
         Ok((mnt, c))
     }
 

@@ -219,9 +219,13 @@ fn boot(
     let m = machine::Wasm::new()?;
     let mut k = Kernel::new(root, Rc::new(m))?;
     k.tab.add(Box::new(PipeDev::new()));
-    k.tab.add(Box::new(SrvDev::new(k.up.clone())));
+    // `#s`'s table is shared with `#p`, because `srvname` (`devsrv.c`) is
+    // what `#p/<n>/ns` calls to name the server behind a mount.
+    let srv = SrvDev::new(k.up.clone());
+    let srvtab = srv.table();
+    k.tab.add(Box::new(srv));
     k.tab.add(Box::new(MntDev::new()));
-    k.tab.add(Box::new(ProcDev::new(k.up.clone())));
+    k.tab.add(Box::new(ProcDev::new(k.up.clone()).with_srv(srvtab)));
     k.tab.add(Box::new(DupDev::new(k.up.clone())));
     k.tab.add(Box::new(EnvDev::new(k.up.clone())));
     k.tab.add(Box::new(CapDev::new(k.up.clone())));
@@ -709,6 +713,27 @@ mod userspace {
             assert!(out.contains(&format!("\t{name}\n")), "no `{name}` in {out}");
         }
         assert!(typing("echo $terminal\n").contains(&format!("wasm {CONFFILE}")));
+    }
+
+    /// **`#p/1/ns` is the namespace as `/lib/namespace` would write it.**
+    /// It was device letters and qid numbers on both sides, which is the
+    /// kernel's bookkeeping and not a namespace.
+    #[test]
+    fn ns_reads_back_as_the_namespace_file() {
+        let out = typing("cat /proc/1/ns\n");
+        for line in [
+            "bind -a /root /\n",
+            "mount -aC #s/boot /root \n",
+            "bind  /wasm/bin /bin\n",
+            "bind -a /rc/bin /bin\n",
+            "bind  #c /dev\n",
+            "bind -c #e /env\n",
+            "cd /\n",
+        ] {
+            assert!(out.contains(line), "no `{}` in {out}", line.trim_end());
+        }
+        assert!(!out.contains("#M"), "a mount names its server, not `#M`: {out}");
+        assert!(!out.contains("#//"), "paths, not device letters and qids: {out}");
     }
 
     /// `#ec` is bound under `#e` (`initcode.c:28`) and is EMPTY, because what

@@ -34,7 +34,7 @@ const ENONEXIST: &str = "file does not exist";
 const ESHUTDOWN: &str = "channel shut down";
 
 /// Plan 9's `Srv`.
-struct Srv {
+pub struct Srv {
     name: String,
     /// `sp->chan` — nil until something posts one.
     chan: Option<Chan>,
@@ -43,8 +43,46 @@ struct Srv {
     path: u64,
 }
 
+impl Srv {
+    /// An entry as `srvcreate` plus `srvwrite` leave it: named, and with a
+    /// channel behind it.
+    pub fn posted(name: &str, chan: Chan) -> Srv {
+        Srv { name: name.into(), chan: Some(chan), owner: "eve".into(), perm: 0o600, path: 0 }
+    }
+}
+
+/// `static Srv *srv` (`devsrv.c:21`) — **one table for the whole kernel**,
+/// a file-scope global in Plan 9. `devproc.c` reaches it through `srvname`
+/// (declared in `portfns.h`) to print a `mount` line in `#p/<n>/ns`, so it
+/// is not devsrv's alone. Shared here, which is what a Rust kernel writes
+/// where Plan 9 writes a global.
+pub type Srvtab = Rc<RefCell<Vec<Srv>>>;
+
+/// `srvname(Chan *c)` (`devsrv.c`) — the `#s` name a channel was posted
+/// under, or `nil`:
+///
+/// ```c
+/// for(sp = srv; sp; sp = sp->link)
+///     if(sp->chan == c){
+///         snprint(s, size, "#s/%s", sp->name);
+/// ```
+///
+/// Plan 9 compares POINTERS — the posted channel is the same object. Here a
+/// channel is a value, so the comparison is on what identifies the file:
+/// the device, the instance and the qid, which is `findmount`'s key too.
+pub fn srvname(tab: &Srvtab, c: &Chan) -> Option<String> {
+    tab.borrow()
+        .iter()
+        .find(|s| {
+            s.chan.as_ref().is_some_and(|p| {
+                (p.dev, p.devno, p.qid) == (c.dev, c.devno, c.qid)
+            })
+        })
+        .map(|s| format!("#s/{}", s.name))
+}
+
 pub struct SrvDev {
-    srv: Vec<Srv>,
+    srv: Srvtab,
     /// `eve` — the machine's owner, for `devpermcheck`.
     pub eve: String,
     /// `qidpath` (`srvinit`, `devsrv.c`), counting from 1.
@@ -54,11 +92,12 @@ pub struct SrvDev {
 
 impl SrvDev {
     pub fn new(up: Rc<RefCell<Up>>) -> SrvDev {
-        SrvDev { srv: Vec::new(), eve: "eve".into(), next: 1, up }
+        SrvDev { srv: Srvtab::default(), eve: "eve".into(), next: 1, up }
     }
 
-    fn lookup(&self, path: u64) -> Option<&Srv> {
-        self.srv.iter().find(|s| s.path == path)
+    /// The table, for whoever else needs it — `srvname`'s callers.
+    pub fn table(&self) -> Srvtab {
+        self.srv.clone()
     }
 
     /// `devpermcheck` (`dev.c:339`), shared in [`crate::dev::permcheck`].
@@ -88,8 +127,8 @@ impl Dev for SrvDev {
         if name == ".." || name == "." {
             return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: 0 })));
         }
-        Ok(self
-            .srv
+        let tab = self.srv.borrow();
+        Ok(tab
             .iter()
             .find(|s| s.name == name)
             .map(|s| c.walked(name, Qid { qtype: 0, vers: 0, path: s.path })))
@@ -104,7 +143,8 @@ impl Dev for SrvDev {
             return Ok(c);
         }
         let (posted, owner, perm) = {
-            let sp = self.lookup(c.qid.path).ok_or(ENONEXIST)?;
+            let tab = self.srv.borrow();
+            let sp = tab.iter().find(|s| s.path == c.qid.path).ok_or(ENONEXIST)?;
             (sp.chan.clone().ok_or(ESHUTDOWN)?, sp.owner.clone(), sp.perm)
         };
         self.permcheck(&owner, perm, mode)?;
@@ -120,12 +160,12 @@ impl Dev for SrvDev {
         if mode & 3 != crate::chan::mode::OWRITE {
             return Err(EPERM.into());
         }
-        if self.srv.iter().any(|s| s.name == name) {
+        if self.srv.borrow().iter().any(|s| s.name == name) {
             return Err(EEXIST.into());
         }
         let path = self.next;
         self.next += 1;
-        self.srv.push(Srv {
+        self.srv.borrow_mut().push(Srv {
             name: name.to_string(),
             chan: None,
             owner: self.up.borrow().user(),
@@ -149,6 +189,7 @@ impl Dev for SrvDev {
         // whoever posted it.
         let mut list: Vec<(String, u64, String, u32)> = self
             .srv
+            .borrow()
             .iter()
             .map(|sp| (sp.name.clone(), sp.path, sp.owner.clone(), sp.perm))
             .collect();
@@ -182,7 +223,8 @@ impl Dev for SrvDev {
             return Err("posted fd has remove-on-close or close-on-exec".into());
         }
         let path = c.qid.path;
-        let sp = self.srv.iter_mut().find(|s| s.path == path).ok_or(ENONEXIST)?;
+        let mut tab = self.srv.borrow_mut();
+        let sp = tab.iter_mut().find(|s| s.path == path).ok_or(ENONEXIST)?;
         if sp.chan.is_some() {
             return Err(EEXIST.into());
         }
@@ -194,7 +236,8 @@ impl Dev for SrvDev {
         let (name, owner, perm) = if c.qid.is_dir() {
             ("#s".to_string(), self.eve.clone(), crate::ninep::DMDIR | 0o555)
         } else {
-            let sp = self.lookup(c.qid.path).ok_or(ENONEXIST)?;
+            let tab = self.srv.borrow();
+            let sp = tab.iter().find(|s| s.path == c.qid.path).ok_or(ENONEXIST)?;
             (sp.name.clone(), sp.owner.clone(), sp.perm)
         };
         Ok(crate::dev::devdir(c, c.qid, &name, 0, &owner, &self.eve.clone(), perm).conv_d2m())
@@ -211,8 +254,9 @@ impl Dev for SrvDev {
             return Err(EPERM.into());
         }
         let path = c.qid.path;
-        let i = self.srv.iter().position(|s| s.path == path).ok_or(ENONEXIST)?;
-        self.srv.remove(i);
+        let mut tab = self.srv.borrow_mut();
+        let i = tab.iter().position(|s| s.path == path).ok_or(ENONEXIST)?;
+        tab.remove(i);
         Ok(())
     }
 

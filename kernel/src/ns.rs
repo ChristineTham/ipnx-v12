@@ -33,23 +33,65 @@ pub enum Bind {
     After,
 }
 
-/// What a mount point resolves to: Plan 9's `Mount`.
+/// The mount flags (`libc.h:556`). Kept whole on the element, because
+/// `#p/<n>/ns` prints them back with `int2flag` and a namespace that cannot
+/// say how it was built cannot be rebuilt from its own dump.
+pub mod mflag {
+    /// `MREPL` — *"mount replaces object"*. **Zero**, which is why
+    /// `int2flag` gives it the empty string and not `-b`.
+    pub const MREPL: i32 = 0x0000;
+    /// `MBEFORE` — *"mount goes before others in union directory"*.
+    pub const MBEFORE: i32 = 0x0001;
+    /// `MAFTER` — *"mount goes after others in union directory"*.
+    pub const MAFTER: i32 = 0x0002;
+    /// `MCREATE` — *"permit creation in mounted directory"*.
+    pub const MCREATE: i32 = 0x0004;
+    /// `MCACHE` — *"cache some data"*. Nothing here caches, but the bit is
+    /// carried so a dump of the namespace is faithful.
+    pub const MCACHE: i32 = 0x0010;
+    /// `MMASK` — *"all bits on"*.
+    pub const MMASK: i32 = 0x0017;
+}
+
+/// What a mount point resolves to: Plan 9's `Mount` (`portdat.h:295`).
+///
+/// Plan 9 keeps `Chan *to`, `int mflag` and `char *spec`. It kept the flag
+/// **word**, not a decoded bit, and `#p/<n>/ns` is why: `int2flag`
+/// (`devproc.c`) turns it back into `-a`, `-bc`, `-aC` or the empty string
+/// for `MREPL`. This carried a `create: bool` instead, so the dump had to
+/// guess the flag from an element's position in the list — which cannot tell
+/// `MREPL` from `MBEFORE`, and loses `-ac` entirely.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Element {
     /// `Mount.to` — the channel replacing the channel mounted upon.
     pub chan: Chan,
-    /// `MCREATE` — a create in this directory lands here. The first element
-    /// carrying it wins; a union with none refuses creates, which is how a
-    /// read-only union is expressed without a read-only flag.
-    pub create: bool,
+    /// `Mount.mflag` — the flag word as given.
+    pub mflag: i32,
+    /// `Mount.spec` — `mount`'s aname. Empty for a bind, and for a mount
+    /// that gave none.
+    pub spec: String,
 }
 
 impl Element {
     pub fn new(chan: Chan) -> Self {
-        Element { chan, create: false }
+        Element { chan, mflag: mflag::MREPL, spec: String::new() }
     }
+
+    /// The element as `bind`/`mount` made it: the channel, the flag word and
+    /// the spec.
+    pub fn with(chan: Chan, flag: i32, spec: &str) -> Self {
+        Element { chan, mflag: flag & mflag::MMASK, spec: spec.to_string() }
+    }
+
     pub fn creatable(chan: Chan) -> Self {
-        Element { chan, create: true }
+        Element::with(chan, mflag::MCREATE, "")
+    }
+
+    /// `MCREATE` — a create in this directory lands here. The first element
+    /// carrying it wins; a union with none refuses creates, which is how a
+    /// read-only union is expressed without a read-only flag.
+    pub fn create(&self) -> bool {
+        self.mflag & mflag::MCREATE != 0
     }
 }
 
@@ -67,10 +109,23 @@ impl Key {
     }
 }
 
+/// `Mhead` (`portdat.h:307`) — one mount POINT: *"`Chan* from;` — channel
+/// mounted upon"*, and the list of what is mounted on it.
+///
+/// `from` is not decoration. `#p/<n>/ns` prints `mh->from->path->s` as the
+/// second operand of every `bind` line it writes (`devproc.c`), so a
+/// namespace that does not keep the channel it was mounted upon cannot say
+/// what it is.
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
+pub struct Mhead {
+    pub from: Option<Chan>,
+    pub mount: Vec<Element>,
+}
+
 /// A process's namespace: Plan 9's `Pgrp`, which is a table of `Mhead`.
 #[derive(Debug)]
 pub struct Ns {
-    mounts: HashMap<Key, Vec<Element>>,
+    mounts: HashMap<Key, Mhead>,
     /// `Pgrp.pgrpid` (`portdat.h`, `struct Pgrp`). **A namespace group is what
     /// Plan 9 calls a process group** — `Pgrp` holds `mnthash[]`, the mount
     /// table, and nothing about signals or job control. `newpgrp` numbers each
@@ -116,27 +171,6 @@ impl Ns {
     /// The namespace as the lines that would rebuild it, which is what
     /// `/proc/n/ns` prints (`devproc.c:952`): one per mount element, with the
     /// flag `bind` would have been given.
-    pub fn describe(&self) -> Vec<(String, String, &'static str)> {
-        let mut out = Vec::new();
-        for (key, els) in &self.mounts {
-            for (i, el) in els.iter().enumerate() {
-                let how = if el.create {
-                    "-c"
-                } else if i == 0 {
-                    "-b"
-                } else {
-                    "-a"
-                };
-                out.push((
-                    format!("#{}/{}", key.dev.letter(), key.qid.path),
-                    format!("#{}/{}", el.chan.dev.letter(), el.chan.qid.path),
-                    how,
-                ));
-            }
-        }
-        out.sort();
-        out
-    }
 
     /// `Pgrp.noattach` — `RFNOMNT`'s sandbox. Set, never cleared.
     pub fn noattach(&self) -> bool {
@@ -155,7 +189,9 @@ impl Ns {
     /// `bind(2)` and `mount(2)`: put `to` over the file `on`.
     pub fn mount(&mut self, on: &Chan, to: Element, how: Bind) {
         let fresh = !self.mounts.contains_key(&Key::of(on));
-        let list = self.mounts.entry(Key::of(on)).or_default();
+        let head = self.mounts.entry(Key::of(on)).or_default();
+        head.from = Some(on.clone());
+        let list = &mut head.mount;
         // **`cmount` (`chan.c:707`), and the comment there is the whole of
         // it:** *"if this is a union mount, add the old node to the mount
         // chain."* Nothing was mounted here before, so the directory itself
@@ -181,9 +217,18 @@ impl Ns {
         // The union's FIRST element is the channel itself — `domount` landed
         // on it — so the copy starts at the second: `for(um = um->next; um;
         // um = um->next)` (`chan.c:727`).
+        //
+        // **The copies carry the ORDER's flag and the original's spec** —
+        // `newmount(m, um->to, flg, um->spec)` (`chan.c:731`), where `flg =
+        // order` with `MREPL` becoming `MAFTER`. Not the original's flag:
+        // the new binding says where these go.
+        let flg = match how {
+            Bind::Replace | Bind::After => mflag::MAFTER,
+            Bind::Before => mflag::MBEFORE,
+        };
         let mut group = vec![to];
         for extra in group[0].chan.umh.clone().into_iter().skip(1) {
-            group.push(Element::new(extra));
+            group.push(Element::with(extra.chan, flg, &extra.spec));
         }
         match how {
             Bind::Replace => *list = group,
@@ -199,7 +244,16 @@ impl Ns {
     /// `findmount`: is anything mounted on this file? Answered by the file's
     /// identity, so every path that reaches it sees the same answer.
     pub fn findmount(&self, on: &Chan) -> Option<&[Element]> {
-        self.mounts.get(&Key::of(on)).map(|v| v.as_slice())
+        self.mounts.get(&Key::of(on)).map(|h| h.mount.as_slice())
+    }
+
+    /// Every mount point, for `#p/<n>/ns` to print. Plan 9 walks `mnthash[]`
+    /// with `mntscan` (`devproc.c`); the order there is the hash's and the
+    /// `mountid` counter's, and here it is whatever `sort` makes stable.
+    pub fn heads(&self) -> Vec<&Mhead> {
+        let mut v: Vec<&Mhead> = self.mounts.values().collect();
+        v.sort_by_key(|h| h.from.as_ref().map(|c| c.path.clone()).unwrap_or_default());
+        v
     }
 
     /// `unmount(2)`. With a channel, remove that element; without, clear the
@@ -211,9 +265,9 @@ impl Ns {
                 self.mounts.remove(&key);
             }
             Some(w) => {
-                if let Some(list) = self.mounts.get_mut(&key) {
-                    list.retain(|e| Key::of(&e.chan) != Key::of(w));
-                    if list.is_empty() {
+                if let Some(head) = self.mounts.get_mut(&key) {
+                    head.mount.retain(|e| Key::of(&e.chan) != Key::of(w));
+                    if head.mount.is_empty() {
                         self.mounts.remove(&key);
                     }
                 }
@@ -224,7 +278,7 @@ impl Ns {
     /// Where a create in this directory lands: the first element that accepts
     /// one. `None` means creates are refused here.
     pub fn create_element(&self, on: &Chan) -> Option<&Element> {
-        self.findmount(on)?.iter().find(|e| e.create)
+        self.findmount(on)?.iter().find(|e| e.create())
     }
 
     pub fn is_empty(&self) -> bool {

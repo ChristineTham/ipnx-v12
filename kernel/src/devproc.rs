@@ -75,11 +75,22 @@ fn split_qid(path: u64) -> (Pid, Q) {
 pub struct ProcDev {
     up: Rc<RefCell<Up>>,
     pub eve: String,
+    /// `#s`'s table, for `srvname` — which `devproc.c` calls to name the
+    /// server behind a mount, and reaches because Plan 9's is a file-scope
+    /// global with the function declared in `portfns.h`.
+    srv: crate::devsrv::Srvtab,
 }
 
 impl ProcDev {
     pub fn new(up: Rc<RefCell<Up>>) -> ProcDev {
-        ProcDev { up, eve: "eve".into() }
+        ProcDev { up, eve: "eve".into(), srv: Default::default() }
+    }
+
+    /// Hand it `#s`'s table. Without one, a mount names its wire channel —
+    /// which is `srvname` returning nil, and Plan 9's own fallback.
+    pub fn with_srv(mut self, srv: crate::devsrv::Srvtab) -> ProcDev {
+        self.srv = srv;
+        self
     }
 
     /// `nonone` (`devproc.c:336`): a process running as `none` cannot read or
@@ -101,6 +112,33 @@ impl ProcDev {
     fn alive(&self, pid: Pid) -> bool {
         self.up.borrow().procs.borrow().get(pid).is_some()
     }
+}
+
+/// `int2flag` (`devproc.c`): the flag word as `bind`'s own letters.
+///
+/// ```c
+/// if(flag == 0){ *s = '\0'; return; }
+/// *s++ = '-';
+/// if(flag & MAFTER)  *s++ = 'a';
+/// if(flag & MBEFORE) *s++ = 'b';
+/// if(flag & MCREATE) *s++ = 'c';
+/// if(flag & MCACHE)  *s++ = 'C';
+/// ```
+///
+/// **`MREPL` is zero, so it prints nothing** — not `-b`, which is what
+/// guessing the flag from an element's position produced.
+fn int2flag(flag: i32) -> String {
+    use crate::ns::mflag::*;
+    if flag == 0 {
+        return String::new();
+    }
+    let mut s = String::from("-");
+    for (bit, c) in [(MAFTER, 'a'), (MBEFORE, 'b'), (MCREATE, 'c'), (MCACHE, 'C')] {
+        if flag & bit != 0 {
+            s.push(c);
+        }
+    }
+    s
 }
 
 impl Dev for ProcDev {
@@ -252,10 +290,38 @@ impl Dev for ProcDev {
                 }
                 // `ns`: the namespace as the lines that would rebuild it
                 // (`devproc.c:952`) — `cd`, then `bind`/`mount` per element.
+                // `Qns` (`devproc.c`), line for line. A mount is told from
+                // a bind by the channel's own path — *"if(strcmp(
+                // mw->cm->to->path->s, "#M") == 0)"* — and then it names
+                // the server rather than the mount: `srvname(mchan)`, or
+                // the wire channel's path when it was never posted.
+                //
+                // **These are the lines that rebuild the namespace.** They
+                // were `#<letter>/<qid>` on both sides, which is a report of
+                // the kernel's bookkeeping and not a namespace.
                 Q::Ns => {
                     let mut s = String::new();
-                    for (on, el, how) in proc.ns.borrow().describe() {
-                        s.push_str(&format!("bind {how} {} {}\n", el, on));
+                    for h in proc.ns.borrow().heads() {
+                        let Some(from) = &h.from else { continue };
+                        for e in &h.mount {
+                            let flag = int2flag(e.mflag);
+                            if e.chan.path == "#M" {
+                                let wire = e.chan.mchan.as_deref();
+                                let name = wire
+                                    .and_then(|w| crate::devsrv::srvname(&self.srv, w))
+                                    .or_else(|| wire.map(|w| w.path.clone()))
+                                    .unwrap_or_else(|| "#M".to_string());
+                                s.push_str(&format!(
+                                    "mount {flag} {name} {} {}\n",
+                                    from.path, e.spec
+                                ));
+                            } else {
+                                s.push_str(&format!(
+                                    "bind {flag} {} {}\n",
+                                    e.chan.path, from.path
+                                ));
+                            }
+                        }
                     }
                     s.push_str(&format!("cd {}\n", proc.dot.path));
                     s
@@ -359,8 +425,18 @@ mod tests {
     use crate::chan::mode::{OREAD, OWRITE};
     use crate::proc::{rf, Procs};
 
+    /// The root channel is named `/`, as the boot renames it
+    /// (`pc/main.c:242`: `pathclose(up->slash->path); up->slash->path =
+    /// newpath("/")`). A fixture that leaves it `#/` tests a path the
+    /// running system never has.
+    fn root() -> Chan {
+        let mut c = Chan::attach(DevId::Root, 0);
+        c.path = "/".to_string();
+        c
+    }
+
     fn proc() -> (ProcDev, Rc<RefCell<Procs>>) {
-        let procs = Rc::new(RefCell::new(Procs::new(Chan::attach(DevId::Root, 0))));
+        let procs = Rc::new(RefCell::new(Procs::new(root())));
         let up = Rc::new(RefCell::new(Up { pid: 1, procs: procs.clone() }));
         (ProcDev::new(up), procs)
     }
@@ -424,7 +500,7 @@ mod tests {
     #[test]
     fn ns_prints_the_namespace_as_bind_lines() {
         let (mut d, procs) = proc();
-        let on = Chan::attach(DevId::Root, 0);
+        let on = root();
         let mut to = Chan::attach(DevId::Pipe, 3);
         to.qid = Qid { qtype: QTDIR, vers: 0, path: 5 };
         procs
@@ -435,9 +511,60 @@ mod tests {
             .borrow_mut()
             .mount(&on, crate::ns::Element::new(to), crate::ns::Bind::Replace);
         let s = read(&mut d, 1, "ns");
-        assert!(s.contains("bind"), "{s}");
-        assert!(s.contains("#|/5"), "the mounted channel is named: {s}");
-        assert!(s.contains("cd "), "{s}");
+        // `bind %s %s %s\n` with `to->path` then `from->path`
+        // (`devproc.c`). **Paths, not device letters and qids** — these are
+        // the lines that rebuild the namespace, and `#|/5` is not a name any
+        // shell can be given.
+        assert!(s.contains("bind  #| /\n"), "{s}");
+        assert!(s.contains("cd /\n"), "{s}");
+    }
+
+    /// `int2flag` (`devproc.c`) composes the letters and gives **`MREPL` the
+    /// empty string**. Guessing the flag from an element's position, as this
+    /// did, calls `MREPL` `-b` and cannot say `-ac` at all.
+    #[test]
+    fn the_flag_word_is_printed_as_binds_own_letters() {
+        use crate::ns::mflag::*;
+        assert_eq!(int2flag(MREPL), "");
+        assert_eq!(int2flag(MAFTER), "-a");
+        assert_eq!(int2flag(MBEFORE), "-b");
+        assert_eq!(int2flag(MAFTER | MCREATE), "-ac");
+        assert_eq!(int2flag(MBEFORE | MCREATE | MCACHE), "-bcC");
+    }
+
+    /// A mount prints `mount <flag> <server> <on> <spec>` and names the
+    /// server, not the mount: *"if(strcmp(mw->cm->to->path->s, "#M") == 0)"*
+    /// then `srvname(mw->cm->to->mchan)`. It printed `bind` for everything.
+    #[test]
+    fn a_mount_prints_as_a_mount_and_names_the_server() {
+        use crate::ns::mflag::{MCREATE, MREPL};
+        let (mut d, procs) = proc();
+        let on = root();
+
+        // `#M`, carrying the wire it speaks down — as `mntattach` leaves it.
+        let mut to = Chan::attach(DevId::Mnt, 0);
+        to.qid = Qid { qtype: QTDIR, vers: 0, path: 0 };
+        let mut wire = Chan::attach(DevId::Pipe, 7);
+        wire.qid = Qid { qtype: 0, vers: 0, path: 3 };
+        to.mchan = Some(Box::new(wire.clone()));
+
+        procs.borrow().get(1).unwrap().ns.borrow_mut().mount(
+            &on,
+            crate::ns::Element::with(to, MREPL | MCREATE, "main"),
+            crate::ns::Bind::Replace,
+        );
+
+        // With no `#s` table, `srvname` is nil and Plan 9 falls back to the
+        // wire channel's own path.
+        let s = read(&mut d, 1, "ns");
+        assert!(s.starts_with("mount -c #| / main\n"), "{s}");
+
+        // Posted at `#s/boot`, it is named by the name it was posted under.
+        let tab = crate::devsrv::Srvtab::default();
+        tab.borrow_mut().push(crate::devsrv::Srv::posted("boot", wire));
+        let (mut d, _) = (d.with_srv(tab), ());
+        let s = read(&mut d, 1, "ns");
+        assert!(s.starts_with("mount -c #s/boot / main\n"), "{s}");
     }
 
     /// `/proc/n/fd` lists the open descriptors, so `ls` of it is what `lsof`
