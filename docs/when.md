@@ -73,16 +73,22 @@ runnable process `tsleep` and `delay` are the same thing. `init`'s loop is
 now Plan 9's, `sleep(1000)` and all.
 
 **Four still refuse, and a scheduler is the whole of what they want:**
-`alarm`, `notify`, `noted`, `rendezvous`. A note is delivered on the way out
-of the kernel by rewriting the user stack so the handler runs and `noted`
-returns through it (`notify(Ureg*)`, `trap.c`); **this machine has no user
-stack the kernel can write**, and a process that is not running is not
-suspended but finished. `rendezvous` would have to ready a process that is
-BELOW this one on the machine's call stack. With them go `RFNOTEG` (absent
+`alarm`, `notify`, `noted`, `rendezvous`. With them go `RFNOTEG` (absent
 from `rfork`'s flags), a write to `#p/<n>/note`, and `#p/<n>/ctl`'s
-`start`/`stop`/`waitstop`/`hang`/`nohang` — each of which now names what
-Plan 9 does rather than a phase that has shipped. rc's `Trapinit` is still a
-stub, so nothing interrupts. **The design is a proposal, not a gap.**
+`start`/`stop`/`waitstop`/`hang`/`nohang`. rc's `Trapinit` is a stub, so
+nothing interrupts.
+
+**They are unbuilt, not impossible** (corrected 2026-09-20, RESEARCH §14).
+An earlier version of this file said *"this machine has no user stack the
+kernel can write"* and that *"a process that is not running is not suspended
+but finished"* — both true of the host **as built**, neither true of the
+substrate. `sched()` divides at `setlabel`/`gotolabel`, which are declared
+in `port/portfns.h` and implemented in `pc/l.s` — **the scheduler is Plan
+9's portable code and the stack switch is the architecture's**, as `touser`
+is. wasmtime's `async_support` is a real host-stack fiber, and
+`epoch_deadline_async_yield_and_update` makes a guest yield on a timer and
+continue. The design is scoped in `docs/proposals.md` and is a **proposal**;
+what it needs decided is there too.
 
 ### `#M`, and the refactor it needed
 

@@ -3416,3 +3416,113 @@ constant where Plan 9 has an empty string a userspace program fills, and
   not end; input can end here, so the second exit is the end of the session
   rather than a reason to start a third — and `sleep`, which is what Plan 9
   puts in the loop to stop a spin, is one of the calls this kernel refuses.
+
+## §14 — What the machine can actually do about scheduling (measured 2026-09-20)
+
+Christine, on being told four calls want a scheduler this machine cannot
+have: *"You can control WASM memory allocation and scheduling from host:
+Sets initial/maximum boundaries; handles memory, grow requests, Controls
+execution time limits, interrupts, thread pools, and request triggering.
+Given we are building effectively a custom host runtime environment, you can
+scope this out."*
+
+**She is right, and the mistake was in the wrong half.** I had written that
+*"this machine has no user stack the kernel can write"* and that *"a process
+that is not running is not suspended but finished"*. Both are true of the
+host **as built** — one guest at a time, run to completion inside one
+`touser` — and neither is true of the substrate.
+
+### The thing I had not read: where `sched` actually divides
+
+`sched()` (`port/proc.c:119`) is sixty-seven lines and the switch is two of
+them:
+
+```c
+procsave(up);
+if(setlabel(&up->sched)){
+	procrestore(up);
+	spllo();
+	return;
+}
+gotolabel(&m->sched);
+```
+
+`setlabel` and `gotolabel` are declared in **`port/portfns.h`** (`:328`,
+`:128`) and implemented in **`pc/l.s`** (`:1000`, `:992`). `Label` is
+`{ulong sp; ulong pc;}` and lives in **`pc/dat.h:51`** — a machine-dependent
+type. So **the scheduler is Plan 9's portable code and the stack switch is
+the architecture's**, exactly as `touser` is. A scheduler here is not a
+deviation to be authorised; it is `port/proc.c` arriving, with this machine
+supplying what `pc/l.s` supplies there.
+
+### What wasmtime 39.0.2 provides, at file and line
+
+Read in `~/.cargo/registry/.../wasmtime-39.0.2`, not from memory:
+
+| Plan 9 | machine-dependent there | this machine |
+|---|---|---|
+| `setlabel`/`gotolabel` (`l.s:1000`, `:992`) | save and restore SP+PC | `Config::async_support` (`config.rs:429`) pulls in **`wasmtime-fiber`**: `Func::call_async` (`func.rs:1099`) runs the guest on a fiber, and a host function that suspends returns to the caller with the guest's stack intact |
+| `hzclock()` → `sched()` | the clock interrupt | `Config::epoch_interruption` (`config.rs:705`) + `Engine::increment_epoch()` (`engine.rs:797`) from a timer + **`Store::epoch_deadline_async_yield_and_update`** (`store/async_.rs:125`) — the guest **yields and continues**; `epoch_deadline_trap` (`store.rs:1120`) is the other disposition, and is not the one wanted |
+| `splhi`/`spllo` | cli/sti | nothing: one kernel thread, and an epoch check is the only preemption point |
+| `procsave`/`procrestore` (`pc/fns.h:156`) | FP state | nothing: the fiber holds it |
+| `mmuswitch` | page tables | nothing: a process is a `Store`, and `RFMEM` is sharing one |
+| `segbrk`/`brk_` — **omitted from the call list**, *"memory is the machine's"* | | `Store::limiter` (`store.rs:932`) + `ResourceLimiter::memory_growing` (`limits.rs:69`): the machine decides whether a grow succeeds. `Config::memory_reservation` (`:1728`), `max_wasm_stack` (`:756`), `async_stack_size` (`:778`) |
+| — | — | `consume_fuel`/`set_fuel` (`config.rs:591`, `store.rs:1026`): deterministic metering, an alternative to epochs with different properties |
+
+Cargo features present in this version: `async`, `threads`,
+`stack-switching`, `pooling-allocator`. We build with
+`default-features = false, features = ["cranelift", "runtime", "std"]`, so
+`async` is a feature to add, not a fork.
+
+### What would come in, and all of it is Plan 9's
+
+Line counts from `port/proc.c` (1,705 lines in total), because they are the
+size of the claim:
+
+| | |
+|---|---|
+| `sched` 67 · `ready` 31 · `runproc` 74 · `yield` 8 | the switch and the run queues |
+| `sleep` 74 · `tsleep` 24 · `wakeup` 30 | `Rendez` — and `struct Rendez` is `{Lock; Proc *p;}`, two fields (`portdat.h:104`) |
+| `postnote` 78 · `procctl` 39 | notes, and `#p/<n>/ctl`'s `start`/`stop`/`waitstop`/`hang` |
+| twelve process states (`portdat.h:610`) | `Ready` `Running` `Queueing` `Wakeme` `Stopped` `Rendezvous` … |
+| `notify(Ureg*)` 79 · `noted(Ureg*)` 90 (`pc/trap.c`) | machine-dependent, and the shape a wasm machine must find its own answer to |
+
+About 425 lines of `port/proc.c`, plus the machine's half. **No invention:
+every item is in `plan9/` at file and line, which is the test.**
+
+### The one thing fibers do not buy
+
+**`rfork(RFPROC)` still cannot return twice.** A fork duplicates an address
+space *and* a stack; a wasm instance's memory can be copied, but a fiber's
+stack holds host frames with raw pointers into that instance and cannot.
+`procrfork` (`libthread/create.c:103`) stays, for the reason RESEARCH §5.2
+gives. A scheduler makes processes *concurrent*; it does not make them
+*forkable*.
+
+### And what it costs
+
+**The kernel must survive a suspend in the middle of a syscall.** Today
+`Machine::touser` is handed a `&mut dyn Syscalls` — *"the kernel, lent for
+the duration"* — and a blocking call would hold that borrow while its fiber
+sleeps. That is the one structural change, and it is in the host/kernel
+boundary rather than in anything Plan 9 designed.
+
+Two shapes, and they are not equivalent:
+
+* the kernel takes `&self` with interior mutability throughout — it already
+  holds `procs`, `ns` and `fds` as `Rc<RefCell<…>>`, so this is the smaller
+  edit and the one that hides a re-entrancy bug best;
+* **the call answers "blocked" and the machine re-enters when it is
+  readied** — which is what `sleep()` returning after `wakeup` *is*, and is
+  therefore the shape with a counterpart.
+
+Also measured: `async_support` makes every `Func::call` an `await`, so the
+host needs an executor. A single-threaded one suffices and must be
+preferred — the kernel is dependency-free and the browser host has to do the
+same thing with JSPI or the stack-switching proposal, where there is no
+wasmtime at all. **A trait method named for a fiber would be a boundary P7
+cannot implement.**
+
+Finally, `asyncify` and the `env.setj/longj/sjbuf` and `tsave/tjump/tdrop`
+imports named in `when.md` are what a machine reaches for when it has no
+stack switch. With one, they are unnecessary.

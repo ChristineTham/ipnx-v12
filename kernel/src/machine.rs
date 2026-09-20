@@ -72,6 +72,13 @@ pub trait Machine {
     /// implemented per architecture: the PC spins on the TSC
     /// (`pc/i8253.c:320`, `aamloop`). A hosted machine has a better way and
     /// uses it; the kernel does not know or care which.
+    ///
+    /// **It stands in for a scheduler, and only while one process is
+    /// runnable at a time.** `syssleep`'s other branch is `tsleep` on a
+    /// `Rendez`, which needs `sched()` and therefore `setlabel`/`gotolabel`
+    /// — machine-dependent too (`pc/l.s:1000`, `:992`), and something this
+    /// machine could supply. RESEARCH §14 measures what with; the design is
+    /// in `docs/proposals.md` and is not built.
     fn delay(&self, ms: u64);
 }
 

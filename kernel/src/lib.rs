@@ -674,15 +674,14 @@ impl Kernel {
             Call::Notify | Call::Noted { .. } => Err(NONOTES.into()),
             // `sysrendezvous` (`sysproc.c`) either finds a waiting process
             // and `ready()`s it, or sets `up->state = Rendezvous` and
-            // `sched()`s. Here the other process is BELOW this one on the
-            // host's call stack — `procrfork` called it — so it cannot be
-            // readied without returning to it, and this one cannot be
-            // suspended at all.
-            Call::Rendezvous { .. } => Err(
-                "rendezvous needs a scheduler: the other process is below this one on the \
-                 machine's call stack, and neither can be suspended"
-                    .into(),
-            ),
+            // `sched()`s. **As this host is built** a child runs to its end
+            // inside the call that made it, so the other process is below
+            // this one on the machine's call stack and neither can be
+            // suspended. That is the host's shape, not the substrate's —
+            // RESEARCH §14.
+            Call::Rendezvous { .. } => {
+                Err("rendezvous needs a scheduler; this machine has none yet".into())
+            }
         }
     }
 
@@ -789,14 +788,17 @@ fn bind_of(flag: i32) -> ns::Bind {
 /// with the PC's `HZ` of 100 (`pc/mem.h:31`). The shortest sleep there is.
 const TK2MS1: u64 = 10;
 
-/// What `notify`, `noted` and `alarm` are waiting on. A note is delivered on
-/// the way out of the kernel (`notify(Ureg*)`, `trap.c`) by rewriting the
-/// user stack so the handler runs and `noted` returns through it. **This
-/// machine has no user stack the kernel can write** — a guest's stack is the
-/// engine's — and a process that is not running is not suspended but
-/// finished, so there is nothing to deliver to. The design is a proposal,
-/// not a gap to be filled in passing.
-const NONOTES: &str = "notes need a mechanism this machine does not have yet";
+/// What `notify`, `noted` and `alarm` are waiting on: a scheduler, and the
+/// stack switch under it. A note is delivered on the way out of the kernel
+/// (`notify(Ureg*)`, `pc/trap.c`) by rewriting the user stack so the handler
+/// runs and `noted` returns through it — machine-dependent code, as
+/// `setlabel`/`gotolabel` are (`pc/l.s:1000`, `:992`), which is why
+/// `port/proc.c`'s scheduler is portable and this is not.
+///
+/// **Unbuilt, not impossible.** This machine can suspend a guest — RESEARCH
+/// §14 measures how — and the design is in `docs/proposals.md` awaiting
+/// review. Until then the call refuses and says which half is missing.
+const NONOTES: &str = "notes need a scheduler; this machine has none yet";
 
 /// The element as `bind`/`mount` made it. **The flag WORD is kept**
 /// (`Mount.mflag`, `portdat.h:303`), not just its `MCREATE` bit, because
