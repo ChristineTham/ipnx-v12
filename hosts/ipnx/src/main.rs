@@ -96,8 +96,21 @@ impl Console for Host {
         (0, 64 * 1024, 0)
     }
 
+    /// `configfile[]` — **the kernel configuration file, verbatim**, which
+    /// `portmkfile:53` embeds in the kernel image byte for byte and
+    /// `/dev/config` reads back (`devcons.c:871`). It is `$CONF` — `pc/pcf`
+    /// and its like — the file `mkdevc` turns into `devtab[]`, and it is NOT
+    /// the boot arguments: those are `plan9.ini`, which the bootloader leaves
+    /// in memory and which reaches userspace through `#ec`.
+    ///
+    /// This one is [`LETTERS`], in that file's own shape, because [`LETTERS`] is
+    /// what `mkdevc` reads here.
     fn config(&mut self) -> String {
-        std::env::args().collect::<Vec<_>>().join(" ")
+        let mut s = format!("# {CONFFILE} - Saranos on a terminal\ndev\n");
+        for d in LETTERS {
+            s.push_str(&format!("\t{}\n", d.name()));
+        }
+        s
     }
 
     fn reboot(&mut self, cmd: &str) -> Result<(), String> {
@@ -166,6 +179,14 @@ const CONS: &str = "#c/cons";
 /// `arch->id` — what this machine is called, and therefore where its
 /// binaries live: `/$cputype/bin` on Plan 9 (`pc/main.c:252` says `"386"`).
 const OBJTYPE: &str = "wasm";
+
+/// `conffile` — **the path of the kernel configuration file**, which
+/// `mkdevc` writes into the kernel it generates (`port/mkdevc:187`:
+/// `printf "char* conffile = \"%s/%s\";\n", pwd, ARGV[1]` — so
+/// `/sys/src/9/pc/pcf`). `$terminal` is `arch->id` and this, and nothing
+/// else (`pc/main.c:250`). Here `mkdevc`'s input is [`DEVS`], so the file
+/// holding it is this one.
+const CONFFILE: &str = "hosts/ipnx/src/main.rs";
 
 /// `ksetenv` (`devenv.c:386`) — `namec("#e%s/<name>", Acreate, OWRITE, 0600)`
 /// and a write, where `%s` is `"c"` when `conf` is set. The kernel's own way
@@ -297,7 +318,7 @@ fn startboot(
     // puts in the environment, and `$objtype` — which `/lib/namespace` uses
     // to find the binaries — is init's copy of `cputype`.
     for (name, val) in [
-        ("terminal", format!("{OBJTYPE} {}", std::env::args().collect::<Vec<_>>().join(" "))),
+        ("terminal", format!("{OBJTYPE} {CONFFILE}")),
         ("cputype", OBJTYPE.to_string()),
         ("service", "terminal".to_string()),
     ] {
@@ -673,6 +694,33 @@ mod userspace {
     #[test]
     fn the_environment_is_what_the_boot_put_there() {
         assert!(typing("echo $objtype $user $sysname\n").contains("wasm eve gnot"));
+    }
+
+    /// **`/dev/config` is the KERNEL configuration file** — `$CONF`, the one
+    /// `mkdevc` turns into `devtab[]` (`portmkfile:53`, `devcons.c:871`) —
+    /// and `$terminal` is `arch->id` and that file's path, nothing else
+    /// (`pc/main.c:250`). It used to be the command line for both, which is
+    /// `plan9.ini`'s job and not this one.
+    #[test]
+    fn dev_config_is_the_kernel_configuration_and_not_the_command_line() {
+        let out = typing("cat /dev/config\n");
+        assert!(out.contains("\ndev\n"), "the `dev` section: {out}");
+        for name in ["root", "cons", "env", "pipe", "proc", "mnt", "srv", "dup", "virtio9p"] {
+            assert!(out.contains(&format!("\t{name}\n")), "no `{name}` in {out}");
+        }
+        assert!(typing("echo $terminal\n").contains(&format!("wasm {CONFFILE}")));
+    }
+
+    /// `#ec` is bound under `#e` (`initcode.c:28`) and is EMPTY, because what
+    /// fills it on a Plan 9 machine is every line of `plan9.ini`
+    /// (`pc/main.c:257`) and this host has no counterpart to one. The three
+    /// the kernel sets itself go to `#e`, with `conf` 0 (`:251`).
+    #[test]
+    fn the_configuration_environment_is_reachable_and_empty() {
+        assert!(typing("ls '#ec' && echo none\n").contains("none"));
+        assert!(typing("bind -a '#ec' /env && echo bound\n").contains("bound"));
+        assert!(typing("ls '#ex'\n").contains("bad arg"), "any other spec is Ebadarg");
+        assert!(typing("echo $cputype\n").contains("wasm"), "#e still answers");
     }
 
     /// A pipeline, typed — two processes and the pipe between them.

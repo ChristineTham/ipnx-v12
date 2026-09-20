@@ -11,7 +11,30 @@ was in this register on 2026-09-18 turned out to be answered at file and line.
 
 ## Open
 
-Nothing.
+**Is the host's command line the machine's configuration?** — proposed
+2026-09-20, from *"why is there no plan9.ini?"* (RESEARCH §13.2).
+
+`#ec` exists and is empty. On a Plan 9 PC it holds every line of `plan9.ini`
+(`pc/main.c:257`) — what the bootloader read off the boot partition and left
+in memory before the kernel existed. That mechanism answers a problem this
+system does not have: no hardware to enumerate, the device table fixed in
+`LETTERS`, the root handed to the kernel in Rust, and a host that does not
+vanish the way a bootloader does.
+
+**But Plan 9 has a second way in, in the same function** (`pc/main.c:49`): on
+a multiboot machine with no `plan9.ini` to read, the **bootloader's command
+line** becomes the configuration, spaces turned into newlines, `name=value`
+per line. `ipnx`'s argv is that command line.
+
+The proposal is to take it: `ipnx name=value ...` parses as plan9.ini,
+`ksetenv(name, val, 1)` for every line and `ksetenv(name, val, 0)` for the
+ones not beginning `*`. What it would buy immediately is `rootdir=` and
+`rootspec=`, which `boot` already reads (`boot/boot.c:161`, `:174`) and which
+`IPNX_STORE` currently stands in for.
+
+**Not built, and the decision is whether argv is the right thing to call the
+machine's configuration at all** — `ipnx` also takes a command to run, so the
+two would have to share the line.
 
 ## Decided, and moved into the specs
 

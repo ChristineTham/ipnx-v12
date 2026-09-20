@@ -134,6 +134,16 @@ device at all; it is a file server, which is what Plan 9 would have made it.
 > in mechanism, so the test is a counterpart in `plan9/` at file and line — not
 > whether the deviation can be argued for.
 
+**Two configurations, with different lifetimes.** `$CONF` is the kernel
+configuration file — the `dev` list `mkdevc` turns into `devtab[]`; its bytes
+are embedded in the kernel image (`port/portmkfile:53`) and read at
+`/dev/config`, and its path is `conffile`, the second half of `$terminal`
+(`pc/main.c:250`). **`plan9.ini` is the other one**: what the bootloader read
+before the kernel existed, exported to `#ec` entire and to `#e` for the names
+not beginning `*` (`pc/main.c:257`). Here the first is `LETTERS` in
+`hosts/ipnx/src/main.rs`; **the second is empty**, because nothing in this
+system has the bootloader's problem — see `docs/proposals.md`.
+
 ## Contract: the guest ABI
 
 A Plan 9-dialect binary is a wasm32 module that:

@@ -3266,7 +3266,80 @@ either — `"#e%s/%s"` with `conf?"c":""`.
 
 **What this does not close.** `#ec` is empty, because what fills it on a Plan 9
 machine is `plan9.ini` and this host has no counterpart. That is a gap, not a
-decision.
+decision — see §13.2.
+
+### §13.2 — why there is no plan9.ini, and the two configurations (2026-09-20)
+
+*"why is there no plan9.ini?"* — Christine, on the gap §13.1 left. Reading it
+out turned up that **Plan 9 has TWO configurations with different lifetimes,
+and this kernel had them crossed.**
+
+**The build-time one: `$CONF`.** `/sys/src/9/pc/pcf` and its like — a `dev`
+section naming devices, then `link`, `ip`, `misc`, `port`, `boot`. `mkdevc`
+turns it into `devtab[]`, and `portmkfile:53` embeds the file's own bytes in
+the kernel image:
+
+```rc
+{echo 'uchar configfile[]={'
+ xd -1x $CONF | sed ...
+ echo '};'} >> $CONF.c
+```
+
+That array is what `/dev/config` reads (`devcons.c:871`), and `mkdevc:187`
+also emits `char* conffile = "<pwd>/<$CONF>"`, the path, which is the second
+half of `$terminal`: `snprint(buf, sizeof(buf), "%s %s", arch->id, conffile)`
+(`pc/main.c:250`). **We have this configuration** — it is `LETTERS` in
+`hosts/ipnx/src/main.rs`, which is `mkdevc`'s input here.
+
+**The boot-time one: plan9.ini.** `plan9.ini(8)`:
+
+> When booting Plan 9 on a PC, the bootstrap programs described in 9boot(8)
+> first read, via TFTP or a FAT filesystem on the boot disk, a file containing
+> configuration information.
+
+The bootloader leaves it in physical memory and the kernel picks it out of raw
+bytes — `cp = BOOTARGS;	/* where b.com leaves its config */` (`pc/main.c:66`),
+`BOOTARGS` being `CONFADDR+BOOTLINELEN` (`:25`). `options()` splits it on
+newlines into `confname[]`/`confval[]`, and `main` exports it (`:257`): every
+line to `#ec`, and the ones not beginning `*` to `#e` as well.
+
+**The defect this exposed.** `/dev/config` returned the host's command line
+and `$terminal` was `wasm <command line>`. That is plan9.ini's material put
+where `$CONF`'s belongs — the two configurations crossed, and the one place a
+plan9.ini equivalent could have gone was already spent. Fixed: `/dev/config`
+is now `LETTERS` in `$CONF`'s own shape and `$terminal` is `wasm
+hosts/ipnx/src/main.rs`.
+
+**And why there is no plan9.ini.** Its mechanism answers a problem this system
+does not have. plan9.ini exists because **a PC kernel must be configured
+before it can read a filesystem** — which disk controller, which ethernet
+card, which partition holds the root — and the root is exactly what the
+configuration is for. So a program that runs *before* the kernel reads a file
+off the boot partition, leaves it at a fixed address, and vanishes. Here
+nothing has that problem: there is no hardware to enumerate, the device table
+is fixed in `LETTERS`, the host hands the kernel a `Root` and a `Nineserver`
+in Rust before `#/` has a first instruction, and `IPNX_STORE` already does
+what `rootdir=` does. Above all **the bootloader does not vanish** — the host
+is inside Saranos, not underneath it — so "leave a config in a known place for
+the thing that outlives you" is not the shape of anything here.
+
+**But the ROLE has a Plan 9 counterpart, and it is not the FAT file.** It is
+the branch above it in the same function (`pc/main.c:49`), for a multiboot
+loader that has no `plan9.ini` to read:
+
+```c
+if(mbi->flags & Fcmdline){
+	q = (char*)KADDR(mbi->cmdline);
+	p = BOOTARGS;
+	while(*q && p < BOOTARGS+BOOTARGSLEN-1){
+		*p++ = (*q == ' ')? '\n' : *q;
+```
+
+**The bootloader's command line, spaces turned into newlines, IS plan9.ini**
+on such a machine. `ipnx`'s argv is that command line. So the counterpart
+exists and is Plan 9's own; what it would take is deciding that the host's
+argv is the machine's configuration, which is a design decision and hers.
+**PROPOSED, not built.**
 
 ### Still different, and named rather than hidden
 

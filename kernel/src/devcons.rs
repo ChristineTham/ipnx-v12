@@ -67,7 +67,15 @@ pub trait Console {
     /// The memory numbers `/dev/swap` reports: total bytes, page size, bytes
     /// in use.
     fn memory(&mut self) -> (u64, u64, u64);
-    /// `configfile` — how this kernel was started.
+    /// `configfile[]` (`port/portmkfile:53`) — **the kernel configuration
+    /// file, verbatim**: `$CONF`, the file `mkdevc` turns into `devtab[]`,
+    /// embedded in the kernel image and read back at `/dev/config`
+    /// (`devcons.c:871`). Whoever builds the device table owns it, which is
+    /// the machine here.
+    ///
+    /// **Not the boot arguments.** Those are `plan9.ini`, which the
+    /// bootloader leaves at `BOOTARGS` for `options()` to parse
+    /// (`pc/main.c:66`) and which reaches userspace through `#ec`.
     fn config(&mut self) -> String;
     /// `/dev/reboot`: `halt`, or `reboot <path>`.
     fn reboot(&mut self, cmd: &str) -> Result<(), String>;
