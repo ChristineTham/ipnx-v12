@@ -39,7 +39,7 @@ and a freshly built module is indistinguishable from a shipped one.
 `cargo test -p conformance -- --nocapture` prints the distance to the demo:
 a checklist of what the system can do, and how much of it is reached. **It
 fails, and is meant to** — the suite asserts equivalence with the demo and
-goes green at P7, not before. `cargo test` therefore reports a failure on a
+goes green at P8, not before. `cargo test` therefore reports a failure on a
 perfectly healthy tree; for day-to-day work run `cargo test -p ipnx-kernel`
 and `cargo test -p ipnx`.
 

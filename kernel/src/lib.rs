@@ -678,7 +678,7 @@ impl Kernel {
             // inside the call that made it, so the other process is below
             // this one on the machine's call stack and neither can be
             // suspended. That is the host's shape, not the substrate's —
-            // RESEARCH §14.
+            // RESEARCH §14, and P6.
             Call::Rendezvous { .. } => {
                 Err("rendezvous needs a scheduler; this machine has none yet".into())
             }
@@ -796,8 +796,9 @@ const TK2MS1: u64 = 10;
 /// `port/proc.c`'s scheduler is portable and this is not.
 ///
 /// **Unbuilt, not impossible.** This machine can suspend a guest — RESEARCH
-/// §14 measures how — and the design is in `docs/proposals.md` awaiting
-/// review. Until then the call refuses and says which half is missing.
+/// §14 measures how, §14.1 says what Plan 9 does with it — and it is
+/// `implementation.md`'s **P6**. Until then the call refuses and says which
+/// half is missing.
 const NONOTES: &str = "notes need a scheduler; this machine has none yet";
 
 /// The element as `bind`/`mount` made it. **The flag WORD is kept**

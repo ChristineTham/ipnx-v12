@@ -78,7 +78,8 @@ from `rfork`'s flags), a write to `#p/<n>/note`, and `#p/<n>/ctl`'s
 `start`/`stop`/`waitstop`/`hang`/`nohang`. rc's `Trapinit` is a stub, so
 nothing interrupts.
 
-**They are unbuilt, not impossible** (corrected 2026-09-20, RESEARCH §14).
+**They are unbuilt, not impossible, and they are P6** (corrected
+2026-09-20, scheduled 2026-09-21; RESEARCH §14 and §14.1).
 An earlier version of this file said *"this machine has no user stack the
 kernel can write"* and that *"a process that is not running is not suspended
 but finished"* — both true of the host **as built**, neither true of the
@@ -87,8 +88,8 @@ in `port/portfns.h` and implemented in `pc/l.s` — **the scheduler is Plan
 9's portable code and the stack switch is the architecture's**, as `touser`
 is. wasmtime's `async_support` is a real host-stack fiber, and
 `epoch_deadline_async_yield_and_update` makes a guest yield on a timer and
-continue. The design is scoped in `docs/proposals.md` and is a **proposal**;
-what it needs decided is there too.
+continue. The design is `implementation.md`'s **P6**, before the registries — the
+browser host is a worker per process, and that IS P6's machine boundary.
 
 ### `#M`, and the refactor it needed
 
@@ -215,7 +216,7 @@ one it claims**: it boots the whole system on a scripted console and types at
 it, so a line reads `reached` only when a person really can do the thing, on
 this boot. The five: boot to a shell, list a directory, read a file, a
 pipeline, and per-process namespaces (`@{rfork n; bind /tmp/alt /etc}` sees
-the bind; the shell outside it does not). The other seven are P6 and P7.
+the bind; the shell outside it does not). The other seven are P7 and P8.
 
 It still fails, and will until all twelve are reached.
 
@@ -233,4 +234,4 @@ fixtures, because a behaviour is reached when a person can do it.
 `boot`, `init`, `/lib/namespace` and `/rc/bin/termrc`, with the embedding
 reduced to `initcode.c`'s nine lines.
 
-P6 is the registries, and P7 is emca and the browser.
+**P6 is the scheduler** — added 2026-09-21, before the registries, because the browser host is a worker per process and that IS P6's machine boundary. P7 is the registries; P8 is emca and the browser.

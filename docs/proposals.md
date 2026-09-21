@@ -45,77 +45,31 @@ The open questions, in order:
 **Nothing here is built.** The mechanism is: `#ec` attaches, binds under `#e`,
 and takes writes from eve.
 
-**The scheduler, and what the machine can actually do** — proposed
-2026-09-20, from Christine: *"You can control WASM memory allocation and
-scheduling from host… Given we are building effectively a custom host
-runtime environment, you can scope this out."* The measurements are
-RESEARCH §14.
-
-**This is not a deviation, and that is the finding.** `sched()`
-(`port/proc.c:119`) divides at `setlabel(&up->sched)` / `gotolabel(
-&m->sched)`, which are declared in `port/portfns.h` and implemented in
-`pc/l.s:1000`, `:992` — **the scheduler is Plan 9's portable code and the
-stack switch is the architecture's**, exactly as `touser` is. So there is
-nothing to authorise: it is `port/proc.c` arriving, with this machine
-supplying what `pc/l.s` supplies there.
-
-`Config::async_support` gives wasmtime a real host-stack fiber; a host
-function that suspends returns to the scheduler with the guest's stack
-intact. `epoch_interruption` plus `epoch_deadline_async_yield_and_update`
-makes a guest **yield and continue** on a timer, which is `hzclock()`
-calling `sched()`. `ResourceLimiter::memory_growing` is the machine
-deciding a grow, which is why `segbrk`/`brk_` are omitted from the call
-list at all. Every API is cited at file and line in §14.
-
-**Six stages, each with an acceptance.** They are ordered so that the one
-with no dependencies comes first and the one that needs the most decided
-comes last.
-
-| | builds | acceptance |
-|---|---|---|
-| **S0** | `ResourceLimiter` and the bounds — `memory_reservation`, `max_wasm_stack`, a grow policy | a guest asking for more memory than the machine allows is refused, and says so |
-| **S1** | the machine's stack switch: a fiber per process, `async_support`, a single-threaded executor. Cooperative only — a switch at a syscall, no timer | two processes alternate at a syscall, and `/proc` shows both `Running` and `Ready` |
-| **S2** | `port/proc.c`'s `Rendez`, `sleep`, `wakeup`, `tsleep`, `ready`, `runproc`, `yield`, and the twelve states | `sleep(2)` is a `tsleep` on a `Rendez` and a second process runs during it — where today it is `delay` and nothing else runs |
-| **S3** | preemption: a timer thread incrementing the epoch, the deadline set to yield | a guest in a tight loop does not stop the system |
-| **S4** | notes: `postnote`, this machine's answer to `notify(Ureg*)`, `#p/<n>/note`, `RFNOTEG`, `alarm` | `^C` interrupts a command, and rc's `Trapinit` stops being a stub |
-| **S5** | `rendezvous` | two processes meet and exchange a value |
-
-**What it unlocks**, and each is a call or a file Plan 9 has and this
-kernel refuses today: `sleep` properly, `alarm`, `notify`, `noted`,
-`rendezvous`, `RFNOTEG`, `#p/<n>/note`, `#p/<n>/ctl`'s `start`/`stop`/
-`waitstop`/`hang`, and `/proc/<n>/status`'s real states.
-
-**What it does NOT unlock:** `rfork(RFPROC)` still cannot return twice. A
-fork duplicates an address space *and* a stack; a fiber's stack holds host
-frames pointing into the instance and cannot be copied. `procrfork` stays.
-
-### The decisions this needs before anything is written
-
-1. **How does the kernel survive a suspend mid-syscall?** `touser` is
-   handed the kernel *"lent for the duration"*, and a blocking call would
-   hold that loan while its fiber sleeps. Either the kernel takes `&self`
-   with interior mutability throughout (smaller edit, hides re-entrancy
-   bugs best), or **the call answers "blocked" and the machine re-enters
-   when it is readied** — which is what `sleep()` returning after `wakeup`
-   *is*, and so the shape with a counterpart. **Recommended: the second.**
-2. **Is preemption in scope (S3), or only cooperative yielding (S1–S2)?**
-   Plan 9 preempts. A system whose guests are all its own may not need to,
-   and every preemption point is a place the kernel must be consistent.
-3. **What is the browser's counterpart?** There is no wasmtime there:
-   JSPI, the stack-switching proposal, or a worker per process. A trait
-   method named for a fiber is a boundary P7 cannot implement, so S1's
-   naming has to answer to `setlabel`/`gotolabel` and not to wasmtime.
-   **Should S1 wait for a browser sketch?**
-4. **Where does this sit against P6 and P7?** It is not on the path to the
-   demo — the demo needs packages and a surface, not concurrency — but S4
-   is what makes `^C` work, and a terminal without `^C` is noticeably not
-   a terminal.
-
-**Nothing here is built.** `Machine::delay` (`pc/fns.h:23`) is what stands
-in for it today, and it is honest for exactly as long as one process is
-runnable at a time.
-
 ## Decided, and moved into the specs
+
+**The scheduler** — proposed and decided 2026-09-21, and it is now
+[implementation.md](implementation.md)'s **P6**, before the registries,
+because Christine put it there: *"we will need to implement before P6/P7."*
+
+Two of its four questions came back as *"what does plan 9 do?"*, which is
+the answer to a question that is a lookup, and both were. They are settled
+in RESEARCH §14.1 and stated in the phase:
+
+* **the suspend shape** — per-process kernel stacks (`Proc.kstack`, 4096
+  bytes), so `sleep` leaves its locals where they are and `setlabel`
+  returns 1 on the way back. Neither option the proposal offered;
+* **the borrow rule** — `up->nlocks`: no lock held across a sleep, which
+  here reads no `RefCell` borrow held across a suspension point;
+* **preemption** — yes, and of user mode only. `hzclock` marks
+  `up->delaysched`; the switch happens at `trap()`'s tail, `syscall()`'s
+  tail, or `unlock`. An epoch check is compiled into guest code and never
+  into a host function, so a yield lands exactly where Plan 9's would.
+
+And the third question was hers to answer, and she did: **the browser
+counterpart is a Node wasm supervisor and browser workers.** A worker is a
+thread, so the switch there is a message and `Atomics.wait` rather than a
+fiber — which is why the machine's method answers to `setlabel`/`gotolabel`
+and to no engine's word for it.
 
 **The window type system and the manager interface** — proposed and decided
 2026-09-18, five questions answered in one reply. It is now

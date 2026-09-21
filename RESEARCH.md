@@ -3526,3 +3526,98 @@ cannot implement.**
 Finally, `asyncify` and the `env.setj/longj/sjbuf` and `tsave/tjump/tdrop`
 imports named in `when.md` are what a machine reaches for when it has no
 stack switch. With one, they are unnecessary.
+
+### §14.1 — How Plan 9 survives a suspend, and where it preempts (2026-09-21)
+
+Two of the four decisions §14 put to Christine came back as *"what does plan
+9 do?"* — which is her standing answer to a question that is a lookup. Both
+were.
+
+#### The kernel is entered per process, on that process's own stack
+
+`Proc.kstack` (`portdat.h:661`, commented *"known to l.s"*) is `KSTACK` =
+**4096 bytes** (`pc/mem.h:26`), allocated in `newproc` (`proc.c:724`:
+`p->kstack = smalloc(KSTACK)`). A syscall runs on it. When it sleeps
+(`sleep`, `proc.c:815`):
+
+```c
+procsave(up);
+if(setlabel(&up->sched)) {
+	/*  here when the process is awakened  */
+	procrestore(up);
+	spllo();
+} else {
+	/*  here to go to sleep (i.e. stop Running)  */
+	unlock(&up->rlock);
+	unlock(r);
+	gotolabel(&m->sched);
+}
+```
+
+The half-finished syscall's C locals stay where they are. `wakeup` readies
+the process, `sched` does `gotolabel(&up->sched)`, `setlabel` returns 1, and
+**the syscall continues from the line it stopped on**. There is no "blocked"
+return value, no re-entrancy, and no lending: the kernel is not one object
+that a process borrows, it is code every process runs on its own stack.
+
+**So neither option §14 offered was Plan 9's.** The fiber is the kernel
+stack: a host function that awaits keeps its Rust locals on the fiber
+exactly as C locals stay on `kstack`.
+
+**And the discipline that makes it safe is stated, with a diagnostic**
+(`proc.c:821`):
+
+```c
+if(up->nlocks.ref)
+	print("process %lud sleeps with %lud locks held, ...");
+```
+
+A process must not sleep holding a lock. `sched()` will not switch while one
+is held — `up->delaysched++` and return (`proc.c:213`) — and `unlock`
+(`taslock.c:216`) calls `sched()` the moment the last one goes: *"Call sched
+if the need arose while locks were held."* **In Rust that rule is: no
+`RefCell` borrow held across a suspension point.** Same rule, same reason,
+and it is Plan 9's, not ours.
+
+#### Plan 9 preempts, but never inside the kernel
+
+`hzclock` (`portclock.c:136`) ends:
+
+```c
+if(up && up->state == Running)
+	hzsched();	/* in proc.c */
+```
+
+and `hzsched` does **not** call `sched()`:
+
+```c
+/* unless preempted, get to run for at least 100ms */
+if(anyhigher()
+|| (!up->fixedpri && m->ticks > m->schedticks && anyready())){
+	m->readied = nil;	/* avoid cooperative scheduling */
+	up->delaysched++;
+}
+```
+
+**The clock only marks.** The switch happens at three points the kernel
+chose:
+
+| | |
+|---|---|
+| `trap()`'s tail (`pc/trap.c:438`) | *"delaysched set because we held a lock or because our quantum ended"* — and only `if(clockintr && m->ilockdepth == 0)` |
+| `syscall()`'s tail (`pc/trap.c:778`) | *"if we delayed sched because we held a lock, sched now"* |
+| `unlock()` (`taslock.c:216`) | when the last lock is released |
+
+So: **preemption is real and it is of user mode only.** That is an exact fit
+for an epoch deadline, and the fit is not a coincidence — wasmtime's epoch
+checks are compiled into **guest** code and never into a host function, so a
+yield can only land where Plan 9's `trap()` would, never in the middle of a
+syscall. The kernel half suspends only where an `await` is written, which is
+`sleep`, which is the one place Plan 9 suspends too.
+
+#### What this settles
+
+* the suspend shape: **per-process stacks**, not a blocked-and-resumed call;
+* the borrow rule: **`up->nlocks`**, spelled as no borrow across an await;
+* preemption: **yes, and only of the guest** — the kernel is not
+  preemptible, and the machine's yield lands exactly where Plan 9's does.

@@ -178,7 +178,7 @@ goes stale there — that is how four different test counts came to exist.
 
 | | |
 |---|---|
-| `docs/implementation.md` | **the plan — a redesign and rebuild (2026-09-17)**: phases P0–P7 to the demo (the CLI, then the website), built from the design and from `plan9/`. Superseded plans are in `docs/archive/` |
+| `docs/implementation.md` | **the plan — a redesign and rebuild (2026-09-17)**: phases P0–P8 to the demo (the CLI, then the website), built from the design and from `plan9/`. Superseded plans are in `docs/archive/` |
 | `docs/handbook.md` | the practice: prerequisites, build/run, load-bearing flags, how to add a command/test/device/host |
 
 ### meta — documents that inform and guide the six
@@ -458,7 +458,7 @@ generated. Work is sequenced by `docs/implementation.md`; what is built is
 status, and no other document carries it** — including this one. What was here
 described a tree that no longer exists.
 
-The plan is [docs/implementation.md](docs/implementation.md): P0–P7 to the
+The plan is [docs/implementation.md](docs/implementation.md): P0–P8 to the
 demo. The load-bearing engineering lessons live where they always did:
 RESEARCH §5 (fork, the transport), §9.4–9.6 (the toolchain, kencc call-site
 adjustment, the native core's findings), §10 (the deviation audit) and §11

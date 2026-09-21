@@ -77,8 +77,8 @@ pub trait Machine {
     /// runnable at a time.** `syssleep`'s other branch is `tsleep` on a
     /// `Rendez`, which needs `sched()` and therefore `setlabel`/`gotolabel`
     /// — machine-dependent too (`pc/l.s:1000`, `:992`), and something this
-    /// machine could supply. RESEARCH §14 measures what with; the design is
-    /// in `docs/proposals.md` and is not built.
+    /// machine could supply. RESEARCH §14 measures what with, §14.1 says
+    /// what Plan 9 does with it, and it is `implementation.md`'s P6.
     fn delay(&self, ms: u64);
 }
 

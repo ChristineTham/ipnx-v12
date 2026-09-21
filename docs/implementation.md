@@ -77,7 +77,7 @@ final state; design resumes after it. **Don't overengineer.**
 | **the website** | emca in the browser doing what the site does now — a listing on the left, `motd`/`tour`/`README` as tabs, `rc` below — with the windows, toolbar and status line to spec | emca owns windows entirely, the contract and the types hold, the surface renders files and never pixels |
 
 **Not in the demo:** a window on a Mac or an iPad, the raster, `/net`, git.
-**P0–P7 deliver it.**
+**P0–P8 deliver it.**
 
 ---
 
@@ -205,23 +205,48 @@ already, because `rfork` acts on them. They are that state shown as files.
 | **builds** | `/namespace`, the instance's own configuration, read by the embedding because it owns the storage; `/rc/bin/termrc`, the rc half, which starts the servers — Plan 9's own name at Plan 9's own location; the root itself a file server |
 | **depends on** | P4 |
 | **acceptance** | **the CLI.** Typing `ipnx` boots to `rc` on the terminal; `ls`, `cat /etc/motd` and the demo's commands run |
-| **exposes** | packages — `/pkg`, `/store`, `/profile` — and emca |
+| **exposes** | the scheduler, then packages — `/pkg`, `/store`, `/profile` — and emca |
 
-## P6 — the registries
+## P6 — the scheduler *(added 2026-09-21)*
+
+**Christine put it before the registries**: *"we will need to implement
+before P6/P7."* The measurements are RESEARCH §14, and what Plan 9 does —
+twice asked, twice a lookup — is §14.1.
+
+**It is not a deviation.** `sched()` divides at `setlabel(&up->sched)` /
+`gotolabel(&m->sched)`, declared in `port/portfns.h` and implemented in
+`pc/l.s:1000`, `:992`, with `Label` a machine-dependent type
+(`pc/dat.h:51`). The scheduler is Plan 9's PORTABLE code; the stack switch
+is the architecture's, exactly as `touser` is. So this phase is
+`port/proc.c` arriving and a machine supplying what `pc/l.s` supplies there.
+
+| | |
+|---|---|
+| **builds** | **the machine's stack switch** — one per process, named for `setlabel`/`gotolabel` and not for any engine's word for it; then `port/proc.c`'s `Rendez`, `sleep`, `wakeup`, `tsleep`, `ready`, `runproc`, `yield`, `hzsched` and the twelve process states (`portdat.h:610`); then preemption; then notes — `postnote`, this machine's answer to `notify(Ureg*)`, `#p/<n>/note`, `RFNOTEG`, `alarm`; then `rendezvous`. About **425 lines of `port/proc.c`**, and not a line of invention |
+| **the machine boundary** | three hosts, one shape. **wasmtime**: `Config::async_support` is a host-stack fiber and `Func::call_async` runs the guest on it; `epoch_interruption` + `Engine::increment_epoch()` + `Store::epoch_deadline_async_yield_and_update` preempt by yielding rather than trapping. **Node**: a wasm supervisor. **Browser**: a worker per process. A worker is a thread, so the switch there is a message and `Atomics.wait` — which is why the method answers to `setlabel`/`gotolabel` and to nothing else |
+| **the suspend shape** | **per-process stacks** (§14.1). `Proc.kstack` is 4096 bytes (`pc/mem.h:26`), a syscall runs on it, and `sleep` leaves its C locals there: `setlabel` returns 1 on the way back and the syscall continues from the line it stopped on. The fiber IS that stack, so a host function that awaits keeps its Rust locals exactly as Plan 9 keeps its C ones. There is no blocked-and-resumed call and no re-entrancy |
+| **the one rule** | **no lock held across a sleep** — `sleep` prints a diagnostic when there is (`proc.c:821`), `sched` refuses to switch and sets `up->delaysched` (`:213`), and `unlock` sched's the moment the last one goes (`taslock.c:216`). Here that reads: **no `RefCell` borrow held across a suspension point** |
+| **where preemption lands** | **user mode only.** `hzclock` calls `hzsched`, which does not `sched()` — it marks `up->delaysched` (`portclock.c:136`, `proc.c`). The switch happens at `trap()`'s tail, `syscall()`'s tail, or `unlock` (`pc/trap.c:438`, `:778`, `taslock.c:216`). An epoch check is compiled into GUEST code and never into a host function, so a yield can only land where Plan 9's `trap()` would |
+| **depends on** | P5 |
+| **acceptance** | `sleep(2)` is a `tsleep` on a `Rendez` and a second process runs during it; a guest in a tight loop does not stop the system; **`^C` interrupts a command**, so rc's `Trapinit` stops being a stub |
+| **does NOT build** | `rfork(RFPROC)` returning twice. A fork duplicates an address space AND a stack; a fiber's stack holds host frames pointing into the instance, and a worker's is another thread's. `procrfork` stays (RESEARCH §5.2) |
+| **exposes** | `alarm`, `notify`, `noted`, `rendezvous`, `RFNOTEG`, `#p/<n>/note`, `#p/<n>/ctl`'s `start`/`stop`/`waitstop`/`hang`, and `/proc/<n>/status`'s real states — every one of them a call or a file Plan 9 has and this kernel refuses today |
+
+## P7 — the registries
 
 | | |
 |---|---|
 | **builds** | `/profile`, `/pkg` and `/template` as one format, three registries: a list of bindings plus commands. `/store` for fetched bytes, served by a userspace file server so verification is IPNX's |
-| **depends on** | P5 |
+| **depends on** | P6 |
 | **acceptance** | a package installs as a bind, `pkg remove` unbinds, and the store entry survives it |
 | **exposes** | — |
 
-## P7 — emca, and the browser *(the website)*
+## P8 — emca, and the browser *(the website)*
 
 | | |
 |---|---|
 | **builds** | emca in userspace: it mints windows and serves the contract of [window.md](window.md) as files. Then the browser embedding, and the surface that **reads emca's files** and renders natively |
-| **depends on** | P5 |
+| **depends on** | P6 — the browser host is a worker per process, which is P6's machine boundary on that surface |
 | **acceptance** | **the website.** The site shows the listing, the three tabs and `rc`, to spec |
 | **exposes** | the other targets |
 

@@ -292,7 +292,7 @@ until all twelve are reached.
 
 **[RESEARCH.md](RESEARCH.md)** — the living evidence base: every finding with
  provenance, from Plan 9's call table to the wasm toolchain's measured behaviors.
-**[docs/implementation.md](docs/implementation.md)** — the plan: phases P0–P7,
+**[docs/implementation.md](docs/implementation.md)** — the plan: phases P0–P8,
  from the kernel to the demo to hardware.
 **[docs/when.md](docs/when.md)** — what is built, and what is not. The only
  document that says.
