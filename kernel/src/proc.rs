@@ -171,6 +171,98 @@ pub fn quote(s: &str) -> String {
     out
 }
 
+/// **The process states** (`portdat.h:610`), and they are Plan 9's twelve.
+/// `/proc/<n>/status` reports one, and `sched` acts on it: a process is put
+/// on the run queue when it is `Ready`, entered when it becomes `Running`,
+/// and left alone while it is `Wakeme`.
+///
+/// `Dead` is zero there, and is the state of a slot with no process in it;
+/// this table has no empty slots, so it is here for the numbering and for
+/// what `pexit` leaves behind.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum State {
+    #[default]
+    Dead,
+    Moribund,
+    Ready,
+    Scheding,
+    Running,
+    Queueing,
+    QueueingR,
+    QueueingW,
+    Wakeme,
+    Broken,
+    Stopped,
+    Rendezvous,
+    Waitrelease,
+}
+
+impl State {
+    /// `statename[]` (`proc.c:22`) — what `/proc/<n>/status` prints.
+    pub fn name(&self) -> &'static str {
+        match self {
+            State::Dead => "Dead",
+            State::Moribund => "Moribund",
+            State::Ready => "Ready",
+            State::Scheding => "Scheding",
+            State::Running => "Running",
+            State::Queueing => "Queueing",
+            State::QueueingR => "QueueingR",
+            State::QueueingW => "QueueingW",
+            State::Wakeme => "Wakeme",
+            State::Broken => "Broken",
+            State::Stopped => "Stopped",
+            State::Rendezvous => "Rendez",
+            State::Waitrelease => "Waitrelease",
+        }
+    }
+}
+
+/// `struct Rendez` (`portdat.h:104`) — *"Lock; Proc *p;"*, and that is the
+/// whole of it: **a place for one process to wait and another to find it**.
+///
+/// The `Lock` is absent because this kernel runs on one processor and never
+/// in an interrupt: `sleep` and `wakeup` cannot interleave. Everything else
+/// is Plan 9's, including the rule that two processes may not sleep on one
+/// `Rendez` — `sleep` panics on it there (*"double sleep"*, `proc.c:826`)
+/// and this says so too.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Rendez {
+    /// `r->p` — who is waiting, if anyone.
+    pub p: Option<Pid>,
+}
+
+/// **Where a `Rendez` lives.** Plan 9's are fields on the things that own
+/// them — `&up->sleep` is *"place for syssleep/debug"* (`portdat.h:720`) and
+/// `&up->waitr` is *"Place to hang out in wait"* (`:683`) — and `sleep` takes
+/// the address of one. A Rust kernel cannot pass that address around, so a
+/// `Rendez` is named by whose it is and which it is, which is the same
+/// information.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Rid(pub Pid, pub Which);
+
+/// Which of a process's two `Rendez` (`portdat.h:683`, `:720`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Which {
+    /// `up->sleep` — `syssleep` waits here.
+    Sleep,
+    /// `up->waitr` — `pwait` waits here and `pexit` wakes it.
+    Waitr,
+}
+
+/// The scheduler's own constants (`portdat.h:640`).
+pub mod pri {
+    /// `Npriq` — *"number of scheduler priority levels"*.
+    pub const NPRIQ: usize = 20;
+    /// `Nrq` — `Npriq+2`, the two above being edf's. Nothing here is edf,
+    /// and the queues exist so the numbering does not drift from Plan 9's.
+    pub const NRQ: usize = NPRIQ + 2;
+    /// `PriNormal` — *"base priority for normal processes"*.
+    pub const NORMAL: usize = 10;
+    /// `PriKproc` and `PriRoot` — both 13 there.
+    pub const KPROC: usize = 13;
+}
+
 #[derive(Clone)]
 pub struct Proc {
     pub pid: Pid,
@@ -211,6 +303,32 @@ pub struct Proc {
     pub status: Option<String>,
     /// `RFNOWAIT`: the parent abandoned it, so no wait record is kept.
     pub waited: bool,
+    /// `p->state` (`portdat.h:659`).
+    pub state: State,
+    /// `p->priority` — which run queue it goes on. `PriNormal` to start,
+    /// as `newproc` leaves it (`proc.c:710`).
+    pub priority: usize,
+    /// `p->r` — *"rendezvous point slept on"* (`portdat.h:719`). Set by
+    /// `sleep`, cleared by `wakeup`, and the pair is what `wakeup` checks
+    /// before readying: *"if(p->state != Wakeme || p->r != r) panic"*.
+    pub r: Option<Rid>,
+    /// `up->sleep` (`portdat.h:720`) and `up->waitr` (`:683`), the two
+    /// `Rendez` a process carries.
+    pub sleep: Rendez,
+    pub waitr: Rendez,
+    /// `p->basepri` — what `reprioritize` may not exceed. `PriNormal` from
+    /// `newproc` (`proc.c:710`).
+    pub basepri: usize,
+    /// `p->cpu` — the decaying average `updatecpu` keeps and
+    /// `reprioritize` reads (`proc.c`).
+    pub cpu: u32,
+    /// `p->lastupdate` — when `cpu` was last decayed, in ticks.
+    pub lastupdate: u64,
+    /// `p->twhen` — when a `tsleep`'s timer fires, in the machine's
+    /// nanoseconds. Plan 9 keeps a `Timer` on a per-machine list
+    /// (`portclock.c`); one process at a time sleeping on a timer needs no
+    /// list, and `checkalarms`' counterpart walks the table.
+    pub twhen: Option<u64>,
 }
 
 impl Proc {
@@ -235,6 +353,15 @@ impl Proc {
             slash,
             status: None,
             waited: true,
+            state: State::Running,
+            priority: pri::NORMAL,
+            r: None,
+            sleep: Rendez::default(),
+            waitr: Rendez::default(),
+            basepri: pri::NORMAL,
+            cpu: 0,
+            lastupdate: 0,
+            twhen: None,
         }
     }
 }
@@ -273,6 +400,26 @@ impl Up {
 pub struct Procs {
     tab: HashMap<Pid, Proc>,
     next: Pid,
+    /// `Schedq runq[Nrq]` (`proc.c:39`) — one queue per priority, and a
+    /// process is on exactly one of them when it is `Ready`. Plan 9's
+    /// `Schedq` is a head/tail list threaded through `p->rnext`; a queue of
+    /// pids is the same list without the threading, which a Rust kernel has
+    /// no way to do anyway.
+    runq: Vec<Vec<Pid>>,
+    /// `nrdy` (`proc.c:41`) — how many are on the queues.
+    nrdy: usize,
+    /// `m->readied` — *"group scheduling"* (`ready`, `proc.c:428`). The
+    /// process just made ready runs next if nothing higher wants to, which
+    /// is what makes a `wakeup` hand the processor over rather than merely
+    /// queue somebody.
+    readied: Option<Pid>,
+    /// `MACHP(0)->ticks` — what `updatecpu` measures against. The machine
+    /// has the clock; this is the count the scheduler sees.
+    pub ticks: u64,
+    /// `MACHP(0)->load`. **Nothing computes a load average yet**, so it is
+    /// zero and `reprioritize` returns `basepri` — which is exactly what
+    /// Plan 9 does when load is zero (`proc.c`, first line).
+    load: u32,
 }
 
 impl Procs {
@@ -281,7 +428,15 @@ impl Procs {
     pub fn new(slash: Chan) -> Self {
         let mut tab = HashMap::new();
         tab.insert(1, Proc::root(1, slash));
-        Procs { tab, next: 2 }
+        Procs {
+            tab,
+            next: 2,
+            runq: (0..pri::NRQ).map(|_| Vec::new()).collect(),
+            nrdy: 0,
+            readied: None,
+            ticks: 0,
+            load: 0,
+        }
     }
 
     pub fn get(&self, pid: Pid) -> Option<&Proc> {
@@ -306,6 +461,258 @@ impl Procs {
     /// table — is an error, not a silent choice between them. So is asking for
     /// `RFMEM` or `RFNOWAIT` without `RFPROC`, since there is no child for
     /// either to describe.
+// ---- the scheduler (`port/proc.c`) ------------------------------------
+    //
+    // **The switch is not here.** `sched()` (`proc.c:119`) ends with
+    // `gotolabel(&up->sched)`, which is `pc/l.s:992` — the architecture's,
+    // like `touser`. What is here is everything above that line: who is
+    // runnable, who runs next, and who is waiting for what.
+
+    /// `queueproc` (`proc.c:348`): onto the tail of its priority's queue.
+    fn queueproc(&mut self, pri: usize, pid: Pid) {
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.priority = pri;
+        }
+        self.runq[pri].push(pid);
+        self.nrdy += 1;
+    }
+
+    /// `dequeueproc` (`proc.c:369`) — take a named process off the queue it
+    /// is on. Plan 9 checks it is still there under the lock and gives up if
+    /// it is not; here nothing can take it away in between.
+    fn dequeueproc(&mut self, pri: usize, pid: Pid) -> bool {
+        if let Some(i) = self.runq[pri].iter().position(|&q| q == pid) {
+            self.runq[pri].remove(i);
+            self.nrdy -= 1;
+            return true;
+        }
+        false
+    }
+
+    /// `updatecpu` (`proc.c`) — the decaying average of how much processor a
+    /// process has had. `D = schedgain*HZ*Scaling`, and the running process
+    /// decays towards 1000 while every other decays towards 0.
+    fn updatecpu(&mut self, pid: Pid, running: bool) {
+        const SCHEDGAIN: u64 = 30;
+        const HZ: u64 = 100;
+        const SCALING: u64 = 2;
+        let d = (SCHEDGAIN * HZ * SCALING) as u32;
+        let t = (self.ticks * SCALING + SCALING / 2) as u32;
+        let Some(p) = self.tab.get_mut(&pid) else { return };
+        let n = t.saturating_sub(p.lastupdate as u32);
+        p.lastupdate = t as u64;
+        if n == 0 {
+            return;
+        }
+        let n = n.min(d);
+        let ocpu = p.cpu;
+        p.cpu = if running {
+            let x = 1000u32.saturating_sub(ocpu);
+            1000 - (x * (d - n)) / d
+        } else {
+            (ocpu * (d - n)) / d
+        };
+    }
+
+    /// `reprioritize` (`proc.c`). **Load zero is `basepri`**, which is the
+    /// function's own first branch — and load is zero here because nothing
+    /// computes a load average yet.
+    fn reprioritize(&self, pid: Pid) -> usize {
+        let Some(p) = self.tab.get(&pid) else { return pri::NORMAL };
+        if self.load == 0 {
+            return p.basepri;
+        }
+        let fairshare = (1000 * 1000) / self.load as usize;
+        let n = (p.cpu as usize).max(1);
+        ((fairshare + n / 2) / n).min(p.basepri)
+    }
+
+    /// `ready` (`proc.c:418`) — put a process on the run queue.
+    ///
+    /// `m->readied = p` is *"group scheduling"*: whoever was just made ready
+    /// is the one `runproc` takes next unless something higher is waiting,
+    /// which is how a `wakeup` hands the processor over.
+    pub fn ready(&mut self, pid: Pid) {
+        if self.tab.get(&pid).map(|p| p.state) == Some(State::Ready) {
+            return;
+        }
+        self.readied = Some(pid);
+        self.updatecpu(pid, false);
+        let pri = self.reprioritize(pid);
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.state = State::Ready;
+        }
+        self.queueproc(pri, pid);
+    }
+
+    /// `runproc` (`proc.c:507`) — who runs next.
+    ///
+    /// **Cut to one processor**, which is most of it: Plan 9's loop is
+    /// affinity (`p->mp`), wiring (`p->wired`) and load balancing across
+    /// `MACHP(i)`, and there is one of everything here. What is left is its
+    /// first branch — *"cooperative scheduling until the clock ticks"*, the
+    /// `m->readied` process — and then the highest non-empty queue.
+    ///
+    /// `None` is `idlehands()`: nothing to run.
+    pub fn runproc(&mut self) -> Option<Pid> {
+        // *"cooperative scheduling until the clock ticks"*. The condition is
+        // Plan 9's whole condition: the readied process is `Ready`, **and
+        // the two top queues are empty** — `runq[Nrq-1].head == nil &&
+        // runq[Nrq-2].head == nil`, which are edf's. Nothing else outranks
+        // it, so a `wakeup` beats a higher priority and that is deliberate.
+        let edf_idle = self.runq[pri::NRQ - 1].is_empty() && self.runq[pri::NRQ - 2].is_empty();
+        if let Some(p) = self.readied.filter(|_| edf_idle) {
+            if self.tab.get(&p).map(|q| q.state) == Some(State::Ready) {
+                let pri = self.tab[&p].priority;
+                if self.dequeueproc(pri, p) {
+                    self.readied = None;
+                    return Some(p);
+                }
+            }
+        }
+        self.readied = None;
+        for pri in (0..pri::NRQ).rev() {
+            if let Some(&p) = self.runq[pri].first() {
+                self.dequeueproc(pri, p);
+                return Some(p);
+            }
+        }
+        None
+    }
+
+    /// `sleep(r, f, arg)` (`proc.c:815`), everything up to the switch.
+    ///
+    /// The condition is checked first — *"if condition happened or a note is
+    /// pending, never mind"* — and only then is the process committed:
+    /// `r->p = up`, `up->state = Wakeme`, `up->r = r`. **`true` means the
+    /// caller must now leave**, which is `gotolabel(&m->sched)` and is the
+    /// machine's.
+    ///
+    /// Plan 9 unlocks `r` and `up->rlock` on the line before it leaves; the
+    /// Rust counterpart is that this returns, dropping every borrow, and the
+    /// caller suspends after it.
+    pub fn sleep(&mut self, pid: Pid, r: Rid, happened: bool) -> bool {
+        if self.rendez(r).p.is_some() && self.rendez(r).p != Some(pid) {
+            // *"double sleep called from …"* (`proc.c:826`) — Plan 9 prints
+            // and dumps the stack. Two processes on one `Rendez` is a bug in
+            // the caller either way.
+            return false;
+        }
+        if happened {
+            self.rendez_mut(r).p = None;
+            return false;
+        }
+        self.rendez_mut(r).p = Some(pid);
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.state = State::Wakeme;
+            p.r = Some(r);
+        }
+        true
+    }
+
+    /// `wakeup(r)` (`proc.c:942`) — ready whoever is sleeping there.
+    ///
+    /// The check is Plan 9's and is a panic there: *"if(p->state != Wakeme
+    /// || p->r != r) panic("wakeup: state")"*. It answers who was woken, as
+    /// `wakeup` returns the `Proc*`.
+    pub fn wakeup(&mut self, r: Rid) -> Option<Pid> {
+        let p = self.rendez(r).p?;
+        let ok = self.tab.get(&p).is_some_and(|q| q.state == State::Wakeme && q.r == Some(r));
+        if !ok {
+            return None;
+        }
+        self.rendez_mut(r).p = None;
+        if let Some(q) = self.tab.get_mut(&p) {
+            q.r = None;
+            q.twhen = None;
+        }
+        self.ready(p);
+        Some(p)
+    }
+
+    /// `tsleep` (`proc.c:910`) — `sleep`, with a timer that will `wakeup` for
+    /// you. Plan 9 hangs a `Timer` on the machine's list (`timeradd`,
+    /// `portclock.c`) whose function is `twakeup`; here the deadline is on
+    /// the process and [`Procs::checkalarms`] is what walks it, because one
+    /// table is not a list worth keeping twice.
+    pub fn tsleep(&mut self, pid: Pid, r: Rid, happened: bool, deadline: u64) -> bool {
+        let slept = self.sleep(pid, r, happened);
+        if slept {
+            if let Some(p) = self.tab.get_mut(&pid) {
+                p.twhen = Some(deadline);
+            }
+        }
+        slept
+    }
+
+    /// `checkalarms` (`portclock.c:128`), for `tsleep`'s timers: whoever is
+    /// due is woken. `now` is the machine's nanoseconds.
+    pub fn checkalarms(&mut self, now: u64) {
+        let due: Vec<Pid> = self
+            .tab
+            .values()
+            .filter(|p| p.state == State::Wakeme && p.twhen.is_some_and(|w| w <= now))
+            .map(|p| p.pid)
+            .collect();
+        for pid in due {
+            if let Some(r) = self.tab.get(&pid).and_then(|p| p.r) {
+                self.wakeup(r);
+            }
+        }
+    }
+
+    /// Is anything else runnable? `runproc` without taking it — what
+    /// `sched` asks before it decides there is nobody and idles.
+    pub fn runproc_peek(&self) -> Option<Pid> {
+        self.readied
+            .filter(|p| self.state(*p) == State::Ready)
+            .or_else(|| (0..pri::NRQ).rev().find_map(|pri| self.runq[pri].first().copied()))
+    }
+
+    /// When the earliest sleeper is due, if anyone is — so a host with
+    /// nothing to run knows how long to wait rather than spinning. Plan 9's
+    /// `idlehands()` halts the processor and the next clock interrupt wakes
+    /// it; this is the same question asked forwards.
+    pub fn nextalarm(&self) -> Option<u64> {
+        self.tab
+            .values()
+            .filter(|p| p.state == State::Wakeme)
+            .filter_map(|p| p.twhen)
+            .min()
+    }
+
+    fn rendez(&self, r: Rid) -> Rendez {
+        let Rid(pid, which) = r;
+        self.tab
+            .get(&pid)
+            .map(|p| match which {
+                Which::Sleep => p.sleep,
+                Which::Waitr => p.waitr,
+            })
+            .unwrap_or_default()
+    }
+
+    fn rendez_mut(&mut self, r: Rid) -> &mut Rendez {
+        let Rid(pid, which) = r;
+        let p = self.tab.get_mut(&pid).expect("no such process");
+        match which {
+            Which::Sleep => &mut p.sleep,
+            Which::Waitr => &mut p.waitr,
+        }
+    }
+
+    /// `p->state`, and the one place anything else sets it: `sched` marks
+    /// the process it enters `Running` (`proc.c:160`).
+    pub fn setstate(&mut self, pid: Pid, st: State) {
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.state = st;
+        }
+    }
+
+    pub fn state(&self, pid: Pid) -> State {
+        self.tab.get(&pid).map(|p| p.state).unwrap_or(State::Dead)
+    }
+
     pub fn rforkcheck(flags: i32) -> Result<(), String> {
         for both in [rf::FDG | rf::CFDG, rf::NAMEG | rf::CNAMEG, rf::ENVG | rf::CENVG] {
             if flags & both == both {
@@ -358,6 +765,15 @@ impl Procs {
             dot: parent.dot.clone(),
             status: None,
             waited: flags & rf::NOWAIT != 0,
+            state: State::Ready,
+            priority: pri::NORMAL,
+            r: None,
+            sleep: Rendez::default(),
+            waitr: Rendez::default(),
+            basepri: pri::NORMAL,
+            cpu: 0,
+            lastupdate: 0,
+            twhen: None,
         };
         let cpid = child.pid;
         self.tab.insert(cpid, child);
@@ -508,6 +924,12 @@ impl Procs {
                 parent.time[TCUSER + i] += time[i];
             }
         }
+        // `pexit`'s own last acts (`proc.c:1219`, `:1244`): the wait record
+        // goes on the parent's queue and **`wakeup(&p->waitr)`** — the
+        // parent is asleep in `pwait` until one arrives. Without this a
+        // `await` would sleep for ever.
+        self.setstate(pid, State::Moribund);
+        self.wakeup(Rid(ppid, Which::Waitr));
     }
 
     /// `await(2)`: reap one exited child. Plan 9 states no order and neither
@@ -558,6 +980,118 @@ mod tests {
 
     fn one() -> Procs {
         Procs::new(Chan::attach(crate::dev::DevId::Root, 0))
+    }
+
+    // ---- the scheduler ----------------------------------------------------
+
+    /// `sleep` commits the process (`proc.c:815`): `r->p = up`, `up->state =
+    /// Wakeme`, `up->r = r`. **And it checks the condition first** — *"if
+    /// condition happened … never mind"* — so a `sleep` whose reason has
+    /// already passed does not sleep at all, which is the whole reason
+    /// `sleep` takes a function.
+    #[test]
+    fn sleep_commits_only_when_the_condition_has_not_happened() {
+        let mut p = one();
+        let r = Rid(1, Which::Sleep);
+
+        assert!(!p.sleep(1, r, true), "the condition happened: never mind");
+        assert_eq!(p.state(1), State::Running);
+
+        assert!(p.sleep(1, r, false), "committed, and the caller must leave");
+        assert_eq!(p.state(1), State::Wakeme);
+        assert_eq!(p.tab[&1].r, Some(r));
+    }
+
+    /// `wakeup` (`proc.c:942`) readies the sleeper and clears both ends.
+    /// The pair check is Plan 9's panic — *"if(p->state != Wakeme || p->r !=
+    /// r)"* — so a wakeup on the wrong `Rendez` readies nobody.
+    #[test]
+    fn wakeup_readies_the_sleeper_and_only_on_its_own_rendez() {
+        let mut p = one();
+        let (sleep, waitr) = (Rid(1, Which::Sleep), Rid(1, Which::Waitr));
+        p.sleep(1, sleep, false);
+
+        assert_eq!(p.wakeup(waitr), None, "nobody sleeps there");
+        assert_eq!(p.state(1), State::Wakeme);
+
+        assert_eq!(p.wakeup(sleep), Some(1));
+        assert_eq!(p.state(1), State::Ready);
+        assert_eq!(p.tab[&1].r, None);
+    }
+
+    /// `ready` puts a process on the queue and `runproc` takes it off. **The
+    /// one just readied runs next** — `m->readied = p`, *"group
+    /// scheduling"* (`proc.c:428`) — which is what makes a `wakeup` hand the
+    /// processor to whoever it woke.
+    #[test]
+    fn the_process_just_readied_is_the_one_that_runs_next() {
+        let mut p = one();
+        let a = p.rfork(1, rf::PROC).expect("a child");
+        let b = p.rfork(1, rf::PROC).expect("another");
+        // `rfork` leaves a child `Ready` but on no queue; put both on.
+        p.setstate(a, State::Scheding);
+        p.setstate(b, State::Scheding);
+        p.ready(a);
+        p.ready(b);
+        assert_eq!(p.runproc(), Some(b), "the last readied, not the first queued");
+        assert_eq!(p.runproc(), Some(a));
+        assert_eq!(p.runproc(), None, "and then idlehands");
+    }
+
+    /// A higher priority queue is emptied first — `runproc`'s loop runs the
+    /// queues downwards from `Nrq-1`.
+    ///
+    /// **But not before `m->readied`**, whose condition is only that the two
+    /// edf queues are empty: a `wakeup` beats a higher priority, and that is
+    /// what *"cooperative scheduling"* means. So the readied one goes first
+    /// and the priority order decides everything after it.
+    #[test]
+    fn readied_runs_first_and_then_the_highest_priority() {
+        let mut p = one();
+        let hi = p.rfork(1, rf::PROC).unwrap();
+        let lo1 = p.rfork(1, rf::PROC).unwrap();
+        let lo2 = p.rfork(1, rf::PROC).unwrap();
+        p.tab.get_mut(&hi).unwrap().basepri = pri::KPROC;
+        for q in [hi, lo1, lo2] {
+            p.setstate(q, State::Scheding);
+            p.ready(q);
+        }
+        assert_eq!(p.runproc(), Some(lo2), "the last readied, whatever its priority");
+        assert_eq!(p.runproc(), Some(hi), "then PriKproc 13 before PriNormal 10");
+        assert_eq!(p.runproc(), Some(lo1));
+        assert_eq!(p.runproc(), None, "and then idlehands");
+    }
+
+    /// `tsleep`'s timer: `checkalarms` wakes whoever is due, and nobody
+    /// else. Plan 9 hangs a `Timer` per sleeper; the deadline is on the
+    /// process here, and this is the walk.
+    #[test]
+    fn a_tsleep_is_woken_by_its_deadline_and_not_before() {
+        let mut p = one();
+        let r = Rid(1, Which::Sleep);
+        assert!(p.tsleep(1, r, false, 500));
+        assert_eq!(p.nextalarm(), Some(500));
+
+        p.checkalarms(499);
+        assert_eq!(p.state(1), State::Wakeme, "not yet");
+        p.checkalarms(500);
+        assert_eq!(p.state(1), State::Ready, "due");
+        assert_eq!(p.nextalarm(), None);
+    }
+
+    /// `pexit` wakes the parent (`proc.c:1219`, `:1244`: `wakeup(&p->waitr)`)
+    /// — a parent asleep in `pwait` is waiting for exactly this, and without
+    /// it an `await` sleeps for ever.
+    #[test]
+    fn a_child_exiting_wakes_the_parent_out_of_wait() {
+        let mut p = one();
+        let c = p.rfork(1, rf::PROC).unwrap();
+        assert!(p.sleep(1, Rid(1, Which::Waitr), false));
+        assert_eq!(p.state(1), State::Wakeme);
+
+        p.exits(c, "", None);
+        assert_eq!(p.state(1), State::Ready, "the parent is runnable again");
+        assert_eq!(p.state(c), State::Moribund);
     }
 
     /// The three-way rule, on file descriptors: a `G` bit copies, a `CG` bit

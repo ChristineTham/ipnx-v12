@@ -272,7 +272,10 @@ impl Dev for ProcDev {
                 // `status`: text, user, state, then numbers — the fixed-width
                 // record `ps` parses (`devproc.c:867`, STATSIZE).
                 Q::Status => {
-                    let state = if proc.status.is_some() { "Broken" } else { "Running" };
+                    // `statename[p->state]` (`devproc.c`, `procstatus`).
+                    // It was "Running" or "Broken" and nothing else, which
+                    // is a guess where the kernel now knows.
+                    let state = proc.state.name();
                     let t = p.cputime(pid, 0);
                     format!(
                         "{:<w$}{:<w$}{:<11}{:<12}{:<12}{:<12}",
@@ -515,8 +518,11 @@ mod tests {
         let s = read(&mut d, 1, "status");
         assert!(s.contains("eve"), "{s}");
         assert!(s.contains("Running"), "{s}");
+        // `Moribund`, which is what `pexit` leaves (`proc.c`). It said
+        // `Broken` before, and `Broken` is a process that took a fatal note
+        // and was kept for a debugger (`broken()`) — not one that exited.
         procs.borrow_mut().exits(1, "", None);
-        assert!(read(&mut d, 1, "status").contains("Broken"));
+        assert!(read(&mut d, 1, "status").contains("Moribund"));
     }
 
     /// `/proc/n/ns` prints the namespace as the lines that would rebuild it.

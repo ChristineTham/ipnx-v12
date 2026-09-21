@@ -655,12 +655,42 @@ impl Kernel {
             // observationally the same thing**, so the wait goes to the
             // machine, which is where Plan 9 puts `delay` too.
             Call::Sleep { ms } => {
-                if ms > 0 {
-                    // `if(n < TK2MS(1)) n = TK2MS(1)` — `TK2MS(1)` is
-                    // `1000/HZ`, 10ms at the PC's `HZ` of 100
-                    // (`pc/mem.h:31`). A sleep shorter than a tick is a
-                    // sleep of one tick.
-                    self.machine.delay(ms.max(TK2MS1));
+                if ms == 0 {
+                    return Ok(Ret::Ok);
+                }
+                // `if(n < TK2MS(1)) n = TK2MS(1)` — `TK2MS(1)` is `1000/HZ`,
+                // 10ms at the PC's `HZ` of 100 (`pc/mem.h:31`). A sleep
+                // shorter than a tick is a sleep of one tick.
+                let ms = ms.max(TK2MS1);
+                let now = self.machine.todget().nsec;
+                let deadline = now + ms * 1_000_000;
+                // `tsleep(&up->sleep, return0, 0, n)` (`sysproc.c`). The
+                // condition is `return0`, so it always commits: this sleep
+                // has no reason but the clock.
+                let r = proc::Rid(up, proc::Which::Sleep);
+                self.procs.borrow_mut().tsleep(up, r, false, deadline);
+                // Here Plan 9 calls `sched()`, whose last line is
+                // `gotolabel(&up->sched)` — the architecture's
+                // (`pc/l.s:992`). **This machine has no switch yet**, so
+                // what follows is `sched`'s other end: ask who else is
+                // runnable, and with nobody, `idlehands()` — halt until the
+                // clock. `Machine::delay` is that halt.
+                //
+                // The state is real either way: the process is `Wakeme`
+                // with a deadline, and `checkalarms` is what ends it.
+                let next = self.procs.borrow().runproc_peek();
+                if next.is_none() {
+                    self.machine.delay(ms);
+                }
+                let now = self.machine.todget().nsec;
+                self.procs.borrow_mut().checkalarms(now.max(deadline));
+                // `sched`'s tail (`proc.c:157`): `p = runproc(); up = p;
+                // up->state = Running;` — and **`runproc` takes it off its
+                // queue on the way**, which is the half a `setstate` here
+                // would have missed.
+                let p = self.procs.borrow_mut().runproc();
+                if let Some(p) = p {
+                    self.procs.borrow_mut().setstate(p, proc::State::Running);
                 }
                 Ok(Ret::Ok)
             }
@@ -1325,11 +1355,11 @@ mod syscalls {
 
     /// `syssleep` (`sysproc.c`), both branches.
     ///
-    /// `n <= 0` is `yield()`, and yielding to nobody is returning: a child
-    /// made by `procrfork` runs to its end inside the call that made it, so
-    /// exactly one process is ever runnable. `n > 0` goes to the machine's
-    /// `delay` (`pc/fns.h:23`), raised to one tick — `TK2MS(1)`, 10ms at the
-    /// PC's `HZ` — because *"if(n < TK2MS(1)) n = TK2MS(1)"*.
+    /// `n <= 0` is `yield()`, and yielding to nobody is returning. `n > 0`
+    /// is `tsleep(&up->sleep, return0, 0, n)`, raised to one tick —
+    /// `TK2MS(1)`, 10ms at the PC's `HZ` — because *"if(n < TK2MS(1)) n =
+    /// TK2MS(1)"*. With nobody else runnable, `sched` reaches
+    /// `idlehands()`, and `Machine::delay` is that halt.
     #[test]
     fn sleep_yields_for_nothing_and_delays_for_a_time() {
         let (mut k, log) = tests::watched();
@@ -1339,5 +1369,19 @@ mod syscalls {
         k.syscall(1, Call::Sleep { ms: 250 }).unwrap();
         k.syscall(1, Call::Sleep { ms: 1 }).unwrap();
         assert_eq!(log.borrow().delayed, vec![250, 10], "and a tick is the floor");
+    }
+
+    /// **The sleep is a real `tsleep`**, not a wait dressed as one: the
+    /// process commits to `up->sleep` with a deadline, `checkalarms` is what
+    /// ends it, and it comes back `Running` off the run queue. The state is
+    /// the same one it will have when the machine can leave it.
+    #[test]
+    fn a_sleep_goes_through_the_rendez_and_comes_back_running() {
+        let (mut k, _) = tests::watched();
+        k.syscall(1, Call::Sleep { ms: 20 }).unwrap();
+        let procs = k.procs.borrow();
+        assert_eq!(procs.state(1), proc::State::Running);
+        assert_eq!(procs.nextalarm(), None, "the timer is spent");
+        assert_eq!(procs.runproc_peek(), None, "and it is off the queue");
     }
 }

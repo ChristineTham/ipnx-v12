@@ -207,7 +207,7 @@ already, because `rfork` acts on them. They are that state shown as files.
 | **acceptance** | **the CLI.** Typing `ipnx` boots to `rc` on the terminal; `ls`, `cat /etc/motd` and the demo's commands run |
 | **exposes** | the scheduler, then packages — `/pkg`, `/store`, `/profile` — and emca |
 
-## P6 — the scheduler *(added 2026-09-21)*
+## P6 — the scheduler *(added 2026-09-21; the kernel's half is in)*
 
 **Christine put it before the registries**: *"we will need to implement
 before P6/P7."* The measurements are RESEARCH §14, and what Plan 9 does —
@@ -222,7 +222,8 @@ is the architecture's, exactly as `touser` is. So this phase is
 
 | | |
 |---|---|
-| **builds** | **the machine's stack switch** — one per process, named for `setlabel`/`gotolabel` and not for any engine's word for it; then `port/proc.c`'s `Rendez`, `sleep`, `wakeup`, `tsleep`, `ready`, `runproc`, `yield`, `hzsched` and the twelve process states (`portdat.h:610`); then preemption; then notes — `postnote`, this machine's answer to `notify(Ureg*)`, `#p/<n>/note`, `RFNOTEG`, `alarm`; then `rendezvous`. About **425 lines of `port/proc.c`**, and not a line of invention |
+| **done** | **the kernel above the switch** (2026-09-21): the twelve states, `Rendez` addressed as `(pid, which)` because Plan 9's are fields (`portdat.h:683`, `:720`), `runq[Nrq]`, `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc` (cut to one processor — Plan 9's is affinity and load balancing across `MACHP(i)`), `sleep`, `wakeup`, `tsleep`, `checkalarms`. `syssleep` goes through it; `pexit` wakes the parent's `waitr`; `/proc/<n>/status` reports the real state. **161 kernel tests** |
+| **next** | **the machine's stack switch** — one per process, named for `setlabel`/`gotolabel` and not for any engine's word for it; then `port/proc.c`'s `Rendez`, `sleep`, `wakeup`, `tsleep`, `ready`, `runproc`, `yield`, `hzsched` and the twelve process states (`portdat.h:610`); then preemption; then notes — `postnote`, this machine's answer to `notify(Ureg*)`, `#p/<n>/note`, `RFNOTEG`, `alarm`; then `rendezvous`. About **425 lines of `port/proc.c`**, and not a line of invention |
 | **the machine boundary** | three hosts, one shape. **wasmtime**: `Config::async_support` is a host-stack fiber and `Func::call_async` runs the guest on it; `epoch_interruption` + `Engine::increment_epoch()` + `Store::epoch_deadline_async_yield_and_update` preempt by yielding rather than trapping. **Node**: a wasm supervisor. **Browser**: a worker per process. A worker is a thread, so the switch there is a message and `Atomics.wait` — which is why the method answers to `setlabel`/`gotolabel` and to nothing else |
 | **the suspend shape** | **per-process stacks** (§14.1). `Proc.kstack` is 4096 bytes (`pc/mem.h:26`), a syscall runs on it, and `sleep` leaves its C locals there: `setlabel` returns 1 on the way back and the syscall continues from the line it stopped on. The fiber IS that stack, so a host function that awaits keeps its Rust locals exactly as Plan 9 keeps its C ones. There is no blocked-and-resumed call and no re-entrancy |
 | **the one rule** | **no lock held across a sleep** — `sleep` prints a diagnostic when there is (`proc.c:821`), `sched` refuses to switch and sets `up->delaysched` (`:213`), and `unlock` sched's the moment the last one goes (`taslock.c:216`). Here that reads: **no `RefCell` borrow held across a suspension point** |

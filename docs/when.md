@@ -25,7 +25,7 @@ Measured 2026-09-20.
 | `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. `boot` names the host owner by writing `#c/hostowner` (`bootauth.c:56`), so `$user` is `glenda` and not the role's own name |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators |
 | `namec.rs` | name → channel, with the mount check at every component; all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk |
-| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser` |
+| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `checkalarms` — all `port/proc.c`'s |
 | `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
 | `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
 | `lib.rs` | the 28 calls, `exec`, and `unionread` |
@@ -63,14 +63,19 @@ Answered: `rfork` `exec` `exits` `await` `errstr` `bind` `mount` `unmount`
 `stat` `fstat` `wstat` `fwstat` — **22 of 28**. A failed call leaves its reason where
 `errstr` finds it, and reading exchanges it as Plan 9's does.
 
-**`sleep` is built** (2026-09-20), both branches of `syssleep`
-(`sysproc.c`). `n <= 0` is `yield()`, and yielding to nobody is returning:
-a child made by `procrfork` runs to its end inside the call that made it, so
-exactly one process is ever runnable. `n > 0` goes to `Machine::delay` —
-`delay(int)` is declared beside `touser` in the same machine-dependent list
-(`pc/fns.h:23`) and the PC spins on the TSC (`i8253.c:320`); with one
-runnable process `tsleep` and `delay` are the same thing. `init`'s loop is
-now Plan 9's, `sleep(1000)` and all.
+**`sleep` is a real `tsleep`** (P6, 2026-09-21). `n <= 0` is `yield()`,
+and yielding to nobody is returning. `n > 0` is `tsleep(&up->sleep,
+return0, 0, n)`: the process commits to its own `Rendez`, becomes
+`Wakeme` with a deadline, and `checkalarms` is what ends it — then
+`sched`'s tail takes it off the run queue and marks it `Running`. The
+floor is `TK2MS(1)`, 10ms at the PC's `HZ`.
+
+**What is missing is the switch, and only the switch.** Where Plan 9's
+`sched()` ends with `gotolabel(&up->sched)` — `pc/l.s:992`, the
+architecture's — this asks `runproc` who else is runnable, finds nobody,
+and reaches `idlehands()`: `Machine::delay` is that halt. Every state the
+process passes through is the one it will pass through when the machine
+can leave it.
 
 **Four still refuse, and a scheduler is the whole of what they want:**
 `alarm`, `notify`, `noted`, `rendezvous`. With them go `RFNOTEG` (absent
