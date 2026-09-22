@@ -324,10 +324,14 @@ pub struct Proc {
     pub cpu: u32,
     /// `p->lastupdate` — when `cpu` was last decayed, in ticks.
     pub lastupdate: u64,
+    /// `p->trend` (`portdat.h:733`) — *"Rendez\* trend"*, the one `twakeup`
+    /// wakes when this process's timer fires. `tsleep` sets it and
+    /// `twakeup` clears it.
+    pub trend: Option<Rid>,
     /// `p->twhen` — when a `tsleep`'s timer fires, in the machine's
     /// nanoseconds. Plan 9 keeps a `Timer` on a per-machine list
     /// (`portclock.c`); one process at a time sleeping on a timer needs no
-    /// list, and `checkalarms`' counterpart walks the table.
+    /// list, and `timerintr`'s counterpart walks the table.
     pub twhen: Option<u64>,
 }
 
@@ -356,6 +360,7 @@ impl Proc {
             state: State::Running,
             priority: pri::NORMAL,
             r: None,
+            trend: None,
             sleep: Rendez::default(),
             waitr: Rendez::default(),
             basepri: pri::NORMAL,
@@ -421,6 +426,10 @@ pub struct Procs {
     /// that makes `m->readied` mean anything, and `updatecpu` for the
     /// branch that decays towards 1000 rather than 0.
     pub up: Option<Pid>,
+    /// How often `sleep` was called on a `Rendez` somebody else was already
+    /// on. Plan 9 prints and dumps the stack (`proc.c:826`); this kernel has
+    /// nowhere to print from, so it counts, and a test can read the count.
+    pub doublesleep: u32,
     /// `MACHP(0)->load`. **Nothing computes a load average yet**, so it is
     /// zero and `reprioritize` returns `basepri` — which is exactly what
     /// Plan 9 does when load is zero (`proc.c`, first line).
@@ -440,6 +449,7 @@ impl Procs {
             nrdy: 0,
             readied: None,
             up: Some(1),
+            doublesleep: 0,
             ticks: 0,
             load: 0,
         }
@@ -604,11 +614,13 @@ impl Procs {
     /// Rust counterpart is that this returns, dropping every borrow, and the
     /// caller suspends after it.
     pub fn sleep(&mut self, pid: Pid, r: Rid, happened: bool) -> bool {
-        if self.rendez(r).p.is_some() && self.rendez(r).p != Some(pid) {
-            // *"double sleep called from …"* (`proc.c:826`) — Plan 9 prints
-            // and dumps the stack. Two processes on one `Rendez` is a bug in
-            // the caller either way.
-            return false;
+        // *"double sleep called from %#p"* (`proc.c:826`) — and Plan 9
+        // **prints, dumps the stack, and carries on**: `r->p = up` happens
+        // either way. This declined to sleep instead, which is a branch Plan
+        // 9 does not have; a caller that double-sleeps has a bug, and hiding
+        // it is not this function's business.
+        if self.rendez(r).p.is_some_and(|q| q != pid) {
+            self.doublesleep += 1;
         }
         if happened {
             self.rendez_mut(r).p = None;
@@ -636,6 +648,8 @@ impl Procs {
         self.rendez_mut(r).p = None;
         if let Some(q) = self.tab.get_mut(&p) {
             q.r = None;
+            // *"if(up->tt) timerdel(up);"* on the way out of `tsleep`.
+            q.trend = None;
             q.twhen = None;
         }
         self.ready(p);
@@ -645,21 +659,44 @@ impl Procs {
     /// `tsleep` (`proc.c:910`) — `sleep`, with a timer that will `wakeup` for
     /// you. Plan 9 hangs a `Timer` on the machine's list (`timeradd`,
     /// `portclock.c`) whose function is `twakeup`; here the deadline is on
-    /// the process and [`Procs::checkalarms`] is what walks it, because one
+    /// the process and [`Procs::timerintr`] is what walks it, because one
     /// table is not a list worth keeping twice.
     pub fn tsleep(&mut self, pid: Pid, r: Rid, happened: bool, deadline: u64) -> bool {
+        // `up->trend = r; up->tfn = fn; timeradd(up);` (`proc.c:910`) —
+        // the timer is armed BEFORE the sleep, so a deadline already passed
+        // is not lost.
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.trend = Some(r);
+            p.twhen = Some(deadline);
+        }
         let slept = self.sleep(pid, r, happened);
-        if slept {
+        if !slept {
+            // *"if(up->tt) timerdel(up);"* — the condition happened, so the
+            // timer goes.
             if let Some(p) = self.tab.get_mut(&pid) {
-                p.twhen = Some(deadline);
+                p.trend = None;
+                p.twhen = None;
             }
         }
         slept
     }
 
-    /// `checkalarms` (`portclock.c:128`), for `tsleep`'s timers: whoever is
-    /// due is woken. `now` is the machine's nanoseconds.
-    pub fn checkalarms(&mut self, now: u64) {
+    /// `timerintr` (`portclock.c:172`) — **fire the timers that are due**.
+    /// Plan 9 walks a per-machine sorted list, `timers[machno]`, and calls
+    /// each due timer's function; for a `tsleep` that function is `twakeup`
+    /// (`proc.c:897`), which is `wakeup(p->trend)`.
+    ///
+    /// The list is a walk of the table here, because one table is not a
+    /// list worth keeping twice on a machine with one processor. `twhen` is
+    /// Plan 9's own field: `Proc` embeds a `Timer` (`portdat.h:732`, *"For
+    /// tsleep and real-time"*).
+    ///
+    /// **It was called `checkalarms`, which is a different function.**
+    /// `checkalarms` (`alarm.c:47`) walks `alarms.head` and wakes `alarmr`
+    /// so that `alarmkproc` can post notes for `procalarm` — nothing to do
+    /// with `tsleep`. Borrowing the name made a claim about Plan 9 that was
+    /// not true.
+    pub fn timerintr(&mut self, now: u64) {
         let due: Vec<Pid> = self
             .tab
             .values()
@@ -667,8 +704,10 @@ impl Procs {
             .map(|p| p.pid)
             .collect();
         for pid in due {
-            if let Some(r) = self.tab.get(&pid).and_then(|p| p.r) {
-                self.wakeup(r);
+            // `twakeup` (`proc.c:897`): `trend = p->trend; p->trend = 0;
+            // if(trend) wakeup(trend);`
+            if let Some(trend) = self.tab.get_mut(&pid).and_then(|p| p.trend.take()) {
+                self.wakeup(trend);
             }
         }
     }
@@ -800,6 +839,7 @@ impl Procs {
             state: State::Scheding,
             priority: pri::NORMAL,
             r: None,
+            trend: None,
             sleep: Rendez::default(),
             waitr: Rendez::default(),
             basepri: pri::NORMAL,
@@ -1044,6 +1084,19 @@ mod tests {
 
     // ---- the scheduler ----------------------------------------------------
 
+    /// **Two processes on one `Rendez` is counted, not refused.**
+    /// `proc.c:826` prints and dumps the stack, and `r->p = up` happens
+    /// anyway; declining to sleep was a branch Plan 9 does not have.
+    #[test]
+    fn a_double_sleep_is_noticed_and_not_prevented() {
+        let mut p = one();
+        let c = p.rfork(1, rf::PROC).unwrap();
+        let r = Rid(1, Which::Sleep);
+        assert!(p.sleep(1, r, false));
+        assert!(p.sleep(c, r, false), "it sleeps, as Plan 9's does");
+        assert_eq!(p.doublesleep, 1, "and it is noticed");
+    }
+
     /// `sleep` commits the process (`proc.c:815`): `r->p = up`, `up->state =
     /// Wakeme`, `up->r = r`. **And it checks the condition first** — *"if
     /// condition happened … never mind"* — so a `sleep` whose reason has
@@ -1122,7 +1175,7 @@ mod tests {
         assert_eq!(p.runproc(), None, "and then idlehands");
     }
 
-    /// `tsleep`'s timer: `checkalarms` wakes whoever is due, and nobody
+    /// `tsleep`'s timer: `timerintr` wakes whoever is due, and nobody
     /// else. Plan 9 hangs a `Timer` per sleeper; the deadline is on the
     /// process here, and this is the walk.
     #[test]
@@ -1132,9 +1185,9 @@ mod tests {
         assert!(p.tsleep(1, r, false, 500));
         assert_eq!(p.nextalarm(), Some(500));
 
-        p.checkalarms(499);
+        p.timerintr(499);
         assert_eq!(p.state(1), State::Wakeme, "not yet");
-        p.checkalarms(500);
+        p.timerintr(500);
         assert_eq!(p.state(1), State::Ready, "due");
         assert_eq!(p.nextalarm(), None);
     }

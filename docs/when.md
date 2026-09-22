@@ -25,7 +25,7 @@ Measured 2026-09-20.
 | `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. `boot` names the host owner by writing `#c/hostowner` (`bootauth.c:56`), so `$user` is `glenda` and not the role's own name |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators |
 | `namec.rs` | name → channel, with the mount check at every component; all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk |
-| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `checkalarms` — all `port/proc.c`'s |
+| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s |
 | `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 28 calls, `exec`, and `unionread` |
@@ -66,7 +66,7 @@ Answered: `rfork` `exec` `exits` `await` `errstr` `bind` `mount` `unmount`
 **`sleep` is a real `tsleep`** (P6, 2026-09-21). `n <= 0` is `yield()`,
 and yielding to nobody is returning. `n > 0` is `tsleep(&up->sleep,
 return0, 0, n)`: the process commits to its own `Rendez`, becomes
-`Wakeme` with a deadline, and `checkalarms` is what ends it — then
+`Wakeme` with a deadline, and `timerintr` is what ends it — then
 `sched`'s tail takes it off the run queue and marks it `Running`. The
 floor is `TK2MS(1)`, 10ms at the PC's `HZ`.
 
@@ -77,8 +77,15 @@ per process, where one poll is the jump and a future that comes back
 `Pending` is a stack suspended inside a host call. `Kernel::schedinit` is
 `schedinit` (`proc.c:67`), the loop every `gotolabel(&m->sched)` lands in.
 
+**`updatecpu` and `reprioritize` are present and inert** (RESEARCH §15):
+`Procs.ticks` is never incremented, because `m->ticks++` is the first line
+of `hzclock` and there is no clock interrupt until preemption. So every
+process runs at `PriNormal` and the order is `m->readied` then the queues.
+`reprioritize` returning `basepri` is Plan 9's own behaviour when load is
+zero; `updatecpu` never decaying is not.
+
 **So processes are concurrent.** A pipeline is two of them with the shell
-asleep in `pwait` between; `sleep` leaves the processor and `checkalarms`
+asleep in `pwait` between; `sleep` leaves the processor and `timerintr`
 brings it back; `exec` gives a process a new image and unwinds the old
 one's frames, which is what `exec` means. `/proc/1/status` reads `Wakeme`
 while a command runs, because that is what `init` is doing.

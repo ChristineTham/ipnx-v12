@@ -3621,3 +3621,64 @@ syscall. The kernel half suspends only where an `await` is written, which is
 * the borrow rule: **`up->nlocks`**, spelled as no borrow across an await;
 * preemption: **yes, and only of the guest** — the kernel is not
   preemptible, and the machine's yield lands exactly where Plan 9's does.
+
+## §15 — The scheduler's deviation audit (2026-09-22)
+
+Christine, on the switch landing: *"why are there differences from plan 9?"*
+
+Every difference in P6, found by reading my own code against `port/proc.c`
+rather than by remembering what I meant to write. **Two were inventions and
+are already undone**; the rest are listed so she can strike any of them.
+
+### Undone, because they were mine and not Plan 9's
+
+| | |
+|---|---|
+| **`sleep` declined to sleep on an occupied `Rendez`** | `proc.c:826` prints *"double sleep called from …"*, dumps the stack, and **carries on**: `r->p = up` happens either way. I had written a branch that returned without sleeping. It now counts (`Procs.doublesleep`) where Plan 9 prints, because this kernel has nowhere to print from, and a test reads the count |
+| **`checkalarms` was the wrong name for what it did** | `checkalarms` (`alarm.c:47`) walks `alarms.head` and wakes `alarmr` so `alarmkproc` can post notes for `procalarm`. **Nothing to do with `tsleep`.** Firing a due timer is `timerintr` (`portclock.c:172`), whose function for a `tsleep` is `twakeup` (`proc.c:897`) — `wakeup(p->trend)`. Renamed, and `Proc.trend` (`portdat.h:733`) exists now, set by `tsleep` and cleared by `twakeup`, where the code had been reaching for `p->r` instead |
+
+### Cannot exist here — the narrow case, stated at each point
+
+No approval needed by the standing rule, but each is a difference and each is
+named in the code.
+
+| | |
+|---|---|
+| no `Lock` on `Rendez`, no `splhi`/`spllo`, no `ilock` | one processor, one thread, no interrupts. `sleep` and `wakeup` cannot interleave |
+| no `procsave`/`procrestore` | no FP state the kernel owns — the fiber holds it |
+| no `mmuswitch`, `flushmmu` | no page tables. A process is a `Store` |
+| `runproc` without `p->mp`, `p->wired`, `MACHP(i)` | affinity and load balancing across processors, of which there is one |
+| `Label` is a fiber, not `{ulong sp; ulong pc;}` (`pc/dat.h:51`) | the machine's business either way, which is the point of it being in `pc/` |
+| **`Left::Exited`** | a Plan 9 process leaves by a trap or a syscall and nothing else; `_start` there ends in `exits`. A wasm export can simply return, and a machine must say so or leave a process on the queue that will never run |
+| **`schedinit` returns** | Plan 9's *"never returns"*, because its clock is an interrupt and there is always another. With no runnable process and no timer, nothing here can ever make one runnable |
+
+### Forced by the substrate, and these are the ones worth striking
+
+| | |
+|---|---|
+| **`Ret::Sched`** — the call answers *"leave"* where `sleep` does `gotolabel(&m->sched)` | Rust cannot jump out of a call. The effect is Plan 9's: the process's frames stay on its own stack (the fiber), and `sleep` releases everything first — which is literally what `proc.c:860` does, `unlock(&up->rlock); unlock(r);` on the line before it goes |
+| **`procrfork`** instead of `rfork(RFPROC)` returning twice | RESEARCH §5.2, and it predates P6. A fork duplicates a stack, and no fiber's can be copied |
+| **`rfork`'s `sched()` is in the host, not the kernel** | `sysrfork` ends `ready(p); sched();` (`sysproc.c`). The `ready` is in `Call::Rfork`; the `sched` is a yield in the `procrfork` import, because the child runs its few instructions on the parent's own instance first and the parent cannot leave until it has |
+| **`Rid(pid, which)`** instead of `Rendez*` | Plan 9's `Rendez` are fields on their owner — `&up->sleep` (`portdat.h:720`), `&up->waitr` (`:683`) — and Rust cannot pass that address |
+| **`exits` takes the process off the run queue** | Plan 9 never needs to: a process that exits is `up`, which `runproc` already dequeued. A `procrfork` child can be readied and end before the scheduler enters it |
+| **the host ends a child whose `__childstart` returns** | our own libc already calls `exits("child returned")`; the host repeats it for a module that exports its own `__childstart`, so a raw guest cannot leave a process nothing can enter |
+| **`unsafe impl Send for Guest`** | wasmtime asks because a suspended fiber *may in general* resume on another thread. Nothing here is sent |
+| a timer is a field on the `Proc`, walked | **the field is Plan 9's** — `Proc` embeds a `Timer` (`portdat.h:732`, *"For tsleep and real-time"*). What differs is the list: Plan 9 keeps a sorted `timers[machno]` and `timerintr` walks it; one table is not a list worth keeping twice here |
+| `anyready()` is `nrdy > 0`, not `runvec` | the same answer without the bitmask. `anyhigher()` needs the bitmask and is not built — it belongs to preemption, which is next |
+
+### Present and inert, which is worth saying plainly
+
+**`updatecpu` and `reprioritize` do nothing yet.** Both are written from
+`port/proc.c` and both are correct, and neither has anything to run on:
+
+* `Procs.ticks` is never incremented. Plan 9's `m->ticks++` is the first line
+  of `hzclock` (`portclock.c:136`), and there is no clock interrupt here
+  until preemption. So `updatecpu` computes the same `t` every time, `n` is
+  zero after the first call, and `p->cpu` never decays.
+* `load` is zero, so `reprioritize` returns `basepri` — **which is Plan 9's
+  own first branch**, so that half is not an artefact.
+
+The effect is that every process runs at `PriNormal` and the order is
+`m->readied` then the queues, which is Plan 9's behaviour on an idle machine
+and not its behaviour under load. It will start working when there is a
+clock, and the clock is the next thing P6 builds.

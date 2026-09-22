@@ -388,7 +388,7 @@ mod userspace {
     }
 
     /// `sleep` leaves the processor: the process is `Wakeme` with a
-    /// deadline and `checkalarms` is what ends it. With nothing else to run
+    /// deadline and `timerintr` is what ends it. With nothing else to run
     /// `schedinit` reaches `idlehands()`, and the shell comes back.
     #[test]
     fn a_sleeping_process_comes_back() {

@@ -247,7 +247,7 @@ impl Kernel {
                 };
                 self.machine.delay(when.saturating_sub(now) / 1_000_000);
                 let now = self.machine.todget().nsec;
-                self.procs.borrow_mut().checkalarms(now.max(when));
+                self.procs.borrow_mut().timerintr(now.max(when));
                 continue;
             };
             // `sched`'s tail (`proc.c:157`): `up = p; up->state = Running;`
@@ -1500,7 +1500,7 @@ mod syscalls {
 
     /// **`schedinit` is the loop** (`proc.c:67`), and this is the whole of
     /// it: a process asleep, nothing else runnable, so `idlehands()` — the
-    /// machine waits until the deadline, `checkalarms` readies the sleeper,
+    /// machine waits until the deadline, `timerintr` readies the sleeper,
     /// and `sched` enters it.
     #[test]
     fn schedinit_idles_until_a_sleeper_is_due_and_then_enters_it() {
