@@ -13,7 +13,7 @@ Measured 2026-09-20.
 | `dev.rs` | the device table, Plan 9's `struct Dev`; ten letters (`/ \| s M p d e c ¤ 9`); `devdir`, `devdirread`, `cclone` and the permission check every device shares |
 | `ns.rs` | the namespace, keyed by the identity of the channel mounted upon — and a union is a LIST: `cmount` puts the directory itself in first, and copies a union when one is bound onto a directory |
 | `devroot.rs` | `#/` — `#/` and `boot` from `rootdir[]`, plus the ten empty directories `rootreset` adds for a first process to bind onto; every write is `Egreg` |
-| `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed |
+| `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed. Each end is a `Queue` of blocks (`qio.c`): a read of an empty pipe **sleeps** on `q->rr` until a write wakes it, and the last close of an end hangs up the other (`pipeclose`, `devpipe.c:247`), which is end of file once what was queued is read |
 | `devproc.rs` | `#p` — the process table as files: **nine of `procdir[]`'s eighteen** (`devproc.c:79`), and the table says why each of the other nine is absent. `ns` prints the bind lines that rebuild the namespace — paths, `int2flag`'s letters, and `mount <flag> <server> <on> <spec>` with `srvname` |
 | `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user |
 | `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, clunk. Reached through the table's dispatcher, which takes it out while it runs |
@@ -25,12 +25,12 @@ Measured 2026-09-20.
 | `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. `boot` names the host owner by writing `#c/hostowner` (`bootauth.c:56`), so `$user` is `glenda` and not the role's own name |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators |
 | `namec.rs` | name → channel, with the mount check at every component; all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk |
-| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s |
+| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s. **And the clock** (2026-09-22): `Mach` (`pc/dat.h:206`, the fields `port/` reads), `timersinit`, `hzclock`, `accounttime`, `hzsched`, `rebalance`, `anyhigher`, and `sched`'s tail with `m->schedticks`. `exits` does `closefgrp` (`proc.c:1160`), queuing what reaches a device on `clunkq` (`chan.c:517`) |
 | `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 28 calls, `exec`, and `unionread` |
 
-165 kernel tests, and 26 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and nineteen that boot the whole system.
+179 kernel tests, and 28 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and twenty-one that boot the whole system.
 
 ## The host — `hosts/ipnx`, three files
 
@@ -77,20 +77,38 @@ per process, where one poll is the jump and a future that comes back
 `Pending` is a stack suspended inside a host call. `Kernel::schedinit` is
 `schedinit` (`proc.c:67`), the loop every `gotolabel(&m->sched)` lands in.
 
-**This kernel has no clock tick, and four things are inert because of it**
-(RESEARCH §15.1). Plan 9's clock interrupt calls `hzclock`
-(`portclock.c:136`, from `timerintr`, `:196`) HZ times a second, and
-`hzclock` does four things. Nothing here calls it, so none of them happens:
+**The clock is built** (2026-09-22; RESEARCH §15.1, §15.2). The machine
+raises an interrupt HZ times a second — wasmtime's epoch, moved on by a
+thread, with each store's callback as `clockintr` — and the kernel's
+`timerintr` (`portclock.c:169`) fires what is due and calls `hzclock`
+(`:136`) once however late it is. `hzclock` does what Plan 9's does:
 
-| `hzclock` does | so here |
+| `hzclock` does | here |
 |---|---|
-| `m->ticks++` | `updatecpu` never decays `p->cpu` |
-| `accounttime()` (`proc.c:1615`) — `p->time[p->insyscall]++` and `m->load` | `cputime`'s `TUser`/`TSys` are zero, and `load` is zero, so `reprioritize` returns `basepri` |
-| `checkalarms()` | `alarm` has nothing to fire it |
-| `hzsched()` | nothing is preempted |
+| `m->ticks++` | `updatecpu` decays `p->cpu`, and `rebalance` runs once a second |
+| `accounttime()` (`proc.c:1615`) | the running process is charged the tick; `m->load` and `m->perf` are the decaying averages `reprioritize` and `/dev/sysstat` read |
+| `checkalarms()` | **not yet** — it wakes `alarmkproc`, whose one act is `postnote`, so it arrives with notes |
+| `hzsched()` | a process past its 100ms quantum with something else ready, or with something higher ready, is marked `delaysched`, and the interrupt's tail `sched()`s it (`pc/trap.c:438`) |
 
-Every process therefore runs at `PriNormal`, ordered by `m->readied` and then
-the queues — Plan 9's behaviour on an idle machine, not under load.
+**So a process in a tight loop does not stop the system** — P6's second
+acceptance test, and a test runs it: `{while(~ 1 1) x=1} &`, then the shell
+kills it and carries on. The idle loop waits a tick at a time, as
+`idlehands()` waits for the clock.
+
+Where it differs, each stated in the code: a tick only lands in guest code,
+never inside a call, so `TSys` is never charged (`insyscall` would always be
+0); and while a `procrfork` child is on its parent's frames the switch waits
+for it, as Plan 9's `sched` waits with `delaysched` counting (`proc.c:145`).
+
+**Pipes block** (2026-09-22). They did not: a read of an empty pipe answered
+0, which is end of file, and `pipeclose` did nothing. Pipelines worked only
+because `rfork`'s `sched` ran the writer first, and preemption broke that
+ordering one run in six. Now `qread` sleeps the reader on `q->rr`, the call
+answers `Sched` so the machine leaves, and the read is made again when the
+process is entered. **Exit closes the descriptors**, which it also did not.
+There is no flow control: `qbwrite` queues and THEN sleeps (`qio.c:1250`),
+and a call made again would queue twice, so a pipe holds whatever is
+written to it.
 
 **So processes are concurrent.** A pipeline is two of them with the shell
 asleep in `pwait` between; `sleep` leaves the processor and `timerintr`
@@ -170,10 +188,12 @@ process's start from it, so `/dev/cputime`'s `TReal` is wall time.
 
 No surface.
 
-`/dev/sysstat`'s interrupt, page-fault and tlb counters are zero because
-this machine has none of those things. Its load counter and `cputime`'s
-`TUser`/`TSys` are zero for a different reason: they are `accounttime()`'s,
-and nothing calls `hzclock` — the missing clock tick above.
+`/dev/sysstat` is Plan 9's ten numbers (`devcons.c:873`) read from `Mach`:
+context switches, interrupts, syscalls, load, and the idle and interrupt
+percentages. It was eight, and the two it counted were fields of `#c` that
+only a test ever set, so the running system read zeros. Page faults and the
+TLB have no counterpart here and stay zero; `cputime`'s `TSys` is zero
+because a tick never lands inside a call.
 
 **`pread` with an explicit offset is not reliable**, and `date` is the only
 thing that does it: `nsec(2)` is `pread(open("/dev/bintime"), b, 8, 0)`,
@@ -230,7 +250,7 @@ exactly as `boot.c:171` does. `ls /` shows both halves because `unionread`
 reads every element. A file written under `/tmp` is a file on the host, so it
 is still there after the next boot.
 
-Twenty-six tests in `hosts/ipnx` — sixteen typing at a scripted console
+Twenty-eight tests in `hosts/ipnx` — eighteen typing at a scripted console
 after a full boot, three booting twice into a filesystem of their own, five
 driving a guest module directly, and two on the machine: that `Guest` is
 `Send` with no `unsafe impl`, and that a thread nobody entered has no kernel. They need

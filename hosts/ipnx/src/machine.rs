@@ -28,8 +28,13 @@ use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-use std::time::{SystemTime, UNIX_EPOCH};
-use wasmtime::{Caller, Engine, Instance, Linker, Memory, Module, Store, TypedFunc};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use wasmtime::{
+    Caller, Engine, Instance, Linker, Memory, Module, Store, StoreContextMut, TypedFunc,
+    UpdateDeadline,
+};
 
 /// The error an `exits` or a completed `exec` raises to unwind the process it
 /// was running. It is not a fault, and [`Wasm::touser`] takes it as the
@@ -56,6 +61,79 @@ pub struct Wasm {
     /// The future owns its `Store`, so nothing here borrows anything: a
     /// process is a self-contained thing the scheduler can leave alone.
     procs: RefCell<HashMap<Pid, Fiber>>,
+    /// The clock: what raises this machine's interrupt. Stopped when the
+    /// machine goes.
+    _clock: Clock,
+}
+
+/// **The clock** — this machine's counterpart of the i8253 or the local
+/// APIC timer (`pc/i8253.c`, `pc/apic.c:376`): something outside the
+/// processor that raises an interrupt HZ times a second.
+///
+/// The interrupt is wasmtime's epoch. A thread moves the engine's epoch on
+/// every `1000/HZ` ms; each store's deadline is one epoch ahead, so the next
+/// epoch check compiled into guest code — at a loop header or a function
+/// entry — calls [`clockintr`]. **The check is only ever in guest code**,
+/// never in a host function, so the interrupt only lands in user mode and
+/// the kernel is never entered twice. Plan 9 takes clock interrupts in its
+/// own kernel too, and `sched()`s at their tail when no ilock is held
+/// (`pc/trap.c:438`, which has no `user` test); this kernel runs each call
+/// to its end, so the tick waits for the call to finish.
+///
+/// It is the one thread this machine has, and it touches nothing but the
+/// epoch counter — which is atomic, and is all an interrupt line is.
+struct Clock {
+    stop: Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Clock {
+    fn start(engine: Engine) -> Clock {
+        let stop = Arc::new(AtomicBool::new(false));
+        let halt = stop.clone();
+        let period = Duration::from_millis(1000 / ipnx_kernel::proc::HZ);
+        let thread = std::thread::spawn(move || {
+            while !halt.load(Ordering::Relaxed) {
+                std::thread::sleep(period);
+                engine.increment_epoch();
+            }
+        });
+        Clock { stop, thread: Some(thread) }
+    }
+}
+
+impl Drop for Clock {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Relaxed);
+        if let Some(t) = self.thread.take() {
+            let _ = t.join();
+        }
+    }
+}
+
+/// **`clockintr`** — the machine's clock interrupt handler, as each
+/// architecture has one (`kw/clock.c:46`, `pc/i8253.c:262`): call the
+/// portable `timerintr`, then do what `trap()`'s tail does with its answer
+/// (`pc/trap.c:438`) — `sched()` if `up->delaysched`, which here is to
+/// yield the fiber, so `gotolabel` returns and the scheduler finds the
+/// process still `Running` and puts it back on the queue.
+///
+/// **Not while a `procrfork` child is on the parent's frames.** The child
+/// runs there only as far as its `exec` and cannot be entered anywhere else
+/// until then, so yielding would leave the parent's fiber with the child
+/// half-run on it and the child on the run queue with nothing to enter. The
+/// tick is still taken; the `sched()` waits, `delaysched` stays set, and the
+/// first interrupt after the child is gone acts on it — as Plan 9's `sched`
+/// returns with `delaysched` still counting while the switch cannot happen
+/// (`proc.c:145`).
+///
+/// Either way the next interrupt is one epoch on.
+fn clockintr(c: StoreContextMut<'_, Guest>) -> wasmtime::Result<UpdateDeadline> {
+    // Sound for the same reason [`call`] is: this runs inside a poll, inside
+    // `gotolabel`, where the kernel is entered and nothing else holds it.
+    let sched = unsafe { (*kernel()).timerintr() };
+    let borrowed = c.data().pid != c.data().up;
+    Ok(if sched && !borrowed { UpdateDeadline::Yield(1) } else { UpdateDeadline::Continue(1) })
 }
 
 /// A process, as this machine holds one.
@@ -111,8 +189,8 @@ fn noop_waker() -> Waker {
     unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
 }
 
-/// What the store carries while a process runs: **which process it is, and
-/// nothing else**. Plan 9 keeps that in `up`.
+/// What the store carries while a process runs: **which process it is**.
+/// Plan 9 keeps that in `up`.
 ///
 /// The kernel is not here. It lives in [`KERNEL`], one per thread, which is
 /// what makes `Guest` `Send` by itself: a pid is a number, and wasmtime may
@@ -125,6 +203,10 @@ pub struct Guest {
     /// store: during a `procrfork` the child runs on this instance, and every
     /// call it makes is the child's.
     pid: Pid,
+    /// The process whose fiber this is — the one `gotolabel` enters, and
+    /// the kernel's `up` while it runs. It differs from `pid` only while a
+    /// `procrfork` child is on these frames.
+    up: Pid,
 }
 
 thread_local! {
@@ -267,10 +349,13 @@ impl Wasm {
         // which is `setlabel(&up->sched)` and `gotolabel(&m->sched)`
         // (`pc/l.s:1000`, `:992`) in the one arrangement this machine has.
         config.async_support(true);
+        // **The interrupt line** — see [`Clock`].
+        config.epoch_interruption(true);
         let engine = Engine::new(&config).map_err(|e| e.to_string())?;
         let mut linker: Linker<Guest> = Linker::new(&engine);
         imports(&mut linker).map_err(|e| e.to_string())?;
-        Ok(Wasm { engine, linker, procs: RefCell::new(HashMap::new()) })
+        let clock = Clock::start(engine.clone());
+        Ok(Wasm { engine, linker, procs: RefCell::new(HashMap::new()), _clock: clock })
     }
 }
 
@@ -365,7 +450,10 @@ impl Wasm {
         args: Vec<String>,
     ) -> Result<Pin<Box<dyn Future<Output = Result<(), wasmtime::Error>> + Send>>, String> {
         let module = Module::new(&self.engine, &image).map_err(|e| e.to_string())?;
-        let mut store = Store::new(&self.engine, Guest { pid });
+        let mut store = Store::new(&self.engine, Guest { pid, up: pid });
+        // Interrupts on: the next epoch calls `clockintr`.
+        store.set_epoch_deadline(1);
+        store.epoch_deadline_callback(clockintr);
         let linker = self.linker.clone();
         Ok(Box::pin(async move {
             let instance = linker.instantiate_async(&mut store, &module).await?;
@@ -446,18 +534,26 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         or_fail(call(&mut c, Call::Close { fd }), |_| 0)
     })?;
 
-    l.func_wrap(
+    // A read can sleep — `qread` on an empty pipe (`qio.c:866`) — and the
+    // kernel then answers `Sched`: leave, and make the read again when the
+    // process is entered, which is the device finding what was written.
+    l.func_wrap_async(
         "sys",
         "pread",
-        |mut c: Caller<'_, Guest>, fd: i32, p: i32, n: i32, off: i64| {
-            let d = match call(&mut c, Call::Pread { fd, n: n.max(0) as usize, off }) {
-                Ok(Ret::Data(d)) => d,
-                _ => return -1,
-            };
-            match write(&mut c, p, &d) {
-                Ok(()) => d.len() as i32,
-                Err(_) => -1,
-            }
+        |mut c: Caller<'_, Guest>, (fd, p, n, off): (i32, i32, i32, i64)| {
+            Box::new(async move {
+                let d = loop {
+                    match call(&mut c, Call::Pread { fd, n: n.max(0) as usize, off }) {
+                        Ok(Ret::Data(d)) => break d,
+                        Ok(Ret::Sched) => Sched::new().await,
+                        _ => return -1,
+                    }
+                };
+                match write(&mut c, p, &d) {
+                    Ok(()) => d.len() as i32,
+                    Err(_) => -1,
+                }
+            })
         },
     )?;
 

@@ -223,7 +223,7 @@ pub fn boot(
 ) -> Result<Kernel, String> {
     let m = machine::Wasm::new()?;
     let mut k = Kernel::new(root, Rc::new(m))?;
-    k.tab.add(Box::new(PipeDev::new()));
+    k.tab.add(Box::new(PipeDev::new(k.up.clone())));
     // `#s`'s table is shared with `#p`, because `srvname` (`devsrv.c`) is
     // what `#p/<n>/ns` calls to name the server behind a mount.
     let srv = SrvDev::new(k.up.clone());

@@ -233,16 +233,23 @@ pub struct Rendez {
 }
 
 /// **Where a `Rendez` lives.** Plan 9's are fields on the things that own
-/// them — `&up->sleep` is *"place for syssleep/debug"* (`portdat.h:720`) and
-/// `&up->waitr` is *"Place to hang out in wait"* (`:683`) — and `sleep` takes
-/// the address of one. A Rust kernel cannot pass that address around, so a
-/// `Rendez` is named by whose it is and which it is, which is the same
-/// information.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Rid(pub Pid, pub Which);
+/// them — `&up->sleep` is *"place for syssleep/debug"* (`portdat.h:720`),
+/// `&up->waitr` is *"Place to hang out in wait"* (`:683`), `&q->rr` is a
+/// queue's reader's (`qio.c:866`) — and `sleep` takes the address of one. A
+/// Rust kernel cannot pass that address around, so a `Rendez` is named by
+/// whose it is and which it is, which is the same information.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Rid {
+    /// One of a process's own two.
+    Proc(Pid, Which),
+    /// `&q->rr` — where `qread` waits for data (`qwait`, `qio.c:866`) — of
+    /// a device's queue, named by the device, its instance, and which of
+    /// its queues. A pipe has two (`devpipe.c:18`).
+    Rr(crate::dev::DevId, u32, usize),
+}
 
 /// Which of a process's two `Rendez` (`portdat.h:683`, `:720`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Which {
     /// `up->sleep` — `syssleep` waits here.
     Sleep,
@@ -259,8 +266,11 @@ pub mod pri {
     pub const NRQ: usize = NPRIQ + 2;
     /// `PriNormal` — *"base priority for normal processes"*.
     pub const NORMAL: usize = 10;
-    /// `PriKproc` and `PriRoot` — both 13 there.
+    /// `PriKproc` — 13.
     pub const KPROC: usize = 13;
+    /// `PriRoot` — also 13, and a name of its own: `sysexec` gives it to
+    /// a process whose image came from `#/` (`sysproc.c:567`).
+    pub const ROOT: usize = 13;
 }
 
 #[derive(Clone)]
@@ -333,6 +343,15 @@ pub struct Proc {
     /// (`portclock.c`); one process at a time sleeping on a timer needs no
     /// list, and `timerintr`'s counterpart walks the table.
     pub twhen: Option<u64>,
+    /// `p->delaysched` — *"sched was delayed"*. `hzsched` sets it when the
+    /// quantum is over or something higher is ready (`proc.c:213`), and the
+    /// clock interrupt's tail `sched()`s because of it (`pc/trap.c:438`);
+    /// `sched` zeroes it (`proc.c:154`).
+    ///
+    /// Plan 9's other reason — a lock held when `sched` was called
+    /// (`proc.c:145`) — cannot arise: nothing here holds a lock across a
+    /// call.
+    pub delaysched: u32,
 }
 
 impl Proc {
@@ -367,6 +386,7 @@ impl Proc {
             cpu: 0,
             lastupdate: 0,
             twhen: None,
+            delaysched: 0,
         }
     }
 }
@@ -401,6 +421,86 @@ impl Up {
     }
 }
 
+/// `HZ` — *"clock frequency"*, 100 (`pc/mem.h:31`). Machine-dependent in
+/// Plan 9 by where it is written, and 100 in every architecture directory of
+/// `plan9/` that defines it (`kw`, `loongson`, `mtx`, `pc` among them). The
+/// portable code reads it, and so does a machine choosing how often to
+/// interrupt.
+pub const HZ: u64 = 100;
+
+/// `TK2MS(x)` — *"((x)*(1000/HZ))"* (`port/portfns.h`), ticks to
+/// milliseconds.
+pub const fn tk2ms(t: u64) -> u64 {
+    t * (1000 / HZ)
+}
+
+/// `Scaling` (`proc.c:36`) — `updatecpu`'s fixed point on ticks.
+const SCALING: u64 = 2;
+
+/// `schedgain` (`proc.c:10`) — *"units in seconds"*: how long `updatecpu`'s
+/// average remembers.
+const SCHEDGAIN: u64 = 30;
+
+/// **`struct Mach`** (`pc/dat.h:206`) — the processor, as the portable code
+/// sees it. Only the fields `port/` reads are here; the rest are the PC's
+/// (`pdb`, `tss`, `gdt`, `mtrr…`) and describe nothing on a machine without
+/// them. There is one processor (§14.1), so this is `m` and `MACHP(0)`
+/// both.
+#[derive(Default)]
+pub struct Mach {
+    /// `m->ticks` — *"of the clock since boot time"*. `hzclock` counts it
+    /// and nothing else does.
+    pub ticks: u64,
+    /// `m->readied` — *"for runproc"*: the process `ready` just queued,
+    /// which `runproc` takes first (*"group scheduling"*, `proc.c:428`)
+    /// until `hzsched` clears it.
+    pub readied: Option<Pid>,
+    /// `m->schedticks` — *"next forced context switch"*. `sched` sets it a
+    /// tenth of a second ahead for a process it did not take from
+    /// `readied` (`proc.c:175`); `hzsched` compares against it.
+    pub schedticks: u64,
+    /// `m->cs`, `m->intr`, `m->syscall` — counted by `sched`, `trap` and
+    /// `syscall`, reported by `/dev/sysstat` (`devcons.c:873`) and zeroed
+    /// by a write of it (`:1082`).
+    pub cs: u64,
+    pub intr: u64,
+    pub syscall: u64,
+    /// `m->load` — `accounttime`'s decaying average of how many processes
+    /// wanted the processor, times 1000 (`proc.c:1657`).
+    pub load: u64,
+    /// `m->perf` (`portdat.h:992`).
+    pub perf: Perf,
+    /// The HZ clock's own timer — *"T->tf == nil means the HZ clock for this
+    /// processor"* (`timersinit`, `portclock.c:227`) — as when it next
+    /// fires, in the machine's nanoseconds. `None` until `timersinit`.
+    pub hz: Option<u64>,
+    /// `nrun` — `accounttime`'s static (`proc.c:1619`): ticks on which
+    /// something was running, since the last load computation.
+    nrun: u64,
+    /// `balancetime` (`proc.c:468`) — when `rebalance` last ran, in ticks.
+    balancetime: u64,
+}
+
+/// `struct Perf` (`portdat.h:992`), in the machine's fast ticks, which are
+/// `todget`'s nanoseconds here.
+#[derive(Default)]
+pub struct Perf {
+    /// *"time of last interrupt"*.
+    pub intrts: u64,
+    /// *"time since last clock tick in interrupt handlers"*.
+    pub inintr: u64,
+    /// *"avg time per clock tick in interrupt handlers"*.
+    pub avg_inintr: u64,
+    /// *"time since last clock tick in idle loop"*.
+    pub inidle: u64,
+    /// *"avg time per clock tick in idle loop"*.
+    pub avg_inidle: u64,
+    /// *"value of perfticks() at last clock tick"*.
+    pub last: u64,
+    /// *"perfticks() per clock tick"*.
+    pub period: u64,
+}
+
 /// The process table.
 pub struct Procs {
     tab: HashMap<Pid, Proc>,
@@ -413,14 +513,10 @@ pub struct Procs {
     runq: Vec<Vec<Pid>>,
     /// `nrdy` (`proc.c:41`) — how many are on the queues.
     nrdy: usize,
-    /// `m->readied` — *"group scheduling"* (`ready`, `proc.c:428`). The
-    /// process just made ready runs next if nothing higher wants to, which
-    /// is what makes a `wakeup` hand the processor over rather than merely
-    /// queue somebody.
-    readied: Option<Pid>,
-    /// `MACHP(0)->ticks` — what `updatecpu` measures against. The machine
-    /// has the clock; this is the count the scheduler sees.
-    pub ticks: u64,
+    /// `m` — the processor. Plan 9 reaches it through a per-machine
+    /// register; the scheduler is what reads and writes it, so it lives with
+    /// the table the scheduler walks.
+    pub m: Mach,
     /// `up` — **the process running now** (`portdat.h`, a global there and
     /// set by `sched()`: `up = p`). `ready` needs it for the one condition
     /// that makes `m->readied` mean anything, and `updatecpu` for the
@@ -430,10 +526,20 @@ pub struct Procs {
     /// on. Plan 9 prints and dumps the stack (`proc.c:826`); this kernel has
     /// nowhere to print from, so it counts, and a test can read the count.
     pub doublesleep: u32,
-    /// `MACHP(0)->load`. **Nothing computes a load average yet**, so it is
-    /// zero and `reprioritize` returns `basepri` — which is exactly what
-    /// Plan 9 does when load is zero (`proc.c`, first line).
-    load: u32,
+    /// The `Rendez` that are fields of a device's queues rather than of a
+    /// process — `q->rr`. They are kept here because `sleep` and `wakeup`
+    /// must reach them, and a device is not somewhere this table can see.
+    rr: HashMap<Rid, Rendez>,
+    /// **`clunkq`** (`chan.c:517`) — channels whose last reference has
+    /// gone, waiting to be closed by someone who can reach `devtab`.
+    ///
+    /// Plan 9 queues a channel here with `ccloseq` when the closer must not
+    /// close it itself, and `closeproc` does the `cclose`. Here that is
+    /// `exits`, which runs where `devtab` cannot be reached — from
+    /// `/proc/n/ctl`'s kill inside a device — so every channel `closefgrp`
+    /// lets go of comes here, and the kernel closes them on its way out of
+    /// the call.
+    pub clunkq: Vec<Chan>,
 }
 
 impl Procs {
@@ -447,11 +553,11 @@ impl Procs {
             next: 2,
             runq: (0..pri::NRQ).map(|_| Vec::new()).collect(),
             nrdy: 0,
-            readied: None,
+            m: Mach::default(),
             up: Some(1),
             doublesleep: 0,
-            ticks: 0,
-            load: 0,
+            rr: HashMap::new(),
+            clunkq: Vec::new(),
         }
     }
 
@@ -509,12 +615,9 @@ impl Procs {
     /// process has had. `D = schedgain*HZ*Scaling`, and the running process
     /// decays towards 1000 while every other decays towards 0.
     /// `running` is Plan 9's `p != up` (`updatecpu`), inverted.
-    fn updatecpu(&mut self, pid: Pid, running: bool) {
-        const SCHEDGAIN: u64 = 30;
-        const HZ: u64 = 100;
-        const SCALING: u64 = 2;
+    pub(crate) fn updatecpu(&mut self, pid: Pid, running: bool) {
         let d = (SCHEDGAIN * HZ * SCALING) as u32;
-        let t = (self.ticks * SCALING + SCALING / 2) as u32;
+        let t = (self.m.ticks * SCALING + SCALING / 2) as u32;
         let Some(p) = self.tab.get_mut(&pid) else { return };
         let n = t.saturating_sub(p.lastupdate as u32);
         p.lastupdate = t as u64;
@@ -531,15 +634,14 @@ impl Procs {
         };
     }
 
-    /// `reprioritize` (`proc.c`). **Load zero is `basepri`**, which is the
-    /// function's own first branch — and load is zero here because nothing
-    /// computes a load average yet.
+    /// `reprioritize` (`proc.c:318`). Load zero is `basepri`, the function's
+    /// own first branch; `conf.nmach` is 1.
     fn reprioritize(&self, pid: Pid) -> usize {
         let Some(p) = self.tab.get(&pid) else { return pri::NORMAL };
-        if self.load == 0 {
+        if self.m.load == 0 {
             return p.basepri;
         }
-        let fairshare = (1000 * 1000) / self.load as usize;
+        let fairshare = (1000 * 1000) / self.m.load as usize;
         let n = (p.cpu as usize).max(1);
         ((fairshare + n / 2) / n).min(p.basepri)
     }
@@ -557,7 +659,7 @@ impl Procs {
         // before never runs. A pipeline's first stage waits for the shell
         // that made it to exit.
         if self.up != Some(pid) {
-            self.readied = Some(pid);
+            self.m.readied = Some(pid);
         }
         self.updatecpu(pid, self.up == Some(pid));
         let pri = self.reprioritize(pid);
@@ -583,19 +685,22 @@ impl Procs {
         // runq[Nrq-2].head == nil`, which are edf's. Nothing else outranks
         // it, so a `wakeup` beats a higher priority and that is deliberate.
         let edf_idle = self.runq[pri::NRQ - 1].is_empty() && self.runq[pri::NRQ - 2].is_empty();
-        if let Some(p) = self.readied.filter(|_| edf_idle) {
+        // `runproc` does not clear `m->readied`: `sched` does, after asking
+        // whether the process it got was that one (`proc.c:174`).
+        if let Some(p) = self.m.readied.filter(|_| edf_idle) {
             if self.tab.get(&p).map(|q| q.state) == Some(State::Ready) {
                 let pri = self.tab[&p].priority;
                 if self.dequeueproc(pri, p) {
-                    self.readied = None;
+                    self.setstate(p, State::Scheding);
                     return Some(p);
                 }
             }
         }
-        self.readied = None;
         for pri in (0..pri::NRQ).rev() {
             if let Some(&p) = self.runq[pri].first() {
                 self.dequeueproc(pri, p);
+                // *"p->state = Scheding;"* (`proc.c:569`), at `found:`.
+                self.setstate(p, State::Scheding);
                 return Some(p);
             }
         }
@@ -681,21 +786,32 @@ impl Procs {
         slept
     }
 
-    /// `timerintr` (`portclock.c:172`) — **fire the timers that are due**.
-    /// Plan 9 walks a per-machine sorted list, `timers[machno]`, and calls
-    /// each due timer's function; for a `tsleep` that function is `twakeup`
-    /// (`proc.c:897`), which is `wakeup(p->trend)`.
+    /// `timersinit` (`portclock.c:221`) — start the HZ clock: a periodic
+    /// timer of `1000000000/HZ` nanoseconds whose function is nil, which
+    /// `timerintr` reads as *"the HZ clock for this processor"*.
     ///
-    /// The list is a walk of the table here, because one table is not a
-    /// list worth keeping twice on a machine with one processor. `twhen` is
-    /// Plan 9's own field: `Proc` embeds a `Timer` (`portdat.h:732`, *"For
-    /// tsleep and real-time"*).
+    /// `tadd`'s periodic case with no other timer to combine with: `twhen =
+    /// fastticks(nil)`, then `+= ns2fastticks(tns)` (`portclock.c:53`,
+    /// `:55`).
+    pub fn timersinit(&mut self, now: u64) {
+        self.m.hz = Some(now + 1_000_000_000 / HZ);
+        self.m.perf.last = now;
+    }
+
+    /// `timerintr` (`portclock.c:169`) — **fire the timers that are due**,
+    /// and if one of them was the HZ clock, call `hzclock`.
     ///
-    /// **It was called `checkalarms`, which is a different function.**
-    /// `checkalarms` (`alarm.c:47`) walks `alarms.head` and wakes `alarmr`
-    /// so that `alarmkproc` can post notes for `procalarm` — nothing to do
-    /// with `tsleep`. Borrowing the name made a claim about Plan 9 that was
-    /// not true.
+    /// For a `tsleep` the timer's function is `twakeup` (`proc.c:897`),
+    /// which is `wakeup(p->trend)`. Plan 9 walks a per-machine sorted list,
+    /// `timers[machno]`; the list is a walk of the table here, because one
+    /// table is not a list worth keeping twice on one processor. `twhen` is
+    /// Plan 9's own field: `Proc` embeds a `Timer` (`portdat.h:732`).
+    ///
+    /// **`hzclock` runs once however late the interrupt is.** The HZ timer
+    /// is periodic, so `tadd` puts it back one period on (`:209`) and the
+    /// loop takes it again while it is still due, counting — but the count
+    /// is only tested, `if(callhzclock) hzclock(u)` (`:195`). Ticks an
+    /// interrupt arrives too late for are lost, on Plan 9 as here.
     pub fn timerintr(&mut self, now: u64) {
         let due: Vec<Pid> = self
             .tab
@@ -710,6 +826,157 @@ impl Procs {
                 self.wakeup(trend);
             }
         }
+        let Some(when) = self.m.hz.filter(|&w| w <= now) else { return };
+        // The loop's re-adding, in one step: however many periods have
+        // passed, the next is the first one after `now`.
+        let period = 1_000_000_000 / HZ;
+        self.m.hz = Some(when + ((now - when) / period + 1) * period);
+        self.hzclock(now);
+    }
+
+    /// `hzclock` (`portclock.c:136`) — the clock tick.
+    ///
+    /// What is not here, and why: `m->proc->pc = ur->pc` (no register set
+    /// to read), `flushmmu` and `kmapinval` (no MMU, no kmap), `kproftimer`
+    /// (no profiler), `iscpuactive` and `active.exiting` (one processor,
+    /// always active). **`checkalarms()` (`alarm.c:47`) is not here yet**:
+    /// it wakes `alarmkproc`, whose one act is `postnote(rp, 0, "alarm",
+    /// NUser)` — so it arrives with notes, which is where `alarm` does.
+    fn hzclock(&mut self, now: u64) {
+        self.m.ticks += 1;
+        self.accounttime(now);
+        // *"if(up && up->state == Running) hzsched();"*
+        if let Some(up) = self.up.filter(|&p| self.state(p) == State::Running) {
+            self.hzsched(up);
+        }
+    }
+
+    /// `accounttime` (`proc.c:1615`) — charge the tick, and keep the
+    /// decaying averages `reprioritize` and `/dev/sysstat` read.
+    fn accounttime(&mut self, now: u64) {
+        // *"p = m->proc; if(p) { nrun++; p->time[p->insyscall]++; }"* —
+        // `m->proc` is `up` while a process is entered and nil in the idle
+        // loop, which is what `up` is here.
+        //
+        // **Always `TUser`**: the machine's clock interrupt can only land in
+        // guest code (an epoch check is compiled into the guest and never
+        // into a host call), so a tick never finds a process in a syscall
+        // and `insyscall` would always be 0. Plan 9 interrupts its own
+        // kernel; this kernel runs to the end of a call.
+        //
+        // Plan 9 counts ticks and `/dev/cputime` converts with `TK2MS`
+        // (`devcons.c:63`); `time` holds milliseconds here, so the tick is
+        // converted as it is charged. Same numbers read out.
+        if let Some(up) = self.up {
+            self.m.nrun += 1;
+            if let Some(p) = self.tab.get_mut(&up) {
+                p.time[TUSER] += tk2ms(1);
+            }
+        }
+
+        // *"calculate decaying duty cycles"*
+        let perf = &mut self.m.perf;
+        let per = now.saturating_sub(perf.last);
+        perf.last = now;
+        let per = (perf.period * (HZ - 1) + per) / HZ;
+        if per != 0 {
+            perf.period = per;
+        }
+        perf.avg_inidle = (perf.avg_inidle * (HZ - 1) + perf.inidle) / HZ;
+        perf.inidle = 0;
+        perf.avg_inintr = (perf.avg_inintr * (HZ - 1) + perf.inintr) / HZ;
+        perf.inintr = 0;
+
+        // *"calculate decaying load average"* — `m->machno` is 0.
+        let n = std::mem::take(&mut self.m.nrun);
+        let n = (self.nrdy as u64 + n) * 1000;
+        self.m.load = (self.m.load * (HZ - 1) + n) / HZ;
+    }
+
+    /// `hzsched` (`proc.c:203`) — *"here once per clock tick to see if we
+    /// should resched"*. It does not `sched()`: it marks `delaysched`, and
+    /// the interrupt's tail does the switch (`pc/trap.c:438`).
+    ///
+    /// Plan 9's condition reads `!up->fixedpri && …`; nothing here sets
+    /// `fixedpri` (`/proc/n/ctl`'s `fixedpri` is not built), so that clause
+    /// is omitted rather than tested against a constant.
+    fn hzsched(&mut self, up: Pid) {
+        // *"once a second, rebalance will reprioritize ready procs"*
+        self.rebalance();
+        // *"unless preempted, get to run for at least 100ms"*
+        if self.anyhigher(up) || (self.m.ticks > self.m.schedticks && self.anyready()) {
+            // *"avoid cooperative scheduling"*
+            self.m.readied = None;
+            if let Some(p) = self.tab.get_mut(&up) {
+                p.delaysched += 1;
+            }
+        }
+    }
+
+    /// `anyhigher` (`proc.c:194`) — is anything ready above `up`'s
+    /// priority? Plan 9 masks `runvec`; this asks the queues the bits
+    /// stand for.
+    pub fn anyhigher(&self, up: Pid) -> bool {
+        let pri = self.tab.get(&up).map_or(0, |p| p.priority);
+        self.runq[pri + 1..].iter().any(|q| !q.is_empty())
+    }
+
+    /// `rebalance` (`proc.c:471`) — *"recalculate priorities once a second.
+    /// We need to do this since priorities will otherwise only be
+    /// recalculated when the running process blocks."* Only the head of
+    /// each queue is looked at, as there.
+    fn rebalance(&mut self) {
+        let t = self.m.ticks;
+        if t - self.m.balancetime < HZ {
+            return;
+        }
+        self.m.balancetime = t;
+        for pri in 0..pri::NPRIQ {
+            // `another:`
+            loop {
+                let Some(&p) = self.runq[pri].first() else { break };
+                if self.tab.get(&p).is_some_and(|q| q.basepri == pri) {
+                    break;
+                }
+                self.updatecpu(p, self.up == Some(p));
+                let npri = self.reprioritize(p);
+                if npri == pri {
+                    break;
+                }
+                if self.dequeueproc(pri, p) {
+                    self.queueproc(npri, p);
+                }
+            }
+        }
+    }
+
+    /// **`sched()` after the switch** (`proc.c:169`–`:178`): pick the next
+    /// process and make it `up`.
+    ///
+    /// ```c
+    /// p = runproc();
+    /// if(!p->edf){ updatecpu(p); p->priority = reprioritize(p); }
+    /// if(p != m->readied) m->schedticks = m->ticks + HZ/10;
+    /// m->readied = 0;
+    /// up = p;
+    /// up->state = Running;
+    /// ```
+    ///
+    /// `None` is `runproc`'s idle loop, which is the caller's to wait in.
+    pub fn sched(&mut self) -> Option<Pid> {
+        let p = self.runproc()?;
+        self.updatecpu(p, self.up == Some(p));
+        let pri = self.reprioritize(p);
+        if let Some(q) = self.tab.get_mut(&p) {
+            q.priority = pri;
+        }
+        if self.m.readied != Some(p) {
+            self.m.schedticks = self.m.ticks + HZ / 10;
+        }
+        self.m.readied = None;
+        self.up = Some(p);
+        self.setstate(p, State::Running);
+        Some(p)
     }
 
     /// `anyready()` (`proc.c:188`) — is anything on a run queue?
@@ -721,7 +988,6 @@ impl Procs {
     /// just used 1/2 tick"*, so yielding does not look like idleness and
     /// raise the yielder's priority. The caller leaves after it.
     pub fn yield_(&mut self, pid: Pid) {
-        const SCALING: u64 = 2;
         if let Some(p) = self.tab.get_mut(&pid) {
             p.lastupdate = p.lastupdate.saturating_sub(SCALING / 2);
         }
@@ -730,7 +996,8 @@ impl Procs {
     /// Is anything else runnable? `runproc` without taking it — what
     /// `sched` asks before it decides there is nobody and idles.
     pub fn runproc_peek(&self) -> Option<Pid> {
-        self.readied
+        self.m
+            .readied
             .filter(|p| self.state(*p) == State::Ready)
             .or_else(|| (0..pri::NRQ).rev().find_map(|pri| self.runq[pri].first().copied()))
     }
@@ -748,22 +1015,29 @@ impl Procs {
     }
 
     fn rendez(&self, r: Rid) -> Rendez {
-        let Rid(pid, which) = r;
-        self.tab
-            .get(&pid)
-            .map(|p| match which {
-                Which::Sleep => p.sleep,
-                Which::Waitr => p.waitr,
-            })
-            .unwrap_or_default()
+        match r {
+            Rid::Proc(pid, which) => self
+                .tab
+                .get(&pid)
+                .map(|p| match which {
+                    Which::Sleep => p.sleep,
+                    Which::Waitr => p.waitr,
+                })
+                .unwrap_or_default(),
+            Rid::Rr(..) => self.rr.get(&r).copied().unwrap_or_default(),
+        }
     }
 
     fn rendez_mut(&mut self, r: Rid) -> &mut Rendez {
-        let Rid(pid, which) = r;
-        let p = self.tab.get_mut(&pid).expect("no such process");
-        match which {
-            Which::Sleep => &mut p.sleep,
-            Which::Waitr => &mut p.waitr,
+        match r {
+            Rid::Proc(pid, which) => {
+                let p = self.tab.get_mut(&pid).expect("no such process");
+                match which {
+                    Which::Sleep => &mut p.sleep,
+                    Which::Waitr => &mut p.waitr,
+                }
+            }
+            Rid::Rr(..) => self.rr.entry(r).or_default(),
         }
     }
 
@@ -837,15 +1111,21 @@ impl Procs {
             // (`sysproc.c`). A child born `Ready` is one nothing ever puts
             // on a queue.
             state: State::Scheding,
-            priority: pri::NORMAL,
+            // *"p->basepri = up->basepri; p->priority = up->basepri;"*
+            // (`sysproc.c:203`) — a child inherits its parent's base, not
+            // `PriNormal`: `newproc`'s `procpriority(p, PriNormal, 0)` is
+            // overwritten here.
+            priority: parent.basepri,
             r: None,
             trend: None,
             sleep: Rendez::default(),
             waitr: Rendez::default(),
-            basepri: pri::NORMAL,
+            basepri: parent.basepri,
             cpu: 0,
-            lastupdate: 0,
+            // *"p->lastupdate = MACHP(0)->ticks*Scaling"* (`proc.c:731`).
+            lastupdate: self.m.ticks * SCALING,
             twhen: None,
+            delaysched: 0,
         };
         let cpid = child.pid;
         self.tab.insert(cpid, child);
@@ -1010,11 +1290,29 @@ impl Procs {
             let pri = self.tab[&pid].priority;
             self.dequeueproc(pri, pid);
         }
-        if self.readied == Some(pid) {
-            self.readied = None;
+        if self.m.readied == Some(pid) {
+            self.m.readied = None;
+        }
+        // *"fgrp = up->fgrp; up->fgrp = nil; … closefgrp(fgrp);"*
+        // (`proc.c:1147`, `:1160`). `closefgrp` does nothing unless this was
+        // the last reference to the table (`pgrp.c:215`, `if(decref(f) !=
+        // 0) return;`) — a child made without `RFFDG` shares its parent's —
+        // and then `cclose`s every channel in it, which reaches the device
+        // only for a channel nobody else holds (`chan.c:496`). What must
+        // reach a device goes on `clunkq`.
+        let fgrp = self
+            .tab
+            .get_mut(&pid)
+            .map(|p| std::mem::replace(&mut p.fds, Rc::new(RefCell::new(Fds::default()))));
+        if let Some(Ok(fds)) = fgrp.map(Rc::try_unwrap) {
+            for c in fds.into_inner().slots.into_iter().flatten() {
+                if let Ok(c) = Rc::try_unwrap(c) {
+                    self.clunkq.push(c.into_inner());
+                }
+            }
         }
         self.setstate(pid, State::Moribund);
-        self.wakeup(Rid(ppid, Which::Waitr));
+        self.wakeup(Rid::Proc(ppid, Which::Waitr));
     }
 
     /// `await(2)`: reap one exited child. Plan 9 states no order and neither
@@ -1091,7 +1389,7 @@ mod tests {
     fn a_double_sleep_is_noticed_and_not_prevented() {
         let mut p = one();
         let c = p.rfork(1, rf::PROC).unwrap();
-        let r = Rid(1, Which::Sleep);
+        let r = Rid::Proc(1, Which::Sleep);
         assert!(p.sleep(1, r, false));
         assert!(p.sleep(c, r, false), "it sleeps, as Plan 9's does");
         assert_eq!(p.doublesleep, 1, "and it is noticed");
@@ -1105,7 +1403,7 @@ mod tests {
     #[test]
     fn sleep_commits_only_when_the_condition_has_not_happened() {
         let mut p = one();
-        let r = Rid(1, Which::Sleep);
+        let r = Rid::Proc(1, Which::Sleep);
 
         assert!(!p.sleep(1, r, true), "the condition happened: never mind");
         assert_eq!(p.state(1), State::Running);
@@ -1121,7 +1419,7 @@ mod tests {
     #[test]
     fn wakeup_readies_the_sleeper_and_only_on_its_own_rendez() {
         let mut p = one();
-        let (sleep, waitr) = (Rid(1, Which::Sleep), Rid(1, Which::Waitr));
+        let (sleep, waitr) = (Rid::Proc(1, Which::Sleep), Rid::Proc(1, Which::Waitr));
         p.sleep(1, sleep, false);
 
         assert_eq!(p.wakeup(waitr), None, "nobody sleeps there");
@@ -1181,7 +1479,7 @@ mod tests {
     #[test]
     fn a_tsleep_is_woken_by_its_deadline_and_not_before() {
         let mut p = one();
-        let r = Rid(1, Which::Sleep);
+        let r = Rid::Proc(1, Which::Sleep);
         assert!(p.tsleep(1, r, false, 500));
         assert_eq!(p.nextalarm(), Some(500));
 
@@ -1199,7 +1497,7 @@ mod tests {
     fn a_child_exiting_wakes_the_parent_out_of_wait() {
         let mut p = one();
         let c = p.rfork(1, rf::PROC).unwrap();
-        assert!(p.sleep(1, Rid(1, Which::Waitr), false));
+        assert!(p.sleep(1, Rid::Proc(1, Which::Waitr), false));
         assert_eq!(p.state(1), State::Wakeme);
 
         p.exits(c, "", None);
@@ -1395,5 +1693,131 @@ mod tests {
         assert!(p.await_child(1).is_none(), "b is a's child, not 1's");
         let w = p.await_child(a).expect("a reaps its own child");
         assert_eq!((w.pid, w.msg.as_str()), (b, "b"));
+    }
+
+    // ---- the clock -----------------------------------------------------
+
+    const TICK: u64 = 1_000_000_000 / HZ;
+
+    /// Two processes, `a` entered by `sched` and `b` waiting. The clock
+    /// starts at 0.
+    fn two() -> (Procs, Pid, Pid) {
+        let mut p = one();
+        p.timersinit(0);
+        let a = p.rfork(1, rf::PROC).unwrap();
+        let b = p.rfork(1, rf::PROC).unwrap();
+        p.up = None;
+        p.ready(a);
+        // Not from `readied`, so `sched` gives it a quantum (`proc.c:174`).
+        p.m.readied = None;
+        assert_eq!(p.sched(), Some(a));
+        p.ready(b);
+        (p, a, b)
+    }
+
+    /// **The quantum** — *"unless preempted, get to run for at least
+    /// 100ms"* (`hzsched`, `proc.c:209`). `sched` gives a process not taken
+    /// from `readied` `HZ/10` ticks, and the tick after that marks it.
+    #[test]
+    fn a_process_that_has_had_its_quantum_is_marked_to_sched() {
+        let (mut p, a, b) = two();
+        for t in 1..=10 {
+            p.timerintr(t * TICK);
+            assert_eq!(p.get(a).unwrap().delaysched, 0, "tick {t} is inside the quantum");
+        }
+        assert_eq!(p.m.readied, Some(b), "b is readied, and nothing has cleared it");
+        p.timerintr(11 * TICK);
+        assert_eq!(p.get(a).unwrap().delaysched, 1, "the eleventh tick is past it");
+        assert_eq!(p.m.readied, None, "*avoid cooperative scheduling*");
+    }
+
+    /// Nothing else ready, no mark: `anyready()` is the other half of the
+    /// condition.
+    #[test]
+    fn a_process_alone_is_never_marked() {
+        let mut p = one();
+        p.timersinit(0);
+        let a = p.rfork(1, rf::PROC).unwrap();
+        p.up = None;
+        p.ready(a);
+        p.sched();
+        for t in 1..=50 {
+            p.timerintr(t * TICK);
+        }
+        assert_eq!(p.get(a).unwrap().delaysched, 0);
+    }
+
+    /// `anyhigher()` does not wait for the quantum.
+    #[test]
+    fn a_higher_priority_ready_marks_the_running_process_at_once() {
+        let (mut p, a, b) = two();
+        let pri = p.get(b).unwrap().priority;
+        p.dequeueproc(pri, b);
+        p.queueproc(pri + 1, b);
+        assert!(p.anyhigher(a));
+        p.timerintr(TICK);
+        assert_eq!(p.get(a).unwrap().delaysched, 1);
+    }
+
+    /// **A late interrupt is one tick** — `if(callhzclock) hzclock(u)`
+    /// (`portclock.c:195`) — and the HZ timer's next firing is the first
+    /// period after now, not a backlog.
+    #[test]
+    fn a_late_interrupt_ticks_once() {
+        let mut p = one();
+        p.timersinit(0);
+        p.timerintr(5 * TICK + 3);
+        assert_eq!(p.m.ticks, 1);
+        assert_eq!(p.m.hz, Some(6 * TICK));
+        p.timerintr(5 * TICK + 4);
+        assert_eq!(p.m.ticks, 1, "early: nothing is due");
+    }
+
+    /// `accounttime` (`proc.c:1615`): the running process is charged the
+    /// tick, and the load average moves towards `(nrdy + running) * 1000`.
+    #[test]
+    fn a_tick_is_charged_to_the_running_process_and_to_the_load() {
+        let (mut p, a, b) = two();
+        p.timerintr(TICK);
+        assert_eq!(p.get(a).unwrap().time[TUSER], tk2ms(1));
+        assert_eq!(p.get(b).unwrap().time[TUSER], 0, "b was waiting");
+        // One running, one ready: `n = (1 + 1) * 1000`, decayed by HZ.
+        assert_eq!(p.m.load, 2000 / HZ);
+        p.up = None;
+        p.timerintr(2 * TICK);
+        assert_eq!(p.get(a).unwrap().time[TUSER], tk2ms(1), "idle: charged to nobody");
+    }
+
+    /// `rebalance` (`proc.c:471`), once a second: a queue's head that is
+    /// not at its base priority is reprioritized and moved.
+    #[test]
+    fn rebalance_moves_a_ready_process_back_to_where_it_belongs() {
+        let (mut p, a, b) = two();
+        let base = p.get(b).unwrap().basepri;
+        p.dequeueproc(base, b);
+        p.queueproc(3, b);
+        // Keep `a` from being marked before the second is up: nothing
+        // above it, and a quantum longer than the test.
+        p.m.schedticks = u64::MAX;
+        for t in 1..HZ {
+            p.timerintr(t * TICK);
+        }
+        assert_eq!(p.get(b).unwrap().priority, 3, "not yet a second");
+        p.timerintr(HZ * TICK);
+        assert_eq!(p.get(b).unwrap().priority, base, "moved back to its base");
+        assert_eq!(p.get(a).unwrap().delaysched, 0);
+    }
+
+    /// A child inherits its parent's base priority (`sysproc.c:203`), and
+    /// starts its cpu average now (`proc.c:731`).
+    #[test]
+    fn a_child_inherits_its_parents_base_priority() {
+        let mut p = one();
+        p.get_mut(1).unwrap().basepri = pri::ROOT;
+        p.m.ticks = 7;
+        let c = p.rfork(1, rf::PROC).unwrap();
+        let c = p.get(c).unwrap();
+        assert_eq!((c.basepri, c.priority), (pri::ROOT, pri::ROOT));
+        assert_eq!(c.lastupdate, 7 * SCALING);
     }
 }

@@ -3669,7 +3669,8 @@ named in the code.
 ### Present and inert, which is worth saying plainly
 
 **`updatecpu` and `reprioritize` do nothing yet** — see §15.1 for why, which
-is larger than it first looked.
+is larger than it first looked. *(Resolved the same day: the clock is built,
+§15.2.)*
 
 ### §15.1 — The missing clock tick (2026-09-22)
 
@@ -3734,3 +3735,73 @@ four at once. One thing to settle when it is written, by reading
 elapse while no guest is running are counted as they would have been
 (`hzclock` runs on every tick on Plan 9, idle or not — `accounttime`'s
 `m->perf.inidle` is exactly the idle case) or lost.
+
+**Settled by reading, when it was written** (§15.2): lost. `timerintr`
+counts the HZ timer each time its loop finds it due — `callhzclock++` — but
+only tests the count: `if(callhzclock) hzclock(u)` (`portclock.c:195`). An
+interrupt that arrives late ticks once. Idle ticks are counted because on
+Plan 9 the clock interrupts an idle processor too, and here the idle loop
+waits a tick at a time for the same reason.
+
+### §15.2 — The clock, and what building it exposed (2026-09-22)
+
+Christine: *"continue P6"* — the next row was the clock.
+
+**What was read, at file and line, before each piece was written:**
+`portclock.c` whole (`tadd` `:26`, `timeradd` `:96`, `hzclock` `:136`,
+`timerintr` `:169`, `timersinit` `:221`); `proc.c` `schedinit` `:67`,
+`sched` `:119`, `anyhigher` `:194`, `hzsched` `:203`, `preempted` `:222`,
+`updatecpu` `:279`, `reprioritize` `:318`, `yield` `:454`, `rebalance`
+`:471`, `runproc` `:507`, `newproc` `:672`–`:735`, `accounttime` `:1615`,
+`pexit` `:1145`–`:1168`; `alarm.c` whole; `pc/trap.c` `trap` `:315`–`:445`,
+`intrtime` `:271`, `syscall` `:660`–`:781`; `pc/i8253.c:228`–`:265`;
+`kw/clock.c:46`; `pc/dat.h:206` (`struct Mach`); `portdat.h:992` (`struct
+Perf`); `devcons.c:873`, `:1082`; `sysproc.c:196`–`:206`, `:564`–`:569`;
+`devpipe.c` whole; `qio.c` `qwait` `:849`, `qread` `:1070`, `qbwrite`
+`:1165`, `qwrite` `:1270`, `qclose` `:1386`, `qhangup` `:1418`, `qreopen`
+`:1447`; `pgrp.c:207` (`closefgrp`); `chan.c:517`–`:564` (`clunkq`).
+
+**Built:** `Mach` with the fields `port/` reads; `timersinit`, `timerintr`,
+`hzclock`, `accounttime`, `hzsched`, `anyhigher`, `rebalance`; `sched`'s
+tail with `m->schedticks`; the machine's `clockintr` as wasmtime's epoch
+callback, fed by a thread that moves the epoch on at HZ; and the
+interrupt's tail yielding when `up->delaysched` is set.
+
+**Found wrong while reading, and made Plan 9's:**
+
+| | Plan 9 | was |
+|---|---|---|
+| a child's priority | *"p->basepri = up->basepri; p->priority = up->basepri"* (`sysproc.c:203`) | `PriNormal` |
+| a child's `lastupdate` | `MACHP(0)->ticks*Scaling` (`proc.c:731`) | 0 |
+| `exec` from `#/` | `PriRoot` (`sysproc.c:567`) | nothing |
+| `runproc` | marks what it takes `Scheding` (`:569`); `sched` clears `m->readied` after comparing (`:174`) | `runproc` cleared `readied` itself, so `schedticks` could not know |
+| `schedinit` on entry | *"if(up) { … updatecpu(up); up = nil; }"* (`:105`) — whoever was `up` stops being it | only a process `gotolabel` returned was dealt with, so a stale `up` would have been charged idle ticks |
+| `/dev/sysstat` | ten numbers from `Mach` (`devcons.c:873`) | eight, and the two counted were fields of `#c` nothing set outside a test |
+| **`pipe`** | `qread` sleeps on `q->rr` until data or hangup (`qio.c:866`); `pipeclose` counts opens and hangs up the other end on the last (`devpipe.c:247`); a read answers one block (`qio.c:1125`) | a byte buffer: an empty read answered 0 — end of file — and `close` did nothing |
+| **`pexit`** | `closefgrp(fgrp)` (`proc.c:1160`) | the table was dropped and no device heard |
+| `implementation.md`'s *"user mode only"* | `trap.c:438` has no `user` test — Plan 9 preempts its own kernel at a clock interrupt when no ilock is held | stated as Plan 9's rule; it is this machine's limit |
+
+**The pipe was found by the clock.** A pipeline test failed one run in six:
+`tr` read end of file while the `rc` that would run `echo` still held the
+write end. Every pipeline had worked only because `rfork`'s `sched` ran the
+writer first; preemption let the reader in first, and a pipe that could not
+block told it the pipe was over. The fix is Plan 9's — the device sleeps the
+caller on the queue's `Rendez` — and the call then answers `Ret::Sched`: the
+syscall layer finds the caller `Wakeme`, the machine leaves, and the read is
+made again when the process is entered. `Rid` gains `Rr(dev, devno, q)` for
+`&q->rr`, the same adaptation `Rid` already was for `&up->sleep`. 30 of 30
+runs pass after it.
+
+**Differences, each stated where it is in the code:**
+
+| | why |
+|---|---|
+| a tick lands only in guest code, so `TSys` is never charged | an epoch check is compiled into the guest and never into a host function; the kernel runs each call to its end |
+| `checkalarms` is not in `hzclock` yet | it wakes `alarmkproc`, whose one act is `postnote` — it arrives with notes |
+| `!up->fixedpri` is omitted from `hzsched` | nothing sets `fixedpri`; `/proc/n/ctl`'s `fixedpri` is not built |
+| **no pipe flow control** | `qbwrite` queues the block and THEN sleeps on `q->wr` (`qio.c:1250`); a call made again on re-entry would queue it twice. A pipe holds whatever is written. **Worth striking** — it needs a call that can resume past its sleep rather than be made again |
+| no `q->rlock`/`q->wlock` | two readers of one pipe would double-sleep on `q->rr`, which `sleep` counts. Plan 9 queues the second on the `QLock` |
+| no *"sys: write on closed pipe"* note, and `qbwrite`'s *"if we just wokeup a higher priority process, let it run"* | notes are not built; the second waits for the next tick's `anyhigher` |
+| `clockintr` does not yield while a `procrfork` child is on its parent's frames | the child cannot be entered anywhere else until its `exec`; the `sched` waits with `delaysched` counting, as Plan 9's does while a lock is held (`proc.c:145`) |
+| `clunkq` is drained by the kernel, not by a `closeproc` kproc | `exits` runs where `devtab` cannot be reached — from `/proc/n/ctl`'s kill, inside a device — so every channel `closefgrp` lets go of is queued, and drained on the way out of the call |
+| `Proc.time` holds milliseconds; a tick is charged as `TK2MS(1)` | Plan 9 counts ticks and converts on read (`devcons.c:63`); the numbers read out are the same |

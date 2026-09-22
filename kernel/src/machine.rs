@@ -29,6 +29,22 @@ use crate::{Call, Ret};
 /// `touser` is running, and the process inside it is calling back.
 pub trait Syscalls {
     fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String>;
+
+    /// **The clock interrupt**, taken while a process runs: a machine's
+    /// `clockintr` calls the portable `timerintr` (`kw/clock.c:46`;
+    /// `i8253clock` on the PC, `pc/i8253.c:262`), and `trap()`'s tail then
+    /// asks whether to `sched()` (`pc/trap.c:438`).
+    ///
+    /// The answer is that question: `true` is *"up->delaysched"*, and the
+    /// machine must then leave the process as `sched()` would — it is
+    /// still `Running`, so the scheduler puts it back on the queue. No
+    /// process is named, as `timerintr(Ureg*, Tval)` names none: the one
+    /// interrupted is `up`, which the kernel already has.
+    ///
+    /// A machine calls this at `HZ` (`proc::HZ`), or as near as it can.
+    /// Calling it early is harmless — `timerintr` fires only what is due —
+    /// and calling it late loses ticks, as a late interrupt does on Plan 9.
+    fn timerintr(&mut self) -> bool;
 }
 
 /// **Every method takes `&self`, and that is load-bearing.** Plan 9's machine
@@ -103,12 +119,8 @@ pub trait Machine {
     /// (`pc/i8253.c:320`, `aamloop`). A hosted machine has a better way and
     /// uses it; the kernel does not know or care which.
     ///
-    /// **It stands in for a scheduler, and only while one process is
-    /// runnable at a time.** `syssleep`'s other branch is `tsleep` on a
-    /// `Rendez`, which needs `sched()` and therefore `setlabel`/`gotolabel`
-    /// — machine-dependent too (`pc/l.s:1000`, `:992`), and something this
-    /// machine could supply. RESEARCH §14 measures what with, §14.1 says
-    /// what Plan 9 does with it, and it is `implementation.md`'s P6.
+    /// `schedinit`'s idle loop waits in it until the next interrupt is due
+    /// — `idlehands()`, which on the PC halts until the clock.
     fn delay(&self, ms: u64);
 }
 

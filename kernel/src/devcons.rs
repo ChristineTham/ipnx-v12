@@ -93,13 +93,9 @@ pub struct Cons {
     pub hostdomain: String,
     pub sysname: String,
     pub kmesg: Vec<u8>,
-    /// `Mach.syscall` and `Mach.cs` (`pc/dat.h:233`), the two counters this
-    /// kernel is in a position to keep honestly.
-    pub syscalls: u64,
     /// `kprintinuse` (`devcons.c`) — the one-reader lock `consopen` takes
     /// with `tas` and `consclose` releases.
     kprintinuse: bool,
-    pub cs: u64,
     /// The device letters this kernel carries, for `/dev/drivers`. The names
     /// come from [`DevId::name`], so there is one list and not two.
     letters: Vec<DevId>,
@@ -237,9 +233,7 @@ impl Cons {
             hostdomain: String::new(),
             sysname: String::new(),
             kmesg: Vec::new(),
-            syscalls: 0,
             kprintinuse: false,
-            cs: 0,
             letters,
             up,
             host,
@@ -531,14 +525,35 @@ impl Dev for Cons {
                 );
                 Self::readstr(&s, n, off)
             }
-            // Per-processor counters (`devcons.c:129`), one line per machine:
-            // id, context switches, interrupts, syscalls, page faults, tlb
-            // faults, tlb purges, load. This kernel has one machine and
-            // counts what it actually does; the rest stay zero rather than
-            // being invented.
+            // `consread`'s `Qsysstat` (`devcons.c:873`): one line per
+            // machine, TEN numbers — id, context switches, interrupts,
+            // syscalls, page faults, tlb faults, tlb purges, load, and the
+            // percentages of each tick spent idle and in interrupts. They are
+            // `Mach`'s, read from it.
+            //
+            // It printed eight, and all but one were constants: the two it
+            // counted were fields of this device that nothing outside a test
+            // ever set, so the running system reported zeros. Page faults
+            // and the TLB have no counterpart on a machine without an MMU,
+            // and stay zero.
             Q::Sysstat => {
+                let up = self.up.borrow();
+                let procs = up.procs.borrow();
+                let m = &procs.m;
+                let pct = |v: u64| if m.perf.period == 0 { 0 } else { v * 100 / m.perf.period };
                 let mut s = String::new();
-                for v in [0, self.cs, 0, self.syscalls, 0, 0, 0, 0] {
+                for v in [
+                    0,
+                    m.cs,
+                    m.intr,
+                    m.syscall,
+                    0,
+                    0,
+                    0,
+                    m.load,
+                    pct(m.perf.avg_inidle),
+                    pct(m.perf.avg_inintr),
+                ] {
                     s.push_str(&String::from_utf8_lossy(&readnum(v, NUMSIZE)));
                 }
                 s.push('\n');
@@ -647,10 +662,13 @@ impl Dev for Cons {
             Q::Kmesg | Q::Kprint => self.kmesg.extend_from_slice(data),
             // `/dev/null` swallows, and that is its whole job.
             Q::Null => {}
-            // `conswrite`'s Qsysstat zeroes the counters (`devcons.c:107`).
+            // `conswrite`'s `Qsysstat` zeroes the counters (`devcons.c:1082`).
             Q::Sysstat => {
-                self.syscalls = 0;
-                self.cs = 0;
+                let up = self.up.borrow();
+                let mut procs = up.procs.borrow_mut();
+                procs.m.cs = 0;
+                procs.m.intr = 0;
+                procs.m.syscall = 0;
             }
             Q::Swap | Q::Time | Q::Bintime => {}
             // `conswrite`'s `Qcons` (`devcons.c:992`).
@@ -1022,20 +1040,28 @@ mod tests {
         assert_eq!(v[crate::proc::TCUSER], "250", "the child's user time came across");
     }
 
-    /// `/dev/sysstat` is one line per machine, eight numbers, and writing it
-    /// zeroes the counters (`devcons.c:107`).
+    /// `/dev/sysstat` is one line per machine, ten numbers read from `Mach`
+    /// (`devcons.c:873`), and writing it zeroes the counters but not the
+    /// load (`:1082`).
     #[test]
-    fn sysstat_counts_what_the_kernel_does_and_a_write_zeroes_it() {
-        let (mut d, _) = cons();
-        d.syscalls = 17;
-        d.cs = 4;
+    fn sysstat_reads_the_machine_and_a_write_zeroes_the_counters() {
+        let (mut d, procs) = cons();
+        {
+            let m = &mut procs.borrow_mut().m;
+            m.cs = 4;
+            m.intr = 9;
+            m.syscall = 17;
+            m.load = 1500;
+            m.perf.period = 200;
+            m.perf.avg_inidle = 50;
+        }
         let s = read(&mut d, "sysstat");
         let v: Vec<&str> = s.split_whitespace().collect();
-        assert_eq!(v.len(), 8, "eight counters");
-        assert_eq!(v[1], "4", "context switches");
-        assert_eq!(v[3], "17", "syscalls");
+        assert_eq!(v, ["0", "4", "9", "17", "0", "0", "0", "1500", "25", "0"]);
         write(&mut d, "sysstat", "").unwrap();
-        assert_eq!(read(&mut d, "sysstat").split_whitespace().nth(3).unwrap(), "0");
+        let v: Vec<String> =
+            read(&mut d, "sysstat").split_whitespace().map(String::from).collect();
+        assert_eq!((&v[1][..], &v[2][..], &v[3][..], &v[7][..]), ("0", "0", "0", "1500"));
     }
 
     /// **A read of `cons` answers a whole line**, because `consread` runs the

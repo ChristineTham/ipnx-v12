@@ -120,8 +120,6 @@ pub struct Kernel {
     pub procs: std::rc::Rc<std::cell::RefCell<proc::Procs>>,
     pub tab: namec::Devtab,
     machine: std::rc::Rc<dyn machine::Machine>,
-    /// `Mach.syscall` (`pc/dat.h:234`) — what `/dev/sysstat` reports.
-    pub syscalls: u64,
     /// `up` — the calling process, which the devices that need it read
     /// through. Set before each dispatch.
     pub up: std::rc::Rc<std::cell::RefCell<proc::Up>>,
@@ -155,7 +153,7 @@ impl Kernel {
         tab.add(Box::new(root));
         let procs = std::rc::Rc::new(std::cell::RefCell::new(proc::Procs::new(slash)));
         let up = std::rc::Rc::new(std::cell::RefCell::new(proc::Up { pid: 1, procs: procs.clone() }));
-        Ok(Kernel { procs, up, tab, machine, syscalls: 0 })
+        Ok(Kernel { procs, up, tab, machine })
     }
 
     /// `exec`, in the order `sysexec` does it (`sysproc.c:302`).
@@ -207,10 +205,26 @@ impl Kernel {
     /// clock is one. Here the only thing that can wake a sleeper is its own
     /// timer, so no runnable process and no timer is the end of the system.
     pub fn schedinit(&mut self) -> Result<(), String> {
+        // `timersinit` (`portclock.c:221`) — Plan 9's `main` calls it before
+        // `schedinit`; here the scheduler is where the machine first enters,
+        // so it starts the HZ clock the first time it runs.
+        if self.procs.borrow().m.hz.is_none() {
+            let now = self.machine.todget().nsec;
+            self.procs.borrow_mut().timersinit(now);
+        }
         let mut left: Option<(Pid, machine::Left)> = None;
         loop {
             // `schedinit`'s switch on the state of the process that left.
             if let Some((pid, how)) = left.take() {
+                {
+                    // `sched` before the switch (`proc.c:154`, `:159`):
+                    // *"up->delaysched = 0;"* and *"m->cs++"*.
+                    let mut procs = self.procs.borrow_mut();
+                    if let Some(p) = procs.get_mut(pid) {
+                        p.delaysched = 0;
+                    }
+                    procs.m.cs += 1;
+                }
                 let mut procs = self.procs.borrow_mut();
                 match (how, procs.state(pid)) {
                     // *"case Moribund: up->state = Dead"* — and a process
@@ -226,6 +240,7 @@ impl Kernel {
                     }
                     // *"case Running: ready(up)"* — it gave up the processor
                     // without going to sleep, so it goes back on the queue.
+                    // A process the clock preempted is one of these.
                     (machine::Left::Sched, proc::State::Running) => procs.ready(pid),
                     (machine::Left::Sched, proc::State::Moribund) => {
                         procs.setstate(pid, proc::State::Dead)
@@ -234,40 +249,82 @@ impl Kernel {
                     _ => {}
                 }
             }
-
-            // `sched()`: `p = runproc()` and enter it.
-            let next = self.procs.borrow_mut().runproc();
-            let Some(pid) = next else {
-                // `idlehands()`. The clock is what wakes a Plan 9 processor;
-                // here it is a sleeper's own deadline, and with none there is
-                // nothing that can ever make a process runnable again.
-                let now = self.machine.todget().nsec;
-                let Some(when) = self.procs.borrow().nextalarm() else {
-                    return Ok(());
-                };
-                self.machine.delay(when.saturating_sub(now) / 1_000_000);
-                let now = self.machine.todget().nsec;
-                self.procs.borrow_mut().timerintr(now.max(when));
-                continue;
-            };
-            // `sched`'s tail (`proc.c:157`): `up = p; up->state = Running;`
+            self.closeproc();
+            // *"if(up) { up->mach = nil; updatecpu(up); up = nil; }"*
+            // (`proc.c:105`) — whoever was `up` is not any more, including
+            // on the first entry, where it is whoever the boot ran as.
             {
                 let mut procs = self.procs.borrow_mut();
-                procs.up = Some(pid);
-                procs.setstate(pid, proc::State::Running);
+                if let Some(up) = procs.up.take() {
+                    procs.updatecpu(up, true);
+                }
             }
+
+            // `sched()`: `p = runproc()`, and make it `up`.
+            let next = self.procs.borrow_mut().sched();
+            let Some(pid) = next else {
+                // `idlehands()` — halt until the next interrupt. On Plan 9
+                // that is the clock, HZ times a second whether or not
+                // anything is due; here it is whichever comes first, the HZ
+                // clock or a sleeper's timer, and the wait is the machine's
+                // `delay`.
+                //
+                // **With no sleeper at all the system is over** — Plan 9's
+                // clock would go on ticking for ever with nothing that could
+                // ever make a process runnable, and a hosted machine has
+                // somewhere to return to.
+                let (alarm, hz) = {
+                    let procs = self.procs.borrow();
+                    (procs.nextalarm(), procs.m.hz)
+                };
+                let Some(alarm) = alarm else {
+                    return Ok(());
+                };
+                let when = hz.map_or(alarm, |h| h.min(alarm));
+                let start = self.machine.todget().nsec;
+                self.machine.delay(when.saturating_sub(start) / 1_000_000);
+                let now = self.machine.todget().nsec.max(when);
+                // *"remember how much time we're here"* (`runproc`,
+                // `proc.c:558`).
+                self.procs.borrow_mut().m.perf.inidle += now - start;
+                self.timerintr(now);
+                continue;
+            };
             self.up.borrow_mut().pid = pid;
             let m = self.machine.clone();
             left = Some((pid, m.gotolabel(pid, self)?));
         }
     }
 
+    /// **The clock interrupt**, the kernel's half: what `trap()` does
+    /// around it (`pc/trap.c:339`, `m->intr++`; `intrtime`, `:271`) and the
+    /// portable `timerintr` it reaches through the machine's `clockintr`
+    /// (`kw/clock.c:46`, `i8253clock` on the PC). The counters are `Mach`'s,
+    /// and the machine cannot reach `Mach`, so they are counted here.
+    pub fn timerintr(&mut self, now: u64) {
+        let mut procs = self.procs.borrow_mut();
+        procs.m.intr += 1;
+        procs.m.perf.intrts = now;
+        procs.timerintr(now);
+        // `intrtime`: the time spent in the handler, taken out of the idle
+        // time if the processor was idle (*"if(up == nil && m->perf.inidle
+        // > diff) m->perf.inidle -= diff"*).
+        let diff = self.machine.todget().nsec.saturating_sub(now);
+        procs.m.perf.intrts = now + diff;
+        procs.m.perf.inintr += diff;
+        if procs.up.is_none() && procs.m.perf.inidle > diff {
+            procs.m.perf.inidle -= diff;
+        }
+    }
+
     /// Steps 1 and 2 alone: resolve and read. Split out because it is entirely
     /// Plan 9's, and so it can be tested without a machine.
     pub fn exec_image(&mut self, pid: Pid, path: &str) -> Result<Vec<u8>, String> {
-        let procs = self.procs.borrow();
-                let p = procs.get(pid).ok_or("no such process")?;
-        let (slash, dot, ns) = (p.slash.clone(), p.dot.clone(), p.ns.clone());
+        let (slash, dot, ns) = {
+            let procs = self.procs.borrow();
+            let p = procs.get(pid).ok_or("no such process")?;
+            (p.slash.clone(), p.dot.clone(), p.ns.clone())
+        };
         let ns = ns.borrow();
         let mut c = namec::namec(
             &mut self.tab,
@@ -291,6 +348,16 @@ impl Kernel {
                 break;
             }
             image.extend_from_slice(&got);
+        }
+        // *"'/' processes are higher priority (hack to make /ip more
+        // responsive)."* — `if(devtab[tc->type]->dc == L'/') up->basepri =
+        // PriRoot; up->priority = up->basepri;` (`sysproc.c:564`), on the
+        // line before `cclose(tc)`.
+        if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
+            if c.dev == dev::DevId::Root {
+                p.basepri = proc::pri::ROOT;
+            }
+            p.priority = p.basepri;
         }
         self.tab.dclose(&mut c);
         Ok(image)
@@ -325,8 +392,15 @@ mod tests {
             self.0.borrow_mut().order.push("procsetup");
             Ok(())
         }
+        /// A clock that stands still except when the machine is asked to
+        /// wait — then it moves by exactly that much, as if it had.
         fn todget(&self) -> machine::Tod {
-            machine::Tod { nsec: 1_500_000_000_000_000_000, ticks: 42, hz: 1_000_000 }
+            let waited: u64 = self.0.borrow().delayed.iter().sum();
+            machine::Tod {
+                nsec: 1_500_000_000_000_000_000 + waited * 1_000_000,
+                ticks: 42,
+                hz: 1_000_000,
+            }
         }
         /// A test machine does not wait; it records that it was asked to.
         fn delay(&self, ms: u64) {
@@ -444,6 +518,15 @@ impl machine::Syscalls for Kernel {
     fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
         Kernel::syscall(self, up, call)
     }
+
+    fn timerintr(&mut self) -> bool {
+        let now = self.machine.todget().nsec;
+        Kernel::timerintr(self, now);
+        // *"if(up && up->delaysched && clockintr && m->ilockdepth == 0)
+        // sched();"* (`pc/trap.c:438`) — `ilockdepth` is always 0 here.
+        let procs = self.procs.borrow();
+        procs.up.and_then(|up| procs.get(up)).is_some_and(|p| p.delaysched > 0)
+    }
 }
 
 /// What a call answers. Plan 9's syscalls all return `uintptr` and write
@@ -477,7 +560,8 @@ impl Kernel {
     /// global; here it is the argument, because a Rust kernel cannot hand a
     /// device an ambient mutable global — the same information, made explicit.
     pub fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
-        self.syscalls += 1;
+        // *"m->syscall++"* (`pc/trap.c:673`).
+        self.procs.borrow_mut().m.syscall += 1;
         // **`up` is the calling process, and it is set on the way in.** Plan 9
         // does not have to: `syscall()` (`pc/trap.c:665`) runs on the trapping
         // process's own kernel stack, so the per-machine `up` already names
@@ -486,10 +570,35 @@ impl Kernel {
         // it is not set, every one of them answers for whoever ran last.
         self.up.borrow_mut().pid = up;
         let r = self.dispatch(up, call);
+        // `closeproc` (`chan.c:552`): close what `exits` let go of.
+        self.closeproc();
+        // **A call that slept leaves.** A device that must wait sleeps the
+        // caller where Plan 9's does — `qread` on `q->rr` — and that commits
+        // it: `Wakeme`, on a `Rendez`. On Plan 9 the `sleep` itself switches
+        // away and the call carries on from that line when it is woken; here
+        // the device returns, and what it returned is not an answer. So the
+        // machine is told to leave, and the call is made again when the
+        // process is entered — which is where a device that sleeps must be
+        // able to begin again, having taken nothing.
+        if self.procs.borrow().state(up) == proc::State::Wakeme {
+            return Ok(Ret::Sched);
+        }
         if let Err(e) = &r {
             self.procs.borrow_mut().seterrstr(up, e);
         }
         r
+    }
+
+    /// `closeproc` (`chan.c:552`) — the kernel process that drains
+    /// `clunkq`, `cclose`ing each channel. Here it is not a process: the
+    /// kernel drains the queue itself whenever it is on its way out of a
+    /// call or back from a process, the two places `exits` can have run.
+    fn closeproc(&mut self) {
+        loop {
+            let c = self.procs.borrow_mut().clunkq.pop();
+            let Some(mut c) = c else { break };
+            self.tab.dclose(&mut c);
+        }
     }
 
     fn dispatch(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
@@ -549,7 +658,7 @@ impl Kernel {
                     if self.procs.borrow().nchild(up) == 0 {
                         return Err(ENOCHILD.into());
                     }
-                    let r = proc::Rid(up, proc::Which::Waitr);
+                    let r = proc::Rid::Proc(up, proc::Which::Waitr);
                     self.procs.borrow_mut().sleep(up, r, false);
                     return Ok(Ret::Sched);
                 }
@@ -795,7 +904,7 @@ impl Kernel {
                 // `tsleep(&up->sleep, return0, 0, n)` (`sysproc.c`). The
                 // condition is `return0`, so it always commits: this sleep
                 // has no reason but the clock.
-                let r = proc::Rid(up, proc::Which::Sleep);
+                let r = proc::Rid::Proc(up, proc::Which::Sleep);
                 self.procs.borrow_mut().tsleep(up, r, false, deadline);
                 Ok(Ret::Sched)
             }
@@ -922,9 +1031,8 @@ fn bind_of(flag: i32) -> ns::Bind {
 /// `Enochild` (`error.h`) — *"no living children"*.
 const ENOCHILD: &str = "no living children";
 
-/// `TK2MS(1)` — *"#define TK2MS(x) ((x)*(1000/HZ))"* (`port/portfns.h`),
-/// with the PC's `HZ` of 100 (`pc/mem.h:31`). The shortest sleep there is.
-const TK2MS1: u64 = 10;
+/// `TK2MS(1)` — the shortest sleep there is.
+const TK2MS1: u64 = proc::tk2ms(1);
 
 /// What `notify`, `noted` and `alarm` are waiting on: a scheduler, and the
 /// stack switch under it. A note is delivered on the way out of the kernel
@@ -958,7 +1066,7 @@ mod syscalls {
         root.addbootfile("init", b"an image".to_vec());
         root.addbootfile("hello", b"greetings".to_vec());
         let mut k = Kernel::new(root, std::rc::Rc::new(tests::Recorder::silent())).unwrap();
-        k.tab.add(Box::new(devpipe::PipeDev::new()));
+        k.tab.add(Box::new(devpipe::PipeDev::new(k.up.clone())));
         k.tab.add(Box::new(devenv::EnvDev::new(k.up.clone())));
         k
     }
@@ -1049,6 +1157,36 @@ mod syscalls {
         assert_eq!(got, Ret::Data(b"hello".to_vec()));
     }
 
+    /// **A read of an empty pipe sleeps**, and the call answers `Sched` so
+    /// the machine leaves (`qwait`, `qio.c:866`) — not an empty read, which
+    /// is end of file.
+    #[test]
+    fn a_read_of_an_empty_pipe_leaves_the_processor() {
+        let mut k = booted();
+        let Ret::Two(_a, b) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
+        assert_eq!(k.syscall(1, Call::Pread { fd: b, n: 16, off: -1 }), Ok(Ret::Sched));
+        assert_eq!(k.procs.borrow().state(1), proc::State::Wakeme);
+    }
+
+    /// **`pexit` closes the descriptors** (`closefgrp`, `proc.c:1160`), so
+    /// when the last writer exits the reader gets what was written and then
+    /// end of file — which is how `tr` learns that `echo` is done.
+    #[test]
+    fn a_writer_that_exits_closes_its_end_of_the_pipe() {
+        let mut k = booted();
+        let Ret::Two(a, b) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
+        let Ret::Pid(child) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::FDG }).unwrap()
+        else {
+            panic!()
+        };
+        k.syscall(1, Call::Close { fd: a }).unwrap();
+        k.syscall(child, Call::Pwrite { fd: a, data: b"bye".to_vec(), off: -1 }).unwrap();
+        k.syscall(child, Call::Exits { status: String::new() }).unwrap();
+        let read = |k: &mut Kernel| k.syscall(1, Call::Pread { fd: b, n: 16, off: -1 });
+        assert_eq!(read(&mut k), Ok(Ret::Data(b"bye".to_vec())));
+        assert_eq!(read(&mut k), Ok(Ret::Data(Vec::new())), "then end of file");
+    }
+
     /// A child with its own fd table does NOT see the parent's later opens.
     #[test]
     fn rfork_reaches_the_call_interface() {
@@ -1120,10 +1258,10 @@ mod syscalls {
     #[test]
     fn the_kernel_counts_the_calls_it_answers() {
         let mut k = booted();
-        assert_eq!(k.syscalls, 0);
+        assert_eq!(k.procs.borrow().m.syscall, 0);
         let _ = k.syscall(1, Call::Errstr { buf: String::new() });
         let _ = k.syscall(1, Call::Open { path: "/nothing".into(), mode: 0 });
-        assert_eq!(k.syscalls, 2, "a failed call is still a call");
+        assert_eq!(k.procs.borrow().m.syscall, 2, "a failed call is still a call");
     }
 
     /// **A directory seeks only to 0** (`sysfile.c:820`, `Eisdir`), and a
@@ -1500,17 +1638,34 @@ mod syscalls {
 
     /// **`schedinit` is the loop** (`proc.c:67`), and this is the whole of
     /// it: a process asleep, nothing else runnable, so `idlehands()` — the
-    /// machine waits until the deadline, `timerintr` readies the sleeper,
+    /// machine waits for the next interrupt, which is the HZ clock every
+    /// tick until the sleeper's own timer comes due; `timerintr` readies it
     /// and `sched` enters it.
     #[test]
-    fn schedinit_idles_until_a_sleeper_is_due_and_then_enters_it() {
+    fn schedinit_idles_a_tick_at_a_time_until_a_sleeper_is_due() {
         let (mut k, log) = tests::watched();
         k.syscall(1, Call::Sleep { ms: 250 }).unwrap();
         k.schedinit().unwrap();
 
-        assert_eq!(log.borrow().delayed, vec![250], "it waited exactly that long");
+        assert_eq!(log.borrow().delayed, vec![10; 25], "twenty-five ticks of 10ms");
         assert!(log.borrow().order.contains(&"gotolabel"), "and then entered it");
         assert_eq!(k.procs.borrow().state(1), proc::State::Dead, "which ran to its end");
+        let procs = k.procs.borrow();
+        assert_eq!(procs.m.ticks, 25, "the clock ticked while nothing ran");
+        assert_eq!(procs.m.intr, 25, "each tick an interrupt");
+        assert_eq!(procs.get(1).unwrap().time[proc::TUSER], 0, "and charged nobody");
+        assert_eq!(procs.m.cs, 1, "one switch: out of the image");
+    }
+
+    /// `sysexec` gives a process whose image came from `#/` `PriRoot`
+    /// (`sysproc.c:564`).
+    #[test]
+    fn an_image_from_the_root_device_runs_at_priroot() {
+        let mut k = booted();
+        k.exec_image(1, "/boot/init").unwrap();
+        let procs = k.procs.borrow();
+        let p = procs.get(1).unwrap();
+        assert_eq!((p.basepri, p.priority), (proc::pri::ROOT, proc::pri::ROOT));
     }
 
     /// With nothing runnable and no timer, nothing can ever make a process

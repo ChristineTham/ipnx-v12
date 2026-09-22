@@ -395,6 +395,35 @@ mod userspace {
         assert!(typing("sleep 1\necho awake\n").contains("awake"));
     }
 
+    /// **A process in a tight loop does not stop the system** — P6's
+    /// acceptance. The loop makes no call, so nothing but the clock can take
+    /// the processor from it: `hzsched` marks it once its quantum is up and
+    /// the interrupt's tail `sched()`s (`proc.c:209`, `pc/trap.c:438`). The
+    /// shell gets the processor back, kills the loop, and says so.
+    #[test]
+    fn a_process_in_a_tight_loop_does_not_stop_the_system() {
+        let out = typing(
+            "{while(~ 1 1) x=1} &\n\
+             echo kill >/proc/$apid/ctl\n\
+             echo still here\n",
+        );
+        assert!(out.contains("still here"), "{out}");
+    }
+
+    /// `/dev/sysstat` reads the machine: the clock has interrupted and
+    /// the kernel has answered calls, so neither count is zero.
+    #[test]
+    fn sysstat_counts_interrupts_and_calls() {
+        let out = typing("sleep 1\ncat /dev/sysstat\n");
+        // The line follows the prompts it was typed after; the ten numbers
+        // are its last ten words.
+        let line = out.lines().find(|l| l.split_whitespace().count() >= 10).expect(&out);
+        let words: Vec<&str> = line.split_whitespace().collect();
+        let v: Vec<u64> = words[words.len() - 10..].iter().map(|n| n.parse().unwrap()).collect();
+        assert!(v[2] > 0, "interrupts: {line}");
+        assert!(v[3] > 0, "syscalls: {line}");
+    }
+
     /// `#ec` is bound under `#e` (`initcode.c:28`) and is EMPTY, because what
     /// fills it on a Plan 9 machine is every line of `plan9.ini`
     /// (`pc/main.c:257`) and this host has no counterpart to one. The three
@@ -410,7 +439,8 @@ mod userspace {
     /// A pipeline, typed — two processes and the pipe between them.
     #[test]
     fn a_pipeline_typed_at_the_console() {
-        assert!(typing("echo shouting | tr a-z A-Z\n").contains("SHOUTING\n"));
+        let out = typing("echo shouting | tr a-z A-Z\n");
+        assert!(out.contains("SHOUTING\n"), "{out:?}");
     }
 
     /// rc's own control flow, over commands that are separate processes.
