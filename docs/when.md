@@ -30,7 +30,7 @@ Measured 2026-09-20.
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 28 calls, `exec`, and `unionread` |
 
-151 kernel tests, and 21 in `hosts/ipnx` — five that run a guest module against a real kernel, and sixteen that boot the whole system.
+165 kernel tests, and 26 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and nineteen that boot the whole system.
 
 ## The host — `hosts/ipnx`, three files
 
@@ -230,9 +230,10 @@ exactly as `boot.c:171` does. `ls /` shows both halves because `unionread`
 reads every element. A file written under `/tmp` is a file on the host, so it
 is still there after the next boot.
 
-Twenty-one tests in `hosts/ipnx` run the real thing — thirteen typing at a
-scripted console after a full boot, three booting twice into a filesystem of
-their own, and five driving a guest module directly. They need
+Twenty-six tests in `hosts/ipnx` — sixteen typing at a scripted console
+after a full boot, three booting twice into a filesystem of their own, five
+driving a guest module directly, and two on the machine: that `Guest` is
+`Send` with no `unsafe impl`, and that a thread nobody entered has no kernel. They need
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
 and say so rather than passing quietly.
 

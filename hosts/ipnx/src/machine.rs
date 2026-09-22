@@ -23,7 +23,7 @@
 use ipnx_kernel::machine::{Left, Machine, Syscalls, Tod};
 use ipnx_kernel::proc::rf;
 use ipnx_kernel::{Call, Pid, Ret};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -111,48 +111,86 @@ fn noop_waker() -> Waker {
     unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) }
 }
 
-/// What the store carries while a process runs: which process it is, and the
-/// kernel to call. Plan 9 keeps the first in `up` and needs nothing at all for
-/// the second, because its kernel is reachable from anywhere.
+/// What the store carries while a process runs: **which process it is, and
+/// nothing else**. Plan 9 keeps that in `up`.
 ///
-/// The kernel is held as a pointer because wasmtime's `Store<T>` requires
-/// `T: 'static` and this borrow is not. **The invariant that makes it sound:**
-/// the pointer is set afresh by every [`Machine::gotolabel`], which holds the
-/// borrow for the whole of that call, and a process only ever runs inside
-/// one. Between calls the pointer is not dereferenced, because nothing of
-/// the process is running. Nothing else may construct a `Guest`.
+/// The kernel is not here. It lives in [`KERNEL`], one per thread, which is
+/// what makes `Guest` `Send` by itself: a pid is a number, and wasmtime may
+/// move a number wherever it likes. It held a raw pointer to the kernel until
+/// 2026-09-22, which made it `!Send` and needed `unsafe impl Send` to satisfy
+/// `call_async` — a promise the compiler could not check, whose failure would
+/// have been memory corruption with no message.
 pub struct Guest {
     /// The process making the calls. It is not constant for the life of the
     /// store: during a `procrfork` the child runs on this instance, and every
     /// call it makes is the child's.
     pid: Pid,
-    sys: *mut dyn Syscalls,
 }
 
-/// **Nothing here is ever sent anywhere.** wasmtime asks for `Send` because a
-/// fiber it suspends *may in general* be resumed on another thread; this
-/// machine's executor is a poll loop on the thread that booted, the kernel is
-/// `Rc`-based and could not survive a move, and no other thread exists. The
-/// claim is the same one the raw pointer above already rests on, one scope
-/// wider: the scheduler loop owns the kernel and is on the stack for as long
-/// as any process can run.
-unsafe impl Send for Guest {}
+thread_local! {
+    /// **The kernel, for whatever process is running on this thread.** Plan
+    /// 9's counterpart is per processor: `up` and `m` are `Mach` fields, one
+    /// per CPU (`pc/dat.h`), and a process runs on exactly one of them at a
+    /// time. A thread is this machine's processor.
+    ///
+    /// [`Machine::gotolabel`] sets it for exactly as long as it holds the
+    /// kernel's borrow, and puts back what was there when it returns — so
+    /// every call reads a pointer taken from the borrow that is live NOW, not
+    /// one kept from an earlier entry.
+    ///
+    /// The kernel is `Rc`-based and belongs to the thread that booted it.
+    /// **A fiber resumed on any other thread finds this empty and stops with a
+    /// message**, where before it would have used the kernel from the wrong
+    /// thread. Under `cargo test` each test is its own thread and sees only
+    /// its own kernel, which is the isolation that was only assumed before.
+    static KERNEL: Cell<Option<*mut (dyn Syscalls + 'static)>> = const { Cell::new(None) };
+}
 
-impl Guest {
-    /// # Safety
-    /// Only called from a closure the store owns, so the invariant above
-    /// holds: `touser` is on the stack and still holds the borrow.
-    fn sys(&mut self) -> &mut dyn Syscalls {
-        unsafe { &mut *self.sys }
+/// Puts [`KERNEL`] back as it was, however the poll ends — a return, an
+/// error or a panic.
+struct Entered(Option<*mut (dyn Syscalls + 'static)>);
+
+impl Drop for Entered {
+    fn drop(&mut self) {
+        KERNEL.with(|k| k.set(self.0));
     }
 }
 
-/// The one shape every import has: take the calling pid and the kernel out of
-/// the store, and make a call.
+/// Make `sys` the kernel for this thread until the returned guard drops.
+fn enter(sys: &mut dyn Syscalls) -> Entered {
+    // The cast drops the borrow's lifetime, because a thread-local has to be
+    // `'static`. **The invariant that makes it sound:** the guard is dropped
+    // before `sys`'s borrow ends — `gotolabel` holds both, in that order — so
+    // the pointer is never read after the borrow it came from.
+    let p: *mut (dyn Syscalls + 'static) = unsafe {
+        std::mem::transmute::<*mut dyn Syscalls, *mut (dyn Syscalls + 'static)>(sys)
+    };
+    Entered(KERNEL.with(|k| k.replace(Some(p))))
+}
+
+/// The kernel for the process running on this thread.
+///
+/// # Panics
+/// If there is none: a process is running where nobody entered it, which
+/// can only mean a fiber was resumed on a thread other than the one that
+/// owns its kernel. That is a bug in whatever resumed it, and saying so is
+/// the whole point of keeping the kernel here.
+fn kernel() -> *mut (dyn Syscalls + 'static) {
+    KERNEL.with(|k| k.get()).expect(
+        "a process ran on a thread with no kernel: a fiber was resumed on a thread \
+         other than the one that booted its kernel",
+    )
+}
+
+/// The one shape every import has: which process is calling, and the kernel
+/// to call.
 fn call(c: &mut Caller<'_, Guest>, k: Call) -> Result<Ret, String> {
-    let g = c.data_mut();
-    let (pid, sys) = (g.pid, g.sys());
-    sys.syscall(pid, k)
+    let pid = c.data().pid;
+    // Sound for as long as [`enter`]'s invariant holds: this runs inside a
+    // poll, inside `gotolabel`, and nothing else makes a `&mut` to the kernel
+    // while it does — every call finishes before control returns to the
+    // guest.
+    unsafe { (*kernel()).syscall(pid, k) }
 }
 
 fn memory(c: &mut Caller<'_, Guest>) -> Result<Memory, wasmtime::Error> {
@@ -279,16 +317,16 @@ impl Machine for Wasm {
         let mut f = self.procs.borrow_mut().remove(&pid).ok_or("no such process")?;
         if f.run.is_none() {
             let (image, args) = f.image.take().ok_or("the process has no image")?;
-            f.run = Some(self.start(pid, image, args, sys)?);
-        } else {
-            // A suspended fiber holds a `Guest` with last time's pointer.
-            // The kernel is the same object either way; this is the borrow
-            // being renewed, and it is why the pointer is never held.
-            self.reseat(pid, sys);
+            f.run = Some(self.start(pid, image, args)?);
         }
         let mut run = f.run.take().expect("a fiber");
         let waker = noop_waker();
-        let polled = run.as_mut().poll(&mut Context::from_waker(&waker));
+        // The kernel is this thread's for the length of the poll, and not a
+        // moment longer: `entered` drops before `sys`'s borrow ends.
+        let polled = {
+            let _entered = enter(sys);
+            run.as_mut().poll(&mut Context::from_waker(&waker))
+        };
         // Whatever `exec` left in the table wins; otherwise the fiber goes
         // back, suspended where it stopped.
         let replaced = self.procs.borrow().contains_key(&pid);
@@ -325,14 +363,9 @@ impl Wasm {
         pid: Pid,
         image: Vec<u8>,
         args: Vec<String>,
-        sys: &mut dyn Syscalls,
     ) -> Result<Pin<Box<dyn Future<Output = Result<(), wasmtime::Error>> + Send>>, String> {
         let module = Module::new(&self.engine, &image).map_err(|e| e.to_string())?;
-        // The cast drops the borrow's lifetime; [`Guest`] records what makes
-        // it sound.
-        let sys: *mut (dyn Syscalls + 'static) =
-            unsafe { std::mem::transmute::<*mut dyn Syscalls, *mut (dyn Syscalls + 'static)>(sys) };
-        let mut store = Store::new(&self.engine, Guest { pid, sys });
+        let mut store = Store::new(&self.engine, Guest { pid });
         let linker = self.linker.clone();
         Ok(Box::pin(async move {
             let instance = linker.instantiate_async(&mut store, &module).await?;
@@ -342,13 +375,6 @@ impl Wasm {
             start.call_async(&mut store, (argc, argv, heap)).await
         }))
     }
-
-    /// Renew the kernel pointer a suspended fiber's store holds. There is no
-    /// way to reach inside a running future, so the store keeps it and this
-    /// is a no-op: the pointer a fiber was built with is the same kernel it
-    /// is handed now, because one kernel exists and the scheduler owns it
-    /// for the life of the system.
-    fn reseat(&self, _pid: Pid, _sys: &mut dyn Syscalls) {}
 }
 
 /// Place the argument block/// Place the argument block, the way `sysexec` places one on the new stack
@@ -740,5 +766,33 @@ fn statlike(
     match write(c, p, &d) {
         Ok(()) => d.len() as i32,
         Err(_) => -1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `call_async` needs the store's data to be `Send`, and `Guest` now is
+    /// by construction — this fails to compile if a field ever makes it not.
+    #[test]
+    fn guest_is_send_without_a_promise() {
+        fn send<T: Send>() {}
+        send::<Guest>();
+    }
+
+    /// A thread nobody entered has no kernel, and says so rather than using
+    /// another thread's.
+    #[test]
+    fn a_thread_with_no_kernel_stops_with_a_message() {
+        let r = std::thread::spawn(|| {
+            kernel();
+        })
+        .join();
+        let e = r.expect_err("kernel() returned on a thread nobody entered");
+        let msg = e.downcast_ref::<&str>().map(|s| s.to_string())
+            .or_else(|| e.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(msg.contains("no kernel"), "{msg}");
     }
 }
