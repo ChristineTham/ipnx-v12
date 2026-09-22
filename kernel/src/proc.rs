@@ -416,6 +416,11 @@ pub struct Procs {
     /// `MACHP(0)->ticks` — what `updatecpu` measures against. The machine
     /// has the clock; this is the count the scheduler sees.
     pub ticks: u64,
+    /// `up` — **the process running now** (`portdat.h`, a global there and
+    /// set by `sched()`: `up = p`). `ready` needs it for the one condition
+    /// that makes `m->readied` mean anything, and `updatecpu` for the
+    /// branch that decays towards 1000 rather than 0.
+    pub up: Option<Pid>,
     /// `MACHP(0)->load`. **Nothing computes a load average yet**, so it is
     /// zero and `reprioritize` returns `basepri` — which is exactly what
     /// Plan 9 does when load is zero (`proc.c`, first line).
@@ -434,6 +439,7 @@ impl Procs {
             runq: (0..pri::NRQ).map(|_| Vec::new()).collect(),
             nrdy: 0,
             readied: None,
+            up: Some(1),
             ticks: 0,
             load: 0,
         }
@@ -492,6 +498,7 @@ impl Procs {
     /// `updatecpu` (`proc.c`) — the decaying average of how much processor a
     /// process has had. `D = schedgain*HZ*Scaling`, and the running process
     /// decays towards 1000 while every other decays towards 0.
+    /// `running` is Plan 9's `p != up` (`updatecpu`), inverted.
     fn updatecpu(&mut self, pid: Pid, running: bool) {
         const SCHEDGAIN: u64 = 30;
         const HZ: u64 = 100;
@@ -533,11 +540,16 @@ impl Procs {
     /// is the one `runproc` takes next unless something higher is waiting,
     /// which is how a `wakeup` hands the processor over.
     pub fn ready(&mut self, pid: Pid) {
-        if self.tab.get(&pid).map(|p| p.state) == Some(State::Ready) {
-            return;
+        // *"if(up != p && …) m->readied = p; /* group scheduling */"*
+        // (`proc.c:428`). **`up != p` is load-bearing**: a process readying
+        // ITSELF on its way out of `sched` must not claim the slot, or it
+        // takes back the processor it just gave up and whatever it readied
+        // before never runs. A pipeline's first stage waits for the shell
+        // that made it to exit.
+        if self.up != Some(pid) {
+            self.readied = Some(pid);
         }
-        self.readied = Some(pid);
-        self.updatecpu(pid, false);
+        self.updatecpu(pid, self.up == Some(pid));
         let pri = self.reprioritize(pid);
         if let Some(p) = self.tab.get_mut(&pid) {
             p.state = State::Ready;
@@ -661,6 +673,21 @@ impl Procs {
         }
     }
 
+    /// `anyready()` (`proc.c:188`) — is anything on a run queue?
+    pub fn anyready(&self) -> bool {
+        self.nrdy > 0
+    }
+
+    /// `yield` (`proc.c:454`), everything but the `sched()`: *"pretend we
+    /// just used 1/2 tick"*, so yielding does not look like idleness and
+    /// raise the yielder's priority. The caller leaves after it.
+    pub fn yield_(&mut self, pid: Pid) {
+        const SCALING: u64 = 2;
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.lastupdate = p.lastupdate.saturating_sub(SCALING / 2);
+        }
+    }
+
     /// Is anything else runnable? `runproc` without taking it — what
     /// `sched` asks before it decides there is nobody and idles.
     pub fn runproc_peek(&self) -> Option<Pid> {
@@ -765,7 +792,12 @@ impl Procs {
             dot: parent.dot.clone(),
             status: None,
             waited: flags & rf::NOWAIT != 0,
-            state: State::Ready,
+            // `newproc` leaves a child `Scheding` (`proc.c:681`), not
+            // `Ready`: it is `ready(p)` that makes it runnable, and
+            // `sysrfork` calls it on the line before it scheds
+            // (`sysproc.c`). A child born `Ready` is one nothing ever puts
+            // on a queue.
+            state: State::Scheding,
             priority: pri::NORMAL,
             r: None,
             sleep: Rendez::default(),
@@ -928,6 +960,19 @@ impl Procs {
         // goes on the parent's queue and **`wakeup(&p->waitr)`** — the
         // parent is asleep in `pwait` until one arrives. Without this a
         // `await` would sleep for ever.
+        // **Off the run queue.** On Plan 9 a process that exits is `up` and
+        // so is on no queue — `runproc` took it off to enter it. Here a
+        // `procrfork` child can be readied and then end before the scheduler
+        // ever enters it, because it runs its few instructions on the
+        // parent's own instance; leaving it queued means `sched` picks a
+        // process the machine has nothing of.
+        if self.state(pid) == State::Ready {
+            let pri = self.tab[&pid].priority;
+            self.dequeueproc(pri, pid);
+        }
+        if self.readied == Some(pid) {
+            self.readied = None;
+        }
         self.setstate(pid, State::Moribund);
         self.wakeup(Rid(ppid, Which::Waitr));
     }
@@ -938,6 +983,21 @@ impl Procs {
     /// child waits for its pid.
     ///
     /// A child forked with `RFNOWAIT` is never reported and leaves no zombie.
+    /// `haswaitq` (`proc.c:1271`) — the condition `pwait` sleeps on: is
+    /// there a wait record yet? A reaped child is one with a status that
+    /// nobody has taken.
+    pub fn haswaitq(&self, pid: Pid) -> bool {
+        self.tab.values().any(|p| p.ppid == pid && !p.waited && p.status.is_some())
+    }
+
+    /// `up->nchild` (`pwait`, `proc.c:1294`): *"if(up->nchild == 0 &&
+    /// up->waitq == 0) error(Enochild)"*. A process with neither a living
+    /// child nor a record waiting has nothing to wait for, and waiting would
+    /// be for ever.
+    pub fn nchild(&self, pid: Pid) -> usize {
+        self.tab.values().filter(|p| p.ppid == pid && !p.waited).count()
+    }
+
     pub fn await_child(&mut self, pid: Pid) -> Option<Waitmsg> {
         let cpid = *self
             .tab

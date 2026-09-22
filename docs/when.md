@@ -27,7 +27,7 @@ Measured 2026-09-20.
 | `namec.rs` | name → channel, with the mount check at every component; all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk |
 | `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `checkalarms` — all `port/proc.c`'s |
 | `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
-| `machine.rs` | `procsetup` and `touser` — the machine-dependent half, naming no machine |
+| `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 28 calls, `exec`, and `unionread` |
 
 151 kernel tests, and 21 in `hosts/ipnx` — five that run a guest module against a real kernel, and sixteen that boot the whole system.
@@ -70,12 +70,18 @@ return0, 0, n)`: the process commits to its own `Rendez`, becomes
 `sched`'s tail takes it off the run queue and marks it `Running`. The
 floor is `TK2MS(1)`, 10ms at the PC's `HZ`.
 
-**What is missing is the switch, and only the switch.** Where Plan 9's
-`sched()` ends with `gotolabel(&up->sched)` — `pc/l.s:992`, the
-architecture's — this asks `runproc` who else is runnable, finds nobody,
-and reaches `idlehands()`: `Machine::delay` is that halt. Every state the
-process passes through is the one it will pass through when the machine
-can leave it.
+**The switch is built** (2026-09-22). `Machine::gotolabel(pid)` is
+`gotolabel(&up->sched)` (`pc/l.s:992`): enter the process, and return when
+it leaves. The machine's is `Config::async_support` — a `wasmtime-fiber`
+per process, where one poll is the jump and a future that comes back
+`Pending` is a stack suspended inside a host call. `Kernel::schedinit` is
+`schedinit` (`proc.c:67`), the loop every `gotolabel(&m->sched)` lands in.
+
+**So processes are concurrent.** A pipeline is two of them with the shell
+asleep in `pwait` between; `sleep` leaves the processor and `checkalarms`
+brings it back; `exec` gives a process a new image and unwinds the old
+one's frames, which is what `exec` means. `/proc/1/status` reads `Wakeme`
+while a command runs, because that is what `init` is doing.
 
 **Four still refuse, and a scheduler is the whole of what they want:**
 `alarm`, `notify`, `noted`, `rendezvous`. With them go `RFNOTEG` (absent

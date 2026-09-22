@@ -9,5 +9,8 @@ edition.workspace = true
 ipnx-kernel = { path = "../../kernel" }
 # The engine. It lives HERE and only here: the kernel's machine trait names no
 # machine, so this dependency cannot reach it.
-wasmtime = { version = "39", default-features = false, features = ["cranelift", "runtime", "std"] }
+# `async` is `wasmtime-fiber`: a host-stack fiber, which is this machine's
+# `setlabel`/`gotolabel` (`pc/l.s:1000`, `:992`). Nothing here is threaded —
+# the executor is a poll loop and the run queue is the kernel's.
+wasmtime = { version = "39", default-features = false, features = ["cranelift", "runtime", "std", "async"] }
 wat = "1"

@@ -70,7 +70,12 @@ mod tests {
             root.addbootfile(n, b.to_vec());
         }
         let mut k = boot(root, Box::new(Term::default()), None)?;
+        // `exec` gives pid 1 an image; `ready` puts it on the queue; and
+        // `schedinit` is what runs anything at all (`proc.c:67`). It was
+        // `exec` that ran the process, which is not what `sysexec` does.
         k.exec(1, "/boot/init", &["init".to_string()])?;
+        k.procs.borrow_mut().ready(1);
+        k.schedinit()?;
         let status = k.procs.borrow().status(1);
         Ok(status.unwrap_or_default())
     }
@@ -162,6 +167,8 @@ mod tests {
         root.addbootfile("init", wat::parse_str(ARGS).unwrap());
         let mut k = boot(root, Box::new(Term::default()), None).unwrap();
         k.exec(1, "/boot/init", &["init".into(), "second".into()]).unwrap();
+        k.procs.borrow_mut().ready(1);
+        k.schedinit().unwrap();
         assert_eq!(k.procs.borrow().status(1).as_deref(), Some("second"));
     }
 
@@ -363,6 +370,29 @@ mod userspace {
         }
         assert!(!out.contains("#M"), "a mount names its server, not `#M`: {out}");
         assert!(!out.contains("#//"), "paths, not device letters and qids: {out}");
+    }
+
+    /// **Two processes really do alternate.** A pipeline is the everyday
+    /// proof: `echo` and `tr` are separate processes, the shell sleeps in
+    /// `await` while they run, and the second sees what the first wrote.
+    /// Before the switch, a child ran to its end inside the call that made
+    /// it and there was never more than one runnable process.
+    #[test]
+    fn a_pipeline_is_two_processes_and_the_shell_waits_for_them() {
+        let out = typing("echo shouting | tr a-z A-Z\ncat /proc/1/status\n");
+        assert!(out.contains("SHOUTING"), "{out}");
+        // Pid 1 is `init`, asleep in `await` for as long as a shell runs —
+        // `pwait`'s `sleep(&up->waitr, haswaitq, up)`. It reports `Wakeme`
+        // because that is what it is.
+        assert!(out.contains("Wakeme"), "init waits in pwait: {out}");
+    }
+
+    /// `sleep` leaves the processor: the process is `Wakeme` with a
+    /// deadline and `checkalarms` is what ends it. With nothing else to run
+    /// `schedinit` reaches `idlehands()`, and the shell comes back.
+    #[test]
+    fn a_sleeping_process_comes_back() {
+        assert!(typing("sleep 1\necho awake\n").contains("awake"));
     }
 
     /// `#ec` is bound under `#e` (`initcode.c:28`) and is EMPTY, because what

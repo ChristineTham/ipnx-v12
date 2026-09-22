@@ -167,7 +167,12 @@ impl Kernel {
     ///
     /// Only step 3 is not Plan 9's own sequence, and only because a module
     /// machine has no address space to have mapped the image into first.
-    pub fn exec(&mut self, pid: Pid, path: &str, args: &[String]) -> Result<String, String> {
+    /// **It does not run the process.** `sysexec` sets the new image up and
+    /// returns; the process reaches user mode from `syscall()`'s exit
+    /// (`pc/trap.c:780`), and it is `sched()` that enters it. So this ends
+    /// where Plan 9's does: the image is the process's now, and it is
+    /// `Ready`.
+    pub fn exec(&mut self, pid: Pid, path: &str, args: &[String]) -> Result<(), String> {
         let image = self.exec_image(pid, path)?;
         self.machine.procsetup(pid)?;
         // `TReal`'s origin. Plan 9 takes it from `MACHP(0)->ticks`; here the
@@ -175,24 +180,86 @@ impl Kernel {
         // what a clock is.
         let now = self.machine.todget().nsec;
         self.procs.borrow_mut().started(pid, now);
-        // The machine runs the process, and the process calls back here while
-        // it does. Plan 9 needs no arrangement for that — a trap lands in
-        // `syscall()` and reaches the kernel through globals. Here the kernel
-        // is lent to the machine as the thing to call, and the machine stays
-        // where it is: a process that `exec`s reaches this line again from
-        // inside it, and must find the same machine still here.
-        let m = self.machine.clone();
-        let status = m.touser(pid, &image, args, self)?;
-        // **A status the process set stands.** `sysexec` never returns in
-        // Plan 9 — the process runs, and `sysexits` sets the status
-        // (`sysproc.c:668`). Here `touser` returns when the process is
-        // finished, and recording its return unconditionally would clobber
-        // what the process said on its way out.
-        let already = self.procs.borrow().status(pid).is_some();
-        if !already {
-            self.procs.borrow_mut().exits(pid, &status, Some(now));
+        self.machine.touser(pid, &image, args)?;
+        Ok(())
+    }
+
+    /// `schedinit` (`proc.c:67`) — **the scheduler**, and *"never returns"*.
+    ///
+    /// Plan 9's is the landing point of every `gotolabel(&m->sched)`:
+    /// `setlabel(&m->sched)` marks it, then it deals with the process that
+    /// just left by looking at its state —
+    ///
+    /// ```c
+    /// switch(up->state) {
+    /// case Running:  ready(up);            break;
+    /// case Moribund: up->state = Dead; ... break;
+    /// }
+    /// sched();
+    /// ```
+    ///
+    /// — and calls `sched()`, which picks the next with `runproc` and enters
+    /// it with `gotolabel(&up->sched)`. A loop is what that is, once the
+    /// switch is a call that returns rather than a jump that does not.
+    ///
+    /// It ends when nothing is left to run: Plan 9's `idlehands()` halts
+    /// until the next interrupt and there is always another, because the
+    /// clock is one. Here the only thing that can wake a sleeper is its own
+    /// timer, so no runnable process and no timer is the end of the system.
+    pub fn schedinit(&mut self) -> Result<(), String> {
+        let mut left: Option<(Pid, machine::Left)> = None;
+        loop {
+            // `schedinit`'s switch on the state of the process that left.
+            if let Some((pid, how)) = left.take() {
+                let mut procs = self.procs.borrow_mut();
+                match (how, procs.state(pid)) {
+                    // *"case Moribund: up->state = Dead"* — and a process
+                    // whose image simply ended is one too: it never called
+                    // `exits`, so nothing recorded a status.
+                    (machine::Left::Exited, _) => {
+                        drop(procs);
+                        let now = self.machine.todget().nsec;
+                        if self.procs.borrow().status(pid).is_none() {
+                            self.procs.borrow_mut().exits(pid, "", Some(now));
+                        }
+                        self.procs.borrow_mut().setstate(pid, proc::State::Dead);
+                    }
+                    // *"case Running: ready(up)"* — it gave up the processor
+                    // without going to sleep, so it goes back on the queue.
+                    (machine::Left::Sched, proc::State::Running) => procs.ready(pid),
+                    (machine::Left::Sched, proc::State::Moribund) => {
+                        procs.setstate(pid, proc::State::Dead)
+                    }
+                    // `Wakeme`, `Ready`, `Stopped` — it said where it went.
+                    _ => {}
+                }
+            }
+
+            // `sched()`: `p = runproc()` and enter it.
+            let next = self.procs.borrow_mut().runproc();
+            let Some(pid) = next else {
+                // `idlehands()`. The clock is what wakes a Plan 9 processor;
+                // here it is a sleeper's own deadline, and with none there is
+                // nothing that can ever make a process runnable again.
+                let now = self.machine.todget().nsec;
+                let Some(when) = self.procs.borrow().nextalarm() else {
+                    return Ok(());
+                };
+                self.machine.delay(when.saturating_sub(now) / 1_000_000);
+                let now = self.machine.todget().nsec;
+                self.procs.borrow_mut().checkalarms(now.max(when));
+                continue;
+            };
+            // `sched`'s tail (`proc.c:157`): `up = p; up->state = Running;`
+            {
+                let mut procs = self.procs.borrow_mut();
+                procs.up = Some(pid);
+                procs.setstate(pid, proc::State::Running);
+            }
+            self.up.borrow_mut().pid = pid;
+            let m = self.machine.clone();
+            left = Some((pid, m.gotolabel(pid, self)?));
         }
-        Ok(self.procs.borrow().status(pid).unwrap_or(status))
     }
 
     /// Steps 1 and 2 alone: resolve and read. Split out because it is entirely
@@ -245,7 +312,7 @@ mod tests {
     #[derive(Default)]
     pub(crate) struct Log {
         ran: Vec<(Pid, Vec<u8>)>,
-        order: Vec<&'static str>,
+        pub(crate) order: Vec<&'static str>,
         /// What `delay` was asked to wait for, so a test can see that a
         /// sleep reached the machine without one actually happening.
         pub(crate) delayed: Vec<u64>,
@@ -265,17 +332,22 @@ mod tests {
         fn delay(&self, ms: u64) {
             self.0.borrow_mut().delayed.push(ms);
         }
-        fn touser(
-            &self,
-            pid: Pid,
-            image: &[u8],
-            _a: &[String],
-            _sys: &mut dyn machine::Syscalls,
-        ) -> Result<String, String> {
+        fn touser(&self, pid: Pid, image: &[u8], _a: &[String]) -> Result<(), String> {
             let mut l = self.0.borrow_mut();
             l.order.push("touser");
             l.ran.push((pid, image.to_vec()));
-            Ok(String::new())
+            Ok(())
+        }
+        /// A test machine has no process to enter, so every one it is given
+        /// runs to the end at once. That is `Left::Exited`, and it is what
+        /// keeps `schedinit` from looping on a process nothing can run.
+        fn gotolabel(
+            &self,
+            _pid: Pid,
+            _sys: &mut dyn machine::Syscalls,
+        ) -> Result<machine::Left, String> {
+            self.0.borrow_mut().order.push("gotolabel");
+            Ok(machine::Left::Exited)
         }
     }
 
@@ -387,6 +459,13 @@ pub enum Ret {
     Pid(Pid),
     Wait(Pid, String),
     Str(String),
+    /// **The call did not finish: the process must leave.** `sleep`
+    /// (`proc.c:815`) commits the process and then `gotolabel(&m->sched)`,
+    /// and a machine cannot jump — so the answer travels back instead, and
+    /// the machine leaves. The call resumes where it stopped when `sched`
+    /// enters the process again, which is what the process's own stack is
+    /// for.
+    Sched,
 }
 
 impl Kernel {
@@ -416,14 +495,33 @@ impl Kernel {
     fn dispatch(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
         match call {
             // ---- processes
-            Call::Rfork { flags } => match self.procs.borrow_mut().rfork(up, flags) {
-                Some(pid) => Ok(Ret::Pid(pid)),
-                None => {
-                    proc::Procs::rforkcheck(flags)?;
-                    Ok(Ret::Pid(0))
+            // `sysrfork` (`sysproc.c`) ends `ready(p); sched();` — **the
+            // child goes on the run queue and the parent gives way to it**.
+            // Without the `ready` a child exists and nothing can ever pick
+            // it; without the `sched` the parent runs on, which here it
+            // does anyway, because `procrfork` runs the child's few
+            // instructions on the parent's own instance until it `exec`s.
+            Call::Rfork { flags } => {
+                let child = self.procs.borrow_mut().rfork(up, flags);
+                match child {
+                    Some(pid) => {
+                        self.procs.borrow_mut().ready(pid);
+                        Ok(Ret::Pid(pid))
+                    }
+                    None => {
+                        proc::Procs::rforkcheck(flags)?;
+                        Ok(Ret::Pid(0))
+                    }
                 }
-            },
-            Call::Exec { path, args } => Ok(Ret::Str(self.exec(up, &path, &args)?)),
+            }
+            // **`exec` does not return** (`sysproc.c:302`). It gives the
+            // process a new image and the process IS that image now; the
+            // machine's answer is to leave, and `sched` enters what it
+            // left behind.
+            Call::Exec { path, args } => {
+                self.exec(up, &path, &args)?;
+                Ok(Ret::Ok)
+            }
             Call::Exits { status } => {
                 let now = self.machine.todget().nsec;
                 self.procs.borrow_mut().exits(up, &status, Some(now));
@@ -433,10 +531,33 @@ impl Kernel {
             // and answers its length; `wait(2)` parses it back with
             // `tokenize`. The times belong to the reaped child and nothing
             // outside here has them.
-            Call::Await => match self.procs.borrow_mut().await_child(up) {
-                Some(w) => Ok(Ret::Str(w.format())),
-                None => Err("no living children".into()),
-            },
+            // `pwait` (`proc.c:1288`), and its shape is the whole of why a
+            // scheduler was needed:
+            //
+            // ```c
+            // if(up->nchild == 0 && up->waitq == 0)
+            //     error(Enochild);
+            // sleep(&up->waitr, haswaitq, up);
+            // ```
+            //
+            // **It sleeps.** `pexit` wakes it (`proc.c:1219`). This used to
+            // answer "no living children" the moment no record was ready,
+            // because there was nothing a process could do but return.
+            Call::Await => {
+                let ready = self.procs.borrow().haswaitq(up);
+                if !ready {
+                    if self.procs.borrow().nchild(up) == 0 {
+                        return Err(ENOCHILD.into());
+                    }
+                    let r = proc::Rid(up, proc::Which::Waitr);
+                    self.procs.borrow_mut().sleep(up, r, false);
+                    return Ok(Ret::Sched);
+                }
+                match self.procs.borrow_mut().await_child(up) {
+                    Some(w) => Ok(Ret::Str(w.format())),
+                    None => Err(ENOCHILD.into()),
+                }
+            }
             Call::Errstr { buf } => Ok(Ret::Str(self.procs.borrow_mut().errstr(up, &buf))),
 
             // ---- the namespace
@@ -656,43 +777,27 @@ impl Kernel {
             // machine, which is where Plan 9 puts `delay` too.
             Call::Sleep { ms } => {
                 if ms == 0 {
+                    // `yield()` (`proc.c:454`): *"if(anyready()){ ... sched();
+                    // }"* — and nothing at all when nobody else is waiting.
+                    // The `lastupdate` nudge is *"pretend we just used 1/2
+                    // tick"*, so a process that yields is not rewarded for it.
+                    if self.procs.borrow().anyready() {
+                        self.procs.borrow_mut().yield_(up);
+                        return Ok(Ret::Sched);
+                    }
                     return Ok(Ret::Ok);
                 }
                 // `if(n < TK2MS(1)) n = TK2MS(1)` — `TK2MS(1)` is `1000/HZ`,
                 // 10ms at the PC's `HZ` of 100 (`pc/mem.h:31`). A sleep
                 // shorter than a tick is a sleep of one tick.
                 let ms = ms.max(TK2MS1);
-                let now = self.machine.todget().nsec;
-                let deadline = now + ms * 1_000_000;
+                let deadline = self.machine.todget().nsec + ms * 1_000_000;
                 // `tsleep(&up->sleep, return0, 0, n)` (`sysproc.c`). The
                 // condition is `return0`, so it always commits: this sleep
                 // has no reason but the clock.
                 let r = proc::Rid(up, proc::Which::Sleep);
                 self.procs.borrow_mut().tsleep(up, r, false, deadline);
-                // Here Plan 9 calls `sched()`, whose last line is
-                // `gotolabel(&up->sched)` — the architecture's
-                // (`pc/l.s:992`). **This machine has no switch yet**, so
-                // what follows is `sched`'s other end: ask who else is
-                // runnable, and with nobody, `idlehands()` — halt until the
-                // clock. `Machine::delay` is that halt.
-                //
-                // The state is real either way: the process is `Wakeme`
-                // with a deadline, and `checkalarms` is what ends it.
-                let next = self.procs.borrow().runproc_peek();
-                if next.is_none() {
-                    self.machine.delay(ms);
-                }
-                let now = self.machine.todget().nsec;
-                self.procs.borrow_mut().checkalarms(now.max(deadline));
-                // `sched`'s tail (`proc.c:157`): `p = runproc(); up = p;
-                // up->state = Running;` — and **`runproc` takes it off its
-                // queue on the way**, which is the half a `setstate` here
-                // would have missed.
-                let p = self.procs.borrow_mut().runproc();
-                if let Some(p) = p {
-                    self.procs.borrow_mut().setstate(p, proc::State::Running);
-                }
-                Ok(Ret::Ok)
+                Ok(Ret::Sched)
             }
 
             // The four that a scheduler is the whole of. Each says what Plan
@@ -813,6 +918,9 @@ fn bind_of(flag: i32) -> ns::Bind {
         _ => ns::Bind::Replace,
     }
 }
+
+/// `Enochild` (`error.h`) — *"no living children"*.
+const ENOCHILD: &str = "no living children";
 
 /// `TK2MS(1)` — *"#define TK2MS(x) ((x)*(1000/HZ))"* (`port/portfns.h`),
 /// with the PC's `HZ` of 100 (`pc/mem.h:31`). The shortest sleep there is.
@@ -1355,33 +1463,66 @@ mod syscalls {
 
     /// `syssleep` (`sysproc.c`), both branches.
     ///
-    /// `n <= 0` is `yield()`, and yielding to nobody is returning. `n > 0`
-    /// is `tsleep(&up->sleep, return0, 0, n)`, raised to one tick —
-    /// `TK2MS(1)`, 10ms at the PC's `HZ` — because *"if(n < TK2MS(1)) n =
-    /// TK2MS(1)"*. With nobody else runnable, `sched` reaches
-    /// `idlehands()`, and `Machine::delay` is that halt.
+    /// `n <= 0` is `yield()`, and `yield` does nothing at all when nobody
+    /// else is ready: *"if(anyready()){ … sched(); }"* (`proc.c:454`).
+    /// `n > 0` is `tsleep(&up->sleep, return0, 0, n)`, raised to one tick —
+    /// `TK2MS(1)`, 10ms at the PC's `HZ`.
+    ///
+    /// **And then it leaves.** `Ret::Sched` is `gotolabel(&m->sched)`: the
+    /// process is `Wakeme` with a deadline and the call has not finished.
+    /// Nothing waits inside the kernel any more.
     #[test]
-    fn sleep_yields_for_nothing_and_delays_for_a_time() {
+    fn sleep_yields_for_nothing_and_leaves_for_a_time() {
         let (mut k, log) = tests::watched();
-        k.syscall(1, Call::Sleep { ms: 0 }).unwrap();
-        assert!(log.borrow().delayed.is_empty(), "a yield is not a wait");
+        assert_eq!(k.syscall(1, Call::Sleep { ms: 0 }).unwrap(), Ret::Ok, "nobody to yield to");
 
-        k.syscall(1, Call::Sleep { ms: 250 }).unwrap();
-        k.syscall(1, Call::Sleep { ms: 1 }).unwrap();
-        assert_eq!(log.borrow().delayed, vec![250, 10], "and a tick is the floor");
+        assert_eq!(k.syscall(1, Call::Sleep { ms: 250 }).unwrap(), Ret::Sched);
+        {
+            let procs = k.procs.borrow();
+            assert_eq!(procs.state(1), proc::State::Wakeme);
+            assert_eq!(procs.nextalarm(), Some(1_500_000_000_000_000_000 + 250_000_000));
+        }
+        assert!(log.borrow().delayed.is_empty(), "the kernel does not wait; sched does");
     }
 
-    /// **The sleep is a real `tsleep`**, not a wait dressed as one: the
-    /// process commits to `up->sleep` with a deadline, `checkalarms` is what
-    /// ends it, and it comes back `Running` off the run queue. The state is
-    /// the same one it will have when the machine can leave it.
+    /// A sleep shorter than a tick is a sleep of one tick — *"if(n <
+    /// TK2MS(1)) n = TK2MS(1)"*.
     #[test]
-    fn a_sleep_goes_through_the_rendez_and_comes_back_running() {
+    fn a_sleep_is_at_least_one_tick() {
         let (mut k, _) = tests::watched();
-        k.syscall(1, Call::Sleep { ms: 20 }).unwrap();
-        let procs = k.procs.borrow();
-        assert_eq!(procs.state(1), proc::State::Running);
-        assert_eq!(procs.nextalarm(), None, "the timer is spent");
-        assert_eq!(procs.runproc_peek(), None, "and it is off the queue");
+        k.syscall(1, Call::Sleep { ms: 1 }).unwrap();
+        assert_eq!(
+            k.procs.borrow().nextalarm(),
+            Some(1_500_000_000_000_000_000 + 10_000_000),
+            "TK2MS(1) is the floor"
+        );
     }
+
+    /// **`schedinit` is the loop** (`proc.c:67`), and this is the whole of
+    /// it: a process asleep, nothing else runnable, so `idlehands()` — the
+    /// machine waits until the deadline, `checkalarms` readies the sleeper,
+    /// and `sched` enters it.
+    #[test]
+    fn schedinit_idles_until_a_sleeper_is_due_and_then_enters_it() {
+        let (mut k, log) = tests::watched();
+        k.syscall(1, Call::Sleep { ms: 250 }).unwrap();
+        k.schedinit().unwrap();
+
+        assert_eq!(log.borrow().delayed, vec![250], "it waited exactly that long");
+        assert!(log.borrow().order.contains(&"gotolabel"), "and then entered it");
+        assert_eq!(k.procs.borrow().state(1), proc::State::Dead, "which ran to its end");
+    }
+
+    /// With nothing runnable and no timer, nothing can ever make a process
+    /// runnable again: `schedinit` returns rather than spinning. Plan 9's
+    /// cannot reach this — its clock is an interrupt and there is always
+    /// another.
+    #[test]
+    fn schedinit_returns_when_nothing_can_run_again() {
+        let (mut k, log) = tests::watched();
+        k.schedinit().unwrap();
+        assert!(log.borrow().order.is_empty(), "nothing was ready, so nothing ran");
+    }
+
+
 }

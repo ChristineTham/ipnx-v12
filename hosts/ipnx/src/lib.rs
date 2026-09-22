@@ -335,9 +335,21 @@ pub fn startboot(
         ksetenv(&mut k, name, &val, false)?;
     }
 
-    // `exec(boot, argv)`. Everything after this line is the system's.
+    // `exec(boot, argv)` — `initcode`'s last line. It no longer runs
+    // anything: the image is pid 1's now and pid 1 is `Ready`.
     let path = argv.first().map(String::as_str).unwrap_or(BOOT).to_string();
-    k.exec(1, &path, argv)
+    k.exec(1, &path, argv)?;
+
+    // **`schedinit()`, which never returns** (`proc.c:67`). Plan 9 reaches
+    // it from `main` on every processor and the system is whatever the
+    // processes do from there. Here it returns when nothing is left to run,
+    // which is the end of the session, and the status is pid 1's.
+    // Pid 1 has an image and is not on a queue: `ready` is what puts it
+    // there, as `newproc`'s caller does for every other process.
+    k.procs.borrow_mut().ready(1);
+    k.schedinit()?;
+    let status = k.procs.borrow().status(1).unwrap_or_default();
+    Ok(status)
 }
 #[derive(Default, Clone)]
 /// A console that answers with a script and remembers what it was shown —

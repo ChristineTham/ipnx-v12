@@ -39,24 +39,54 @@ pub trait Syscalls {
 /// on — a shell could not start a command. `&self` restores what Plan 9 has:
 /// the machine is always there, and a machine needing state of its own keeps
 /// it behind a cell.
+/// How a process left the processor — the answer [`Machine::gotolabel`]
+/// brings back.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Left {
+    /// It called `sched()`: `gotolabel(&m->sched)`. Its state says why —
+    /// `Ready` if it yielded, `Wakeme` if it slept.
+    Sched,
+    /// Its image ran to the end. Plan 9 cannot reach this: a Plan 9 process
+    /// leaves by a trap or a syscall and nothing else, and `_start` there
+    /// ends in `exits`. Here a module's exported function can simply return,
+    /// and a machine must say so rather than leave a process that will never
+    /// run again on the queue.
+    Exited,
+}
+
 pub trait Machine {
     /// `procsetup` — whatever state this machine needs for a new process,
     /// before anything of it runs.
     fn procsetup(&self, pid: Pid) -> Result<(), String>;
 
-    /// `touser` — start the process running. It returns when the process has
-    /// finished, carrying the status `exits` would have set.
+    /// `touser` — **give this process its image and its arguments, ready to
+    /// start**. It does not run: `sysexec` sets the new image up and returns,
+    /// and the process reaches user mode from `syscall()`'s exit, not from
+    /// inside `sysexec` (`pc/trap.c:780`, `kexit`).
     ///
-    /// `sys` is how the process calls back, and it is the whole of what a
-    /// machine must arrange: turn whatever its trap looks like into a
-    /// [`Call`], hand it over, and turn the answer back.
-    fn touser(
-        &self,
-        pid: Pid,
-        image: &[u8],
-        args: &[String],
-        sys: &mut dyn Syscalls,
-    ) -> Result<String, String>;
+    /// Calling it again on a running process is what `exec` is: the old
+    /// image is gone and the next [`Machine::gotolabel`] enters the new one.
+    fn touser(&self, pid: Pid, image: &[u8], args: &[String]) -> Result<(), String>;
+
+    /// **`gotolabel(&up->sched)`** (`pc/l.s:992`) — enter this process and
+    /// run it until it leaves.
+    ///
+    /// Plan 9's is two instructions: restore SP, push the saved PC, return.
+    /// The process comes back out the same way, by its own
+    /// `gotolabel(&m->sched)` at the end of `sched()` — **which is this
+    /// returning**. So the whole of a scheduler's machine half is here, and
+    /// the whole of a machine's is a stack switch.
+    ///
+    /// It says nothing about WHY the process left, because the kernel
+    /// already knows: `sched()` sets the state before it goes, and
+    /// `schedinit` reads it on the way back (`proc.c:67`). `Left::Exited` is
+    /// the one thing the state cannot say, because a process that ran off
+    /// the end of its image never called `exits`.
+    ///
+    /// `sys` is how the process calls back while it runs, and it is the
+    /// whole of what a machine must arrange: turn whatever its trap looks
+    /// like into a [`Call`], hand it over, and turn the answer back.
+    fn gotolabel(&self, pid: Pid, sys: &mut dyn Syscalls) -> Result<Left, String>;
 
     /// `todget(&ticks, &mono)` (`port/tod.c:153`) — nanoseconds since the
     /// epoch, the fast-tick counter, and its frequency.
