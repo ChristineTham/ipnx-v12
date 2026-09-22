@@ -77,12 +77,20 @@ per process, where one poll is the jump and a future that comes back
 `Pending` is a stack suspended inside a host call. `Kernel::schedinit` is
 `schedinit` (`proc.c:67`), the loop every `gotolabel(&m->sched)` lands in.
 
-**`updatecpu` and `reprioritize` are present and inert** (RESEARCH §15):
-`Procs.ticks` is never incremented, because `m->ticks++` is the first line
-of `hzclock` and there is no clock interrupt until preemption. So every
-process runs at `PriNormal` and the order is `m->readied` then the queues.
-`reprioritize` returning `basepri` is Plan 9's own behaviour when load is
-zero; `updatecpu` never decaying is not.
+**This kernel has no clock tick, and four things are inert because of it**
+(RESEARCH §15.1). Plan 9's clock interrupt calls `hzclock`
+(`portclock.c:136`, from `timerintr`, `:196`) HZ times a second, and
+`hzclock` does four things. Nothing here calls it, so none of them happens:
+
+| `hzclock` does | so here |
+|---|---|
+| `m->ticks++` | `updatecpu` never decays `p->cpu` |
+| `accounttime()` (`proc.c:1615`) — `p->time[p->insyscall]++` and `m->load` | `cputime`'s `TUser`/`TSys` are zero, and `load` is zero, so `reprioritize` returns `basepri` |
+| `checkalarms()` | `alarm` has nothing to fire it |
+| `hzsched()` | nothing is preempted |
+
+Every process therefore runs at `PriNormal`, ordered by `m->readied` and then
+the queues — Plan 9's behaviour on an idle machine, not under load.
 
 **So processes are concurrent.** A pipeline is two of them with the shell
 asleep in `pwait` between; `sleep` leaves the processor and `timerintr`
@@ -162,9 +170,10 @@ process's start from it, so `/dev/cputime`'s `TReal` is wall time.
 
 No surface.
 
-`/dev/sysstat`'s interrupt, page-fault, tlb and load counters are zero, and
-`cputime`'s `TUser`/`TSys` are charged by nothing yet. Both count honestly
-rather than reporting a number nothing produced.
+`/dev/sysstat`'s interrupt, page-fault and tlb counters are zero because
+this machine has none of those things. Its load counter and `cputime`'s
+`TUser`/`TSys` are zero for a different reason: they are `accounttime()`'s,
+and nothing calls `hzclock` — the missing clock tick above.
 
 **`pread` with an explicit offset is not reliable**, and `date` is the only
 thing that does it: `nsec(2)` is `pread(open("/dev/bintime"), b, 8, 0)`,

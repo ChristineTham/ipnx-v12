@@ -3668,17 +3668,69 @@ named in the code.
 
 ### Present and inert, which is worth saying plainly
 
-**`updatecpu` and `reprioritize` do nothing yet.** Both are written from
-`port/proc.c` and both are correct, and neither has anything to run on:
+**`updatecpu` and `reprioritize` do nothing yet** — see §15.1 for why, which
+is larger than it first looked.
 
-* `Procs.ticks` is never incremented. Plan 9's `m->ticks++` is the first line
-  of `hzclock` (`portclock.c:136`), and there is no clock interrupt here
-  until preemption. So `updatecpu` computes the same `t` every time, `n` is
-  zero after the first call, and `p->cpu` never decays.
-* `load` is zero, so `reprioritize` returns `basepri` — **which is Plan 9's
-  own first branch**, so that half is not an artefact.
+### §15.1 — The missing clock tick (2026-09-22)
 
-The effect is that every process runs at `PriNormal` and the order is
-`m->readied` then the queues, which is Plan 9's behaviour on an idle machine
-and not its behaviour under load. It will start working when there is a
-clock, and the clock is the next thing P6 builds.
+Christine: *"updatecpu and reprioritize are present and inert. why?"*
+
+The first answer — *"`ticks` is never incremented … there is no clock
+interrupt here until preemption"* — had the cause right and the dependency
+backwards. **Preemption does not bring the clock; the clock brings
+preemption**, as one of four things it does.
+
+Plan 9's clock interrupt reaches `timerintr` (`portclock.c:172`), which calls
+`hzclock` (`:196`) HZ times a second — 100 on the PC (`pc/mem.h:31`).
+`hzclock` (`:136`):
+
+```c
+m->ticks++;
+...
+accounttime();
+...
+checkalarms();
+
+if(up && up->state == Running)
+	hzsched();	/* in proc.c */
+```
+
+and `accounttime` (`proc.c:1615`) is where two of the four inputs come
+from:
+
+```c
+p = m->proc;
+if(p) {
+	nrun++;
+	p->time[p->insyscall]++;
+}
+...
+n = (nrdy+n)*1000;
+m->load = (m->load*(HZ-1)+n)/HZ;
+```
+
+So one absence — **nothing calls `hzclock`** — accounts for four things
+reported separately until now:
+
+| `hzclock` does | fed | here |
+|---|---|---|
+| `m->ticks++` | `updatecpu` | `p->cpu` never decays |
+| `accounttime()` | `m->load`; `p->time[TUser/TSys]` | `reprioritize` returns `basepri`; `/dev/cputime` charges nothing; `/dev/sysstat`'s load is zero |
+| `checkalarms()` (`alarm.c:47`) | `procalarm` | `alarm` has nothing to fire it |
+| `hzsched()` | preemption | nothing is preempted |
+
+**Why it was shipped inert.** The P6 plan put the clock inside "preemption",
+after the switch, and I wrote the kernel half from `port/proc.c` as one
+piece before the thing that drives half of it existed. That was my
+sequencing, not a constraint of the substrate: the machine already has a
+clock (`Machine::todget`) and simply never calls into the kernel on a tick.
+
+**What it needs** is the machine's half of `timerintr`: something that
+enters the kernel's `hzclock` at HZ. Plan 9's is the i8253 or the local
+APIC; here the same timer thread P6 planned for preemption — the one that
+calls `Engine::increment_epoch()` — is the natural source, and it gives all
+four at once. One thing to settle when it is written, by reading
+`timerintr` and `hzclock` at the moment of writing: whether ticks that
+elapse while no guest is running are counted as they would have been
+(`hzclock` runs on every tick on Plan 9, idle or not — `accounttime`'s
+`m->perf.inidle` is exactly the idle case) or lost.
