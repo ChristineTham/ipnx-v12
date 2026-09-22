@@ -106,7 +106,9 @@ mod tests {
     (i32.store8 (i32.add (i32.const 256) (global.get $n)) (i32.const 0))
     (call $exits (i32.const 256))))
 "#;
-        assert_eq!(run(READ, &[("hello", b"the bytes")]).unwrap(), "the bytes");
+        // `pexit`'s wait message is *"%s %lud: %s"* — text, pid, status
+        // (`proc.c:1195`), and the text is the file `exec` ran.
+        assert_eq!(run(READ, &[("hello", b"the bytes")]).unwrap(), "init 1: the bytes");
     }
 
     /// A call that fails answers −1 and leaves its reason where `errstr`
@@ -147,7 +149,7 @@ mod tests {
   (data (i32.const 8) "oops\00")
   (func (export "_start") (param i32 i32 i32) (call $exits (i32.const 8))))
 "#;
-        assert_eq!(run(BYE, &[]).unwrap(), "oops");
+        assert_eq!(run(BYE, &[]).unwrap(), "init 1: oops");
     }
 
     /// The arguments arrive. `sysexec` copies argv onto the new process's
@@ -169,7 +171,7 @@ mod tests {
         k.exec(1, "/boot/init", &["init".into(), "second".into()]).unwrap();
         k.procs.borrow_mut().ready(1);
         k.schedinit().unwrap();
-        assert_eq!(k.procs.borrow().status(1).as_deref(), Some("second"));
+        assert_eq!(k.procs.borrow().status(1).as_deref(), Some("init 1: second"));
     }
 
     /// **`procrfork` makes a second process and runs a function in it.**
@@ -461,7 +463,10 @@ mod userspace {
     #[test]
     fn a_commands_exit_status_reaches_the_shell() {
         let out = typing("cat /nothing\necho after [$status]\necho ok\necho then [$status]\n");
-        assert!(out.contains("after [can't open /nothing"), "{out:?}");
+        // rc's `$status` is the wait message, which Plan 9 begins with the
+        // command's name and pid (`proc.c:1195`).
+        assert!(out.contains(": can't open /nothing"), "{out:?}");
+        assert!(out.contains("after [cat "), "{out:?}");
         assert!(out.contains("then []"), "a command that worked clears it: {out:?}");
     }
 

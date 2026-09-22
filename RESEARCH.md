@@ -3792,16 +3792,39 @@ made again when the process is entered. `Rid` gains `Rr(dev, devno, q)` for
 `&q->rr`, the same adaptation `Rid` already was for `&up->sleep`. 30 of 30
 runs pass after it.
 
-**Differences, each stated where it is in the code:**
+**Differences, as first built** — listed here the same day, and then
+removed rather than put to Christine: *"I don't understand why you are asking
+or refusing work when the brief is clear."* The brief is Plan 9; a
+difference that is not forced by the machine is a fault to fix. What each
+became:
 
-| | why |
+| as first built | now |
 |---|---|
-| a tick lands only in guest code, so `TSys` is never charged | an epoch check is compiled into the guest and never into a host function; the kernel runs each call to its end |
-| `checkalarms` is not in `hzclock` yet | it wakes `alarmkproc`, whose one act is `postnote` — it arrives with notes |
-| `!up->fixedpri` is omitted from `hzsched` | nothing sets `fixedpri`; `/proc/n/ctl`'s `fixedpri` is not built |
-| **no pipe flow control** | `qbwrite` queues the block and THEN sleeps on `q->wr` (`qio.c:1250`); a call made again on re-entry would queue it twice. A pipe holds whatever is written. **Worth striking** — it needs a call that can resume past its sleep rather than be made again |
-| no `q->rlock`/`q->wlock` | two readers of one pipe would double-sleep on `q->rr`, which `sleep` counts. Plan 9 queues the second on the `QLock` |
-| no *"sys: write on closed pipe"* note, and `qbwrite`'s *"if we just wokeup a higher priority process, let it run"* | notes are not built; the second waits for the next tick's `anyhigher` |
-| `clockintr` does not yield while a `procrfork` child is on its parent's frames | the child cannot be entered anywhere else until its `exec`; the `sched` waits with `delaysched` counting, as Plan 9's does while a lock is held (`proc.c:145`) |
-| `clunkq` is drained by the kernel, not by a `closeproc` kproc | `exits` runs where `devtab` cannot be reached — from `/proc/n/ctl`'s kill, inside a device — so every channel `closefgrp` lets go of is queued, and drained on the way out of the call |
-| `Proc.time` holds milliseconds; a tick is charged as `TK2MS(1)` | Plan 9 counts ticks and converts on read (`devcons.c:63`); the numbers read out are the same |
+| a tick lands only in guest code, so `TSys` is never charged | **Plan 9's.** A call runs to its end with nothing able to interrupt it — Plan 9's kernel at `splhi` — and an interrupt held off by `splhi` is taken at `spllo`: at the call's end, still `insyscall`, so the tick is `TSys`'s. `p->insyscall` is set and cleared where `syscall()` does it (`pc/trap.c:674`, `:767`) |
+| `!up->fixedpri` omitted from `hzsched` | **Plan 9's.** `p->fixedpri`, `procpriority` (`proc.c:772`), and `/proc/n/ctl`'s `pri` and `fixedpri` (`devproc.c:1373`, `:1379`) |
+| **a call that slept was made again from the top** | **Plan 9's: it carries on.** `Kernel.labels` is `p->sched` — the rest of a call that left the processor, run when the process is entered again, so nothing before the `sleep` happens twice. The machine gains one method, `Syscalls::resume`, which is `setlabel` answering 1 (`proc.c:830`); every import goes through it, because any call may end in `sched()` (`pc/trap.c:778`, now honoured) |
+| no pipe flow control | **Plan 9's.** `qbwrite` queues, then sleeps on `q->wr` until `qnotfull` (`qio.c:1250`), at `conf.pipeqsize` = 32K (`devpipe.c:50`), counting `BALLOC` (`allocb.c`); `qread` wakes it below half (`qwakeup_iunlock`, `:996`) |
+| no `q->rlock`/`q->wlock` | **Plan 9's.** `QLock` (`qlock.c:17`, `:69`) — a second reader waits `Queueing` and is handed the lock |
+| `qbwrite`'s *"let it run"* omitted | **Plan 9's.** A writer that wakes a higher-priority reader `sched()`s, still `Running`, and finishes when entered again (`qio.c:1234`) |
+| `Proc.time` in milliseconds | **Plan 9's: ticks.** Converted on read (`devcons.c:815`, `devproc.c:875`); `TReal` from the tick the process was made on (`sysproc.c:193`) — it had started at `exec` |
+| `clockintr` does not yield while a `procrfork` child is on its parent's frames | **stays** — forced by `procrfork` (§5.2): the child cannot be entered anywhere else before its `exec`. It is Plan 9's own delay: `sched` does not switch while it cannot, and `delaysched` keeps counting (`proc.c:145`). The switch after an `rfork` is `sysrfork`'s own (*"ready(p); sched();"*), taken once the child has run, and that `sched` zeroes `delaysched` before `syscall()`'s check (`proc.c:154`, `pc/trap.c:778`) — so the check is not made after `rfork(RFPROC)` |
+| `clunkq` drained by the kernel, not a `closeproc` kproc | **stays until notes** — it exists for `/proc/n/ctl`'s `kill` and `close`, which run inside `#p` where `devtab` cannot be reached. `kill` becomes the note Plan 9 posts, and the victim's own `pexit` closes directly |
+| `checkalarms`, *"sys: write on closed pipe"* | **notes** — the next step |
+
+**Found while removing them, and made Plan 9's too:** the wait message is
+*"%s %lud: %s"* — text, pid, exit string — or empty (`proc.c:1195`), so
+rc's `$status` after a failed `cat` begins `cat 9:`; `p->text` exists
+(`*init*`, the parent's, the `exec`'d file's last element — `pc/main.c:286`,
+`sysproc.c:195`, `:483`); `pexit` adds `utime` and `stime` to the parent's
+`TCUser` and `TCSys` and **nothing** to `TCReal` (`proc.c:1189`–`:1206`) —
+it had added all three slots one for one; `/proc/n/status` is `readstr` and
+`readnum` fields with nine numbers (`devproc.c:869`–`:890`) — it was
+left-justified with three and a hard-coded `init`; and `/proc/n/ctl`'s
+`close` and `closefiles` now reach the device.
+
+**One thing the resumption exposed, and its fix is Plan 9's order.** With
+`trap.c:778` honoured, an `rfork`'s own call could end in a switch before the
+child had run on the parent's frames — and the scheduler then chose a child
+with nothing to enter (one pipeline run in twenty-one). Plan 9 cannot reach
+that state because `sysrfork`'s `sched` has already zeroed `delaysched` when
+`syscall()` checks it; the kernel now reads the order the same way.

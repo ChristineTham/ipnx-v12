@@ -14,40 +14,79 @@
 use crate::chan::{flag::COPEN, Chan};
 use crate::dev::{Dev, DevId, Eve};
 use crate::ninep::{Qid, QTDIR};
-use crate::proc::{Rid, Up};
+use crate::proc::{Pid, Procs, QLock, Rid, Up};
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 /// `Maxatomic` (`qio.c:54`) — the most one block holds; a longer write is
 /// several (`qwrite`, `qio.c:1280`).
 const MAXATOMIC: usize = 64 * 1024;
 
+/// `conf.pipeqsize` on one processor (`pipeinit`, `devpipe.c:50`) — the
+/// limit a writer waits under.
+const PIPEQSIZE: usize = 32 * 1024;
+
+/// `Hdrspc` (`allocb.c:13`) and `BLOCKALIGN` (`pc/mem.h:17`): a block's
+/// allocation is the room left for headers and the data rounded up, and
+/// that — `BALLOC`, not the data — is what `q->len` counts against the
+/// limit (`qio.c:1213`). The allocator's own rounding (`msize`) is the
+/// allocator's.
+fn balloc(n: usize) -> usize {
+    64 + n.div_ceil(8) * 8
+}
+
 /// `Ehungup` (`error.h:24`) — *"i/o on hungup channel"*.
 const EHUNGUP: &str = "i/o on hungup channel";
 
-/// `struct Queue` (`portdat.h`), as much of it as a pipe uses: the blocks,
-/// and whether it is closed.
+/// `struct Queue` (`portdat.h`), as much of it as a pipe uses.
 ///
 /// **A block is one write** (up to `Maxatomic`), and `qread` answers at
 /// most one: *"first = qremove(q); n = BLEN(first)"* (`qio.c:1125`). So
-/// writes keep their boundaries at the reader, which a byte buffer did not.
-#[derive(Default)]
+/// writes keep their boundaries at the reader.
 struct Queue {
-    blocks: VecDeque<Vec<u8>>,
-    /// `Qclosed`.
+    /// The blocks, each with its `BALLOC`.
+    blocks: VecDeque<(Vec<u8>, usize)>,
+    /// `q->len` — the sum of `BALLOC` over the blocks.
+    len: usize,
+    /// `q->limit`.
+    limit: usize,
+    /// `Qclosed`, `Qstarve`, `Qflow` (`portdat.h`).
     closed: bool,
+    starve: bool,
+    flow: bool,
     /// `q->eof` — reads answered 0 since it closed; the fourth is an error
     /// (`qwait`, `qio.c:857`).
     eof: u32,
-    /// `q->err` — what a read past that answers.
+    /// `q->err`.
     err: String,
+    /// `q->rlock`, `q->wlock` — one reader and one writer at a time
+    /// (`qread`, `qio.c:1075`; `qbwrite`, `:1178`).
+    rlock: QLock,
+    wlock: QLock,
 }
 
 impl Queue {
-    /// `qlen` (`qio.c:1461`) — bytes queued.
-    fn len(&self) -> usize {
-        self.blocks.iter().map(|b| b.len()).sum()
+    /// `qopen(conf.pipeqsize, 0, 0, 0)` (`devpipe.c:69`, `qio.c:798`):
+    /// *"q->state |= Qstarve"*.
+    fn new() -> Queue {
+        Queue {
+            blocks: VecDeque::new(),
+            len: 0,
+            limit: PIPEQSIZE,
+            closed: false,
+            starve: true,
+            flow: false,
+            eof: 0,
+            err: String::new(),
+            rlock: QLock::default(),
+            wlock: QLock::default(),
+        }
+    }
+
+    /// `qlen` (`qio.c:1461`) — `q->dlen`, the bytes queued.
+    fn dlen(&self) -> usize {
+        self.blocks.iter().map(|b| b.0.len()).sum()
     }
 
     /// `qhangup` (`qio.c:1418`): closed, but what is queued stays readable.
@@ -56,28 +95,50 @@ impl Queue {
         self.err = EHUNGUP.into();
     }
 
-    /// `qclose` (`qio.c:1386`): closed, and the blocks are freed.
+    /// `qclose` (`qio.c:1386`): closed, `Qflow` and `Qstarve` cleared, and
+    /// the blocks freed.
     fn close(&mut self) {
         self.hangup();
+        self.flow = false;
+        self.starve = false;
         self.blocks.clear();
+        self.len = 0;
     }
 
     /// `qreopen` (`qio.c:1447`).
     fn reopen(&mut self) {
         self.closed = false;
+        self.starve = true;
         self.eof = 0;
+        self.limit = PIPEQSIZE;
     }
 }
 
 /// `struct Pipe` (`devpipe.c:12`): two queues, and how many opens of each
 /// end there are. Plan 9 hangs it off `c->aux`; here the channel's `devno`
 /// is the pipe's index.
-#[derive(Default)]
 struct Pipe {
     q: [Queue; 2],
     /// `qref[2]` — opens of `data` and of `data1`. When one reaches zero the
     /// other end's queue is hung up (`pipeclose`, `devpipe.c:247`).
     qref: [u32; 2],
+}
+
+/// **Where a process that left in the middle of a read or a write was** —
+/// the part of its kernel stack that is this device's. Plan 9 keeps it on
+/// the stack itself; a process entered again here comes back through the
+/// same method, and this says which line it is on.
+enum At {
+    /// `qread`, holding `q->rlock`, at `again:` (`qio.c:1082`) — whether it
+    /// waited for the lock or slept in `qwait`, it holds the lock now.
+    Read,
+    /// `qwrite`, with `sofar` written, waiting for `q->wlock`: the next
+    /// block is not queued yet.
+    Wlock { sofar: usize },
+    /// `qwrite`, with `sofar` written and the next block queued: in
+    /// `qbwrite`'s flow-control loop (`qio.c:1250`), or just back from the
+    /// `sched()` that let a higher-priority reader run (`:1235`).
+    Flow { sofar: usize },
 }
 
 /// Qids within one pipe, as `devpipe.c:28` enumerates them.
@@ -90,14 +151,15 @@ pub struct PipeDev {
     /// copied, because writing `#c/hostowner` renames it for everyone.
     eve: Eve,
     pipes: Vec<Pipe>,
-    /// `up`, for `sleep` and `wakeup` — `qread` sleeps the caller on
-    /// `q->rr`, and `qwrite` wakes it.
+    /// `up`, for `sleep`, `wakeup`, `qlock` and `qunlock`.
     up: Rc<RefCell<Up>>,
+    /// Each process in the middle of a read or a write, and where.
+    at: HashMap<Pid, At>,
 }
 
 impl PipeDev {
     pub fn new(up: Rc<RefCell<Up>>) -> PipeDev {
-        PipeDev { eve: Eve::default(), pipes: Vec::new(), up }
+        PipeDev { eve: Eve::default(), pipes: Vec::new(), up, at: HashMap::new() }
     }
 
     /// Which queue a read on this end draws from, and which a write fills.
@@ -114,10 +176,129 @@ impl PipeDev {
         self.pipes.get_mut(c.devno as usize).ok_or_else(|| "no such pipe".into())
     }
 
-    /// `wakeup(&q->rr)`.
-    fn wakeup(&self, devno: u32, q: usize) {
+    /// `up`, and the table `sleep` and `wakeup` act on.
+    fn up(&self) -> (Pid, Rc<RefCell<Procs>>) {
         let up = self.up.borrow();
-        up.procs.borrow_mut().wakeup(Rid::Rr(DevId::Pipe, devno, q));
+        (up.pid, up.procs.clone())
+    }
+
+    /// `qread` (`qio.c:1070`). The caller has checked this is a data end.
+    fn qread(&mut self, devno: u32, from: usize, n: usize) -> Result<Vec<u8>, String> {
+        let (pid, procs) = self.up();
+        let mut procs = procs.borrow_mut();
+        let resumed = matches!(self.at.remove(&pid), Some(At::Read));
+        let q = &mut self.pipes[devno as usize].q[from];
+        // *"qlock(&q->rlock)"*.
+        if !resumed && !procs.qlock(&mut q.rlock, pid) {
+            self.at.insert(pid, At::Read);
+            return Ok(Vec::new());
+        }
+        // `again:` — `qwait` (`qio.c:849`).
+        if q.blocks.is_empty() {
+            if q.closed {
+                q.eof += 1;
+                let r = if q.eof > 3 || q.err != EHUNGUP { Err(q.err.clone()) } else { Ok(Vec::new()) };
+                procs.qunlock(&mut q.rlock);
+                return r;
+            }
+            // *"q->state |= Qstarve; … sleep(&q->rr, notempty, q);"*
+            q.starve = true;
+            procs.sleep(pid, Rid::Rr(DevId::Pipe, devno, from), false);
+            self.at.insert(pid, At::Read);
+            return Ok(Vec::new());
+        }
+        // One block, and what does not fit goes back (`qputback`), still
+        // counted at its whole allocation.
+        let (mut b, alloc) = q.blocks.pop_front().unwrap_or_default();
+        if b.len() > n {
+            let rest = b.split_off(n);
+            q.blocks.push_front((rest, alloc));
+        } else {
+            q.len -= alloc;
+        }
+        // `qwakeup_iunlock` (`qio.c:991`): *"if writer flow controlled,
+        // restart"* once the queue is below half its limit.
+        if q.flow && q.len < q.limit / 2 {
+            q.flow = false;
+            procs.wakeup(Rid::Wr(DevId::Pipe, devno, from));
+        }
+        procs.qunlock(&mut q.rlock);
+        Ok(b)
+    }
+
+    /// `qwrite` (`qio.c:1270`) — blocks of at most `Maxatomic`, each through
+    /// `qbwrite` (`:1165`). A write of nothing is one empty block, as the
+    /// `do … while` makes it.
+    fn qwrite(&mut self, devno: u32, to: usize, data: &[u8]) -> Result<usize, String> {
+        let (pid, procs) = self.up();
+        let mut procs = procs.borrow_mut();
+        let (mut sofar, mut at) = match self.at.remove(&pid) {
+            Some(At::Wlock { sofar }) => (sofar, Some(false)),
+            Some(At::Flow { sofar }) => (sofar, Some(true)),
+            _ => (0, None),
+        };
+        loop {
+            let n = (data.len() - sofar).min(MAXATOMIC);
+            let q = &mut self.pipes[devno as usize].q[to];
+            let queued = match at.take() {
+                Some(queued) => queued,
+                None => {
+                    // *"qlock(&q->wlock)"*.
+                    if !procs.qlock(&mut q.wlock, pid) {
+                        self.at.insert(pid, At::Wlock { sofar });
+                        return Ok(0);
+                    }
+                    false
+                }
+            };
+            if !queued {
+                // *"give up if the queue is closed"* — and `waserror`
+                // unlocks on the way out.
+                if q.closed {
+                    procs.qunlock(&mut q.wlock);
+                    return Err(q.err.clone());
+                }
+                let alloc = balloc(n);
+                q.blocks.push_back((data[sofar..sofar + n].to_vec(), alloc));
+                q.len += alloc;
+                // *"make sure other end gets awakened"* — only a reader
+                // that said it was starving.
+                if std::mem::take(&mut q.starve) {
+                    let woke = procs.wakeup(Rid::Rr(DevId::Pipe, devno, to));
+                    // *"if we just wokeup a higher priority process, let it
+                    // run"* — and come back to the flow-control loop.
+                    let pri = |p: Pid| procs.get(p).map_or(0, |p| p.priority);
+                    if woke.is_some_and(|p| pri(p) > pri(pid)) {
+                        procs.setlabel(pid);
+                        self.at.insert(pid, At::Flow { sofar });
+                        return Ok(0);
+                    }
+                }
+            }
+            // *"flow control, wait for queue to get below the limit"* —
+            // `qnotfull` (`qio.c:1152`).
+            let q = &mut self.pipes[devno as usize].q[to];
+            if !(q.len < q.limit || q.closed) {
+                q.flow = true;
+                procs.sleep(pid, Rid::Wr(DevId::Pipe, devno, to), false);
+                self.at.insert(pid, At::Flow { sofar });
+                return Ok(0);
+            }
+            procs.qunlock(&mut q.wlock);
+            sofar += n;
+            if sofar >= data.len() {
+                return Ok(data.len());
+            }
+        }
+    }
+
+    /// `wakeup(&q->rr); wakeup(&q->wr);` — what `qhangup` and `qclose` end
+    /// with.
+    fn wakeboth(&self, devno: u32, q: usize) {
+        let (_, procs) = self.up();
+        let mut procs = procs.borrow_mut();
+        procs.wakeup(Rid::Rr(DevId::Pipe, devno, q));
+        procs.wakeup(Rid::Wr(DevId::Pipe, devno, q));
     }
 }
 
@@ -136,7 +317,7 @@ impl Dev for PipeDev {
 
     /// `pipeattach` — the allocation. Every attach is a NEW pipe.
     fn attach(&mut self, _spec: &str) -> Result<Chan, String> {
-        self.pipes.push(Pipe::default());
+        self.pipes.push(Pipe { q: [Queue::new(), Queue::new()], qref: [0, 0] });
         Ok(Chan::attach(DevId::Pipe, (self.pipes.len() - 1) as u32))
     }
 
@@ -168,26 +349,20 @@ impl Dev for PipeDev {
         Err("permission denied".into())
     }
 
-    /// `piperead` (`devpipe.c:299`) is `qread` (`qio.c:1070`). A pipe is a
-    /// stream, so the offset is ignored.
+    /// `piperead` (`devpipe.c:299`) is `qread`. A pipe is a stream, so the
+    /// offset is ignored.
     ///
-    /// **An empty queue that is not closed puts the reader to sleep** —
-    /// `qwait`'s `sleep(&q->rr, notempty, q)` (`qio.c:866`). The sleep is
-    /// Plan 9's: the process is committed to `q->rr`, and the syscall layer,
-    /// finding it `Wakeme`, leaves the processor; what this returns then is
-    /// not an answer and is thrown away. When the process is entered again
-    /// the read is made again, and nothing was taken, so it finds what the
-    /// writer left.
-    ///
-    /// It answered 0 — end of file — before, which a reader that ran before
-    /// its writer took as the end of the pipe.
+    /// **A read may leave the processor** — waiting for `q->rlock`, or in
+    /// `qwait` for data (`qio.c:866`) — and then answers nothing, because
+    /// the call is not over: when the process is entered again the call
+    /// comes back here and carries on from `again:`, holding the lock.
     fn read(&mut self, c: &mut Chan, n: usize, _off: u64) -> Result<Vec<u8>, String> {
         // `piperead` answers `pipedir[]` for the directory — two entries,
         // and their lengths are what is queued in each.
         if c.qid.is_dir() {
             let queued = {
                 let p = self.pipe(c)?;
-                [p.q[0].len() as u64, p.q[1].len() as u64]
+                [p.q[0].dlen() as u64, p.q[1].dlen() as u64]
             };
             let eve_ = self.eve.borrow().clone();
             let entries: Vec<crate::ninep::Dir> = [("data", QDATA0, 0), ("data1", QDATA1, 1)]
@@ -200,54 +375,21 @@ impl Dev for PipeDev {
             return Ok(crate::dev::devdirread(c, n, &entries));
         }
         let (from, _) = Self::ends(c.qid.path).ok_or("cannot read that")?;
-        let devno = c.devno;
-        let q = &mut self.pipe(c)?.q[from];
-        // `qwait` (`qio.c:849`).
-        if q.blocks.is_empty() {
-            if q.closed {
-                q.eof += 1;
-                if q.eof > 3 || q.err != EHUNGUP {
-                    return Err(q.err.clone());
-                }
-                return Ok(Vec::new());
-            }
-            let up = self.up.borrow();
-            let pid = up.pid;
-            up.procs.borrow_mut().sleep(pid, Rid::Rr(DevId::Pipe, devno, from), false);
-            return Ok(Vec::new());
-        }
-        // One block, and what does not fit goes back (`qputback`).
-        let mut b = q.blocks.pop_front().unwrap_or_default();
-        if b.len() > n {
-            let rest = b.split_off(n);
-            q.blocks.push_front(rest);
-        }
-        Ok(b)
+        self.pipe(c)?;
+        self.qread(c.devno, from, n)
     }
 
     /// `pipewrite` (`devpipe.c:340`) is `qwrite` to the OTHER queue — this
-    /// crossing is the pipe — in blocks of at most `Maxatomic`, and each
-    /// one wakes the reader (`qbwrite`, `qio.c:1230`).
+    /// crossing is the pipe. It may leave the processor as a read may:
+    /// waiting for `q->wlock`, waiting under the limit, or letting a
+    /// higher-priority reader run first.
     ///
-    /// A queue that is closed refuses the write (`qio.c:1189`). Plan 9 also
-    /// posts *"sys: write on closed pipe"* to the writer (`devpipe.c:349`);
-    /// that arrives with notes. **There is no flow control**: `qbwrite`
-    /// queues the block and THEN sleeps on `q->wr` until the queue is below
-    /// `conf.pipeqsize` (`qio.c:1250`), and a call that is made again when
-    /// the process is re-entered would queue it twice. So a pipe here holds
-    /// whatever is written to it.
+    /// Plan 9's `waserror` also posts *"sys: write on closed pipe"* to the
+    /// writer (`devpipe.c:349`); that is a note.
     fn write(&mut self, c: &mut Chan, data: &[u8], _off: u64) -> Result<usize, String> {
         let (_, to) = Self::ends(c.qid.path).ok_or("cannot write that")?;
-        let devno = c.devno;
-        let q = &mut self.pipe(c)?.q[to];
-        if q.closed {
-            return Err(q.err.clone());
-        }
-        for b in data.chunks(MAXATOMIC) {
-            q.blocks.push_back(b.to_vec());
-        }
-        self.wakeup(devno, to);
-        Ok(data.len())
+        self.pipe(c)?;
+        self.qwrite(c.devno, to, data)
     }
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
@@ -266,7 +408,7 @@ impl Dev for PipeDev {
         let length = match Self::ends(c.qid.path) {
             Some((from, _)) => {
                 let p = self.pipe(c)?;
-                p.q[from].len() as u64
+                p.q[from].dlen() as u64
             }
             None => 0,
         };
@@ -303,8 +445,8 @@ impl Dev for PipeDev {
             p.q[1].reopen();
         }
         if hungup {
-            self.wakeup(devno, other);
-            self.wakeup(devno, end);
+            self.wakeboth(devno, other);
+            self.wakeboth(devno, end);
         }
     }
 }
@@ -318,14 +460,18 @@ mod tests {
     use crate::proc::{Procs, State};
 
     /// `syspipe` (`sysfile.c`): attach `#|`, clone, walk one to `data` and the
-    /// other to `data1`, open both. The two channels are the two ends. The
-    /// caller is pid 1, whose table the test keeps.
+    /// other to `data1`, open both. The two channels are the two ends.
     fn pipe() -> (PipeDev, Chan, Chan) {
         pipe_with().0
     }
 
+    /// The same, with the table the device sleeps and wakes processes in.
+    /// Pid 1 writes; pid 2, its child, reads — a pipe's two ends are two
+    /// processes, and a device that keeps where each one is must be told
+    /// which is calling.
     fn pipe_with() -> ((PipeDev, Chan, Chan), Rc<RefCell<Procs>>) {
         let procs = Rc::new(RefCell::new(Procs::new(Chan::attach(DevId::Root, 0))));
+        procs.borrow_mut().rfork(1, crate::proc::rf::PROC).unwrap();
         let up = Rc::new(RefCell::new(Up { pid: 1, procs: procs.clone() }));
         let mut d = PipeDev::new(up);
         let dir = d.attach("").unwrap();
@@ -335,6 +481,11 @@ mod tests {
         let b = d.open(b, ORDWR).unwrap();
         assert!(a.flag & COPEN != 0);
         ((d, a, b), procs)
+    }
+
+    /// Make `pid` the caller, as `syscall()` sets `up`.
+    fn by(d: &PipeDev, pid: Pid) {
+        d.up.borrow_mut().pid = pid;
     }
 
     #[test]
@@ -357,8 +508,9 @@ mod tests {
     fn a_write_is_not_readable_at_the_end_that_wrote_it() {
         let ((mut d, mut a, _b), procs) = pipe_with();
         d.write(&mut a, b"hello", 0).unwrap();
+        by(&d, 2);
         d.read(&mut a, 16, 0).unwrap();
-        assert_eq!(procs.borrow().state(1), State::Wakeme, "it waits for the other end");
+        assert_eq!(procs.borrow().state(2), State::Wakeme, "it waits for the other end");
     }
 
     /// **`qread` on an empty queue sleeps** (`qwait`, `qio.c:866`), and the
@@ -367,11 +519,14 @@ mod tests {
     #[test]
     fn an_empty_pipe_puts_its_reader_to_sleep_until_a_write() {
         let ((mut d, mut a, mut b), procs) = pipe_with();
+        by(&d, 2);
         d.read(&mut b, 16, 0).unwrap();
-        assert_eq!(procs.borrow().state(1), State::Wakeme);
+        assert_eq!(procs.borrow().state(2), State::Wakeme);
+        by(&d, 1);
         d.write(&mut a, b"late", 0).unwrap();
-        assert_eq!(procs.borrow().state(1), State::Ready, "the write woke it");
-        assert_eq!(d.read(&mut b, 16, 0).unwrap(), b"late", "and the read made again finds it");
+        assert_eq!(procs.borrow().state(2), State::Ready, "the write woke it");
+        by(&d, 2);
+        assert_eq!(d.read(&mut b, 16, 0).unwrap(), b"late", "and the read carries on to find it");
     }
 
     /// **The last close of one end is end of file at the other**
@@ -381,10 +536,13 @@ mod tests {
     #[test]
     fn closing_the_writer_is_end_of_file_after_what_it_wrote() {
         let ((mut d, mut a, mut b), procs) = pipe_with();
+        by(&d, 2);
         d.read(&mut b, 16, 0).unwrap();
+        by(&d, 1);
         d.write(&mut a, b"last", 0).unwrap();
         d.close(&mut a);
-        assert_eq!(procs.borrow().state(1), State::Ready);
+        assert_eq!(procs.borrow().state(2), State::Ready);
+        by(&d, 2);
         assert_eq!(d.read(&mut b, 16, 0).unwrap(), b"last");
         assert_eq!(d.read(&mut b, 16, 0).unwrap(), b"", "then end of file");
         assert!(d.write(&mut b, b"x", 0).is_err(), "and nobody reads what b writes");
@@ -419,8 +577,9 @@ mod tests {
         let dir = d.attach("").unwrap();
         let mut other = d.walk(&dir, "data1").unwrap().unwrap();
         d.write(&mut a, b"mine", 0).unwrap();
+        by(&d, 2);
         d.read(&mut other, 16, 0).unwrap();
-        assert_eq!(procs.borrow().state(1), State::Wakeme, "two pipes shared a queue");
+        assert_eq!(procs.borrow().state(2), State::Wakeme, "two pipes shared a queue");
     }
 
     /// A pipe is a stream: a short read leaves the rest, and the next read
@@ -439,5 +598,66 @@ mod tests {
         let (mut d, mut a, _) = pipe();
         assert!(d.create(&mut a, "x", 0, 0).is_err());
         assert!(d.remove(&mut a).is_err());
+    }
+
+    /// **Flow control** (`qbwrite`, `qio.c:1250`): a write that takes the
+    /// queue to its limit queues its block and THEN waits under the limit;
+    /// a read that brings it below half wakes it (`qwakeup_iunlock`,
+    /// `:996`), and the write carries on — its block queued once.
+    #[test]
+    fn a_writer_waits_at_the_limit_and_a_read_below_half_lets_it_go() {
+        let ((mut d, mut a, mut b), procs) = pipe_with();
+        let big = vec![7u8; PIPEQSIZE];
+        assert_eq!(d.write(&mut a, &big, 0).unwrap(), 0, "the call is not over");
+        assert_eq!(procs.borrow().state(1), State::Wakeme, "waiting on q->wr");
+        by(&d, 2);
+        let got = d.read(&mut b, PIPEQSIZE, 0).unwrap();
+        assert_eq!(got.len(), PIPEQSIZE, "one block, all of it");
+        assert_eq!(procs.borrow().state(1), State::Ready, "below half: the writer is woken");
+        by(&d, 1);
+        assert_eq!(d.write(&mut a, &big, 0).unwrap(), PIPEQSIZE, "and finishes");
+        by(&d, 2);
+        d.read(&mut b, 16, 0).unwrap();
+        assert_eq!(procs.borrow().state(2), State::Wakeme, "the block was queued once, not twice");
+    }
+
+    /// **One reader at a time** — `q->rlock` (`qio.c:1075`). A second reader
+    /// waits `Queueing` on the lock, and gets it when the first is done.
+    #[test]
+    fn a_second_reader_queues_for_the_lock() {
+        let ((mut d, mut a, mut b), procs) = pipe_with();
+        let third = procs.borrow_mut().rfork(1, crate::proc::rf::PROC).unwrap();
+        by(&d, 2);
+        d.read(&mut b, 16, 0).unwrap();
+        by(&d, third);
+        d.read(&mut b, 16, 0).unwrap();
+        assert_eq!(procs.borrow().state(third), State::Queueing, "waiting for q->rlock");
+        by(&d, 1);
+        d.write(&mut a, b"first", 0).unwrap();
+        by(&d, 2);
+        assert_eq!(d.read(&mut b, 16, 0).unwrap(), b"first");
+        assert_eq!(procs.borrow().state(third), State::Ready, "qunlock handed it over");
+        by(&d, 1);
+        d.write(&mut a, b"second", 0).unwrap();
+        by(&d, third);
+        assert_eq!(d.read(&mut b, 16, 0).unwrap(), b"second");
+    }
+
+    /// *"if we just wokeup a higher priority process, let it run"*
+    /// (`qio.c:1234`): the writer leaves the processor, still `Running`, and
+    /// finishes when it is entered again.
+    #[test]
+    fn waking_a_higher_priority_reader_lets_it_run_first() {
+        let ((mut d, mut a, mut b), procs) = pipe_with();
+        by(&d, 2);
+        d.read(&mut b, 16, 0).unwrap();
+        procs.borrow_mut().get_mut(2).unwrap().priority = crate::proc::pri::NORMAL + 1;
+        procs.borrow_mut().get_mut(2).unwrap().basepri = crate::proc::pri::NORMAL + 1;
+        by(&d, 1);
+        assert_eq!(d.write(&mut a, b"go", 0).unwrap(), 0, "it left before finishing");
+        assert!(procs.borrow_mut().take_setlabel(1), "sched() from inside the write");
+        assert_eq!(d.write(&mut a, b"go", 0).unwrap(), 2, "and comes back to finish");
+        by(&d, 2);
+        assert_eq!(d.read(&mut b, 16, 0).unwrap(), b"go", "queued once");
     }
 }

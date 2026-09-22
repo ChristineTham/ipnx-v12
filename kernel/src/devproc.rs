@@ -20,6 +20,8 @@ use std::rc::Rc;
 
 const EPERM: &str = "permission denied";
 const EPROCDIED: &str = "process exited";
+/// `Ebadctl` (`error.h`).
+const EBADCTL: &str = "bad process or channel control request";
 
 /// `KNAMELEN` (`portdat.h`) and `STATSIZE` (`devproc.c:73`).
 pub const KNAMELEN: usize = 28;
@@ -275,13 +277,24 @@ impl Dev for ProcDev {
                     // `statename[p->state]` (`devproc.c`, `procstatus`).
                     // It was "Running" or "Broken" and nothing else, which
                     // is a guess where the kernel now knows.
+                    //
+                    // `readstr` fills a space-padded field and `readnum`
+                    // right-justifies in `NUMSIZE`: text, user, state, then
+                    // nine numbers — the six times, memory in K, `basepri`,
+                    // `priority` (`devproc.c:869`–`:890`). The memory is the
+                    // sum of the segments, and a process here has none: its
+                    // memory is the machine's, which `#p` cannot see.
                     let state = proc.state.name();
-                    let t = p.cputime(pid, 0);
-                    format!(
-                        "{:<w$}{:<w$}{:<11}{:<12}{:<12}{:<12}",
-                        "init", proc.user, state, t[0], t[1], t[2],
-                        w = KNAMELEN
-                    )
+                    let field = |v: &str, w: usize| {
+                        let v: String = v.chars().take(w - 1).collect();
+                        format!("{v:<w$}")
+                    };
+                    let mut s = field(&proc.text, KNAMELEN) + &field(&proc.user, KNAMELEN) + &field(state, 12);
+                    let t = p.cputime(pid);
+                    for v in t.iter().copied().chain([0, proc.basepri as u64, proc.priority as u64]) {
+                        s.push_str(&String::from_utf8_lossy(&crate::devcons::readnum(v, crate::devcons::NUMSIZE)));
+                    }
+                    s
                 }
                 Q::Proc | Q::Noteid => format!("{pid}\n"),
                 Q::Args => String::new(),
@@ -368,28 +381,42 @@ impl Dev for ProcDev {
         let procs = self.up.borrow().procs.clone();
         match (q, cmd) {
             (Q::Ctl, "kill") => {
-                procs.borrow_mut().exits(pid, "killed", None);
+                procs.borrow_mut().exits(pid, "killed");
             }
             (Q::Ctl, "close") => {
                 let fd: Fd = word.next().and_then(|w| w.parse().ok()).ok_or("bad fd")?;
-                let p = procs.borrow();
+                let mut p = procs.borrow_mut();
                 let proc = p.get(pid).ok_or(EPROCDIED)?;
-                // `procctl`'s "close n" (`devproc.c:1010`). The device this
-                // channel belongs to is not told here: `#p` cannot reach the
-                // device table, which is exactly what `devtab` being a global
-                // gives Plan 9 and what this kernel has instead in `namec`.
-                // A close through `close(2)` does tell it (`sysfile.c:285`).
-                if proc.fds.borrow_mut().close(fd).is_none() {
-                    return Err("fd out of range or not open".into());
-                }
+                // `procctlclosefiles` (`devproc.c`): take the channel out
+                // and `cclose` it. `#p` cannot reach `devtab`, so a channel
+                // whose last reference this was goes on `clunkq`, and the
+                // kernel closes it before the write returns.
+                let last = proc.fds.borrow_mut().close(fd).ok_or("fd out of range or not open")?;
+                p.clunkq.extend(last);
             }
             (Q::Ctl, "closefiles") => {
-                let p = procs.borrow();
+                let mut p = procs.borrow_mut();
                 let proc = p.get(pid).ok_or(EPROCDIED)?;
-                let mut fds = proc.fds.borrow_mut();
+                let fds = proc.fds.clone();
+                let mut fds = fds.borrow_mut();
                 for fd in 0..fds.slots() {
-                    fds.close(fd);
+                    if let Some(Some(c)) = fds.close(fd) {
+                        p.clunkq.push(c);
+                    }
                 }
+            }
+            // `pri n` and `fixedpri n` (`devproc.c:1373`, `:1379`): only the
+            // host owner may raise a process above `PriNormal`.
+            (Q::Ctl, cmd @ ("pri" | "fixedpri")) => {
+                // `lookupcmd` wants the one argument; `atoi` reads it, and
+                // what is not a number is 0.
+                let arg = word.next().ok_or(EBADCTL)?;
+                let pri: usize = arg.parse().unwrap_or(0);
+                let user = self.up.borrow().user();
+                if pri > crate::proc::pri::NORMAL && !crate::dev::iseve(&self.eve, &user) {
+                    return Err(EPERM.into());
+                }
+                procs.borrow_mut().procpriority(pid, pri, cmd == "fixedpri");
             }
             (Q::Note, _) => {
                 // `procwrite`'s `Qnote` is `postnote(p, 0, buf, NUser)`
@@ -403,7 +430,7 @@ impl Dev for ProcDev {
                 // `Running`, `Stopped` and `Broken` and `sched()`s. A
                 // process here runs inside one call on the machine and
                 // cannot be stopped part way through it.
-                return Err("a process cannot be stopped part way: no scheduler".into());
+                return Err("stopping a process is not built yet".into());
             }
             (Q::Ctl, _) => return Err("unknown control message".into()),
             _ => return Err(EPERM.into()),
@@ -521,7 +548,7 @@ mod tests {
         // `Moribund`, which is what `pexit` leaves (`proc.c`). It said
         // `Broken` before, and `Broken` is a process that took a fatal note
         // and was kept for a debugger (`broken()`) — not one that exited.
-        procs.borrow_mut().exits(1, "", None);
+        procs.borrow_mut().exits(1, "");
         assert!(read(&mut d, 1, "status").contains("Moribund"));
     }
 
@@ -617,7 +644,31 @@ mod tests {
         let mut ctl = open(&mut d, c, "ctl", OWRITE);
         d.write(&mut ctl, b"kill", 0).unwrap();
         let w = procs.borrow_mut().await_child(1).expect("the killed child is reaped");
-        assert_eq!((w.pid, w.msg.as_str()), (c, "killed"));
+        assert_eq!((w.pid, w.msg), (c, format!("*init* {c}: killed")));
+    }
+
+    /// `pri n` and `fixedpri n` (`devproc.c:1373`, `:1379`) are
+    /// `procpriority`; only the host owner may go above `PriNormal`.
+    #[test]
+    fn ctl_sets_priority_and_fixedpri() {
+        let (mut d, procs) = proc();
+        let c = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
+        let mut ctl = open(&mut d, c, "ctl", OWRITE);
+        d.write(&mut ctl, b"fixedpri 5", 0).unwrap();
+        {
+            let p = procs.borrow();
+            let p = p.get(c).unwrap();
+            assert_eq!((p.basepri, p.priority, p.fixedpri), (5, 5, true));
+        }
+        d.write(&mut ctl, b"pri 13", 0).unwrap();
+        {
+            let p = procs.borrow();
+            let p = p.get(c).unwrap();
+            assert_eq!((p.basepri, p.fixedpri), (13, false), "eve may raise it");
+        }
+        procs.borrow_mut().get_mut(1).unwrap().user = "glenda".into();
+        procs.borrow_mut().get_mut(c).unwrap().user = "glenda".into();
+        assert!(d.write(&mut ctl, b"pri 14", 0).is_err(), "nobody else may");
     }
 
     /// `close` and `closefiles` act on the target's fd table.

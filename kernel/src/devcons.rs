@@ -453,12 +453,11 @@ impl Dev for Cons {
             }
             // Six numbers, `NUMSIZE` each (`devcons.c:63`), in milliseconds.
             Q::Cputime => {
-                let (nsec, _, _) = self.host.now();
                 let (pid, procs) = {
                     let up = self.up.borrow();
                     (up.pid, up.procs.clone())
                 };
-                let t = procs.borrow().cputime(pid, nsec);
+                let t = procs.borrow().cputime(pid);
                 t.iter().flat_map(|v| readnum(*v, NUMSIZE)).collect()
             }
 
@@ -1001,43 +1000,44 @@ mod tests {
         assert_ne!(read(&mut d, "pgrpid").trim(), mine, "a copied namespace is a new group");
     }
 
-    /// A process nothing has stamped reports `TReal` 0, not the whole epoch.
-    /// The test below sets the origin, so without this one it would pass
-    /// while every real process reported about forty-seven years.
+    /// Six numbers of `NUMSIZE` each (`devcons.c:807`), converted from
+    /// ticks with `TK2MS`, and `TReal` is `MACHP(0)->ticks` less the tick the
+    /// process was made on (`:817`).
     #[test]
-    fn an_unstarted_process_reports_no_real_time() {
-        let (mut d, _) = cons();
-        let v: Vec<String> =
-            read(&mut d, "cputime").split_whitespace().map(|s| s.to_string()).collect();
-        assert_eq!(v[crate::proc::TREAL], "0");
-    }
-
-    /// Six numbers of `NUMSIZE` each (`devcons.c:63`), in milliseconds, and
-    /// `TReal` is wall time rather than a zero.
-    #[test]
-    fn cputime_reports_six_numbers_and_real_time_advances() {
+    fn cputime_reports_six_numbers_in_milliseconds_from_ticks() {
         let (mut d, procs) = cons();
-        // the fake host's clock is fixed; start the process one second before it
-        let (now, _, _) = FakeHost::default().now();
-        procs.borrow_mut().started(1, now - 1_500_000_000);
+        {
+            let mut p = procs.borrow_mut();
+            p.m.ticks = 150;
+            let me = p.get_mut(1).unwrap();
+            me.time[crate::proc::TUSER] = 7;
+            me.time[crate::proc::TREAL] = 50;
+        }
         let s = read(&mut d, "cputime");
         assert_eq!(s.len(), 6 * NUMSIZE);
         let v: Vec<&str> = s.split_whitespace().collect();
-        assert_eq!(v.len(), 6);
-        assert_eq!(v[crate::proc::TREAL], "1500", "TReal is now - started, in ms");
+        assert_eq!(v, ["70", "0", "1000", "0", "0", "0"]);
     }
 
-    /// An exited child's times fold into its parent's TCUser/TCSys/TCReal,
-    /// which is what makes the last three numbers mean anything.
+    /// `pexit` adds a child's `TUser+TCUser` and `TSys+TCSys` to its
+    /// parent's `TCUser` and `TCSys` — and **not** its real time to
+    /// `TCReal` (`proc.c:1189`, `:1205`).
     #[test]
     fn a_childs_time_is_added_to_its_parents_when_it_exits() {
         let (mut d, procs) = cons();
         let c = procs.borrow_mut().rfork(1, crate::proc::rf::PROC).unwrap();
-        procs.borrow_mut().charge(c, crate::proc::TUSER, 250);
-        procs.borrow_mut().exits(c, "", None);
+        {
+            let mut p = procs.borrow_mut();
+            let child = p.get_mut(c).unwrap();
+            child.time[crate::proc::TUSER] = 25;
+            child.time[crate::proc::TCUSER] = 5;
+            p.m.ticks = 40;
+        }
+        procs.borrow_mut().exits(c, "");
         let s = read(&mut d, "cputime");
         let v: Vec<&str> = s.split_whitespace().collect();
-        assert_eq!(v[crate::proc::TCUSER], "250", "the child's user time came across");
+        assert_eq!(v[crate::proc::TCUSER], "300", "the child's user time and its children's");
+        assert_eq!(v[5], "0", "TCReal gains nothing");
     }
 
     /// `/dev/sysstat` is one line per machine, ten numbers read from `Mach`

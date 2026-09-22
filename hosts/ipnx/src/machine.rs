@@ -275,6 +275,27 @@ fn call(c: &mut Caller<'_, Guest>, k: Call) -> Result<Ret, String> {
     unsafe { (*kernel()).syscall(pid, k) }
 }
 
+/// **A call, as the process makes it: to the end, however many times it
+/// leaves the processor on the way.** A call that `sleep`s, `qlock`s or
+/// `sched()`s part way answers [`Ret::Sched`]; the process leaves, as
+/// `gotolabel(&m->sched)` does — the fiber suspends with this frame on it —
+/// and when the scheduler enters it again the call goes back in through
+/// `resume` and carries on from where it stopped.
+///
+/// Every import comes through here, because any call may end that way:
+/// `syscall()`'s own last act is *"if(up->delaysched) sched();"*
+/// (`pc/trap.c:778`).
+async fn kcall(c: &mut Caller<'_, Guest>, k: Call) -> Result<Ret, String> {
+    let mut r = call(c, k);
+    while let Ok(Ret::Sched) = r {
+        Sched::new().await;
+        let pid = c.data().pid;
+        // Sound as [`call`] is: a poll, inside `gotolabel`.
+        r = unsafe { (*kernel()).resume(pid) };
+    }
+    r
+}
+
 fn memory(c: &mut Caller<'_, Guest>) -> Result<Memory, wasmtime::Error> {
     c.get_export("memory")
         .and_then(|e| e.into_memory())
@@ -511,43 +532,37 @@ fn place(
 
 /// The import table — this machine's `9syscall`.
 fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
-    l.func_wrap("sys", "open", |mut c: Caller<'_, Guest>, p: i32, mode: i32| {
+    l.func_wrap_async("sys", "open", |mut c: Caller<'_, Guest>, (p, mode): (i32, i32)| Box::new(async move {
         let Ok(path) = cstr(&mut c, p) else { return -1 };
-        or_fail(call(&mut c, Call::Open { path, mode }), |v| match v {
+        or_fail(kcall(&mut c, Call::Open { path, mode }).await, |v| match v {
             Ret::Fd(fd) => fd,
             _ => -1,
         })
-    })?;
+    }))?;
 
-    l.func_wrap("sys", "create", |mut c: Caller<'_, Guest>, p: i32, mode: i32, perm: i32| {
+    l.func_wrap_async("sys", "create", |mut c: Caller<'_, Guest>, (p, mode, perm): (i32, i32, i32)| Box::new(async move {
         let Ok(path) = cstr(&mut c, p) else { return -1 };
         or_fail(
-            call(&mut c, Call::Create { path, mode, perm: perm as u32 }),
+            kcall(&mut c, Call::Create { path, mode, perm: perm as u32 }).await,
             |v| match v {
                 Ret::Fd(fd) => fd,
                 _ => -1,
             },
         )
-    })?;
+    }))?;
 
-    l.func_wrap("sys", "close", |mut c: Caller<'_, Guest>, fd: i32| {
-        or_fail(call(&mut c, Call::Close { fd }), |_| 0)
-    })?;
+    l.func_wrap_async("sys", "close", |mut c: Caller<'_, Guest>, (fd,): (i32,)| Box::new(async move {
+        or_fail(kcall(&mut c, Call::Close { fd }).await, |_| 0)
+    }))?;
 
-    // A read can sleep — `qread` on an empty pipe (`qio.c:866`) — and the
-    // kernel then answers `Sched`: leave, and make the read again when the
-    // process is entered, which is the device finding what was written.
     l.func_wrap_async(
         "sys",
         "pread",
         |mut c: Caller<'_, Guest>, (fd, p, n, off): (i32, i32, i32, i64)| {
             Box::new(async move {
-                let d = loop {
-                    match call(&mut c, Call::Pread { fd, n: n.max(0) as usize, off }) {
-                        Ok(Ret::Data(d)) => break d,
-                        Ok(Ret::Sched) => Sched::new().await,
-                        _ => return -1,
-                    }
+                let d = match kcall(&mut c, Call::Pread { fd, n: n.max(0) as usize, off }).await {
+                    Ok(Ret::Data(d)) => d,
+                    _ => return -1,
                 };
                 match write(&mut c, p, &d) {
                     Ok(()) => d.len() as i32,
@@ -557,34 +572,30 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         },
     )?;
 
-    l.func_wrap(
-        "sys",
-        "pwrite",
-        |mut c: Caller<'_, Guest>, fd: i32, p: i32, n: i32, off: i64| {
+    l.func_wrap_async("sys", "pwrite", |mut c: Caller<'_, Guest>, (fd, p, n, off): (i32, i32, i32, i64)| Box::new(async move {
             let Ok(data) = read(&mut c, p, n) else { return -1 };
-            or_fail(call(&mut c, Call::Pwrite { fd, data, off }), |v| match v {
+            or_fail(kcall(&mut c, Call::Pwrite { fd, data, off }).await, |v| match v {
                 Ret::N(n) => n as i32,
                 _ => -1,
             })
-        },
-    )?;
+        }))?;
 
-    l.func_wrap("sys", "seek", |mut c: Caller<'_, Guest>, fd: i32, off: i64, whence: i32| {
-        match call(&mut c, Call::Seek { fd, off, whence }) {
+    l.func_wrap_async("sys", "seek", |mut c: Caller<'_, Guest>, (fd, off, whence): (i32, i64, i32)| Box::new(async move {
+        match kcall(&mut c, Call::Seek { fd, off, whence }).await {
             Ok(Ret::N(n)) => n as i64,
             _ => -1,
         }
-    })?;
+    }))?;
 
-    l.func_wrap("sys", "dup", |mut c: Caller<'_, Guest>, old: i32, new: i32| {
-        or_fail(call(&mut c, Call::Dup { old, new }), |v| match v {
+    l.func_wrap_async("sys", "dup", |mut c: Caller<'_, Guest>, (old, new): (i32, i32)| Box::new(async move {
+        or_fail(kcall(&mut c, Call::Dup { old, new }).await, |v| match v {
             Ret::Fd(fd) => fd,
             _ => -1,
         })
-    })?;
+    }))?;
 
-    l.func_wrap("sys", "pipe", |mut c: Caller<'_, Guest>, p: i32| {
-        let (a, b) = match call(&mut c, Call::Pipe) {
+    l.func_wrap_async("sys", "pipe", |mut c: Caller<'_, Guest>, (p,): (i32,)| Box::new(async move {
+        let (a, b) = match kcall(&mut c, Call::Pipe).await {
             Ok(Ret::Two(a, b)) => (a, b),
             _ => return -1,
         };
@@ -595,70 +606,66 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
             Ok(()) => 0,
             Err(_) => -1,
         }
-    })?;
+    }))?;
 
-    l.func_wrap("sys", "remove", |mut c: Caller<'_, Guest>, p: i32| {
+    l.func_wrap_async("sys", "remove", |mut c: Caller<'_, Guest>, (p,): (i32,)| Box::new(async move {
         let Ok(path) = cstr(&mut c, p) else { return -1 };
-        or_fail(call(&mut c, Call::Remove { path }), |_| 0)
-    })?;
+        or_fail(kcall(&mut c, Call::Remove { path }).await, |_| 0)
+    }))?;
 
-    l.func_wrap("sys", "chdir", |mut c: Caller<'_, Guest>, p: i32| {
+    l.func_wrap_async("sys", "chdir", |mut c: Caller<'_, Guest>, (p,): (i32,)| Box::new(async move {
         let Ok(path) = cstr(&mut c, p) else { return -1 };
-        or_fail(call(&mut c, Call::Chdir { path }), |_| 0)
-    })?;
+        or_fail(kcall(&mut c, Call::Chdir { path }).await, |_| 0)
+    }))?;
 
-    l.func_wrap("sys", "bind", |mut c: Caller<'_, Guest>, n: i32, o: i32, flag: i32| {
+    l.func_wrap_async("sys", "bind", |mut c: Caller<'_, Guest>, (n, o, flag): (i32, i32, i32)| Box::new(async move {
         let (Ok(name), Ok(old)) = (cstr(&mut c, n), cstr(&mut c, o)) else { return -1 };
-        or_fail(call(&mut c, Call::Bind { name, old, flag }), |_| 0)
-    })?;
+        or_fail(kcall(&mut c, Call::Bind { name, old, flag }).await, |_| 0)
+    }))?;
 
-    l.func_wrap(
-        "sys",
-        "mount",
-        |mut c: Caller<'_, Guest>, fd: i32, afd: i32, o: i32, flag: i32, a: i32| {
+    l.func_wrap_async("sys", "mount", |mut c: Caller<'_, Guest>, (fd, afd, o, flag, a): (i32, i32, i32, i32, i32)| Box::new(async move {
             let Ok(old) = cstr(&mut c, o) else { return -1 };
             let aname = if a == 0 { String::new() } else { cstr(&mut c, a).unwrap_or_default() };
-            or_fail(call(&mut c, Call::Mount { fd, afd, old, flag, aname }), |_| 0)
-        },
-    )?;
+            or_fail(kcall(&mut c, Call::Mount { fd, afd, old, flag, aname }).await, |_| 0)
+        }))?;
 
-    l.func_wrap("sys", "unmount", |mut c: Caller<'_, Guest>, n: i32, o: i32| {
+    l.func_wrap_async("sys", "unmount", |mut c: Caller<'_, Guest>, (n, o): (i32, i32)| Box::new(async move {
         let Ok(old) = cstr(&mut c, o) else { return -1 };
         let name = if n == 0 { None } else { Some(cstr(&mut c, n).unwrap_or_default()) };
-        or_fail(call(&mut c, Call::Unmount { name, old }), |_| 0)
-    })?;
+        or_fail(kcall(&mut c, Call::Unmount { name, old }).await, |_| 0)
+    }))?;
 
-    l.func_wrap("sys", "stat", |mut c: Caller<'_, Guest>, p: i32, e: i32, n: i32| {
+    l.func_wrap_async("sys", "stat", |mut c: Caller<'_, Guest>, (p, e, n): (i32, i32, i32)| Box::new(async move {
         let Ok(path) = cstr(&mut c, p) else { return -1 };
-        let r = call(&mut c, Call::Stat { path });
+        let r = kcall(&mut c, Call::Stat { path }).await;
         statlike(&mut c, r, e, n)
-    })?;
+    }))?;
 
-    l.func_wrap("sys", "fstat", |mut c: Caller<'_, Guest>, fd: i32, e: i32, n: i32| {
-        let r = call(&mut c, Call::Fstat { fd });
+    l.func_wrap_async("sys", "fstat", |mut c: Caller<'_, Guest>, (fd, e, n): (i32, i32, i32)| Box::new(async move {
+        let r = kcall(&mut c, Call::Fstat { fd }).await;
         statlike(&mut c, r, e, n)
-    })?;
+    }))?;
 
-    l.func_wrap("sys", "wstat", |mut c: Caller<'_, Guest>, p: i32, e: i32, n: i32| {
+    l.func_wrap_async("sys", "wstat", |mut c: Caller<'_, Guest>, (p, e, n): (i32, i32, i32)| Box::new(async move {
         let (Ok(path), Ok(edir)) = (cstr(&mut c, p), read(&mut c, e, n)) else { return -1 };
-        or_fail(call(&mut c, Call::Wstat { path, edir }), |_| 0)
-    })?;
+        or_fail(kcall(&mut c, Call::Wstat { path, edir }).await, |_| 0)
+    }))?;
 
-    l.func_wrap("sys", "fwstat", |mut c: Caller<'_, Guest>, fd: i32, e: i32, n: i32| {
+    l.func_wrap_async("sys", "fwstat", |mut c: Caller<'_, Guest>, (fd, e, n): (i32, i32, i32)| Box::new(async move {
         let Ok(edir) = read(&mut c, e, n) else { return -1 };
-        or_fail(call(&mut c, Call::Fwstat { fd, edir }), |_| 0)
-    })?;
+        or_fail(kcall(&mut c, Call::Fwstat { fd, edir }).await, |_| 0)
+    }))?;
 
-    l.func_wrap("sys", "fversion", |mut c: Caller<'_, Guest>, fd: i32, m: i32, v: i32, n: i32| {
+    l.func_wrap_async("sys", "fversion", |mut c: Caller<'_, Guest>, (fd, m, v, n): (i32, i32, i32, i32)| Box::new(async move {
         let Ok(version) = cstr(&mut c, v) else { return -1 };
         let _ = n;
         or_fail(
-            call(&mut c, Call::Fversion { fd, msize: m as u32, version }),
+            kcall(&mut c, Call::Fversion { fd, msize: m as u32, version }).await,
             |_| 0,
         )
-    })?;
+    }))?;
 
-    l.func_wrap("sys", "rfork", |mut c: Caller<'_, Guest>, flags: i32| {
+    l.func_wrap_async("sys", "rfork", |mut c: Caller<'_, Guest>, (flags,): (i32,)| Box::new(async move {
         // **A bare `rfork(RFPROC)` cannot be answered on this machine**, and
         // saying so is better than pretending. It returns twice — once into
         // the parent and once into the child — and a wasm call returns into
@@ -673,11 +680,11 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
             );
             return -1;
         }
-        or_fail(call(&mut c, Call::Rfork { flags }), |v| match v {
+        or_fail(kcall(&mut c, Call::Rfork { flags }).await, |v| match v {
             Ret::Pid(p) => p as i32,
             _ => -1,
         })
-    })?;
+    }))?;
 
     // `procrfork(f, arg, stacksize, rforkflag)` — Plan 9's own shape for
     // making a process that runs a FUNCTION (`libthread/create.c:103`), and
@@ -697,7 +704,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         "procrfork",
         |mut c: Caller<'_, Guest>, (f, arg, _stack, flags): (i32, i32, i32, i32)| {
             Box::new(async move {
-                let child = match call(&mut c, Call::Rfork { flags: flags | rf::PROC | rf::MEM }) {
+                let child = match kcall(&mut c, Call::Rfork { flags: flags | rf::PROC | rf::MEM }).await {
                     Ok(Ret::Pid(p)) => p,
                     _ => return -1i32,
                 };
@@ -726,7 +733,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
                 // `exits` or `exec` unwinding, and both already told the
                 // kernel.
                 if ended.is_ok() {
-                    let _ = call(&mut c, Call::Exits { status: String::new() });
+                    let _ = kcall(&mut c, Call::Exits { status: String::new() }).await;
                 }
                 c.data_mut().pid = parent;
                 // **`ready(p); sched();`** — `sysrfork`'s last two lines
@@ -742,11 +749,11 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         },
     )?;
 
-    l.func_wrap("sys", "exec", |mut c: Caller<'_, Guest>, p: i32, a: i32| -> Result<i32, wasmtime::Error> {
+    l.func_wrap_async("sys", "exec", |mut c: Caller<'_, Guest>, (p, a): (i32, i32)| Box::new(async move { let r: Result<i32, wasmtime::Error> = async {
         let (Ok(path), Ok(args)) = (cstr(&mut c, p), cargv(&mut c, a)) else {
             return Ok(-1);
         };
-        match call(&mut c, Call::Exec { path, args }) {
+        match kcall(&mut c, Call::Exec { path, args }).await {
             // **`exec` does not return** (`sysproc.c:302`): the process IS
             // the new image now, and the frames of the old one are nobody's.
             // Unwinding them is what a machine with no address space to
@@ -755,27 +762,20 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
             Ok(_) => Err(wasmtime::Error::new(Exited)),
             Err(_) => Ok(-1),
         }
-    })?;
+    }.await; r }))?;
 
-    l.func_wrap("sys", "exits", |mut c: Caller<'_, Guest>, p: i32| -> Result<(), wasmtime::Error> {
+    l.func_wrap_async("sys", "exits", |mut c: Caller<'_, Guest>, (p,): (i32,)| Box::new(async move { let r: Result<(), wasmtime::Error> = async {
         // `exits(nil)` is the empty status, and nil is address zero.
         let status = if p == 0 { String::new() } else { cstr(&mut c, p).unwrap_or_default() };
-        let _ = call(&mut c, Call::Exits { status });
+        let _ = kcall(&mut c, Call::Exits { status }).await;
         Err(wasmtime::Error::new(Exited))
-    })?;
+    }.await; r }))?;
 
-    // `pwait` (`proc.c:1288`) is `sleep(&up->waitr, haswaitq, up)` and then
-    // taking the record. The loop is that: ask, and if the kernel says the
-    // process must sleep, leave — and ask again when it is entered, which is
-    // `sleep` returning and `haswaitq` being true at last.
     l.func_wrap_async("sys", "await", |mut c: Caller<'_, Guest>, (p, n): (i32, i32)| {
         Box::new(async move {
-            let msg = loop {
-                match call(&mut c, Call::Await) {
-                    Ok(Ret::Str(s)) => break s,
-                    Ok(Ret::Sched) => Sched::new().await,
-                    _ => return -1,
-                }
+            let msg = match kcall(&mut c, Call::Await).await {
+                Ok(Ret::Str(s)) => s,
+                _ => return -1,
             };
             let b = msg.as_bytes();
             let k = b.len().min(n.max(0) as usize);
@@ -786,12 +786,12 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         })
     })?;
 
-    l.func_wrap("sys", "errstr", |mut c: Caller<'_, Guest>, p: i32, n: i32| {
+    l.func_wrap_async("sys", "errstr", |mut c: Caller<'_, Guest>, (p, n): (i32, i32)| Box::new(async move {
         // `generrstr` (`sysproc.c:748`) EXCHANGES and answers 0, never a
         // length: what the buffer held becomes the process's error string and
         // the old one is written back. `werrstr` is that, and nothing else.
         let Ok(buf) = cstr(&mut c, p) else { return -1 };
-        let old = match call(&mut c, Call::Errstr { buf }) {
+        let old = match kcall(&mut c, Call::Errstr { buf }).await {
             Ok(Ret::Str(s)) => s,
             _ => return -1,
         };
@@ -802,43 +802,37 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
             Ok(()) => 0,
             Err(_) => -1,
         }
-    })?;
+    }))?;
 
-    // `syssleep` ends in `tsleep`, which ends in `sched()`. The kernel has
-    // put the process on its own `Rendez` with a deadline; this is the going.
     l.func_wrap_async("sys", "sleep", |mut c: Caller<'_, Guest>, (ms,): (i32,)| {
         Box::new(async move {
-            match call(&mut c, Call::Sleep { ms: ms.max(0) as u64 }) {
-                Ok(Ret::Sched) => {
-                    Sched::new().await;
-                    0
-                }
+            match kcall(&mut c, Call::Sleep { ms: ms.max(0) as u64 }).await {
                 Ok(_) => 0,
                 Err(_) => -1,
             }
         })
     })?;
 
-    l.func_wrap("sys", "alarm", |mut c: Caller<'_, Guest>, ms: i32| {
-        or_fail(call(&mut c, Call::Alarm { ms: ms.max(0) as u64 }), |_| 0) as i64
-    })?;
+    l.func_wrap_async("sys", "alarm", |mut c: Caller<'_, Guest>, (ms,): (i32,)| Box::new(async move {
+        or_fail(kcall(&mut c, Call::Alarm { ms: ms.max(0) as u64 }).await, |_| 0) as i64
+    }))?;
 
     // The three the kernel refuses. They are imports all the same, so a
     // program that calls one gets −1 and the kernel's reason in `errstr` —
     // which is what a Plan 9 program does with a call that fails, and is
     // not the same as a program that would not link.
-    l.func_wrap("sys", "notify", |mut c: Caller<'_, Guest>, _f: i32| {
-        or_fail(call(&mut c, Call::Notify), |_| 0)
-    })?;
-    l.func_wrap("sys", "noted", |mut c: Caller<'_, Guest>, v: i32| {
-        or_fail(call(&mut c, Call::Noted { how: v }), |_| 0)
-    })?;
-    l.func_wrap("sys", "rendezvous", |mut c: Caller<'_, Guest>, tag: i32, val: i32| {
+    l.func_wrap_async("sys", "notify", |mut c: Caller<'_, Guest>, (_f,): (i32,)| Box::new(async move {
+        or_fail(kcall(&mut c, Call::Notify).await, |_| 0)
+    }))?;
+    l.func_wrap_async("sys", "noted", |mut c: Caller<'_, Guest>, (v,): (i32,)| Box::new(async move {
+        or_fail(kcall(&mut c, Call::Noted { how: v }).await, |_| 0)
+    }))?;
+    l.func_wrap_async("sys", "rendezvous", |mut c: Caller<'_, Guest>, (tag, val): (i32, i32)| Box::new(async move {
         or_fail(
-            call(&mut c, Call::Rendezvous { tag: tag as u64, val: val as u64 }),
+            kcall(&mut c, Call::Rendezvous { tag: tag as u64, val: val as u64 }).await,
             |_| 0,
         )
-    })?;
+    }))?;
 
     Ok(())
 }

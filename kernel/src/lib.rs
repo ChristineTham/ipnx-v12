@@ -123,7 +123,22 @@ pub struct Kernel {
     /// `up` — the calling process, which the devices that need it read
     /// through. Set before each dispatch.
     pub up: std::rc::Rc<std::cell::RefCell<proc::Up>>,
+    /// **`p->sched`** (`portdat.h`) — for each process that left the
+    /// processor in the middle of a call, where it goes back in.
+    ///
+    /// On Plan 9 that is a `Label` into the process's own kernel stack:
+    /// `sleep` does `setlabel(&up->sched)`, the frames of the half-finished
+    /// call stay where they are, and when the process is entered again
+    /// `setlabel` returns 1 and the call carries on from the line after the
+    /// `sleep` (`proc.c:830`). Rust cannot leave frames on a stack and come
+    /// back to them, so the rest of the call is kept here instead, as the
+    /// code that runs it — and it runs when the process is entered again,
+    /// having done nothing before the `sleep` twice.
+    labels: std::collections::HashMap<Pid, Label>,
 }
+
+/// The rest of a call — what [`Kernel::labels`] holds.
+type Label = Box<dyn FnOnce(&mut Kernel, Pid) -> Result<Ret, String>>;
 
 impl Kernel {
     /// Boot: the kernel carries a root (`#/`, devroot) holding the files the
@@ -153,7 +168,7 @@ impl Kernel {
         tab.add(Box::new(root));
         let procs = std::rc::Rc::new(std::cell::RefCell::new(proc::Procs::new(slash)));
         let up = std::rc::Rc::new(std::cell::RefCell::new(proc::Up { pid: 1, procs: procs.clone() }));
-        Ok(Kernel { procs, up, tab, machine })
+        Ok(Kernel { procs, up, tab, machine, labels: std::collections::HashMap::new() })
     }
 
     /// `exec`, in the order `sysexec` does it (`sysproc.c:302`).
@@ -173,11 +188,11 @@ impl Kernel {
     pub fn exec(&mut self, pid: Pid, path: &str, args: &[String]) -> Result<(), String> {
         let image = self.exec_image(pid, path)?;
         self.machine.procsetup(pid)?;
-        // `TReal`'s origin. Plan 9 takes it from `MACHP(0)->ticks`; here the
-        // machine supplies it, and nothing else in the kernel needs to know
-        // what a clock is.
-        let now = self.machine.todget().nsec;
-        self.procs.borrow_mut().started(pid, now);
+        // *"up->text = elem"* (`sysproc.c:483`) — the last element of the
+        // name, as `namec` left it in `up->genbuf`.
+        if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
+            p.text = path.rsplit('/').next().unwrap_or(path).to_string();
+        }
         self.machine.touser(pid, &image, args)?;
         Ok(())
     }
@@ -232,9 +247,8 @@ impl Kernel {
                     // `exits`, so nothing recorded a status.
                     (machine::Left::Exited, _) => {
                         drop(procs);
-                        let now = self.machine.todget().nsec;
                         if self.procs.borrow().status(pid).is_none() {
-                            self.procs.borrow_mut().exits(pid, "", Some(now));
+                            self.procs.borrow_mut().exits(pid, "");
                         }
                         self.procs.borrow_mut().setstate(pid, proc::State::Dead);
                     }
@@ -519,6 +533,10 @@ impl machine::Syscalls for Kernel {
         Kernel::syscall(self, up, call)
     }
 
+    fn resume(&mut self, up: Pid) -> Result<Ret, String> {
+        Kernel::resume(self, up)
+    }
+
     fn timerintr(&mut self) -> bool {
         let now = self.machine.todget().nsec;
         Kernel::timerintr(self, now);
@@ -545,9 +563,9 @@ pub enum Ret {
     /// **The call did not finish: the process must leave.** `sleep`
     /// (`proc.c:815`) commits the process and then `gotolabel(&m->sched)`,
     /// and a machine cannot jump — so the answer travels back instead, and
-    /// the machine leaves. The call resumes where it stopped when `sched`
-    /// enters the process again, which is what the process's own stack is
-    /// for.
+    /// the machine leaves. When `sched` enters the process again the machine
+    /// calls [`machine::Syscalls::resume`], and the call carries on from
+    /// where it stopped.
     Sched,
 }
 
@@ -560,8 +578,14 @@ impl Kernel {
     /// global; here it is the argument, because a Rust kernel cannot hand a
     /// device an ambient mutable global — the same information, made explicit.
     pub fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
-        // *"m->syscall++"* (`pc/trap.c:673`).
-        self.procs.borrow_mut().m.syscall += 1;
+        // *"m->syscall++; up->insyscall = 1;"* (`pc/trap.c:673`).
+        {
+            let mut procs = self.procs.borrow_mut();
+            procs.m.syscall += 1;
+            if let Some(p) = procs.get_mut(up) {
+                p.insyscall = true;
+            }
+        }
         // **`up` is the calling process, and it is set on the way in.** Plan 9
         // does not have to: `syscall()` (`pc/trap.c:665`) runs on the trapping
         // process's own kernel stack, so the per-machine `up` already names
@@ -569,24 +593,138 @@ impl Kernel {
         // in `devsrv`, `up->fgrp` in `devdup`, `up->egrp` in `devenv` — and if
         // it is not set, every one of them answers for whoever ran last.
         self.up.borrow_mut().pid = up;
+        // `sysrfork` ends *"ready(p); sched();"*, and that `sched` zeroes
+        // `up->delaysched` (`proc.c:154`) before `syscall()` reaches its own
+        // *"if(up->delaysched) sched();"* — so the switch after an `rfork`
+        // is `sysrfork`'s, never a second one. The machine takes it once
+        // the child has run on the parent's frames (RESEARCH §5.2).
+        let rforked = matches!(call, Call::Rfork { flags } if flags & proc::rf::PROC != 0);
         let r = self.dispatch(up, call);
+        self.syscall_tail(up, r, rforked)
+    }
+
+    /// **The process is entered again in the middle of a call it left** —
+    /// `sleep`'s `setlabel` answering 1 (`proc.c:830`). The rest of the call
+    /// runs, and ends as any call does.
+    pub fn resume(&mut self, up: Pid) -> Result<Ret, String> {
+        self.up.borrow_mut().pid = up;
+        let label = self.labels.remove(&up).ok_or("the process left no call to go back to")?;
+        let r = label(self, up);
+        self.syscall_tail(up, r, false)
+    }
+
+    /// The end of `syscall()` (`pc/trap.c:739`–`:780`), after the call's own
+    /// work.
+    /// `rforked`: the call was `rfork(RFPROC)`, whose own `sched` is still
+    /// to come.
+    fn syscall_tail(&mut self, up: Pid, r: Result<Ret, String>, rforked: bool) -> Result<Ret, String> {
         // `closeproc` (`chan.c:552`): close what `exits` let go of.
         self.closeproc();
-        // **A call that slept leaves.** A device that must wait sleeps the
-        // caller where Plan 9's does — `qread` on `q->rr` — and that commits
-        // it: `Wakeme`, on a `Rendez`. On Plan 9 the `sleep` itself switches
-        // away and the call carries on from that line when it is woken; here
-        // the device returns, and what it returned is not an answer. So the
-        // machine is told to leave, and the call is made again when the
-        // process is entered — which is where a device that sleeps must be
-        // able to begin again, having taken nothing.
-        if self.procs.borrow().state(up) == proc::State::Wakeme {
+        // **The call left the processor in the middle** — `sleep`, `qlock`
+        // or `sched` did `setlabel`, and whatever it was doing kept the rest
+        // of the call in `labels`. The machine leaves; `resume` goes back.
+        if self.procs.borrow_mut().take_setlabel(up) {
             return Ok(Ret::Sched);
+        }
+        // **A clock interrupt that fell due during the call.** This kernel
+        // runs a call to its end with nothing able to interrupt it — the
+        // machine's interrupt is only taken in guest code — which is Plan
+        // 9's kernel running `splhi`. An interrupt held off by `splhi` is
+        // taken at `spllo`, and the call's end is where that is: still
+        // `insyscall`, so the tick is `TSys`'s (`accounttime`, `proc.c:1624`).
+        let now = self.machine.todget().nsec;
+        if self.procs.borrow().m.hz.is_some_and(|h| h <= now) {
+            self.timerintr(now);
+        }
+        // *"up->insyscall = 0;"* (`pc/trap.c:767`).
+        if let Some(p) = self.procs.borrow_mut().get_mut(up) {
+            p.insyscall = false;
         }
         if let Err(e) = &r {
             self.procs.borrow_mut().seterrstr(up, e);
         }
+        // *"if we delayed sched because we held a lock, sched now"* —
+        // `if(up->delaysched) sched();` (`pc/trap.c:778`). The call is done;
+        // its answer waits until the process is entered again.
+        //
+        // After an `rfork`, `sysrfork`'s own `sched` is still to come, and
+        // it is that one.
+        let delayed = !rforked && self.procs.borrow().get(up).is_some_and(|p| p.delaysched > 0);
+        if delayed && self.procs.borrow().state(up) == proc::State::Running {
+            let answer = r.clone();
+            self.labels.insert(up, Box::new(move |_, _| answer));
+            return Ok(Ret::Sched);
+        }
         r
+    }
+
+    /// `sleep` and `sched` from inside a call: keep the rest of it, for
+    /// when the process is entered again. The caller has already done
+    /// `setlabel` — through `sleep`, `qlock`, or directly.
+    fn setlabel(&mut self, up: Pid, rest: Label) {
+        self.labels.insert(up, rest);
+    }
+
+    /// The record `pwait` takes once `haswaitq` is true.
+    fn waitrecord(&mut self, up: Pid) -> Result<Ret, String> {
+        match self.procs.borrow_mut().await_child(up) {
+            Some(w) => Ok(Ret::Str(w.format())),
+            None => Err(ENOCHILD.into()),
+        }
+    }
+
+    /// `sysread` → `read` (`sysfile.c:672`) on a channel.
+    ///
+    /// **Taken out and put back, not held.** Plan 9 hands the device the
+    /// `Chan*` an fd holds and nothing minds that the device may reach the
+    /// same channel again through the fd table — `dupgen` reads `c->mode` of
+    /// every open descriptor (`devdup.c:34`), which is exactly what `ls
+    /// /dev` does when `#d` is in its union. Holding the borrow across the
+    /// call makes that a panic; copying only the offset back loses `dri`
+    /// and `uri`, which is how a directory read came to start over every
+    /// time. The whole channel goes back.
+    ///
+    /// **A device may leave in the middle** — `qread` on an empty pipe
+    /// sleeps. The rest of the read is then this again, on the same
+    /// channel: the device knows where it was.
+    fn pread(&mut self, up: Pid, cell: std::rc::Rc<std::cell::RefCell<chan::Chan>>, n: usize, off: i64) -> Result<Ret, String> {
+        let mut c = cell.borrow().clone();
+        let at = if off < 0 { c.offset } else { off as u64 };
+        // `read` (`sysfile.c:672`): **a directory reached through a union is
+        // read from every element**, one after another. Without this `ls /`
+        // shows whichever element answered the walk and nothing else —
+        // which, once `/` is a union of the kernel's root and a file server,
+        // is most of the system missing.
+        let d = if c.is_dir() && !c.umh.is_empty() {
+            self.unionread(&mut c, n)?
+        } else {
+            self.tab.dread(&mut c, n, at)?
+        };
+        if self.procs.borrow().get(up).is_some_and(|p| p.setlabel) {
+            self.setlabel(up, Box::new(move |k, up| k.pread(up, cell, n, off)));
+            return Ok(Ret::Ok);
+        }
+        if off < 0 {
+            c.offset += d.len() as u64;
+        }
+        *cell.borrow_mut() = c;
+        Ok(Ret::Data(d))
+    }
+
+    /// `syswrite` → `write` (`sysfile.c`), the same way.
+    fn pwrite(&mut self, up: Pid, cell: std::rc::Rc<std::cell::RefCell<chan::Chan>>, data: Vec<u8>, off: i64) -> Result<Ret, String> {
+        let mut c = cell.borrow().clone();
+        let at = if off < 0 { c.offset } else { off as u64 };
+        let n = self.tab.dwrite(&mut c, &data, at)?;
+        if self.procs.borrow().get(up).is_some_and(|p| p.setlabel) {
+            self.setlabel(up, Box::new(move |k, up| k.pwrite(up, cell, data, off)));
+            return Ok(Ret::Ok);
+        }
+        if off < 0 {
+            c.offset += n as u64;
+        }
+        *cell.borrow_mut() = c;
+        Ok(Ret::N(n))
     }
 
     /// `closeproc` (`chan.c:552`) — the kernel process that drains
@@ -632,8 +770,7 @@ impl Kernel {
                 Ok(Ret::Ok)
             }
             Call::Exits { status } => {
-                let now = self.machine.todget().nsec;
-                self.procs.borrow_mut().exits(up, &status, Some(now));
+                self.procs.borrow_mut().exits(up, &status);
                 Ok(Ret::Ok)
             }
             // `sysawait` (`sysproc.c:715`) formats the message in the KERNEL
@@ -652,6 +789,9 @@ impl Kernel {
             // **It sleeps.** `pexit` wakes it (`proc.c:1219`). This used to
             // answer "no living children" the moment no record was ready,
             // because there was nothing a process could do but return.
+            // `pwait` (`proc.c:1271`): *"sleep(&up->waitr, haswaitq, up)"*,
+            // then take the record `pexit` left — which is what the rest of
+            // the call does when the process is entered again.
             Call::Await => {
                 let ready = self.procs.borrow().haswaitq(up);
                 if !ready {
@@ -660,12 +800,10 @@ impl Kernel {
                     }
                     let r = proc::Rid::Proc(up, proc::Which::Waitr);
                     self.procs.borrow_mut().sleep(up, r, false);
-                    return Ok(Ret::Sched);
+                    self.setlabel(up, Box::new(|k, up| k.waitrecord(up)));
+                    return Ok(Ret::Ok);
                 }
-                match self.procs.borrow_mut().await_child(up) {
-                    Some(w) => Ok(Ret::Str(w.format())),
-                    None => Err(ENOCHILD.into()),
-                }
+                self.waitrecord(up)
             }
             Call::Errstr { buf } => Ok(Ret::Str(self.procs.borrow_mut().errstr(up, &buf))),
 
@@ -726,44 +864,11 @@ impl Kernel {
             }
             Call::Pread { fd, n, off } => {
                 let cell = self.chancell(up, fd)?;
-                // **Taken out and put back, not held.** Plan 9 hands the
-                // device the `Chan*` an fd holds and nothing minds that the
-                // device may reach the same channel again through the fd
-                // table — `dupgen` reads `c->mode` of every open descriptor
-                // (`devdup.c:34`), which is exactly what `ls /dev` does when
-                // `#d` is in its union. Holding the borrow across the call
-                // makes that a panic; copying only the offset back loses
-                // `dri` and `uri`, which is how a directory read came to
-                // start over every time. The whole channel goes back.
-                let mut c = cell.borrow().clone();
-                let at = if off < 0 { c.offset } else { off as u64 };
-                // `read` (`sysfile.c:672`): **a directory reached through a
-                // union is read from every element**, one after another.
-                // Without this `ls /` shows whichever element answered the
-                // walk and nothing else — which, once `/` is a union of the
-                // kernel's root and a file server, is most of the system
-                // missing.
-                let d = if c.is_dir() && !c.umh.is_empty() {
-                    self.unionread(&mut c, n)?
-                } else {
-                    self.tab.dread(&mut c, n, at)?
-                };
-                if off < 0 {
-                    c.offset += d.len() as u64;
-                }
-                *cell.borrow_mut() = c;
-                Ok(Ret::Data(d))
+                self.pread(up, cell, n, off)
             }
             Call::Pwrite { fd, data, off } => {
                 let cell = self.chancell(up, fd)?;
-                let mut c = cell.borrow().clone();
-                let at = if off < 0 { c.offset } else { off as u64 };
-                let n = self.tab.dwrite(&mut c, &data, at)?;
-                if off < 0 {
-                    c.offset += n as u64;
-                }
-                *cell.borrow_mut() = c;
-                Ok(Ret::N(n))
+                self.pwrite(up, cell, data, off)
             }
             // `seek` is fd-class, not 9P: the offset is kernel state in the
             // Chan, because `Tread`/`Twrite` carry theirs explicitly.
@@ -891,8 +996,11 @@ impl Kernel {
                     // The `lastupdate` nudge is *"pretend we just used 1/2
                     // tick"*, so a process that yields is not rewarded for it.
                     if self.procs.borrow().anyready() {
-                        self.procs.borrow_mut().yield_(up);
-                        return Ok(Ret::Sched);
+                        let mut procs = self.procs.borrow_mut();
+                        procs.yield_(up);
+                        procs.setlabel(up);
+                        drop(procs);
+                        self.setlabel(up, Box::new(|_, _| Ok(Ret::Ok)));
                     }
                     return Ok(Ret::Ok);
                 }
@@ -906,7 +1014,9 @@ impl Kernel {
                 // has no reason but the clock.
                 let r = proc::Rid::Proc(up, proc::Which::Sleep);
                 self.procs.borrow_mut().tsleep(up, r, false, deadline);
-                Ok(Ret::Sched)
+                // After the `tsleep`, `syssleep` returns 0.
+                self.setlabel(up, Box::new(|_, _| Ok(Ret::Ok)));
+                Ok(Ret::Ok)
             }
 
             // The four that a scheduler is the whole of. Each says what Plan
@@ -1166,6 +1276,61 @@ mod syscalls {
         let Ret::Two(_a, b) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
         assert_eq!(k.syscall(1, Call::Pread { fd: b, n: 16, off: -1 }), Ok(Ret::Sched));
         assert_eq!(k.procs.borrow().state(1), proc::State::Wakeme);
+    }
+
+    /// **A call that left carries on where it stopped** when the process is
+    /// entered again — `sleep` returning into `qread` (`proc.c:830`) — and
+    /// answers what it read. Nothing before the sleep happens twice.
+    #[test]
+    fn a_read_that_left_carries_on_when_resumed() {
+        let mut k = booted();
+        let Ret::Two(a, b) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
+        let Ret::Pid(child) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else {
+            panic!()
+        };
+        assert_eq!(k.syscall(child, Call::Pread { fd: b, n: 16, off: -1 }), Ok(Ret::Sched));
+        k.syscall(1, Call::Pwrite { fd: a, data: b"x".to_vec(), off: -1 }).unwrap();
+        assert_eq!(k.procs.borrow().state(child), proc::State::Ready, "the write woke it");
+        assert_eq!(k.resume(child), Ok(Ret::Data(b"x".to_vec())));
+        assert!(k.resume(child).is_err(), "and there is nothing left to go back to");
+    }
+
+    /// **A tick that falls due during a call is taken at its end, still
+    /// `insyscall`**, so it is `TSys`'s (`accounttime`, `proc.c:1624`;
+    /// `pc/trap.c:674`, `:767`) — the interrupt `splhi` held off, taken at
+    /// `spllo`.
+    #[test]
+    fn a_tick_during_a_call_is_system_time() {
+        let mut k = booted();
+        {
+            let mut p = k.procs.borrow_mut();
+            p.timersinit(0);
+            p.up = Some(1);
+        }
+        k.syscall(1, Call::Errstr { buf: String::new() }).unwrap();
+        let p = k.procs.borrow();
+        assert_eq!(p.m.ticks, 1);
+        assert_eq!(p.get(1).unwrap().time[proc::TSYS], 1);
+        assert_eq!(p.get(1).unwrap().time[proc::TUSER], 0);
+        assert!(!p.get(1).unwrap().insyscall, "and cleared on the way out");
+    }
+
+    /// *"if(up->delaysched) sched();"* at the end of every call
+    /// (`pc/trap.c:778`): the call's work is done, the process leaves, and
+    /// the answer is given when it is entered again.
+    #[test]
+    fn a_delayed_sched_is_taken_at_the_end_of_a_call() {
+        let mut k = booted();
+        {
+            let mut p = k.procs.borrow_mut();
+            let me = p.get_mut(1).unwrap();
+            me.delaysched = 1;
+            me.state = proc::State::Running;
+        }
+        let r = k.syscall(1, Call::Open { path: "/boot/hello".into(), mode: 0 });
+        assert_eq!(r, Ok(Ret::Sched), "it leaves");
+        k.procs.borrow_mut().get_mut(1).unwrap().delaysched = 0;
+        assert!(matches!(k.resume(1), Ok(Ret::Fd(_))), "and then answers");
     }
 
     /// **`pexit` closes the descriptors** (`closefgrp`, `proc.c:1160`), so

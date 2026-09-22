@@ -8,7 +8,7 @@
 
 use crate::chan::Chan;
 use crate::ns::Ns;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::cell::RefCell;
 
@@ -27,6 +27,7 @@ pub const TUSER: usize = 0;
 pub const TSYS: usize = 1;
 pub const TREAL: usize = 2;
 pub const TCUSER: usize = 3;
+pub const TCSYS: usize = 4;
 pub type Fd = i32;
 
 /// `rfork(2)`'s flags, with Plan 9's values. They are bits and they compose,
@@ -151,6 +152,13 @@ impl Waitmsg {
     }
 }
 
+/// The longest prefix of `s` no longer than `n` bytes that ends on a
+/// character: `snprint` into `ERRMAX` truncates by bytes, and a Rust string
+/// cannot be cut inside a rune.
+fn floor(s: &str, n: usize) -> usize {
+    (0..=n.min(s.len())).rev().find(|&i| s.is_char_boundary(i)).unwrap_or(0)
+}
+
 /// `%q` — Plan 9's quoted string (`fmt/fmtquote.c:_quotesetup`). A string is
 /// quoted when it is empty or holds any rune `<= ' '` or a quote; inside the
 /// quotes a quote doubles. `wait(2)` undoes it with `tokenize`, so getting
@@ -232,6 +240,19 @@ pub struct Rendez {
     pub p: Option<Pid>,
 }
 
+/// `struct QLock` (`portdat.h:110`) — a lock a process may hold across a
+/// sleep, because waiting for it is itself a sleep: the processes that want
+/// it queue, `Queueing`, and `qunlock` hands it to the first
+/// (`qlock.c:17`, `:69`). `use` is absent for the reason `Rendez`'s `Lock`
+/// is.
+#[derive(Default)]
+pub struct QLock {
+    /// `locked`.
+    locked: bool,
+    /// `head`…`tail`, threaded through `p->qnext` there.
+    q: VecDeque<Pid>,
+}
+
 /// **Where a `Rendez` lives.** Plan 9's are fields on the things that own
 /// them — `&up->sleep` is *"place for syssleep/debug"* (`portdat.h:720`),
 /// `&up->waitr` is *"Place to hang out in wait"* (`:683`), `&q->rr` is a
@@ -246,6 +267,8 @@ pub enum Rid {
     /// a device's queue, named by the device, its instance, and which of
     /// its queues. A pipe has two (`devpipe.c:18`).
     Rr(crate::dev::DevId, u32, usize),
+    /// `&q->wr` — where `qbwrite` waits for room (`qio.c:1257`).
+    Wr(crate::dev::DevId, u32, usize),
 }
 
 /// Which of a process's two `Rendez` (`portdat.h:683`, `:720`).
@@ -288,19 +311,34 @@ pub struct Proc {
     /// `up->user` — Plan 9's whole identity field (`portdat.h:664`). One
     /// name. No uid, no gid, no euid/ruid pair.
     pub user: String,
-    /// `Proc.time[6]` (`portdat.h:630`): user, sys, real, and the three
-    /// aggregates for exited children. Milliseconds, as `/dev/cputime`
-    /// reports them (`TK2MS`, `devcons.c:63`).
+    /// `Proc.time[6]` (`portdat.h:694`): user, sys, real, and child user,
+    /// sys, real — **in ticks**. `accounttime` charges `time[insyscall]` a
+    /// tick at a time; `time[TReal]` holds the tick the process was made
+    /// on (`sysproc.c:193`), and readers take it from `MACHP(0)->ticks` and
+    /// convert with `TK2MS` (`devcons.c:815`, `devproc.c:875`).
     pub time: [u64; 6],
-    /// When this process started, in the host's nanoseconds, so `TReal` can
-    /// be `now - start` the way Plan 9 computes it from `MACHP(0)->ticks`.
-    ///
-    /// `None` until something with a clock stamps it. Plan 9 always has one —
-    /// `MACHP(0)->ticks` is machine-provided and available kernel-wide — and
-    /// this kernel does not yet, because the clock reaches it only through
-    /// `#c`'s host. An unstamped process reports `TReal` 0 rather than the
-    /// whole of the epoch.
-    pub started: Option<u64>,
+    /// `p->text` — the name of what it runs: `*init*` for the first
+    /// (`pc/main.c:286`), its parent's for a child (`sysproc.c:195`), and
+    /// the last element of the file for an `exec` (`:483`). `ps` shows it,
+    /// and a wait message begins with it (`proc.c:1195`).
+    pub text: String,
+    /// `p->insyscall` (`portdat.h:707`) — set by `syscall()` on the way in
+    /// and cleared on the way out (`pc/trap.c:674`, `:767`), and which of
+    /// `time[TUser]` and `time[TSys]` a tick is charged to.
+    pub insyscall: bool,
+    /// `p->fixedpri` — set by `/proc/n/ctl`'s `fixedpri`, cleared by `pri`
+    /// (`procpriority`, `proc.c:772`). A fixed-priority process is not
+    /// switched away from at the end of its quantum (`hzsched`, `:211`).
+    pub fixedpri: bool,
+    /// **`setlabel(&up->sched)` was called during this call** — the
+    /// process left the processor in the middle of it (`sleep`,
+    /// `proc.c:832`; `sched`, `:162`; `qlock`, `qlock.c:49`) and comes back
+    /// to where it was. Whatever it was doing records where that is; the
+    /// syscall layer reads this and leaves.
+    pub setlabel: bool,
+    /// The wait record's three times, in milliseconds, fixed by `pexit`
+    /// (`proc.c:1191`–`:1193`).
+    pub wait: [u64; 3],
     /// `up->errstr`. Set when a call fails, and taken by `errstr(2)`.
     pub errstr: String,
     /// `up->slash` and `up->dot`. Plan 9 holds both as CHANNELS, not as text —
@@ -367,7 +405,11 @@ impl Proc {
             // role's name rather than anybody's.
             user: String::new(),
             time: [0; 6],
-            started: None,
+            text: "*init*".into(),
+            insyscall: false,
+            fixedpri: false,
+            setlabel: false,
+            wait: [0; 3],
             errstr: String::new(),
             ns: Rc::new(RefCell::new(Ns::new())),
             fds: Rc::new(RefCell::new(Fds::default())),
@@ -527,7 +569,7 @@ pub struct Procs {
     /// nowhere to print from, so it counts, and a test can read the count.
     pub doublesleep: u32,
     /// The `Rendez` that are fields of a device's queues rather than of a
-    /// process — `q->rr`. They are kept here because `sleep` and `wakeup`
+    /// process — `q->rr` and `q->wr`. They are kept here because `sleep` and `wakeup`
     /// must reach them, and a device is not somewhere this table can see.
     rr: HashMap<Rid, Rendez>,
     /// **`clunkq`** (`chan.c:517`) — channels whose last reference has
@@ -736,7 +778,58 @@ impl Procs {
             p.state = State::Wakeme;
             p.r = Some(r);
         }
+        self.setlabel(pid);
         true
+    }
+
+    /// `setlabel(&up->sched)` — mark that the process is leaving the
+    /// processor in the middle of what it is doing, and will come back to
+    /// it. `sleep` and `qlock` do it themselves; code that `sched()`s while
+    /// still `Running` — `yield`, `qbwrite` handing over to a higher
+    /// priority (`qio.c:1235`) — calls this.
+    pub fn setlabel(&mut self, pid: Pid) {
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.setlabel = true;
+        }
+    }
+
+    /// Whether the process left, clearing the mark.
+    pub fn take_setlabel(&mut self, pid: Pid) -> bool {
+        self.tab.get_mut(&pid).is_some_and(|p| std::mem::take(&mut p.setlabel))
+    }
+
+    /// `qlock` (`qlock.c:17`). `true` is holding it; `false` is `Queueing`
+    /// on it, and the process leaves — it holds the lock when it is
+    /// entered again, because `qunlock` hands it over.
+    pub fn qlock(&mut self, q: &mut QLock, pid: Pid) -> bool {
+        if !q.locked {
+            q.locked = true;
+            return true;
+        }
+        q.q.push_back(pid);
+        self.setstate(pid, State::Queueing);
+        self.setlabel(pid);
+        false
+    }
+
+    /// `qunlock` (`qlock.c:69`): hand the lock to the first waiting, and
+    /// ready it; with nobody waiting, unlock.
+    pub fn qunlock(&mut self, q: &mut QLock) {
+        if let Some(p) = q.q.pop_front() {
+            self.ready(p);
+            return;
+        }
+        q.locked = false;
+    }
+
+    /// `procpriority` (`proc.c:772`).
+    pub fn procpriority(&mut self, pid: Pid, pri: usize, fixed: bool) {
+        let pri = pri.min(pri::NPRIQ - 1);
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.basepri = pri;
+            p.priority = pri;
+            p.fixedpri = fixed;
+        }
     }
 
     /// `wakeup(r)` (`proc.c:942`) — ready whoever is sleeping there.
@@ -858,19 +951,10 @@ impl Procs {
         // `m->proc` is `up` while a process is entered and nil in the idle
         // loop, which is what `up` is here.
         //
-        // **Always `TUser`**: the machine's clock interrupt can only land in
-        // guest code (an epoch check is compiled into the guest and never
-        // into a host call), so a tick never finds a process in a syscall
-        // and `insyscall` would always be 0. Plan 9 interrupts its own
-        // kernel; this kernel runs to the end of a call.
-        //
-        // Plan 9 counts ticks and `/dev/cputime` converts with `TK2MS`
-        // (`devcons.c:63`); `time` holds milliseconds here, so the tick is
-        // converted as it is charged. Same numbers read out.
         if let Some(up) = self.up {
             self.m.nrun += 1;
             if let Some(p) = self.tab.get_mut(&up) {
-                p.time[TUSER] += tk2ms(1);
+                p.time[if p.insyscall { TSYS } else { TUSER }] += 1;
             }
         }
 
@@ -897,14 +981,14 @@ impl Procs {
     /// should resched"*. It does not `sched()`: it marks `delaysched`, and
     /// the interrupt's tail does the switch (`pc/trap.c:438`).
     ///
-    /// Plan 9's condition reads `!up->fixedpri && …`; nothing here sets
-    /// `fixedpri` (`/proc/n/ctl`'s `fixedpri` is not built), so that clause
-    /// is omitted rather than tested against a constant.
     fn hzsched(&mut self, up: Pid) {
         // *"once a second, rebalance will reprioritize ready procs"*
         self.rebalance();
         // *"unless preempted, get to run for at least 100ms"*
-        if self.anyhigher(up) || (self.m.ticks > self.m.schedticks && self.anyready()) {
+        let fixedpri = self.tab.get(&up).is_some_and(|p| p.fixedpri);
+        if self.anyhigher(up)
+            || (!fixedpri && self.m.ticks > self.m.schedticks && self.anyready())
+        {
             // *"avoid cooperative scheduling"*
             self.m.readied = None;
             if let Some(p) = self.tab.get_mut(&up) {
@@ -1024,7 +1108,7 @@ impl Procs {
                     Which::Waitr => p.waitr,
                 })
                 .unwrap_or_default(),
-            Rid::Rr(..) => self.rr.get(&r).copied().unwrap_or_default(),
+            Rid::Rr(..) | Rid::Wr(..) => self.rr.get(&r).copied().unwrap_or_default(),
         }
     }
 
@@ -1037,7 +1121,7 @@ impl Procs {
                     Which::Waitr => &mut p.waitr,
                 }
             }
-            Rid::Rr(..) => self.rr.entry(r).or_default(),
+            Rid::Rr(..) | Rid::Wr(..) => self.rr.entry(r).or_default(),
         }
     }
 
@@ -1095,8 +1179,13 @@ impl Procs {
             pid: self.next,
             ppid: pid,
             user: parent.user.clone(),
-            time: [0; 6],
-            started: None,
+            // *"p->time[TReal] = MACHP(0)->ticks"* (`sysproc.c:193`).
+            time: [0, 0, self.m.ticks, 0, 0, 0],
+            text: parent.text.clone(),
+            insyscall: false,
+            fixedpri: parent.fixedpri,
+            setlabel: false,
+            wait: [0; 3],
             errstr: String::new(),
             ns,
             fds,
@@ -1217,64 +1306,43 @@ impl Procs {
         }
     }
 
-    /// The six numbers `/dev/cputime` reports, in milliseconds. `TReal` is
-    /// wall time, which Plan 9 computes as `MACHP(0)->ticks - l`
-    /// (`devcons.c:63`) — here, from the host's clock.
-    pub fn cputime(&self, pid: Pid, now_nsec: u64) -> [u64; 6] {
-        match self.tab.get(&pid) {
-            None => [0; 6],
-            Some(p) => {
-                let mut t = p.time;
-                t[TREAL] = match p.started {
-                    Some(start) => now_nsec.saturating_sub(start) / 1_000_000,
-                    None => 0,
-                };
-                t
-            }
-        }
+    /// The six numbers `/dev/cputime` and `/proc/n/status` report, in
+    /// milliseconds: *"l = p->time[i]; if(i == TReal) l = MACHP(0)->ticks -
+    /// l; l = TK2MS(l);"* (`devcons.c:815`, `devproc.c:875`).
+    pub fn cputime(&self, pid: Pid) -> [u64; 6] {
+        let Some(p) = self.tab.get(&pid) else { return [0; 6] };
+        let mut t = p.time;
+        t[TREAL] = self.m.ticks.saturating_sub(t[TREAL]);
+        t.map(tk2ms)
     }
 
-    /// Add to one of a process's time slots. The kernel charges `TUser` and
-    /// `TSys` as it does work; `TReal` is computed, not charged.
-    pub fn charge(&mut self, pid: Pid, slot: usize, ms: u64) {
-        if let Some(p) = self.tab.get_mut(&pid) {
-            p.time[slot] += ms;
-        }
-    }
-
-    /// Record that a process has begun, so `TReal` has an origin.
-    pub fn started(&mut self, pid: Pid, now_nsec: u64) {
-        if let Some(p) = self.tab.get_mut(&pid) {
-            p.started = Some(now_nsec);
-        }
-    }
-
-    /// `exits(2)`. Plan 9 folds an exited child's times into its parent's
-    /// `TCUser`/`TCSys`/`TCReal`, which is what makes those three mean
-    /// anything.
-    pub fn exits(&mut self, pid: Pid, status: &str, now_nsec: Option<u64>) {
-        let status = &status[..status.len().min(ERRMAX - 1)];
-        let (ppid, time) = match self.tab.get_mut(&pid) {
+    /// `exits(2)` — `pexit` (`proc.c:1174`–`:1219`), what of it this table
+    /// holds. The wait record is made here: *"utime = up->time[TUser] +
+    /// up->time[TCUser]; stime = up->time[TSys] + up->time[TCSys];"*, its
+    /// times in milliseconds with `TReal` the ticks since the process was
+    /// made, and its message *"%s %lud: %s"* — text, pid, exit string — or
+    /// empty. The parent's `TCUser` and `TCSys` gain `utime` and `stime`;
+    /// **`TCReal` gains nothing**, there as here.
+    pub fn exits(&mut self, pid: Pid, status: &str) {
+        let ticks = self.m.ticks;
+        let (ppid, utime, stime) = match self.tab.get_mut(&pid) {
             None => return,
             Some(p) => {
-                p.status = Some(status.to_string());
-                // `TReal` stops here. Plan 9 fills the wait message in
-                // `pexit` from `up->time` (`proc.c:1149`), and wall time is
-                // meaningless once the process is gone, so it is fixed at the
-                // moment it goes rather than recomputed from a clock later.
-                // `None` where nothing at hand has a clock — `/proc/n/ctl`'s
-                // kill runs inside a device, and a device cannot read the
-                // machine. Plan 9's `pexit` always can (`MACHP(0)->ticks`).
-                if let (Some(start), Some(now)) = (p.started, now_nsec) {
-                    p.time[TREAL] = now.saturating_sub(start) / 1_000_000;
-                }
-                (p.ppid, p.time)
+                let utime = p.time[TUSER] + p.time[TCUSER];
+                let stime = p.time[TSYS] + p.time[TCSYS];
+                let msg = if status.is_empty() {
+                    String::new()
+                } else {
+                    format!("{} {}: {}", p.text, pid, status)
+                };
+                p.status = Some(msg[..floor(&msg, ERRMAX - 1)].to_string());
+                p.wait = [tk2ms(utime), tk2ms(stime), tk2ms(ticks.saturating_sub(p.time[TREAL]))];
+                (p.ppid, utime, stime)
             }
         };
         if let Some(parent) = self.tab.get_mut(&ppid) {
-            for i in 0..3 {
-                parent.time[TCUSER + i] += time[i];
-            }
+            parent.time[TCUSER] += utime;
+            parent.time[TCSYS] += stime;
         }
         // `pexit`'s own last acts (`proc.c:1219`, `:1244`): the wait record
         // goes on the parent's queue and **`wakeup(&p->waitr)`** — the
@@ -1345,7 +1413,7 @@ impl Procs {
         let p = self.tab.remove(&cpid)?;
         Some(Waitmsg {
             pid: cpid,
-            time: [p.time[TUSER], p.time[TSYS], p.time[TREAL]],
+            time: p.wait,
             msg: p.status.unwrap_or_default(),
         })
     }
@@ -1500,7 +1568,7 @@ mod tests {
         assert!(p.sleep(1, Rid::Proc(1, Which::Waitr), false));
         assert_eq!(p.state(1), State::Wakeme);
 
-        p.exits(c, "", None);
+        p.exits(c, "");
         assert_eq!(p.state(1), State::Ready, "the parent is runnable again");
         assert_eq!(p.state(c), State::Moribund);
     }
@@ -1595,7 +1663,7 @@ mod tests {
         p.seterrstr(1, &"x".repeat(1000));
         assert!(p.errstr(1, "").len() < ERRMAX);
         let c = p.rfork(1, rf::PROC).unwrap();
-        p.exits(c, &"y".repeat(1000), None);
+        p.exits(c, &"y".repeat(1000));
         assert!(p.await_child(1).unwrap().msg.len() < ERRMAX);
     }
 
@@ -1649,9 +1717,10 @@ mod tests {
         let mut p = one();
         let c = p.rfork(1, rf::PROC).unwrap();
         assert!(p.await_child(1).is_none(), "nothing to reap before it exits");
-        p.exits(c, "oops", None);
+        p.exits(c, "oops");
         let w = p.await_child(1).expect("the exited child is reaped");
-        assert_eq!((w.pid, w.msg.as_str()), (c, "oops"));
+        // `pexit`'s *"%s %lud: %s"* — text, pid, status (`proc.c:1195`).
+        assert_eq!((w.pid, w.msg), (c, format!("*init* {c}: oops")));
         assert!(p.await_child(1).is_none(), "reaped once, and gone");
     }
 
@@ -1660,7 +1729,7 @@ mod tests {
     fn a_child_forked_with_nowait_is_never_reaped() {
         let mut p = one();
         let c = p.rfork(1, rf::PROC | rf::NOWAIT).unwrap();
-        p.exits(c, "gone", None);
+        p.exits(c, "gone");
         assert!(p.await_child(1).is_none());
     }
 
@@ -1689,10 +1758,10 @@ mod tests {
         let mut p = one();
         let a = p.rfork(1, rf::PROC).unwrap();
         let b = p.rfork(a, rf::PROC).unwrap();
-        p.exits(b, "b", None);
+        p.exits(b, "b");
         assert!(p.await_child(1).is_none(), "b is a's child, not 1's");
         let w = p.await_child(a).expect("a reaps its own child");
-        assert_eq!((w.pid, w.msg.as_str()), (b, "b"));
+        assert_eq!((w.pid, w.msg), (b, format!("*init* {b}: b")));
     }
 
     // ---- the clock -----------------------------------------------------
@@ -1779,13 +1848,13 @@ mod tests {
     fn a_tick_is_charged_to_the_running_process_and_to_the_load() {
         let (mut p, a, b) = two();
         p.timerintr(TICK);
-        assert_eq!(p.get(a).unwrap().time[TUSER], tk2ms(1));
+        assert_eq!(p.get(a).unwrap().time[TUSER], 1, "one tick");
         assert_eq!(p.get(b).unwrap().time[TUSER], 0, "b was waiting");
         // One running, one ready: `n = (1 + 1) * 1000`, decayed by HZ.
         assert_eq!(p.m.load, 2000 / HZ);
         p.up = None;
         p.timerintr(2 * TICK);
-        assert_eq!(p.get(a).unwrap().time[TUSER], tk2ms(1), "idle: charged to nobody");
+        assert_eq!(p.get(a).unwrap().time[TUSER], 1, "idle: charged to nobody");
     }
 
     /// `rebalance` (`proc.c:471`), once a second: a queue's head that is

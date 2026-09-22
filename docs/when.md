@@ -30,7 +30,7 @@ Measured 2026-09-20.
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 28 calls, `exec`, and `unionread` |
 
-179 kernel tests, and 28 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and twenty-one that boot the whole system.
+185 kernel tests, and 28 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and twenty-one that boot the whole system.
 
 ## The host — `hosts/ipnx`, three files
 
@@ -95,20 +95,27 @@ acceptance test, and a test runs it: `{while(~ 1 1) x=1} &`, then the shell
 kills it and carries on. The idle loop waits a tick at a time, as
 `idlehands()` waits for the clock.
 
-Where it differs, each stated in the code: a tick only lands in guest code,
-never inside a call, so `TSys` is never charged (`insyscall` would always be
-0); and while a `procrfork` child is on its parent's frames the switch waits
-for it, as Plan 9's `sched` waits with `delaysched` counting (`proc.c:145`).
+A tick that falls due during a call is taken at the call's end, still
+`insyscall`, so it is `TSys`'s — Plan 9's interrupt held off by `splhi` and
+taken at `spllo`. Every call ends as `syscall()` does, in *"if(up->delaysched)
+sched();"* (`pc/trap.c:778`). The one difference is forced by `procrfork`:
+while a child is on its parent's frames the switch waits for it, as Plan 9's
+`sched` waits with `delaysched` counting (`proc.c:145`).
 
-**Pipes block** (2026-09-22). They did not: a read of an empty pipe answered
-0, which is end of file, and `pipeclose` did nothing. Pipelines worked only
-because `rfork`'s `sched` ran the writer first, and preemption broke that
-ordering one run in six. Now `qread` sleeps the reader on `q->rr`, the call
-answers `Sched` so the machine leaves, and the read is made again when the
-process is entered. **Exit closes the descriptors**, which it also did not.
-There is no flow control: `qbwrite` queues and THEN sleeps (`qio.c:1250`),
-and a call made again would queue twice, so a pipe holds whatever is
-written to it.
+**A call that leaves the processor carries on where it stopped.** `sleep`,
+`qlock` and `sched` mark the process (`setlabel`), whatever it was doing
+keeps the rest of the call (`p->sched`), and when the process is entered
+again the machine calls `Syscalls::resume` and the call goes on — nothing
+before the sleep happens twice. It had been made again from the top.
+
+**Pipes are Plan 9's queues** (2026-09-22). They did not block: a read of an
+empty pipe answered 0, which is end of file, and `pipeclose` did nothing.
+Pipelines worked only because `rfork`'s `sched` ran the writer first, and
+preemption broke that ordering one run in six. Now `qread` sleeps on
+`q->rr`, `qbwrite` waits under the limit on `q->wr` (32K, `devpipe.c:50`),
+one reader and one writer at a time hold `q->rlock` and `q->wlock`, and a
+writer that wakes a higher-priority reader lets it run first. **Exit closes
+the descriptors**, which it also did not.
 
 **So processes are concurrent.** A pipeline is two of them with the shell
 asleep in `pwait` between; `sleep` leaves the processor and `timerintr`
@@ -192,8 +199,8 @@ No surface.
 context switches, interrupts, syscalls, load, and the idle and interrupt
 percentages. It was eight, and the two it counted were fields of `#c` that
 only a test ever set, so the running system read zeros. Page faults and the
-TLB have no counterpart here and stay zero; `cputime`'s `TSys` is zero
-because a tick never lands inside a call.
+TLB have no counterpart here and stay zero. `cputime` and `/proc/n/status`
+report ticks converted with `TK2MS`, as Plan 9's do.
 
 **`pread` with an explicit offset is not reliable**, and `date` is the only
 thing that does it: `nsec(2)` is `pread(open("/dev/bintime"), b, 8, 0)`,

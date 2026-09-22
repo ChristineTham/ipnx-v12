@@ -30,6 +30,15 @@ use crate::{Call, Ret};
 pub trait Syscalls {
     fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String>;
 
+    /// **Back into a call the process left in the middle.** A call answers
+    /// [`Ret::Sched`] when it `sleep`s, `qlock`s or `sched()`s part way; the
+    /// machine leaves the process then, as `gotolabel(&m->sched)` does, and
+    /// when the scheduler enters it again the machine calls this, which is
+    /// `setlabel(&up->sched)` answering 1 (`proc.c:830`): the call carries
+    /// on from where it stopped and answers as any call does — possibly
+    /// [`Ret::Sched`] again.
+    fn resume(&mut self, up: Pid) -> Result<Ret, String>;
+
     /// **The clock interrupt**, taken while a process runs: a machine's
     /// `clockintr` calls the portable `timerintr` (`kw/clock.c:46`;
     /// `i8253clock` on the PC, `pc/i8253.c:262`), and `trap()`'s tail then
