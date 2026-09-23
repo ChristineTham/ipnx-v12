@@ -20,6 +20,10 @@ use std::rc::Rc;
 
 const EPERM: &str = "permission denied";
 const EPROCDIED: &str = "process exited";
+/// `Etoosmall`, `Etoobig`, `Ebadarg` (`error.h`).
+const ETOOSMALL: &str = "read or write too small";
+const ETOOBIG: &str = "read or write too large";
+const EBADARG: &str = "bad arg in system call";
 /// `Ebadctl` (`error.h`).
 const EBADCTL: &str = "bad process or channel control request";
 
@@ -36,6 +40,7 @@ pub enum Q {
     Fd,
     Note,
     Noteid,
+    Notepg,
     Ns,
     Proc,
     Status,
@@ -43,14 +48,13 @@ pub enum Q {
 }
 
 /// name, which file, permission — `procdir[]`'s own values.
-/// `procdir[]` (`devproc.c:79`) is eighteen; this is **nine**, and each of
-/// the nine absent is absent for a stated reason:
+/// `procdir[]` (`devproc.c:79`) is eighteen; this is **ten**, and each of
+/// the eight absent is absent for a stated reason:
 ///
 /// | | |
 /// |---|---|
 /// | `fpregs` `kregs` `regs` | a register set. There is none — the machine's registers are the engine's and a guest has no `Ureg`. This is the narrow case that needs no approval |
 /// | `mem` `segment` `text` | an address space. A guest has ONE linear memory and no segments, and `text` is the module — what each should mean here is a design question, not a gap to fill in passing |
-/// | `notepg` | a note group, and there are no notes (see `Call::Notify`) |
 /// | `profile` `syscall` | tracing. Plan 9 has both; neither is built |
 pub const PROCDIR: &[(&str, Q, u32)] = &[
     ("args", Q::Args, 0o660),
@@ -58,6 +62,7 @@ pub const PROCDIR: &[(&str, Q, u32)] = &[
     ("fd", Q::Fd, 0o444),
     ("note", Q::Note, 0o000),
     ("noteid", Q::Noteid, 0o664),
+    ("notepg", Q::Notepg, 0o000),
     ("ns", Q::Ns, 0o444),
     ("proc", Q::Proc, 0o400),
     ("status", Q::Status, 0o444),
@@ -209,6 +214,18 @@ impl Dev for ProcDev {
             if q == Q::Ns && mode & 3 != crate::chan::mode::OREAD {
                 return Err(EPERM.into());
             }
+            // `procopen`'s `Qnotepg` (`devproc.c:446`): write only, never
+            // the boot namespace group's, and the note group is remembered
+            // in the channel — *"c->pgrpid.vers = p->noteid"* — so a write
+            // reaches the group as it was when opened.
+            if q == Q::Notepg {
+                let procs = self.up.borrow().procs.clone();
+                let procs = procs.borrow();
+                if mode & 3 != crate::chan::mode::OWRITE || procs.pgrpid(pid) == Some(1) {
+                    return Err(EPERM.into());
+                }
+                c.aux = procs.get(pid).map_or(0, |p| p.noteid) as u64;
+            }
         }
         c.mode = mode;
         Ok(c)
@@ -265,6 +282,28 @@ impl Dev for ProcDev {
             return Ok(crate::dev::devdirread(c, n, &entries));
         }
 
+        // `procread`'s `Qnote` (`devproc.c:792`): take the first note —
+        // its message and a NUL, as much as fits — or nothing.
+        if q == Q::Note {
+            self.nonone(pid)?;
+            if n < 1 {
+                return Err(ETOOSMALL.into());
+            }
+            let mut p = procs.borrow_mut();
+            let proc = p.get_mut(pid).ok_or(EPROCDIED)?;
+            if proc.note.is_empty() {
+                return Ok(Vec::new());
+            }
+            let note = proc.note.remove(0);
+            let mut b = note.msg.into_bytes();
+            b.push(0);
+            b.truncate(n);
+            if let Some(last) = b.last_mut() {
+                *last = 0;
+            }
+            return Ok(b);
+        }
+
         let s = {
             self.nonone(pid)?;
             let p = procs.borrow();
@@ -296,7 +335,12 @@ impl Dev for ProcDev {
                     }
                     s
                 }
-                Q::Proc | Q::Noteid => format!("{pid}\n"),
+                Q::Proc => format!("{pid}\n"),
+                // `procread`'s `Qnoteid` (`devproc.c:990`).
+                Q::Noteid => {
+                    let b = crate::devcons::readnum(proc.noteid as u64, crate::devcons::NUMSIZE);
+                    String::from_utf8_lossy(&b).into_owned()
+                }
                 Q::Args => String::new(),
                 // `fd`: the working directory, then one line per open fd.
                 Q::Fd => {
@@ -356,7 +400,8 @@ impl Dev for ProcDev {
                     s
                 }
                 Q::Wait => return Err("wait is await's, not a read".into()),
-                Q::Ctl | Q::Note => return Err(EPERM.into()),
+                Q::Ctl | Q::Notepg => return Err(EPERM.into()),
+                Q::Note => unreachable!("taken above"),
             }
         };
         let b = s.into_bytes();
@@ -380,8 +425,15 @@ impl Dev for ProcDev {
         let cmd = word.next().unwrap_or("");
         let procs = self.up.borrow().procs.clone();
         match (q, cmd) {
+            // `CMkill` (`devproc.c:1352`): *"p->procctl = Proc_exitme;
+            // postnote(p, 0, "sys: killed", NExit)"* — the process ends
+            // itself, in `procctl`, on its way out of the kernel. A `Broken`
+            // or `Stopped` process is started first there; neither state
+            // is built.
             (Q::Ctl, "kill") => {
-                procs.borrow_mut().exits(pid, "killed");
+                let mut p = procs.borrow_mut();
+                p.get_mut(pid).ok_or(EPROCDIED)?.procctl = Some(crate::proc::Procctl::Exitme);
+                p.postnote(pid, "sys: killed", crate::proc::NoteFlag::NExit);
             }
             (Q::Ctl, "close") => {
                 let fd: Fd = word.next().and_then(|w| w.parse().ok()).ok_or("bad fd")?;
@@ -418,12 +470,49 @@ impl Dev for ProcDev {
                 }
                 procs.borrow_mut().procpriority(pid, pri, cmd == "fixedpri");
             }
+            // `procwrite`'s `Qnote` (`devproc.c:1115`).
             (Q::Note, _) => {
-                // `procwrite`'s `Qnote` is `postnote(p, 0, buf, NUser)`
-                // (`devproc.c`) — a string delivered to a process, taken on
-                // its way out of the kernel. Nothing here can take it: see
-                // `Call::Notify`.
-                return Err("notes need a mechanism this machine does not have yet".into());
+                let mut p = procs.borrow_mut();
+                if p.get(pid).ok_or(EPROCDIED)?.kp {
+                    return Err(EPERM.into());
+                }
+                if data.len() >= crate::proc::ERRMAX - 1 {
+                    return Err(ETOOBIG.into());
+                }
+                let msg = String::from_utf8_lossy(data).into_owned();
+                if !p.postnote(pid, &msg, crate::proc::NoteFlag::NUser) {
+                    return Err("note not posted".into());
+                }
+            }
+            // `procwrite`'s `Qnotepg` (`devproc.c:1054`): `pgrpnote` to the
+            // group the channel remembered.
+            (Q::Notepg, _) => {
+                if data.len() >= crate::proc::ERRMAX - 1 {
+                    return Err(ETOOBIG.into());
+                }
+                let msg = String::from_utf8_lossy(data).into_owned();
+                let up = self.up.borrow().pid;
+                procs.borrow_mut().pgrpnote(up, c.aux as u32, &msg, crate::proc::NoteFlag::NUser);
+            }
+            // `procwrite`'s `Qnoteid` (`devproc.c:1125`): join a note group —
+            // one's own pid, or a group a process of the same user is in.
+            (Q::Noteid, _) => {
+                let id: u32 = cmd.parse().unwrap_or(0);
+                let mut p = procs.borrow_mut();
+                let user = p.user(pid).ok_or(EPROCDIED)?;
+                if id != pid {
+                    let owner = p
+                        .pids()
+                        .into_iter()
+                        .filter_map(|q| p.get(q))
+                        .find(|q| q.noteid == id && q.state != crate::proc::State::Dead)
+                        .map(|q| q.user.clone())
+                        .ok_or(EBADARG)?;
+                    if owner != user {
+                        return Err(EPERM.into());
+                    }
+                }
+                p.get_mut(pid).ok_or(EPROCDIED)?.noteid = id;
             }
             (Q::Ctl, "start" | "stop" | "waitstop" | "hang" | "nohang") => {
                 // `procctlreq` (`devproc.c`) moves a process between
@@ -643,8 +732,43 @@ mod tests {
         let c = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
         let mut ctl = open(&mut d, c, "ctl", OWRITE);
         d.write(&mut ctl, b"kill", 0).unwrap();
-        let w = procs.borrow_mut().await_child(1).expect("the killed child is reaped");
-        assert_eq!((w.pid, w.msg), (c, format!("*init* {c}: killed")));
+        // `CMkill` asks; the process ends itself in `procctl` on its way
+        // out of the kernel (`devproc.c:1363`, `proc.c:1494`).
+        let p = procs.borrow();
+        let p = p.get(c).unwrap();
+        assert_eq!(p.procctl, Some(crate::proc::Procctl::Exitme));
+        assert_eq!(p.note.first().map(|n| n.msg.as_str()), Some("sys: killed"));
+        assert!(p.notepending);
+    }
+
+    /// `note` (`devproc.c:792`, `:1115`): a write posts, a read takes the
+    /// first, with its NUL. `notepg` posts to every process of the group
+    /// but the writer (`pgrp.c:16`), and is write only.
+    #[test]
+    fn notes_are_posted_and_read_through_note_and_notepg() {
+        let (mut d, procs) = proc();
+        let c = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
+        let mut note = open(&mut d, c, "note", OWRITE | 0);
+        d.write(&mut note, b"hello", 0).unwrap();
+        let mut rd = open(&mut d, c, "note", crate::chan::mode::OREAD);
+        assert_eq!(d.read(&mut rd, 64, 0).unwrap(), b"hello\0");
+        assert!(d.read(&mut rd, 64, 0).unwrap().is_empty(), "taken");
+
+        // pid 1's namespace group is the boot's, which `notepg` refuses; a
+        // child with its own group can be written to.
+        let g = procs.borrow_mut().rfork(1, rf::PROC | rf::NAMEG | rf::NOTEG).unwrap();
+        let h = procs.borrow_mut().rfork(g, rf::PROC).unwrap();
+        let root = d.attach("").unwrap();
+        let dir = d.walk(&root, &g.to_string()).unwrap().unwrap();
+        let pg = d.walk(&dir, "notepg").unwrap().unwrap();
+        assert!(d.open(pg.clone(), crate::chan::mode::OREAD).is_err(), "write only");
+        let mut pg = d.open(pg, OWRITE).unwrap();
+        d.write(&mut pg, b"interrupt", 0).unwrap();
+        let p = procs.borrow();
+        for x in [g, h] {
+            assert_eq!(p.get(x).unwrap().note.first().map(|n| n.msg.as_str()), Some("interrupt"));
+        }
+        assert!(p.get(1).unwrap().note.is_empty(), "another group");
     }
 
     /// `pri n` and `fixedpri n` (`devproc.c:1373`, `:1379`) are

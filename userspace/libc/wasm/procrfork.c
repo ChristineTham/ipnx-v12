@@ -58,3 +58,23 @@ __childstart(void (*f)(void*), void *arg)
 	(*f)(arg);
 	exits("child returned");
 }
+
+/*
+ * Where a note is taken. The machine calls this, on this instance, when the
+ * kernel hands it a note for the process's handler: `f` is what `notify(2)`
+ * was given, and `msg` is the note, which the machine has written onto this
+ * process's stack below its stack pointer — `notify(Ureg*)`'s own
+ * arrangement (pc/trap.c:834-857). `ureg` is nil: there is no register set
+ * on this machine for a handler to see.
+ *
+ * The handler leaves through `noted`, which never returns here. If it
+ * returns instead, it has returned into nothing — on Plan 9 into pc 0, a
+ * fault — and a fault is what this is.
+ */
+__attribute__((export_name("__notestart")))
+void
+__notestart(void (*f)(void*, char*), void *ureg, char *msg)
+{
+	(*f)(ureg, msg);
+	__builtin_trap();
+}

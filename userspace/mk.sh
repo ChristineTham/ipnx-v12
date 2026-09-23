@@ -33,7 +33,10 @@ CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-ex
 	-Wno-unused-value -Wno-unused-but-set-variable -Wno-incompatible-pointer-types
 	-Wno-dangling-else -Wno-empty-body -Wno-implicit-int-float-conversion -Wno-unused-variable -Wno-unused-parameter -Wno-unused-label -Wno-implicit-int -Wno-implicit-function-declaration -Wno-incompatible-library-redeclaration -Wno-builtin-requires-header"
 
-LDFLAGS="--no-entry --export=_start --export-memory --stack-first -z stack-size=65536 --allow-multiple-definition"
+# `__stack_pointer` is exported because `notify(Ureg*)` writes the note onto
+# the process's stack below its stack pointer (pc/trap.c:834), and on this
+# machine the stack pointer is that global.
+LDFLAGS="--no-entry --export=_start --export-memory --export=__stack_pointer --stack-first -z stack-size=65536 --allow-multiple-definition"
 
 # The rootfs is laid out as Plan 9 lays one out: the binaries under
 # `/$objtype`, the scripts under `/rc`, and `/bin` a UNION of the two made by

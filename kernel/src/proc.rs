@@ -240,6 +240,50 @@ pub struct Rendez {
     pub p: Option<Pid>,
 }
 
+/// `NNOTE` (`portdat.h:638`) — how many notes a process holds before
+/// `postnote` refuses the next.
+pub const NNOTE: usize = 5;
+
+/// `enum { NUser, NExit, NDebug }` (`portdat.h:331`) — who a note is from,
+/// which decides what happens when nothing catches it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NoteFlag {
+    /// *"note provided externally"*.
+    #[default]
+    NUser,
+    /// *"deliver note quietly"*.
+    NExit,
+    /// *"print debug message"*.
+    NDebug,
+}
+
+/// `struct Note` (`portdat.h:338`).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Note {
+    pub msg: String,
+    pub flag: NoteFlag,
+}
+
+/// `p->procctl` (`portdat.h:624`) — what `/proc/n/ctl` asked of a process,
+/// acted on by `procctl` at the process's next exit from the kernel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Procctl {
+    /// `Proc_exitme` — `kill`.
+    Exitme,
+}
+
+/// `NCONT`, `NDFLT`, `NSAVE`, `NRSTR` (`libc.h:582`) — what `noted` is
+/// told to do.
+pub mod noted {
+    pub const NCONT: i32 = 0;
+    pub const NDFLT: i32 = 1;
+    pub const NSAVE: i32 = 2;
+    pub const NRSTR: i32 = 3;
+}
+
+/// `Eintr` (`error.h:38`).
+pub const EINTR: &str = "interrupted";
+
 /// `struct QLock` (`portdat.h:110`) — a lock a process may hold across a
 /// sleep, because waiting for it is itself a sleep: the processes that want
 /// it queue, `Queueing`, and `qunlock` hands it to the first
@@ -269,6 +313,10 @@ pub enum Rid {
     Rr(crate::dev::DevId, u32, usize),
     /// `&q->wr` — where `qbwrite` waits for room (`qio.c:1257`).
     Wr(crate::dev::DevId, u32, usize),
+    /// `alarmr` (`alarm.c:8`) — where `alarmkproc` waits.
+    Alarmr,
+    /// `clunkq.r` (`chan.c:516`) — where `closeproc` waits.
+    Clunkq,
 }
 
 /// Which of a process's two `Rendez` (`portdat.h:683`, `:720`).
@@ -339,6 +387,29 @@ pub struct Proc {
     /// The wait record's three times, in milliseconds, fixed by `pexit`
     /// (`proc.c:1191`–`:1193`).
     pub wait: [u64; 3],
+    /// `p->note[NNOTE]` and `p->nnote` — notes posted and not yet taken.
+    pub note: Vec<Note>,
+    /// `p->lastnote` — the one being handled, which `noted(NDFLT)` exits
+    /// with.
+    pub lastnote: Note,
+    /// `p->notified` — *"sysnoted is due"*: a handler is running.
+    pub notified: bool,
+    /// `p->notify` — the handler `notify(2)` named, as an address in the
+    /// process's own image: a function pointer, which a machine whose
+    /// executable is a module holds as a table index. 0 is none.
+    pub notify: u32,
+    /// `p->notepending` — *"note issued but not acted on"*. `sleep` will
+    /// not commit while it is set, and a process woken with it set leaves
+    /// its call with `Eintr` (`proc.c:840`, `:879`).
+    pub notepending: bool,
+    /// `p->noteid` — *"Equivalent of note group"* (`portdat.h:675`).
+    pub noteid: u32,
+    /// `p->procctl`.
+    pub procctl: Option<Procctl>,
+    /// `p->kp` — a kernel process: its body is kernel code, not an image.
+    pub kp: bool,
+    /// `p->alarm` — the tick an `alarm` is due on; 0 is none (`alarm.c`).
+    pub alarm: u64,
     /// `up->errstr`. Set when a call fails, and taken by `errstr(2)`.
     pub errstr: String,
     /// `up->slash` and `up->dot`. Plan 9 holds both as CHANNELS, not as text —
@@ -410,6 +481,15 @@ impl Proc {
             fixedpri: false,
             setlabel: false,
             wait: [0; 3],
+            note: Vec::new(),
+            lastnote: Note::default(),
+            notified: false,
+            notify: 0,
+            notepending: false,
+            noteid: 1,
+            procctl: None,
+            kp: false,
+            alarm: 0,
             errstr: String::new(),
             ns: Rc::new(RefCell::new(Ns::new())),
             fds: Rc::new(RefCell::new(Fds::default())),
@@ -582,6 +662,14 @@ pub struct Procs {
     /// lets go of comes here, and the kernel closes them on its way out of
     /// the call.
     pub clunkq: Vec<Chan>,
+    /// `ccloseq` found no `closeproc` waiting and one must be made
+    /// (`chan.c:541`) — which the kernel does at the end of the call.
+    pub closeproc: bool,
+    /// `noteidalloc` (`proc.c:12`).
+    noteidalloc: u32,
+    /// `alarms` (`alarm.c:7`) — the processes with an alarm set, soonest
+    /// first, threaded through `p->palarm` there.
+    alarms: Vec<Pid>,
 }
 
 impl Procs {
@@ -600,6 +688,9 @@ impl Procs {
             doublesleep: 0,
             rr: HashMap::new(),
             clunkq: Vec::new(),
+            closeproc: false,
+            noteidalloc: 1,
+            alarms: Vec::new(),
         }
     }
 
@@ -769,7 +860,10 @@ impl Procs {
         if self.rendez(r).p.is_some_and(|q| q != pid) {
             self.doublesleep += 1;
         }
-        if happened {
+        // *"if((*f)(arg) || up->notepending)"* — *"if condition happened or
+        // a note is pending never mind"* (`proc.c:840`). The caller then
+        // asks `interrupted`, as `sleep` itself does on its way out.
+        if happened || self.tab.get(&pid).is_some_and(|p| p.notepending) {
             self.rendez_mut(r).p = None;
             return false;
         }
@@ -820,6 +914,125 @@ impl Procs {
             return;
         }
         q.locked = false;
+    }
+
+    /// `postnote` (`proc.c:981`) — give a process a note, and if it is
+    /// asleep, wake it: it leaves its call with `Eintr` and the note is
+    /// delivered on its way out of the kernel. `false` is *"note not
+    /// posted"*: the queue was full.
+    ///
+    /// A note that is not a user's replaces whatever is queued when there is
+    /// no handler or one is already running (`:990`) — it is going to end
+    /// the process, and nothing queued before it will be seen.
+    ///
+    /// `Rendezvous` is not pulled out of here: `rendezvous` is not built.
+    pub fn postnote(&mut self, pid: Pid, msg: &str, flag: NoteFlag) -> bool {
+        let Some(p) = self.tab.get_mut(&pid) else { return false };
+        if flag != NoteFlag::NUser && (p.notify == 0 || p.notified) {
+            p.note.clear();
+        }
+        let posted = p.note.len() < NNOTE;
+        if posted {
+            p.note.push(Note { msg: msg[..floor(msg, ERRMAX - 1)].to_string(), flag });
+        }
+        p.notepending = true;
+        // *"waiting for a wakeup?"* — then take it off its `Rendez` and
+        // ready it, as `wakeup` would.
+        if let Some(r) = p.r.filter(|_| p.state == State::Wakeme) {
+            p.r = None;
+            p.trend = None;
+            p.twhen = None;
+            self.rendez_mut(r).p = None;
+            self.ready(pid);
+        }
+        posted
+    }
+
+    /// The end of `sleep` (`proc.c:879`): *"if(up->notepending) {
+    /// up->notepending = 0; … error(Eintr); }"* — `true` is the call must
+    /// fail with `Eintr`.
+    pub fn interrupted(&mut self, pid: Pid) -> bool {
+        self.tab.get_mut(&pid).is_some_and(|p| std::mem::take(&mut p.notepending))
+    }
+
+    /// `procalarm` (`alarm.c:60`): set the process's alarm `ms` from now, or
+    /// clear it with 0, and answer how long the old one had to go.
+    pub fn procalarm(&mut self, pid: Pid, ms: u64) -> u64 {
+        let ticks = self.m.ticks;
+        let Some(p) = self.tab.get_mut(&pid) else { return 0 };
+        let old = if p.alarm != 0 { tk2ms(p.alarm.saturating_sub(ticks)) } else { 0 };
+        self.alarms.retain(|&q| q != pid);
+        let p = self.tab.get_mut(&pid).expect("checked");
+        if ms == 0 {
+            p.alarm = 0;
+            return old;
+        }
+        // `ms2tk` rounds up (`portclock.c`), and *"when == 0"* is kept
+        // distinct from no alarm.
+        let when = (ms * HZ).div_ceil(1000) + ticks;
+        p.alarm = when.max(1);
+        let at = self
+            .alarms
+            .iter()
+            .position(|q| self.tab.get(q).is_some_and(|f| f.alarm >= when))
+            .unwrap_or(self.alarms.len());
+        self.alarms.insert(at, pid);
+        old
+    }
+
+    /// `checkalarms` (`alarm.c:47`) — *"called every clock tick"*: wake
+    /// `alarmkproc` if the first alarm is due.
+    fn checkalarms(&mut self) {
+        let now = self.m.ticks;
+        if self.alarms.first().is_some_and(|p| self.tab.get(p).is_some_and(|p| p.alarm <= now)) {
+            self.wakeup(Rid::Alarmr);
+        }
+    }
+
+    /// `alarmkproc`'s walk (`alarm.c:16`–`:36`): take the alarms that are
+    /// due off the list, clearing each, and answer who is owed *"alarm"*.
+    pub fn duealarms(&mut self) -> Vec<Pid> {
+        let now = self.m.ticks;
+        let mut due = Vec::new();
+        while let Some(&p) = self.alarms.first() {
+            let when = self.tab.get(&p).map_or(0, |q| q.alarm);
+            if when > now && when != 0 {
+                break;
+            }
+            self.alarms.remove(0);
+            if when != 0 {
+                if let Some(q) = self.tab.get_mut(&p) {
+                    q.alarm = 0;
+                }
+                due.push(p);
+            }
+        }
+        due
+    }
+
+    /// `pgrpnote` (`pgrp.c:16`) — post a note to every process in a note
+    /// group but the caller, and no kernel process.
+    pub fn pgrpnote(&mut self, up: Pid, noteid: u32, msg: &str, flag: NoteFlag) {
+        let group: Vec<Pid> = self
+            .tab
+            .values()
+            .filter(|p| p.pid != up && p.noteid == noteid && !p.kp && p.state != State::Dead)
+            .map(|p| p.pid)
+            .collect();
+        for p in group {
+            self.postnote(p, msg, flag);
+        }
+    }
+
+    /// What `sysexec` resets (`sysproc.c:579`): the notes, the handler, and
+    /// whether one was running.
+    pub fn execnotes(&mut self, pid: Pid) {
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.note.clear();
+            p.notepending = false;
+            p.notify = 0;
+            p.notified = false;
+        }
     }
 
     /// `procpriority` (`proc.c:772`).
@@ -932,12 +1145,11 @@ impl Procs {
     /// What is not here, and why: `m->proc->pc = ur->pc` (no register set
     /// to read), `flushmmu` and `kmapinval` (no MMU, no kmap), `kproftimer`
     /// (no profiler), `iscpuactive` and `active.exiting` (one processor,
-    /// always active). **`checkalarms()` (`alarm.c:47`) is not here yet**:
-    /// it wakes `alarmkproc`, whose one act is `postnote(rp, 0, "alarm",
-    /// NUser)` — so it arrives with notes, which is where `alarm` does.
+    /// always active).
     fn hzclock(&mut self, now: u64) {
         self.m.ticks += 1;
         self.accounttime(now);
+        self.checkalarms();
         // *"if(up && up->state == Running) hzsched();"*
         if let Some(up) = self.up.filter(|&p| self.state(p) == State::Running) {
             self.hzsched(up);
@@ -1108,7 +1320,7 @@ impl Procs {
                     Which::Waitr => p.waitr,
                 })
                 .unwrap_or_default(),
-            Rid::Rr(..) | Rid::Wr(..) => self.rr.get(&r).copied().unwrap_or_default(),
+            _ => self.rr.get(&r).copied().unwrap_or_default(),
         }
     }
 
@@ -1121,7 +1333,7 @@ impl Procs {
                     Which::Waitr => &mut p.waitr,
                 }
             }
-            Rid::Rr(..) | Rid::Wr(..) => self.rr.entry(r).or_default(),
+            _ => self.rr.entry(r).or_default(),
         }
     }
 
@@ -1167,11 +1379,19 @@ impl Procs {
         let env = Self::table(&parent.env, flags & rf::CENVG != 0, flags & rf::ENVG != 0);
         let fds = Self::table(&parent.fds, flags & rf::CFDG != 0, flags & rf::FDG != 0);
 
+        // `newproc`'s *"p->noteid = incref(&noteidalloc)"* (`proc.c:720`),
+        // and without `RFPROC`, `RFNOTEG` gives the caller a new one
+        // (`sysproc.c:87`).
+        self.noteidalloc += 1;
+        let noteid = self.noteidalloc;
         if flags & rf::PROC == 0 {
             let me = self.tab.get_mut(&pid)?;
             me.ns = ns;
             me.env = env;
             me.fds = fds;
+            if flags & rf::NOTEG != 0 {
+                me.noteid = noteid;
+            }
             return None;
         }
 
@@ -1186,6 +1406,19 @@ impl Procs {
             fixedpri: parent.fixedpri,
             setlabel: false,
             wait: [0; 3],
+            // `sysrfork` copies the notes and the handler, never `notified`
+            // (`sysproc.c:103`–`:109`); the note group is the parent's unless
+            // `RFNOTEG` (`:188`), in which case it is the one `newproc`
+            // allocated (`proc.c:720`).
+            note: parent.note.clone(),
+            lastnote: parent.lastnote.clone(),
+            notified: false,
+            notify: parent.notify,
+            notepending: false,
+            noteid: if flags & rf::NOTEG != 0 { noteid } else { parent.noteid },
+            procctl: None,
+            kp: false,
+            alarm: 0,
             errstr: String::new(),
             ns,
             fds,
@@ -1323,11 +1556,17 @@ impl Procs {
     /// made, and its message *"%s %lud: %s"* — text, pid, exit string — or
     /// empty. The parent's `TCUser` and `TCSys` gain `utime` and `stime`;
     /// **`TCReal` gains nothing**, there as here.
-    pub fn exits(&mut self, pid: Pid, status: &str) {
+    ///
+    /// It answers the channels whose last reference went with the process's
+    /// descriptor table, for the caller to `cclose` — `closefgrp`
+    /// (`pgrp.c:207`) — because only the kernel can reach their devices.
+    pub fn exits(&mut self, pid: Pid, status: &str) -> Vec<Chan> {
         let ticks = self.m.ticks;
         let (ppid, utime, stime) = match self.tab.get_mut(&pid) {
-            None => return,
+            None => return Vec::new(),
             Some(p) => {
+                // *"up->alarm = 0"* (`proc.c:1138`).
+                p.alarm = 0;
                 let utime = p.time[TUSER] + p.time[TCUSER];
                 let stime = p.time[TSYS] + p.time[TCSYS];
                 let msg = if status.is_empty() {
@@ -1366,21 +1605,74 @@ impl Procs {
         // the last reference to the table (`pgrp.c:215`, `if(decref(f) !=
         // 0) return;`) — a child made without `RFFDG` shares its parent's —
         // and then `cclose`s every channel in it, which reaches the device
-        // only for a channel nobody else holds (`chan.c:496`). What must
-        // reach a device goes on `clunkq`.
+        // only for a channel nobody else holds (`chan.c:496`).
         let fgrp = self
             .tab
             .get_mut(&pid)
             .map(|p| std::mem::replace(&mut p.fds, Rc::new(RefCell::new(Fds::default()))));
+        let mut last = Vec::new();
         if let Some(Ok(fds)) = fgrp.map(Rc::try_unwrap) {
             for c in fds.into_inner().slots.into_iter().flatten() {
                 if let Ok(c) = Rc::try_unwrap(c) {
-                    self.clunkq.push(c.into_inner());
+                    last.push(c.into_inner());
                 }
             }
         }
         self.setstate(pid, State::Moribund);
         self.wakeup(Rid::Proc(ppid, Which::Waitr));
+        last
+    }
+
+    /// `ccloseq` (`chan.c:521`): a channel whose last reference is gone, to
+    /// be closed by `closeproc` — for a caller that cannot reach `devtab`.
+    /// `false` is *"if(!wakeup(&clunkq.r)) kproc("closeproc", …)"*: nobody
+    /// was waiting to close it, and a `closeproc` must be made.
+    pub fn ccloseq(&mut self, c: Chan) -> bool {
+        self.clunkq.push(c);
+        self.wakeup(Rid::Clunkq).is_some()
+    }
+
+    /// `kproc` (`proc.c:1436`)'s table half: a process whose body is kernel
+    /// code — no image, no parent to wait for it, eve's, at `PriKproc`, in a
+    /// namespace group of its own with nothing in it.
+    pub fn kproc(&mut self, up: Pid, name: &str, user: &str) -> Pid {
+        let pid = self.next;
+        self.next += 1;
+        self.noteidalloc += 1;
+        let ticks = self.m.ticks;
+        let mut p = self.tab.get(&up).cloned().unwrap_or_else(|| Proc::root(pid, Chan::attach(crate::dev::DevId::Root, 0)));
+        p.pid = pid;
+        p.ppid = 0;
+        p.kp = true;
+        p.text = name.to_string();
+        p.user = user.to_string();
+        p.ns = Rc::new(RefCell::new(Ns::new()));
+        p.fds = Rc::new(RefCell::new(Fds::default()));
+        p.env = Rc::new(RefCell::new(HashMap::new()));
+        p.time = [0, 0, ticks, 0, 0, 0];
+        p.status = None;
+        p.waited = true;
+        p.state = State::Scheding;
+        p.r = None;
+        p.trend = None;
+        p.twhen = None;
+        p.sleep = Rendez::default();
+        p.waitr = Rendez::default();
+        p.cpu = 0;
+        p.lastupdate = ticks * SCALING;
+        p.delaysched = 0;
+        p.insyscall = false;
+        p.setlabel = false;
+        p.notified = false;
+        p.notepending = false;
+        p.noteid = self.noteidalloc;
+        p.procctl = None;
+        p.alarm = 0;
+        p.errstr = String::new();
+        self.tab.insert(pid, p);
+        self.procpriority(pid, pri::KPROC, false);
+        self.ready(pid);
+        pid
     }
 
     /// `await(2)`: reap one exited child. Plan 9 states no order and neither

@@ -30,7 +30,7 @@ Measured 2026-09-20.
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 28 calls, `exec`, and `unionread` |
 
-185 kernel tests, and 28 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and twenty-one that boot the whole system.
+191 kernel tests, and 30 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and twenty-three that boot the whole system.
 
 ## The host — `hosts/ipnx`, three files
 
@@ -60,7 +60,8 @@ ambient mutable global.
 
 Answered: `rfork` `exec` `exits` `await` `errstr` `bind` `mount` `unmount`
 `chdir` `open` `create` `close` `pread` `pwrite` `seek` `dup` `pipe` `remove`
-`stat` `fstat` `wstat` `fwstat` — **22 of 28**. A failed call leaves its reason where
+`stat` `fstat` `wstat` `fwstat` `sleep` `alarm` `notify` `noted` — **26 of
+28**; `rendezvous` is not built, and `fversion` is refused because `mount` does the version exchange itself (`mntversion`). A failed call leaves its reason where
 `errstr` finds it, and reading exchanges it as Plan 9's does.
 
 **`sleep` is a real `tsleep`** (P6, 2026-09-21). `n <= 0` is `yield()`,
@@ -87,7 +88,7 @@ thread, with each store's callback as `clockintr` — and the kernel's
 |---|---|
 | `m->ticks++` | `updatecpu` decays `p->cpu`, and `rebalance` runs once a second |
 | `accounttime()` (`proc.c:1615`) | the running process is charged the tick; `m->load` and `m->perf` are the decaying averages `reprioritize` and `/dev/sysstat` read |
-| `checkalarms()` | **not yet** — it wakes `alarmkproc`, whose one act is `postnote`, so it arrives with notes |
+| `checkalarms()` | wakes the `alarm` kproc when the first alarm is due; it posts *"alarm"* |
 | `hzsched()` | a process past its 100ms quantum with something else ready, or with something higher ready, is marked `delaysched`, and the interrupt's tail `sched()`s it (`pc/trap.c:438`) |
 
 **So a process in a tight loop does not stop the system** — P6's second
@@ -123,24 +124,31 @@ brings it back; `exec` gives a process a new image and unwinds the old
 one's frames, which is what `exec` means. `/proc/1/status` reads `Wakeme`
 while a command runs, because that is what `init` is doing.
 
-**Four still refuse, and a scheduler is the whole of what they want:**
-`alarm`, `notify`, `noted`, `rendezvous`. With them go `RFNOTEG` (absent
-from `rfork`'s flags), a write to `#p/<n>/note`, and `#p/<n>/ctl`'s
-`start`/`stop`/`waitstop`/`hang`/`nohang`. rc's `Trapinit` is a stub, so
-nothing interrupts.
+**Notes are built** (2026-09-23; RESEARCH §15.3). `postnote`, `notify` and
+`noted`, `alarm` through an `alarm` **kernel process** as `init0` starts one
+(`pc/main.c:264`), `RFNOTEG`, and `#p/<n>/note`, `notepg` and `noteid`.
+`kill` is the note Plan 9 posts — `procctl` then ends the process on its way
+out of the kernel — so it wakes a sleeper at once. A note ends a `sleep`
+with `Eintr`; one for a handler is written onto the process's own stack and
+the handler entered through the image's `__notestart`; `noted(NCONT)`
+unwinds it back to where the note found the process. **rc's `Trapinit` is
+`plan9.c`'s**, and rc runs its `sigint` function when told `interrupt`. A
+fault is *"sys: trap: …"* and ends the process. `closeproc` is a kernel
+process too.
 
-**They are unbuilt, not impossible, and they are P6** (corrected
-2026-09-20, scheduled 2026-09-21; RESEARCH §14 and §14.1).
-An earlier version of this file said *"this machine has no user stack the
-kernel can write"* and that *"a process that is not running is not suspended
-but finished"* — both true of the host **as built**, neither true of the
-substrate. `sched()` divides at `setlabel`/`gotolabel`, which are declared
-in `port/portfns.h` and implemented in `pc/l.s` — **the scheduler is Plan
-9's portable code and the stack switch is the architecture's**, as `touser`
-is. wasmtime's `async_support` is a real host-stack fiber, and
-`epoch_deadline_async_yield_and_update` makes a guest yield on a timer and
-continue. The design is `implementation.md`'s **P6**, before the registries — the
-browser host is a worker per process, and that IS P6's machine boundary.
+What differs: a note for a handler that arrives at a clock interrupt waits
+for the process's next call to end, because the guest can only be entered
+from a host call; a note that ends the process does not wait. There is no
+`Ureg` for a handler to see, and *"sys:"* notes gain no *" pc=…"*.
+
+**`rendezvous` is the one call left**, with `#p/<n>/ctl`'s
+`start`/`stop`/`waitstop`/`hang`/`nohang`.
+
+**Plan 9's kernel console never turns a key into a note.** `devcons.c` has
+only the `^T^T` debug keys; the interrupt a user types is `rio`'s, which
+writes *"interrupt"* to the window's note group. So `^C` needs whatever
+plays `rio`'s part on a surface — a question for the CLI host and for emca,
+not for the kernel.
 
 ### `#M`, and the refactor it needed
 
@@ -257,7 +265,7 @@ exactly as `boot.c:171` does. `ls /` shows both halves because `unionread`
 reads every element. A file written under `/tmp` is a file on the host, so it
 is still there after the next boot.
 
-Twenty-eight tests in `hosts/ipnx` — eighteen typing at a scripted console
+Thirty tests in `hosts/ipnx` — twenty typing at a scripted console
 after a full boot, three booting twice into a filesystem of their own, five
 driving a guest module directly, and two on the machine: that `Guest` is
 `Send` with no `unsafe impl`, and that a thread nobody entered has no kernel. They need

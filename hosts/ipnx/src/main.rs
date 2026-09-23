@@ -412,6 +412,30 @@ mod userspace {
         assert!(out.contains("still here"), "{out}");
     }
 
+    /// **rc catches a note.** `Trapinit` is `plan9.c`'s now, `notify(notifyf)`;
+    /// a note to the shell interrupts what it is waiting in, the kernel hands
+    /// it to `notifyf` on the stack as `notify(Ureg*)` does, `noted(NCONT)`
+    /// goes back, and rc runs its `sigint` function (`rc/plan9.c:513`).
+    #[test]
+    fn rc_catches_a_note_with_its_own_handler() {
+        let out = typing("fn sigint { echo caught }\necho interrupt >/proc/$pid/note\necho after\n");
+        assert!(out.contains("caught"), "{out}");
+        assert!(out.contains("after"), "the shell went on: {out}");
+    }
+
+    /// **`kill` is a note** (`devproc.c:1363`): it wakes a sleeping process
+    /// at once — `postnote` takes it off its `Rendez` — and the process ends
+    /// itself in `procctl` on its way out of the kernel. The sleep was for
+    /// thirty seconds; the test takes nothing like that.
+    #[test]
+    fn kill_ends_a_sleeping_process_at_once() {
+        let t = std::time::Instant::now();
+        // `exec`, so `$apid` is the sleeping process and not an rc around it.
+        let out = typing("{exec sleep 30} &\necho kill >/proc/$apid/ctl\nwait\necho done\n");
+        assert!(out.contains("done"), "{out}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(25), "it waited out the sleep");
+    }
+
     /// `/dev/sysstat` reads the machine: the clock has interrupted and
     /// the kernel has answered calls, so neither count is zero.
     #[test]

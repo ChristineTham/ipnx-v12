@@ -54,6 +54,43 @@ pub trait Syscalls {
     /// Calling it early is harmless — `timerintr` fires only what is due —
     /// and calling it late loses ticks, as a late interrupt does on Plan 9.
     fn timerintr(&mut self) -> bool;
+
+    /// `postnote` (`proc.c:981`), which a machine's `trap()` calls for a
+    /// fault: *"sys: trap: …"*, `NDebug` (`pc/trap.c:366`).
+    fn postnote(&mut self, up: Pid, msg: &str, flag: crate::proc::NoteFlag) -> bool;
+
+    /// **`notify(Ureg*)`'s decision** (`pc/trap.c:788`) — the portable half:
+    /// whether the process has a note to take and what taking it means.
+    /// Writing the note onto the process's stack and pointing it at the
+    /// handler is the machine's half, done with what this answers.
+    ///
+    /// `at` says where the machine is: returning from a call, where
+    /// `syscall()` already decided (`pc/trap.c:773`) and this hands the
+    /// decision over; at a clock interrupt's tail (`:443`); or at a fault.
+    fn notify(&mut self, up: Pid, at: NoteAt) -> Notify;
+}
+
+/// Where a machine asks [`Syscalls::notify`] from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NoteAt {
+    /// The end of a call.
+    Syscall,
+    /// A clock interrupt's tail, in user mode.
+    Clock,
+    /// A fault the process cannot continue from.
+    Fault,
+}
+
+/// What [`Syscalls::notify`] answers.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Notify {
+    /// Nothing to take (`return 0`).
+    No,
+    /// *"ureg->pc = up->notify"* with the note on the stack (`pc/trap.c:857`)
+    /// — call the handler at `f` with `msg`. It returns through `noted`.
+    Handler { f: u32, msg: String },
+    /// `pexit` — the process is gone, and the machine must leave it.
+    Pexit,
 }
 
 /// **Every method takes `&self`, and that is load-bearing.** Plan 9's machine

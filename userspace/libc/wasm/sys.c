@@ -49,10 +49,8 @@ SYS(alarm)	extern long	__alarm(ulong);
  * `notify`, `noted` and `rendezvous` — NOTIFY is call 28 in
  * `libc/9syscall/sys.h`, and Plan 9 generates their stubs from that file
  * with no C source at all. They are declared here for the same reason the
- * others are: so a program that calls one links, and gets −1 with the
- * kernel's reason in `errstr` rather than a missing symbol at build time.
- * The kernel refuses all three today; see `Call::Notify` for what they wait
- * on.
+ * others are. `notify` and `noted` are answered; a handler is entered
+ * through `__notestart` (procrfork.c). `rendezvous` is not built yet.
  */
 SYS(notify)	extern int	__notify(void*);
 SYS(noted)	extern int	__noted(int);

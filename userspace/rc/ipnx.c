@@ -7,14 +7,16 @@
  * win32.c — and the mkfile picks one; this is that file for this system, and
  * it began as a copy of plan9.c because this system IS Plan 9's interface.
  *
- * THREE THINGS DIFFER, and nothing else:
+ * TWO THINGS DIFFER, and nothing else:
  *
  *   1. `ForkExecute` — this machine's `rfork` cannot return twice, so the
  *      child is told where to start. See `libc/wasm/procrfork.c`; the shape
  *      is Plan 9's own (`libthread/create.c:103`).
- *   2. `Trapinit` — there are no notes yet, so there is nothing to catch.
  *   3. `Isatty` — `fd2path` is not one of this kernel's calls, so the same
  *      question is asked of the file rather than of its name.
+ *
+ * (2 was `Trapinit`, empty while the kernel had no notes. It is plan9.c's
+ * now; the numbers the comments below cite are kept.)
  *
  * Note that `havefork` is NOT one of them: it is 0 here because this file is
  * built beside `haventfork.c`, which is Plan 9's own answer for a system
@@ -603,15 +605,10 @@ Out:
 	noted(NCONT);
 }
 
-/*
- * (2) `Trapinit` — plan9.c installs `notifyf` with `notify(2)`. This kernel
- * refuses `notify` and says why: there are no notes yet. Nothing can arrive,
- * so there is nothing to install, and `notifyf` below is left exactly as
- * plan9.c has it for when there is.
- */
 void
 Trapinit(void)
 {
+	notify(notifyf);
 }
 
 void

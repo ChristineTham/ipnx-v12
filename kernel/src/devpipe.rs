@@ -14,7 +14,7 @@
 use crate::chan::{flag::COPEN, Chan};
 use crate::dev::{Dev, DevId, Eve};
 use crate::ninep::{Qid, QTDIR};
-use crate::proc::{Pid, Procs, QLock, Rid, Up};
+use crate::proc::{NoteFlag, Pid, Procs, QLock, Rid, Up, EINTR};
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
@@ -35,6 +35,9 @@ const PIPEQSIZE: usize = 32 * 1024;
 fn balloc(n: usize) -> usize {
     64 + n.div_ceil(8) * 8
 }
+
+/// What `pipewrite` posts to a writer whose write failed (`devpipe.c:349`).
+const EPIPENOTE: &str = "sys: write on closed pipe";
 
 /// `Ehungup` (`error.h:24`) — *"i/o on hungup channel"*.
 const EHUNGUP: &str = "i/o on hungup channel";
@@ -130,15 +133,18 @@ struct Pipe {
 /// same method, and this says which line it is on.
 enum At {
     /// `qread`, holding `q->rlock`, at `again:` (`qio.c:1082`) — whether it
-    /// waited for the lock or slept in `qwait`, it holds the lock now.
-    Read,
+    /// waited for the lock or `slept` in `qwait`, it holds the lock now. A
+    /// `sleep` a note ended is `Eintr`; waiting for a `QLock` is not a
+    /// sleep and no note ends it.
+    Read { slept: bool },
     /// `qwrite`, with `sofar` written, waiting for `q->wlock`: the next
     /// block is not queued yet.
     Wlock { sofar: usize },
     /// `qwrite`, with `sofar` written and the next block queued: in
-    /// `qbwrite`'s flow-control loop (`qio.c:1250`), or just back from the
-    /// `sched()` that let a higher-priority reader run (`:1235`).
-    Flow { sofar: usize },
+    /// `qbwrite`'s flow-control loop (`qio.c:1250`), having `slept` there,
+    /// or just back from the `sched()` that let a higher-priority reader run
+    /// (`:1235`).
+    Flow { sofar: usize, slept: bool },
 }
 
 /// Qids within one pipe, as `devpipe.c:28` enumerates them.
@@ -186,11 +192,17 @@ impl PipeDev {
     fn qread(&mut self, devno: u32, from: usize, n: usize) -> Result<Vec<u8>, String> {
         let (pid, procs) = self.up();
         let mut procs = procs.borrow_mut();
-        let resumed = matches!(self.at.remove(&pid), Some(At::Read));
+        let at = self.at.remove(&pid);
         let q = &mut self.pipes[devno as usize].q[from];
+        // `qwait`'s `sleep` ended by a note: *"error(Eintr)"* (`proc.c:884`),
+        // and `qread`'s `waserror` lets go of the lock (`qio.c:1076`).
+        if matches!(at, Some(At::Read { slept: true })) && procs.interrupted(pid) {
+            procs.qunlock(&mut q.rlock);
+            return Err(EINTR.into());
+        }
         // *"qlock(&q->rlock)"*.
-        if !resumed && !procs.qlock(&mut q.rlock, pid) {
-            self.at.insert(pid, At::Read);
+        if at.is_none() && !procs.qlock(&mut q.rlock, pid) {
+            self.at.insert(pid, At::Read { slept: false });
             return Ok(Vec::new());
         }
         // `again:` — `qwait` (`qio.c:849`).
@@ -203,8 +215,13 @@ impl PipeDev {
             }
             // *"q->state |= Qstarve; … sleep(&q->rr, notempty, q);"*
             q.starve = true;
-            procs.sleep(pid, Rid::Rr(DevId::Pipe, devno, from), false);
-            self.at.insert(pid, At::Read);
+            if !procs.sleep(pid, Rid::Rr(DevId::Pipe, devno, from), false) {
+                // A note already pending: `sleep` did not commit.
+                procs.interrupted(pid);
+                procs.qunlock(&mut q.rlock);
+                return Err(EINTR.into());
+            }
+            self.at.insert(pid, At::Read { slept: true });
             return Ok(Vec::new());
         }
         // One block, and what does not fit goes back (`qputback`), still
@@ -234,7 +251,17 @@ impl PipeDev {
         let mut procs = procs.borrow_mut();
         let (mut sofar, mut at) = match self.at.remove(&pid) {
             Some(At::Wlock { sofar }) => (sofar, Some(false)),
-            Some(At::Flow { sofar }) => (sofar, Some(true)),
+            Some(At::Flow { sofar, slept }) => {
+                // The flow-control `sleep` ended by a note: `qbwrite`'s
+                // `waserror` lets go of `q->wlock` (`qio.c:1179`), and
+                // `pipewrite`'s posts the note (`devpipe.c:346`).
+                if slept && procs.interrupted(pid) {
+                    procs.qunlock(&mut self.pipes[devno as usize].q[to].wlock);
+                    procs.postnote(pid, EPIPENOTE, NoteFlag::NUser);
+                    return Err(EINTR.into());
+                }
+                (sofar, Some(true))
+            }
             _ => (0, None),
         };
         loop {
@@ -256,6 +283,9 @@ impl PipeDev {
                 // unlocks on the way out.
                 if q.closed {
                     procs.qunlock(&mut q.wlock);
+                    // *"postnote(up, 1, "sys: write on closed pipe", NUser)"*
+                    // (`devpipe.c:349`).
+                    procs.postnote(pid, EPIPENOTE, NoteFlag::NUser);
                     return Err(q.err.clone());
                 }
                 let alloc = balloc(n);
@@ -270,7 +300,7 @@ impl PipeDev {
                     let pri = |p: Pid| procs.get(p).map_or(0, |p| p.priority);
                     if woke.is_some_and(|p| pri(p) > pri(pid)) {
                         procs.setlabel(pid);
-                        self.at.insert(pid, At::Flow { sofar });
+                        self.at.insert(pid, At::Flow { sofar, slept: false });
                         return Ok(0);
                     }
                 }
@@ -280,8 +310,13 @@ impl PipeDev {
             let q = &mut self.pipes[devno as usize].q[to];
             if !(q.len < q.limit || q.closed) {
                 q.flow = true;
-                procs.sleep(pid, Rid::Wr(DevId::Pipe, devno, to), false);
-                self.at.insert(pid, At::Flow { sofar });
+                if !procs.sleep(pid, Rid::Wr(DevId::Pipe, devno, to), false) {
+                    procs.interrupted(pid);
+                    procs.qunlock(&mut q.wlock);
+                    procs.postnote(pid, EPIPENOTE, NoteFlag::NUser);
+                    return Err(EINTR.into());
+                }
+                self.at.insert(pid, At::Flow { sofar, slept: true });
                 return Ok(0);
             }
             procs.qunlock(&mut q.wlock);
@@ -384,8 +419,8 @@ impl Dev for PipeDev {
     /// waiting for `q->wlock`, waiting under the limit, or letting a
     /// higher-priority reader run first.
     ///
-    /// Plan 9's `waserror` also posts *"sys: write on closed pipe"* to the
-    /// writer (`devpipe.c:349`); that is a note.
+    /// Any error posts *"sys: write on closed pipe"* to the writer, as
+    /// `pipewrite`'s `waserror` does (`devpipe.c:346`).
     fn write(&mut self, c: &mut Chan, data: &[u8], _off: u64) -> Result<usize, String> {
         let (_, to) = Self::ends(c.qid.path).ok_or("cannot write that")?;
         self.pipe(c)?;

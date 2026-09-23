@@ -3828,3 +3828,67 @@ child had run on the parent's frames — and the scheduler then chose a child
 with nothing to enter (one pipeline run in twenty-one). Plan 9 cannot reach
 that state because `sysrfork`'s `sched` has already zeroed `delaysched` when
 `syscall()` checks it; the kernel now reads the order the same way.
+
+### §15.3 — Notes (2026-09-23)
+
+**Read before writing:** `proc.c` `sleep` `:815`, `tsleep` `:910`, `wakeup`
+`:942`, `postnote` `:981`, `pexit` `:1123`–`:1225`, `kproc` `:1436`,
+`procctl` `:1484`; `pc/trap.c` `trap` `:315`–`:445`, `syscall` `:767`–`:780`,
+`notify` `:788`, `noted` `:872`; `sysproc.c` `sysrfork` `:80`–`:109`,
+`:188`, `sysexec` `:575`–`:585`, `sysalarm` `:658`, `sysnotify` `:782`,
+`sysnoted` `:791`; `alarm.c` whole; `chan.c` `ccloseq`/`closeproc`
+`:510`–`:575`; `pgrp.c` `pgrpnote` `:16`; `devproc.c` `Qnote`/`Qnotepg`/
+`Qnoteid` `:418`–`:455`, `:792`, `:990`, `:1054`, `:1115`–`:1145`, `CMkill`
+`:1352`; `pc/main.c:264`; `devcons.c` `pprint` `:322`, and its keyboard
+paths `:470`–`:560`, `:755`–`:800`; `rc/plan9.c:513`–`:541`;
+`portdat.h:331`–`:340`, `:624`, `:638`, `:675`, `:721`–`:754`; `error.h`
+(the strings are its comments, turned into `errstr.h`).
+
+**Built, all of it Plan 9's:** the note queue on the `Proc` (`NNOTE`,
+`notified`, `lastnote`, `notepending`, `noteid`, `procctl`); `postnote`,
+which wakes a sleeper; `sleep`'s refusal to commit with a note pending and
+its `Eintr` on the way out, honoured in `sleep`, `await` and the pipe's
+`qread` and `qbwrite` (whose `waserror`s let go of their `QLock`s);
+`notify`'s decision, taken where `syscall()` takes it (`:773`, never after
+`rfork`); `noted`; `alarm`, `procalarm`, `checkalarms` and **the `alarm`
+kernel process**; `ccloseq` and **the `closeproc` kernel process**;
+`pgrpnote`; `RFNOTEG`; `#p/<n>/note`, `notepg`, `noteid`; `kill` as
+*"p->procctl = Proc_exitme; postnote(p, 0, "sys: killed", NExit)"*;
+`pprint`'s *"suicide: …"*; and `exec` clearing the notes and the handler.
+
+**A kernel process is a process whose body is kernel code.** Plan 9 makes
+one with `kproc`, and `kprocchild` starts it in the function it was given.
+Here that body is what `p->sched` already holds for a call that left — the
+rest of what it was doing — so entering a kproc is running that, and it
+keeps itself there each time it sleeps. `alarm` is pid 2, as `init0` starts
+it before the first process reaches user mode.
+
+**The machine's half of `notify(Ureg*)`** is this machine's own and says
+so: the note is written onto the process's stack below its stack pointer
+(*"sp -= 256; … memmove((char*)sp, up->note[0].msg, ERRMAX)"*), which here
+is the exported global `__stack_pointer`, and the handler is entered through
+the image's `__notestart` — the way `procrfork`'s child is entered through
+`__childstart`. `noted(NCONT)` unwinds the handler's frames back to where
+the machine entered it and restores the stack pointer; the frames below are
+the interrupted context, still there. A handler that returns instead of
+calling `noted` has returned into nothing, which is a fault on Plan 9 and is
+one here.
+
+**Cannot exist here, each stated in the code:**
+
+| | why |
+|---|---|
+| no `Ureg`; `__notestart`'s `ureg` is nil | no register set a guest can see |
+| *"sys:"* notes gain no *" pc=0x…"* (`pc/trap.c:809`) | no program counter to report |
+| a fault ends the process even with a handler | the trapped instruction cannot be gone back to — a handler could only `noted(NCONT)` into it |
+| at a clock interrupt, a note for a handler waits for the end of the process's next call | the guest can be entered from a host call and from nowhere else; an epoch callback is not one. A note that ends the process does not wait: the callback traps out of the guest |
+| no note is taken at an interrupt while a `procrfork` child is on its parent's frames | the same frames, the same reason as the switch (§15.2) |
+
+**Found, and not the kernel's: `^C`.** The P6 acceptance test reads *"`^C`
+interrupts a command"*, and **Plan 9's kernel console turns no key into a
+note** — `devcons.c`'s keyboard paths know `^T^T`'s debug keys and nothing
+else (`:470`–`:560`). The interrupt a Plan 9 user types is `rio`'s: it
+writes *"interrupt"* to the window's process group's `notepg`. So the
+kernel side is done — a note written there interrupts a command, and a test
+shows rc catching one — and the key is a job for whatever plays `rio`'s
+part: the CLI host's terminal, and emca.

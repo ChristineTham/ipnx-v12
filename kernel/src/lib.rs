@@ -79,7 +79,7 @@ pub enum Call {
     Await,
     Sleep { ms: u64 },
     Alarm { ms: u64 },
-    Notify,
+    Notify { f: u32 },
     Noted { how: i32 },
     Rendezvous { tag: u64, val: u64 },
 
@@ -135,6 +135,11 @@ pub struct Kernel {
     /// code that runs it — and it runs when the process is entered again,
     /// having done nothing before the `sleep` twice.
     labels: std::collections::HashMap<Pid, Label>,
+    /// What `syscall()`'s `notify` decided at the end of each process's
+    /// last call (`pc/trap.c:773`), for the machine to act on.
+    notes: std::collections::HashMap<Pid, machine::Notify>,
+    /// `clunkq.q` (`chan.c:515`) — one `closeproc` closes at a time.
+    clunkq: proc::QLock,
 }
 
 /// The rest of a call — what [`Kernel::labels`] holds.
@@ -168,7 +173,15 @@ impl Kernel {
         tab.add(Box::new(root));
         let procs = std::rc::Rc::new(std::cell::RefCell::new(proc::Procs::new(slash)));
         let up = std::rc::Rc::new(std::cell::RefCell::new(proc::Up { pid: 1, procs: procs.clone() }));
-        Ok(Kernel { procs, up, tab, machine, labels: std::collections::HashMap::new() })
+        Ok(Kernel {
+            procs,
+            up,
+            tab,
+            machine,
+            labels: std::collections::HashMap::new(),
+            notes: std::collections::HashMap::new(),
+            clunkq: proc::QLock::default(),
+        })
     }
 
     /// `exec`, in the order `sysexec` does it (`sysproc.c:302`).
@@ -193,6 +206,7 @@ impl Kernel {
         if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
             p.text = path.rsplit('/').next().unwrap_or(path).to_string();
         }
+        self.procs.borrow_mut().execnotes(pid);
         self.machine.touser(pid, &image, args)?;
         Ok(())
     }
@@ -226,6 +240,9 @@ impl Kernel {
         if self.procs.borrow().m.hz.is_none() {
             let now = self.machine.todget().nsec;
             self.procs.borrow_mut().timersinit(now);
+            // *"kproc("alarm", alarmkproc, 0)"* — `init0`, before the first
+            // process reaches user mode (`pc/main.c:264`).
+            self.kproc("alarm", alarmkproc);
         }
         let mut left: Option<(Pid, machine::Left)> = None;
         loop {
@@ -248,7 +265,7 @@ impl Kernel {
                     (machine::Left::Exited, _) => {
                         drop(procs);
                         if self.procs.borrow().status(pid).is_none() {
-                            self.procs.borrow_mut().exits(pid, "");
+                            self.pexit(pid, "");
                         }
                         self.procs.borrow_mut().setstate(pid, proc::State::Dead);
                     }
@@ -263,7 +280,6 @@ impl Kernel {
                     _ => {}
                 }
             }
-            self.closeproc();
             // *"if(up) { up->mach = nil; updatecpu(up); up = nil; }"*
             // (`proc.c:105`) — whoever was `up` is not any more, including
             // on the first entry, where it is whoever the boot ran as.
@@ -305,8 +321,17 @@ impl Kernel {
                 continue;
             };
             self.up.borrow_mut().pid = pid;
-            let m = self.machine.clone();
-            left = Some((pid, m.gotolabel(pid, self)?));
+            // A kernel process has no image: its body is kernel code, kept
+            // as the rest of what it was doing, and entering it is running
+            // that (`kprocchild`, `pc/trap.c`).
+            let kp = self.procs.borrow().get(pid).is_some_and(|p| p.kp);
+            let how = if kp {
+                self.runkproc(pid)
+            } else {
+                let m = self.machine.clone();
+                m.gotolabel(pid, self)?
+            };
+            left = Some((pid, how));
         }
     }
 
@@ -528,6 +553,71 @@ mod tests {
     }
 }
 
+/// `alarmkproc` (`alarm.c:11`): post *"alarm"* to every process whose alarm
+/// is due, then sleep on `alarmr` until `checkalarms` wakes it.
+fn alarmkproc(k: &mut Kernel, me: Pid) -> Result<Ret, String> {
+    let due = k.procs.borrow_mut().duealarms();
+    for p in due {
+        k.procs.borrow_mut().postnote(p, "alarm", proc::NoteFlag::NUser);
+    }
+    k.procs.borrow_mut().sleep(me, proc::Rid::Alarmr, false);
+    k.labels.insert(me, Box::new(alarmkproc));
+    Ok(Ret::Ok)
+}
+
+/// `closeproc` (`chan.c:552`): close what `ccloseq` queued, one at a time
+/// under `clunkq.q`; with nothing left, wait five seconds for more, and
+/// then exit — *"no work"*.
+fn closeproc(k: &mut Kernel, me: Pid) -> Result<Ret, String> {
+    loop {
+        if !k.procs.borrow_mut().qlock(&mut k.clunkq, me) {
+            k.labels.insert(me, Box::new(closeprocq));
+            return Ok(Ret::Ok);
+        }
+        if !closeproc1(k, me) {
+            return Ok(Ret::Ok);
+        }
+    }
+}
+
+/// `closeproc`, entered again holding `clunkq.q` after waiting for it.
+fn closeprocq(k: &mut Kernel, me: Pid) -> Result<Ret, String> {
+    if closeproc1(k, me) {
+        return closeproc(k, me);
+    }
+    Ok(Ret::Ok)
+}
+
+/// `closeproc`, entered again after its `tsleep`, holding `clunkq.q`.
+fn closeprocwoken(k: &mut Kernel, me: Pid) -> Result<Ret, String> {
+    k.procs.borrow_mut().interrupted(me);
+    if k.procs.borrow().clunkq.is_empty() {
+        k.procs.borrow_mut().qunlock(&mut k.clunkq);
+        k.pexit(me, "no work");
+        return Ok(Ret::Ok);
+    }
+    if closeproc1(k, me) {
+        return closeproc(k, me);
+    }
+    Ok(Ret::Ok)
+}
+
+/// The body of `closeproc`'s loop, holding `clunkq.q`: `false` if it went
+/// to sleep.
+fn closeproc1(k: &mut Kernel, me: Pid) -> bool {
+    if k.procs.borrow().clunkq.is_empty() {
+        let deadline = k.machine.todget().nsec + 5_000_000_000;
+        k.procs.borrow_mut().tsleep(me, proc::Rid::Clunkq, false, deadline);
+        k.labels.insert(me, Box::new(closeprocwoken));
+        return false;
+    }
+    let c = k.procs.borrow_mut().clunkq.remove(0);
+    k.procs.borrow_mut().qunlock(&mut k.clunkq);
+    let mut c = c;
+    k.tab.dclose(&mut c);
+    true
+}
+
 impl machine::Syscalls for Kernel {
     fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
         Kernel::syscall(self, up, call)
@@ -535,6 +625,17 @@ impl machine::Syscalls for Kernel {
 
     fn resume(&mut self, up: Pid) -> Result<Ret, String> {
         Kernel::resume(self, up)
+    }
+
+    fn postnote(&mut self, up: Pid, msg: &str, flag: proc::NoteFlag) -> bool {
+        self.procs.borrow_mut().postnote(up, msg, flag)
+    }
+
+    fn notify(&mut self, up: Pid, at: machine::NoteAt) -> machine::Notify {
+        match at {
+            machine::NoteAt::Syscall => self.notes.remove(&up).unwrap_or(machine::Notify::No),
+            _ => self.notify_(up, at),
+        }
     }
 
     fn timerintr(&mut self) -> bool {
@@ -599,8 +700,9 @@ impl Kernel {
         // is `sysrfork`'s, never a second one. The machine takes it once
         // the child has run on the parent's frames (RESEARCH §5.2).
         let rforked = matches!(call, Call::Rfork { flags } if flags & proc::rf::PROC != 0);
+        let rfork = matches!(call, Call::Rfork { .. });
         let r = self.dispatch(up, call);
-        self.syscall_tail(up, r, rforked)
+        self.syscall_tail(up, r, rforked, rfork)
     }
 
     /// **The process is entered again in the middle of a call it left** —
@@ -610,16 +712,27 @@ impl Kernel {
         self.up.borrow_mut().pid = up;
         let label = self.labels.remove(&up).ok_or("the process left no call to go back to")?;
         let r = label(self, up);
-        self.syscall_tail(up, r, false)
+        self.syscall_tail(up, r, false, false)
     }
 
     /// The end of `syscall()` (`pc/trap.c:739`–`:780`), after the call's own
     /// work.
     /// `rforked`: the call was `rfork(RFPROC)`, whose own `sched` is still
     /// to come.
-    fn syscall_tail(&mut self, up: Pid, r: Result<Ret, String>, rforked: bool) -> Result<Ret, String> {
-        // `closeproc` (`chan.c:552`): close what `exits` let go of.
-        self.closeproc();
+    /// `rfork`: it was `rfork` at all, which `notify` is not called after
+    /// (`pc/trap.c:773`, *"scallnr!=RFORK"*).
+    fn syscall_tail(
+        &mut self,
+        up: Pid,
+        r: Result<Ret, String>,
+        rforked: bool,
+        rfork: bool,
+    ) -> Result<Ret, String> {
+        // `ccloseq` could not make a `closeproc` from inside a device; the
+        // call's end can.
+        if std::mem::take(&mut self.procs.borrow_mut().closeproc) {
+            self.kproc("closeproc", closeproc);
+        }
         // **The call left the processor in the middle** — `sleep`, `qlock`
         // or `sched` did `setlabel`, and whatever it was doing kept the rest
         // of the call in `labels`. The machine leaves; `resume` goes back.
@@ -642,6 +755,15 @@ impl Kernel {
         }
         if let Err(e) = &r {
             self.procs.borrow_mut().seterrstr(up, e);
+        }
+        // *"if(scallnr!=RFORK && (up->procctl || up->nnote)) notify(ureg);"*
+        // (`pc/trap.c:773`) — decided now, in Plan 9's order, and acted on
+        // by the machine on its way back to the process.
+        let n = if rfork { machine::Notify::No } else { self.notify_(up, machine::NoteAt::Syscall) };
+        let gone = n == machine::Notify::Pexit;
+        self.notes.insert(up, n);
+        if gone {
+            return r;
         }
         // *"if we delayed sched because we held a lock, sched now"* —
         // `if(up->delaysched) sched();` (`pc/trap.c:778`). The call is done;
@@ -727,16 +849,123 @@ impl Kernel {
         Ok(Ret::N(n))
     }
 
-    /// `closeproc` (`chan.c:552`) — the kernel process that drains
-    /// `clunkq`, `cclose`ing each channel. Here it is not a process: the
-    /// kernel drains the queue itself whenever it is on its way out of a
-    /// call or back from a process, the two places `exits` can have run.
-    fn closeproc(&mut self) {
-        loop {
-            let c = self.procs.borrow_mut().clunkq.pop();
-            let Some(mut c) = c else { break };
+    /// `pexit`'s own work, where it needs the kernel: *"closefgrp(fgrp)"*
+    /// (`proc.c:1160`) — `cclose` each channel whose last reference went.
+    pub fn pexit(&mut self, pid: Pid, status: &str) {
+        let last = self.procs.borrow_mut().exits(pid, status);
+        for mut c in last {
             self.tab.dclose(&mut c);
         }
+    }
+
+    /// `pprint` (`devcons.c:322`) — a message from the kernel to a process's
+    /// standard error, prefixed with its text and pid.
+    pub fn pprint(&mut self, pid: Pid, msg: &str) {
+        let Some(cell) = self.chancell(pid, 2).ok() else { return };
+        let mut c = cell.borrow().clone();
+        if c.mode & 3 != chan::mode::OWRITE && c.mode & 3 != chan::mode::ORDWR {
+            return;
+        }
+        let text = self.procs.borrow().get(pid).map(|p| p.text.clone()).unwrap_or_default();
+        let buf = format!("{text} {pid}: {msg}");
+        let at = c.offset;
+        if let Ok(n) = self.tab.dwrite(&mut c, buf.as_bytes(), at) {
+            c.offset += n as u64;
+            *cell.borrow_mut() = c;
+        }
+    }
+
+    /// `kproc` (`proc.c:1436`) — a process whose body is kernel code. The
+    /// body is kept where the rest of a call is (`labels`), and it keeps
+    /// itself there each time it sleeps.
+    pub fn kproc(&mut self, name: &str, body: fn(&mut Kernel, Pid) -> Result<Ret, String>) -> Pid {
+        let up = self.up.borrow().pid;
+        let eve = self.tab.eve().borrow().clone();
+        let pid = self.procs.borrow_mut().kproc(up, name, &eve);
+        self.labels.insert(pid, Box::new(body));
+        pid
+    }
+
+    /// Enter a kernel process: run what it was doing until it sleeps,
+    /// yields, or exits.
+    fn runkproc(&mut self, pid: Pid) -> machine::Left {
+        if let Some(body) = self.labels.remove(&pid) {
+            let _ = body(self, pid);
+        }
+        self.procs.borrow_mut().take_setlabel(pid);
+        match self.procs.borrow().state(pid) {
+            proc::State::Moribund | proc::State::Dead => machine::Left::Exited,
+            _ => machine::Left::Sched,
+        }
+    }
+
+    /// **`notify(Ureg*)`'s decision** (`pc/trap.c:794`–`:865`): act on
+    /// `procctl`, then take the first note — ending the process if nothing
+    /// can catch it, leaving it queued if a handler is already running, and
+    /// otherwise handing it to the handler.
+    ///
+    /// What is not here: *"sys:"* notes gain *" pc=0x…"* on Plan 9 (`:809`)
+    /// and there is no program counter to report; and at a clock interrupt
+    /// a note for a handler stays queued until the process's next call ends,
+    /// because a machine whose guest can only be entered from a host call
+    /// cannot enter it from an interrupt. A note that ends the process does
+    /// not wait.
+    fn notify_(&mut self, up: Pid, at: machine::NoteAt) -> machine::Notify {
+        use machine::Notify;
+        use proc::{NoteFlag, Procctl, State};
+        let (procctl, state) = {
+            let procs = self.procs.borrow();
+            let Some(p) = procs.get(up) else { return Notify::No };
+            (p.procctl, p.state)
+        };
+        if matches!(state, State::Moribund | State::Dead) {
+            return Notify::Pexit;
+        }
+        // `procctl` (`proc.c:1494`): *"case Proc_exitme: pexit("Killed", 1)"*.
+        if procctl == Some(Procctl::Exitme) {
+            self.procs.borrow_mut().get_mut(up).map(|p| p.procctl = None);
+            self.pexit(up, "Killed");
+            return Notify::Pexit;
+        }
+        let (n, notified, handler) = {
+            let procs = self.procs.borrow();
+            let p = procs.get(up).expect("checked");
+            let Some(n) = p.note.first().cloned() else { return Notify::No };
+            (n, p.notified, p.notify)
+        };
+        if n.flag != NoteFlag::NUser && (notified || handler == 0) {
+            if n.flag == NoteFlag::NDebug {
+                self.pprint(up, &format!("suicide: {}\n", n.msg));
+            }
+            self.pexit(up, &n.msg);
+            return Notify::Pexit;
+        }
+        if notified {
+            return Notify::No;
+        }
+        if handler == 0 {
+            self.pexit(up, &n.msg);
+            return Notify::Pexit;
+        }
+        match at {
+            machine::NoteAt::Clock => return Notify::No,
+            // A fault leaves nothing to go back to: the handler could only
+            // `noted(NCONT)` into the instruction that faulted.
+            machine::NoteAt::Fault => {
+                if n.flag == NoteFlag::NDebug {
+                    self.pprint(up, &format!("suicide: {}\n", n.msg));
+                }
+                self.pexit(up, &n.msg);
+                return Notify::Pexit;
+            }
+            machine::NoteAt::Syscall => {}
+        }
+        let mut procs = self.procs.borrow_mut();
+        let p = procs.get_mut(up).expect("checked");
+        p.notepending = false;
+        p.notified = true;
+        p.lastnote = p.note.remove(0);
+        Notify::Handler { f: handler, msg: n.msg }
     }
 
     fn dispatch(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
@@ -770,7 +999,7 @@ impl Kernel {
                 Ok(Ret::Ok)
             }
             Call::Exits { status } => {
-                self.procs.borrow_mut().exits(up, &status);
+                self.pexit(up, &status);
                 Ok(Ret::Ok)
             }
             // `sysawait` (`sysproc.c:715`) formats the message in the KERNEL
@@ -799,8 +1028,15 @@ impl Kernel {
                         return Err(ENOCHILD.into());
                     }
                     let r = proc::Rid::Proc(up, proc::Which::Waitr);
-                    self.procs.borrow_mut().sleep(up, r, false);
-                    self.setlabel(up, Box::new(|k, up| k.waitrecord(up)));
+                    if !self.procs.borrow_mut().sleep(up, r, false) && self.procs.borrow_mut().interrupted(up) {
+                        return Err(proc::EINTR.into());
+                    }
+                    self.setlabel(up, Box::new(|k, up| {
+                        if k.procs.borrow_mut().interrupted(up) {
+                            return Err(proc::EINTR.into());
+                        }
+                        k.waitrecord(up)
+                    }));
                     return Ok(Ret::Ok);
                 }
                 self.waitrecord(up)
@@ -1013,26 +1249,70 @@ impl Kernel {
                 // condition is `return0`, so it always commits: this sleep
                 // has no reason but the clock.
                 let r = proc::Rid::Proc(up, proc::Which::Sleep);
-                self.procs.borrow_mut().tsleep(up, r, false, deadline);
-                // After the `tsleep`, `syssleep` returns 0.
-                self.setlabel(up, Box::new(|_, _| Ok(Ret::Ok)));
+                if !self.procs.borrow_mut().tsleep(up, r, false, deadline) {
+                    // A note was already pending: `sleep` never committed,
+                    // and leaves with `Eintr`.
+                    self.procs.borrow_mut().interrupted(up);
+                    return Err(proc::EINTR.into());
+                }
+                // After the `tsleep`, `syssleep` returns 0 — unless a note
+                // woke it (`proc.c:879`).
+                self.setlabel(up, Box::new(|k, up| {
+                    if k.procs.borrow_mut().interrupted(up) {
+                        return Err(proc::EINTR.into());
+                    }
+                    Ok(Ret::Ok)
+                }));
                 Ok(Ret::Ok)
             }
 
-            // The four that a scheduler is the whole of. Each says what Plan
-            // 9 does and why this machine cannot, rather than naming a phase.
-            //
-            // `sysalarm` is `procalarm` (`sysproc.c`), and an alarm arrives
-            // as a NOTE — so it is the note mechanism, on a timer.
-            Call::Alarm { .. } => Err(NONOTES.into()),
-            Call::Notify | Call::Noted { .. } => Err(NONOTES.into()),
-            // `sysrendezvous` (`sysproc.c`) either finds a waiting process
-            // and `ready()`s it, or sets `up->state = Rendezvous` and
-            // `sched()`s. **As this host is built** a child runs to its end
-            // inside the call that made it, so the other process is below
-            // this one on the machine's call stack and neither can be
-            // suspended. That is the host's shape, not the substrate's —
-            // RESEARCH §14, and P6.
+            // `sysalarm` is `procalarm` (`sysproc.c:658`, `alarm.c:60`):
+            // the note comes from `alarmkproc` when it is due.
+            Call::Alarm { ms } => Ok(Ret::N(self.procs.borrow_mut().procalarm(up, ms) as usize)),
+            // `sysnotify` (`sysproc.c:782`): *"up->notify = arg[0]"*.
+            Call::Notify { f } => {
+                if let Some(p) = self.procs.borrow_mut().get_mut(up) {
+                    p.notify = f;
+                }
+                Ok(Ret::Ok)
+            }
+            // `sysnoted` (`sysproc.c:791`), and then what `syscall()` does
+            // for `NOTED` on its way out, `noted(ureg, arg0)`
+            // (`pc/trap.c:770`, `:872`) — all of it but restoring the
+            // registers, which is the machine's: it answers how, and the
+            // machine goes back to where the note interrupted
+            // (`NCONT`, `NRSTR`), carries on in the handler (`NSAVE`), or
+            // leaves a process that is gone.
+            Call::Noted { how } => {
+                use proc::noted::*;
+                let notified = self.procs.borrow().get(up).is_some_and(|p| p.notified);
+                if how != NRSTR && !notified {
+                    self.pprint(up, "call to noted() when not notified\n");
+                    self.pexit(up, "Suicide");
+                    return Ok(Ret::N(NDFLT as usize));
+                }
+                let last = {
+                    let mut procs = self.procs.borrow_mut();
+                    let p = procs.get_mut(up).expect("checked");
+                    p.notified = false;
+                    p.lastnote.clone()
+                };
+                match how {
+                    NCONT | NRSTR | NSAVE => Ok(Ret::N(how as usize)),
+                    _ => {
+                        let mut flag = last.flag;
+                        if how != NDFLT {
+                            self.pprint(up, &format!("unknown noted arg {how:#x}\n"));
+                            flag = proc::NoteFlag::NDebug;
+                        }
+                        if flag == proc::NoteFlag::NDebug {
+                            self.pprint(up, &format!("suicide: {}\n", last.msg));
+                        }
+                        self.pexit(up, &last.msg);
+                        Ok(Ret::N(NDFLT as usize))
+                    }
+                }
+            }
             Call::Rendezvous { .. } => {
                 Err("rendezvous needs a scheduler; this machine has none yet".into())
             }
@@ -1144,18 +1424,6 @@ const ENOCHILD: &str = "no living children";
 /// `TK2MS(1)` — the shortest sleep there is.
 const TK2MS1: u64 = proc::tk2ms(1);
 
-/// What `notify`, `noted` and `alarm` are waiting on: a scheduler, and the
-/// stack switch under it. A note is delivered on the way out of the kernel
-/// (`notify(Ureg*)`, `pc/trap.c`) by rewriting the user stack so the handler
-/// runs and `noted` returns through it — machine-dependent code, as
-/// `setlabel`/`gotolabel` are (`pc/l.s:1000`, `:992`), which is why
-/// `port/proc.c`'s scheduler is portable and this is not.
-///
-/// **Unbuilt, not impossible.** This machine can suspend a guest — RESEARCH
-/// §14 measures how, §14.1 says what Plan 9 does with it — and it is
-/// `implementation.md`'s **P6**. Until then the call refuses and says which
-/// half is missing.
-const NONOTES: &str = "notes need a scheduler; this machine has none yet";
 
 /// The element as `bind`/`mount` made it. **The flag WORD is kept**
 /// (`Mount.mflag`, `portdat.h:303`), not just its `MCREATE` bit, because
@@ -1331,6 +1599,98 @@ mod syscalls {
         assert_eq!(r, Ok(Ret::Sched), "it leaves");
         k.procs.borrow_mut().get_mut(1).unwrap().delaysched = 0;
         assert!(matches!(k.resume(1), Ok(Ret::Fd(_))), "and then answers");
+    }
+
+    /// **A note ends a sleep with `Eintr`** (`proc.c:879`), and at the end
+    /// of the call it is taken: with no handler, `pexit` with the note as the
+    /// status (`pc/trap.c:830`).
+    #[test]
+    fn a_note_interrupts_a_sleep_and_ends_a_process_without_a_handler() {
+        let mut k = booted();
+        let Ret::Pid(c) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        assert_eq!(k.syscall(c, Call::Sleep { ms: 10_000 }), Ok(Ret::Sched));
+        assert!(k.procs.borrow_mut().postnote(c, "interrupt", proc::NoteFlag::NUser));
+        assert_eq!(k.procs.borrow().state(c), proc::State::Ready, "postnote woke it");
+        assert_eq!(k.resume(c), Err(proc::EINTR.into()), "sleep leaves with Eintr");
+        use machine::Syscalls;
+        assert_eq!(k.notify(c, machine::NoteAt::Syscall), machine::Notify::Pexit);
+        assert_eq!(k.procs.borrow().status(c).as_deref(), Some("*init* 2: interrupt"));
+    }
+
+    /// With a handler the note is handed over (`pc/trap.c:857`), and a
+    /// second one waits while the first is being handled (`:824`);
+    /// `noted(NCONT)` ends the handling and the next is taken at the end of
+    /// that call.
+    #[test]
+    fn a_handler_takes_notes_one_at_a_time() {
+        use machine::{NoteAt, Notify, Syscalls};
+        let mut k = booted();
+        k.syscall(1, Call::Notify { f: 42 }).unwrap();
+        k.procs.borrow_mut().postnote(1, "one", proc::NoteFlag::NUser);
+        k.procs.borrow_mut().postnote(1, "two", proc::NoteFlag::NUser);
+        k.syscall(1, Call::Errstr { buf: String::new() }).unwrap();
+        assert_eq!(k.notify(1, NoteAt::Syscall), Notify::Handler { f: 42, msg: "one".into() });
+        k.syscall(1, Call::Errstr { buf: String::new() }).unwrap();
+        assert_eq!(k.notify(1, NoteAt::Syscall), Notify::No, "notified: the second waits");
+        assert_eq!(k.syscall(1, Call::Noted { how: proc::noted::NCONT }), Ok(Ret::N(0)));
+        assert_eq!(k.notify(1, NoteAt::Syscall), Notify::Handler { f: 42, msg: "two".into() });
+    }
+
+    /// `noted(NDFLT)` ends the process with the note it was handling
+    /// (`pc/trap.c:953`); `noted` when nothing is being handled is
+    /// *"Suicide"* (`:878`).
+    #[test]
+    fn noted_ndflt_exits_and_noted_unnotified_is_suicide() {
+        use machine::{NoteAt, Notify, Syscalls};
+        let mut k = booted();
+        let Ret::Pid(c) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        k.syscall(c, Call::Notify { f: 7 }).unwrap();
+        k.procs.borrow_mut().postnote(c, "hangup", proc::NoteFlag::NUser);
+        k.syscall(c, Call::Errstr { buf: String::new() }).unwrap();
+        assert!(matches!(k.notify(c, NoteAt::Syscall), Notify::Handler { .. }));
+        k.syscall(c, Call::Noted { how: proc::noted::NDFLT }).unwrap();
+        assert_eq!(k.notify(c, NoteAt::Syscall), Notify::Pexit);
+        assert_eq!(k.procs.borrow().status(c).as_deref(), Some("*init* 2: hangup"));
+
+        let Ret::Pid(d) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        k.syscall(d, Call::Noted { how: proc::noted::NCONT }).unwrap();
+        assert_eq!(k.procs.borrow().status(d).as_deref(), Some(&*format!("*init* {d}: Suicide")));
+    }
+
+    /// `alarm` (`alarm.c:60`): the `alarm` kproc posts *"alarm"* when it is
+    /// due, and a second `alarm` answers what was left of the first.
+    #[test]
+    fn an_alarm_is_a_note_from_the_alarm_kproc() {
+        let (mut k, _) = tests::watched();
+        let alarm = k.kproc("alarm", alarmkproc);
+        assert_eq!(k.syscall(1, Call::Alarm { ms: 30 }), Ok(Ret::N(0)));
+        assert_eq!(k.syscall(1, Call::Alarm { ms: 30 }), Ok(Ret::N(30)), "the old one's time left");
+        // Run the kproc once so it sleeps on alarmr, then start the clock
+        // and tick it.
+        k.runkproc(alarm);
+        k.procs.borrow_mut().timersinit(0);
+        for t in 1..=3 {
+            k.timerintr(t * 10_000_000);
+        }
+        assert_eq!(k.procs.borrow().state(alarm), proc::State::Ready, "checkalarms woke it");
+        k.runkproc(alarm);
+        let p = k.procs.borrow();
+        assert_eq!(p.get(1).unwrap().note.first().map(|n| n.msg.as_str()), Some("alarm"));
+    }
+
+    /// `RFNOTEG` gives a new note group (`sysproc.c:87`, `:188`); without
+    /// it a child is in its parent's.
+    #[test]
+    fn rfnoteg_makes_a_new_note_group() {
+        let mut k = booted();
+        let Ret::Pid(c) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        let Ret::Pid(d) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::NOTEG }).unwrap() else {
+            panic!()
+        };
+        let p = k.procs.borrow();
+        let id = |x| p.get(x).unwrap().noteid;
+        assert_eq!(id(c), id(1));
+        assert_ne!(id(d), id(1));
     }
 
     /// **`pexit` closes the descriptors** (`closefgrp`, `proc.c:1160`), so
@@ -1756,8 +2116,6 @@ mod syscalls {
         for c in [
             Call::Mount { fd: 0, afd: -1, old: "/n".into(), flag: 0, aname: String::new() },
             Call::Rendezvous { tag: 0, val: 0 },
-            Call::Notify,
-            Call::Alarm { ms: 5 },
         ] {
             let e = k.syscall(1, c).unwrap_err();
             assert!(!e.contains("P3"), "a phase is not a reason: {e}");
@@ -1819,7 +2177,7 @@ mod syscalls {
         assert_eq!(procs.m.ticks, 25, "the clock ticked while nothing ran");
         assert_eq!(procs.m.intr, 25, "each tick an interrupt");
         assert_eq!(procs.get(1).unwrap().time[proc::TUSER], 0, "and charged nobody");
-        assert_eq!(procs.m.cs, 1, "one switch: out of the image");
+        assert_eq!(procs.m.cs, 2, "the alarm kproc going to sleep, and out of the image");
     }
 
     /// `sysexec` gives a process whose image came from `#/` `PriRoot`
