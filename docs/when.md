@@ -28,7 +28,7 @@ Measured 2026-09-20.
 | `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s. **And the clock** (2026-09-22): `Mach` (`pc/dat.h:206`, the fields `port/` reads), `timersinit`, `hzclock`, `accounttime`, `hzsched`, `rebalance`, `anyhigher`, and `sched`'s tail with `m->schedticks`. `exits` does `closefgrp` (`proc.c:1160`), queuing what reaches a device on `clunkq` (`chan.c:517`) |
 | `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
-| `lib.rs` | the 28 calls, `exec`, and `unionread` |
+| `lib.rs` | the 31 calls, `exec`, and `unionread` |
 
 197 kernel tests, and 32 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and twenty-five that boot the whole system.
 
@@ -61,7 +61,7 @@ ambient mutable global.
 Answered: `rfork` `exec` `exits` `await` `errstr` `bind` `mount` `unmount`
 `chdir` `open` `create` `close` `pread` `pwrite` `seek` `dup` `pipe` `remove`
 `stat` `fstat` `wstat` `fwstat` `sleep` `alarm` `notify` `noted`
-`rendezvous` — **27 of 28**; `fversion` is refused because `mount` does the
+`rendezvous` `semacquire` `tsemacquire` `semrelease` — **30 of 31**; `fversion` is refused because `mount` does the
 version exchange itself (`mntversion`). A failed call leaves its reason where
 `errstr` finds it, and reading exchanges it as Plan 9's does.
 
@@ -150,6 +150,15 @@ ends is kept `Broken` — at most four — until `kill` lets it go, as `pexit`
 does. `/proc/<n>/status` shows the call a process is in (`Await`, `Pread`)
 before its state, so `ps` reads as Plan 9's. Only tracing — `startstop`,
 `startsyscall`, `/proc/<n>/syscall`, `profile` — is not built.
+
+**The semaphores are built** (2026-09-23; RESEARCH §15.7): `semacquire`,
+`tsemacquire` and `semrelease`, as `sysproc.c` has them — a waiter on its
+segment's list, woken oldest first, passing a wakeup on if it leaves without
+the semaphore, and `validaddr`'s and `validalign`'s notes for a bad address.
+The word is read and swapped in the process's memory through the machine's
+`load` and `cmpswap`. No command calls them yet, and no two processes here
+share a memory while both can run, so a waiter is woken by a note or its
+time running out, never yet by another process.
 
 **`^C` interrupts a command** (2026-09-23; RESEARCH §15.5) — P6's last
 acceptance test. Plan 9's kernel console turns no key into a note; `rio`
@@ -240,7 +249,7 @@ until 2026-09-23 because clang promotes `uchar` to `int` and kencc to
 | `libc/{port,fmt,9sys}/` | vendored verbatim from `plan9/sys/src/libc/`, but for one cast in `nsec.c` — kencc's `uchar` promotes to unsigned int, clang's to int (RESEARCH §15.6) |
 | `libbio/`, `libauth/` | vendored: buffered i/o, and `newns` — which is all of libauth that is left once there is no factotum to talk to |
 | `rc/` | Plan 9's rc, with `ipnx.c` as its platform file — it ships three of those and the mkfile picks one — and `haventfork.c`, Plan 9's own file for a system that cannot fork. `termrc` and `rcmain` beside it |
-| `cmd/` | `boot` and `init`; `bind`, `cat`, `echo`, `ls`, `mkdir`, `rm`, `unmount`, a cut-down `tr` and `args`; and **`cp`, `date`, `mount`, `mv`, `ps`, `sleep`, `wc`** — vendored verbatim from `plan9/sys/src/cmd/` except `mount`, whose `amount0` is `fauth` plus `auth_proxy` there and `mount(fd, -1, …)` here, for the reason `newns.c` already carries. **Seventeen, against the demo's "twenty-four real Plan 9 commands"**, and that list of twenty-four is written down nowhere. `pwd` is not among them: `getwd` is `fd2path`, one of the twelve calls this kernel omits |
+| `cmd/` | `boot` and `init`; `bind`, `cat`, `echo`, `ls`, `mkdir`, `rm`, `unmount`, a cut-down `tr` and `args`; and **`cp`, `date`, `mount`, `mv`, `ps`, `sleep`, `wc`** — vendored verbatim from `plan9/sys/src/cmd/` except `mount`, whose `amount0` is `fauth` plus `auth_proxy` there and `mount(fd, -1, …)` here, for the reason `newns.c` already carries. **Seventeen, against the demo's "twenty-four real Plan 9 commands"**, and that list of twenty-four is written down nowhere. `pwd` is not among them: `getwd` is `fd2path`, one of the nine calls this kernel omits |
 | `lib/namespace`, `etc/motd` | the instance's configuration, and something to read |
 | `mk.sh` | the build. `weaken.py` beside it restores common-symbol semantics for rc.h's tentative definitions, which the wasm backend has none of |
 

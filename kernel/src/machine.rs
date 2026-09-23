@@ -171,6 +171,25 @@ pub trait Machine {
     /// `schedinit`'s idle loop waits in it until the next interrupt is due
     /// — `idlehands()`, which on the PC halts until the clock.
     fn delay(&self, ms: u64);
+
+    /// `*addr` — the `long` at `addr` in the process's memory, which is
+    /// what `syssemacquire`'s *"if(*addr < 0)"* and `canacquire`'s
+    /// *"value=*addr"* compile to (`sysproc.c:1098`, `:1199`). Plan 9's
+    /// kernel reads a user address directly, because the process's
+    /// segments are mapped in its address space; on a machine whose
+    /// processes' memories are not the kernel's, only the machine can reach
+    /// one, so the process is named.
+    ///
+    /// An address outside the process's memory is `Err`: `okaddr`'s
+    /// answer (`fault.c:291`), which the kernel turns into `validaddr`'s
+    /// note and `Ebadarg`.
+    fn load(&self, pid: Pid, addr: u32) -> Result<i32, String>;
+
+    /// `cmpswap(long *addr, long old, long new)` (`pc/fns.h:16`,
+    /// `pc/devarch.c:544`) — Plan 9's machine function too: if `*addr` is
+    /// `old`, make it `new` and answer true. Named by process for the reason
+    /// [`Machine::load`] is.
+    fn cmpswap(&self, pid: Pid, addr: u32, old: i32, new: i32) -> Result<bool, String>;
 }
 
 /// What `todget` answers.

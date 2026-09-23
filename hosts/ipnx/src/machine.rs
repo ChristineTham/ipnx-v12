@@ -332,6 +332,52 @@ thread_local! {
     static KERNEL: Cell<Option<*mut (dyn Syscalls + 'static)>> = const { Cell::new(None) };
 }
 
+thread_local! {
+    /// **The memory of the process whose call the kernel is in** — its pid,
+    /// and where its linear memory is and how long. [`Machine::load`] and
+    /// [`Machine::cmpswap`] reach the process's words through it, which is
+    /// what Plan 9's kernel does by dereferencing a user address: the
+    /// segments are mapped in its own address space (`sysproc.c:1098`).
+    ///
+    /// It is set for exactly the length of a kernel call ([`call`], and the
+    /// `resume` in [`kcall`]), and in that time no guest code runs, so the
+    /// memory can neither grow nor move and the pointer stays good. Outside
+    /// a call it is empty and both answer an error.
+    static UMEM: Cell<Option<(Pid, *mut u8, usize)>> = const { Cell::new(None) };
+}
+
+/// Puts [`UMEM`] back as it was.
+struct Umem(Option<(Pid, *mut u8, usize)>);
+
+impl Drop for Umem {
+    fn drop(&mut self) {
+        UMEM.with(|m| m.set(self.0));
+    }
+}
+
+/// Make the calling process's memory the one the kernel reaches, until the
+/// guard drops.
+fn umem(c: &mut Caller<'_, Guest>) -> Umem {
+    let pid = c.data().pid;
+    let m = memory(c).ok().map(|mem| (pid, mem.data_ptr(&*c), mem.data_size(&*c)));
+    Umem(UMEM.with(|u| u.replace(m)))
+}
+
+/// The four bytes at `addr` in `pid`'s memory — which must be the process
+/// whose call this is, because no other's memory is reachable now.
+fn word(pid: Pid, addr: u32) -> Result<*mut [u8; 4], String> {
+    let (p, base, len) = UMEM.with(|m| m.get()).ok_or("no process is in a call")?;
+    if p != pid {
+        return Err(format!("pid {pid}'s memory is not reachable: pid {p} is in the call"));
+    }
+    let at = addr as usize;
+    if at.checked_add(4).is_none_or(|end| end > len) {
+        return Err("address out of range".into());
+    }
+    // In bounds, checked above; valid while the call lasts ([`UMEM`]).
+    Ok(unsafe { base.add(at) } as *mut [u8; 4])
+}
+
 /// Puts [`KERNEL`] back as it was, however the poll ends — a return, an
 /// error or a panic.
 struct Entered(Option<*mut (dyn Syscalls + 'static)>);
@@ -372,6 +418,7 @@ fn kernel() -> *mut (dyn Syscalls + 'static) {
 /// to call.
 fn call(c: &mut Caller<'_, Guest>, k: Call) -> Result<Ret, String> {
     let pid = c.data().pid;
+    let _umem = umem(c);
     // Sound for as long as [`enter`]'s invariant holds: this runs inside a
     // poll, inside `gotolabel`, and nothing else makes a `&mut` to the kernel
     // while it does — every call finishes before control returns to the
@@ -394,6 +441,7 @@ async fn kcall(c: &mut Caller<'_, Guest>, k: Call) -> Result<Ret, String> {
     while let Ok(Ret::Sched) = r {
         Sched::new().await;
         let pid = c.data().pid;
+        let _umem = umem(c);
         // Sound as [`call`] is: a poll, inside `gotolabel`.
         r = unsafe { (*kernel()).resume(pid) };
     }
@@ -499,6 +547,29 @@ impl Machine for Wasm {
     /// process on an operating system that can be asked to wait, so it asks.
     fn delay(&self, ms: u64) {
         std::thread::sleep(std::time::Duration::from_millis(ms));
+    }
+
+    /// `*addr`. Wasm is little-endian, whatever the host is.
+    fn load(&self, pid: Pid, addr: u32) -> Result<i32, String> {
+        let w = word(pid, addr)?;
+        // Sound: [`word`] checked the bounds and the memory is still.
+        Ok(i32::from_le_bytes(unsafe { *w }))
+    }
+
+    /// `cmpswap`. The guest cannot run while the kernel does, and a module's
+    /// memory is not shared with any other thread, so a plain compare and a
+    /// plain store are the whole of the atomicity `cmpswap386` provides by
+    /// turning interrupts off (`pc/devarch.c:544`).
+    fn cmpswap(&self, pid: Pid, addr: u32, old: i32, new: i32) -> Result<bool, String> {
+        let w = word(pid, addr)?;
+        // Sound as in [`Wasm::load`].
+        unsafe {
+            if i32::from_le_bytes(*w) != old {
+                return Ok(false);
+            }
+            *w = new.to_le_bytes();
+        }
+        Ok(true)
     }
 
     /// `touser` — the image is this process's now. It does not run.
@@ -1049,8 +1120,9 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
 
     l.func_wrap_async("sys", "alarm", |mut c: Caller<'_, Guest>, (ms,): (i32,)| Box::new(async move {
         let r = async {
-        match kcall(&mut c, Call::Alarm { ms: ms.max(0) as u64 }).await {
-            Ok(Ret::N(n)) => n as i64,
+        // `ulong` in, `long` out: both 32 bits on this architecture.
+        match kcall(&mut c, Call::Alarm { ms: ms as u32 as u64 }).await {
+            Ok(Ret::N(n)) => n as i32,
             _ => -1,
         }
     }
@@ -1089,11 +1161,42 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         deliver(&mut c).await?;
         Ok::<_, wasmtime::Error>(r)
     }))?;
+    // `semacquire`, `tsemacquire`, `semrelease` (`sysproc.c:1187`, `:1206`,
+    // `:1225`). The address crosses as a number; the kernel reads and
+    // swaps the word through [`Machine::load`] and [`Machine::cmpswap`].
+    l.func_wrap_async("sys", "semacquire", |mut c: Caller<'_, Guest>, (addr, block): (i32, i32)| Box::new(async move {
+        let r = or_fail(kcall(&mut c, Call::Semacquire { addr: addr as u32, block: block != 0 }).await, |v| match v {
+            Ret::N(n) => n as i32,
+            _ => -1,
+        });
+        deliver(&mut c).await?;
+        Ok::<_, wasmtime::Error>(r)
+    }))?;
+    l.func_wrap_async("sys", "tsemacquire", |mut c: Caller<'_, Guest>, (addr, ms): (i32, i32)| Box::new(async move {
+        let r = or_fail(kcall(&mut c, Call::Tsemacquire { addr: addr as u32, ms: ms as u32 as u64 }).await, |v| match v {
+            Ret::N(n) => n as i32,
+            _ => -1,
+        });
+        deliver(&mut c).await?;
+        Ok::<_, wasmtime::Error>(r)
+    }))?;
+    l.func_wrap_async("sys", "semrelease", |mut c: Caller<'_, Guest>, (addr, delta): (i32, i32)| Box::new(async move {
+        let r = or_fail(kcall(&mut c, Call::Semrelease { addr: addr as u32, delta }).await, |v| match v {
+            Ret::N(n) => n as i32,
+            _ => -1,
+        });
+        deliver(&mut c).await?;
+        Ok::<_, wasmtime::Error>(r)
+    }))?;
     l.func_wrap_async("sys", "rendezvous", |mut c: Caller<'_, Guest>, (tag, val): (i32, i32)| Box::new(async move {
         let r = async {
         or_fail(
-            kcall(&mut c, Call::Rendezvous { tag: tag as u64, val: val as u64 }).await,
-            |_| 0,
+            kcall(&mut c, Call::Rendezvous { tag: tag as u32 as u64, val: val as u32 as u64 }).await,
+            // The other's value — or `~0`, pulled out by a note.
+            |v| match v {
+                Ret::N(n) => n as i32,
+                _ => -1,
+            },
         )
     }
         .await;
@@ -1136,6 +1239,63 @@ mod tests {
     fn guest_is_send_without_a_promise() {
         fn send<T: Send>() {}
         send::<Guest>();
+    }
+
+    /// **Every stub in `sys.c` has an import here of the same type.** The
+    /// module is only checked against the linker when a program is
+    /// instantiated, and only for the imports it uses — so a mismatch in a
+    /// call nothing yet makes waits for the first program that does. `alarm`
+    /// answered `i64` for `long` until 2026-09-23 and nobody noticed, because
+    /// no program called it.
+    ///
+    /// `vlong` is `i64`; every other type in the list is 32 bits on wasm32.
+    #[test]
+    fn every_stub_in_sys_c_matches_its_import() {
+        use wasmtime::ValType;
+        let src = include_str!("../../../userspace/libc/wasm/sys.c");
+        let w = Wasm::new().unwrap();
+        let mut store = Store::new(&w.engine, Guest { pid: 0, up: 0 });
+        let ty = |t: &str| if t.trim() == "vlong" { "i64" } else { "i32" };
+        let mut n = 0;
+        for line in src.lines().filter(|l| l.starts_with("SYS(")) {
+            let name = &line[4..line.find(')').unwrap()];
+            let decl = line.split_once("extern").unwrap().1.trim();
+            let ret = decl.split_whitespace().next().unwrap();
+            let args = &decl[decl.find('(').unwrap() + 1..decl.rfind(')').unwrap()];
+            let want_p: Vec<&str> = args.split(',').filter(|a| !a.trim().is_empty() && a.trim() != "void").map(ty).collect();
+            let want_r: Vec<&str> = if ret == "void" { vec![] } else { vec![ty(ret)] };
+            let f = w.linker.get(&mut store, "sys", name).unwrap_or_else(|| panic!("no import for {name}"));
+            let wasmtime::ExternType::Func(ft) = f.ty(&store) else { panic!("{name} is not a function") };
+            let name_of = |v: ValType| match v {
+                ValType::I32 => "i32",
+                ValType::I64 => "i64",
+                _ => "other",
+            };
+            let got_p: Vec<&str> = ft.params().map(name_of).collect();
+            let got_r: Vec<&str> = ft.results().map(name_of).collect();
+            assert_eq!((got_p, got_r), (want_p, want_r), "{name}: {line}");
+            n += 1;
+        }
+        assert!(n >= 30, "read {n} stubs");
+    }
+
+    /// `load` and `cmpswap` reach the calling process's memory, little-endian,
+    /// within its bounds, and nobody else's.
+    #[test]
+    fn load_and_cmpswap_reach_the_calling_process_and_no_other() {
+        let w = Wasm::new().unwrap();
+        let mut mem = vec![0u8; 16];
+        mem[4..8].copy_from_slice(&7i32.to_le_bytes());
+        assert!(w.load(3, 4).is_err(), "outside a call");
+        let _g = Umem(UMEM.with(|u| u.replace(Some((3, mem.as_mut_ptr(), mem.len())))));
+        assert_eq!(w.load(3, 4), Ok(7));
+        assert_eq!(w.cmpswap(3, 4, 6, 1), Ok(false));
+        assert_eq!(w.cmpswap(3, 4, 7, -2), Ok(true));
+        assert_eq!(w.load(3, 4), Ok(-2));
+        assert!(w.load(3, 13).is_err(), "the word runs past the end");
+        assert!(w.load(4, 4).is_err(), "another process's");
+        drop(_g);
+        assert_eq!(&mem[4..8], &(-2i32).to_le_bytes());
     }
 
     /// A thread nobody entered has no kernel, and says so rather than using

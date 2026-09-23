@@ -323,6 +323,36 @@ pub enum Rid {
     Alarmr,
     /// `clunkq.r` (`chan.c:516`) — where `closeproc` waits.
     Clunkq,
+    /// The `Rendez` inside a `Sema` (`portdat.h:440`) — where `semacquire`
+    /// waits. The `Sema` is a local of `semacquire`'s, on the waiting
+    /// process's own kernel stack (`sysproc.c:1111`), so it is named by that
+    /// process: it has at most one.
+    Sema(Pid),
+}
+
+/// `struct Sema` (`portdat.h:438`) — one process waiting in `semacquire`,
+/// on its segment's list. The `Rendez` it embeds is [`Rid::Sema`] of `p`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sema {
+    /// `addr` — the semaphore, an address in the segment.
+    pub addr: u32,
+    /// `waiting` — cleared by `semwakeup` before it wakes.
+    pub waiting: bool,
+    /// Whose `Sema` this is.
+    pub p: Pid,
+}
+
+/// `struct Segment` (`portdat.h:447`), of which only `sema` is here — *"list
+/// of semaphores"*. Everything else a segment is, its pages and its bounds,
+/// is the machine's: a process's memory is not in the kernel's address
+/// space on this machine, so there is nothing for the kernel to map. One
+/// memory is one segment, shared by `RFMEM` as `dupseg` shares the data
+/// segment (`segment.c:192`, *"if(share) goto sameseg"*), and replaced by `exec`.
+#[derive(Debug, Default)]
+pub struct Segment {
+    /// `s->sema` — the waiters, oldest first: `semqueue` puts a new one at
+    /// the tail (`sysproc.c:1033`) and `semwakeup` walks from the head.
+    pub sema: Vec<Sema>,
 }
 
 /// Which of a process's two `Rendez` (`portdat.h:683`, `:720`).
@@ -421,6 +451,8 @@ pub struct Proc {
     /// (`portdat.h:493`); a search for the first with the tag finds the same
     /// one.
     pub rgrp: Rc<RefCell<Vec<Pid>>>,
+    /// `p->seg` — the segment the process's memory is (see [`Segment`]).
+    pub seg: Rc<RefCell<Segment>>,
     /// `p->rendtag`, `p->rendval`.
     pub rendtag: u64,
     pub rendval: u64,
@@ -512,6 +544,7 @@ impl Proc {
             kp: false,
             alarm: 0,
             rgrp: Rc::new(RefCell::new(Vec::new())),
+            seg: Rc::new(RefCell::new(Segment::default())),
             rendtag: 0,
             rendval: 0,
             pdbg: None,
@@ -1487,6 +1520,10 @@ impl Procs {
             // *"if(flag & RFREND) p->rgrp = newrgrp(); else … up->rgrp"*
             // (`sysproc.c:153`); *"p->hang = up->hang"* (`:171`).
             rgrp: if flags & rf::REND != 0 { Rc::new(RefCell::new(Vec::new())) } else { parent.rgrp.clone() },
+            // *"p->seg[i] = dupseg(up->seg, i, n)"* with *"n = flag &
+            // RFMEM"* (`sysproc.c:114`): shared with `RFMEM`, copied — so
+            // with no waiters — without.
+            seg: if flags & rf::MEM != 0 { parent.seg.clone() } else { Rc::new(RefCell::new(Segment::default())) },
             rendtag: 0,
             rendval: 0,
             pdbg: None,
@@ -1742,6 +1779,7 @@ impl Procs {
         p.procctl = None;
         p.alarm = 0;
         p.rgrp = Rc::new(RefCell::new(Vec::new()));
+        p.seg = Rc::new(RefCell::new(Segment::default()));
         p.pdbg = None;
         p.psstate = None;
         p.errstr = String::new();

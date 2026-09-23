@@ -4003,3 +4003,55 @@ code carries the same exposure** — an expression of `uchar`s that is
 widened past 32 bits compiles differently here — and is checked when it
 arrives. Test: `date_reads_the_clock_every_time`, which fails on the old
 file.
+
+### §15.7 — The semaphores, which were never a library (2026-09-23)
+
+`docs/syscalls.md` listed `semacquire`, `semrelease` and `tsemacquire` as
+omitted: *"`rendezvous` is the primitive; semaphores are a library over
+it"*. **Plan 9 disagrees**: they are calls 37, 38 and 52
+(`9syscall/sys.h`), with bodies in the kernel — `syssemacquire`
+`sysproc.c:1187`, `systsemacquire` `:1206`, `syssemrelease` `:1225`. A
+kernel without them is smaller than Plan 9's, which is a deviation.
+Christine: *"do 1-5"*, the first being to build them.
+
+**Read before writing:** `sysproc.c:954`–`:1240` entire (the comment, then
+`semqueue`, `semdequeue`, `semwakeup`, `semrelease`, `canacquire`,
+`semawoke`, `semacquire`, `tsemacquire` and the three calls);
+`portdat.h:438` (`Sema`), `:466` (`Segment.sema`); `segment.c:155`
+(`dupseg`, *"if(share) goto sameseg"* at `:192`); `sysproc.c:114` (*"n =
+flag & RFMEM"*); `fault.c:291`–`:316` (`okaddr`, `validaddr`);
+`pc/trap.c:964` (`validalign`); `pc/fns.h:16` and `pc/devarch.c:544`
+(`cmpswap`).
+
+**What is Plan 9's, as it is:** the waiters are a list on the segment,
+added at the tail and woken from the head; `semwakeup` clears `waiting`
+before it wakes; the loop re-arms `waiting`, tries `canacquire`, and
+sleeps on `semawoke`; a waiter that leaves woken but empty-handed — a note,
+a timeout — passes the wakeup to the next; `tsemacquire` measures what it
+slept in ticks (`TK2MS(m->ticks - t)`) and gives up when that reaches its
+time. `RFMEM` shares the segment and so the list; without it a child's
+segment is a copy with nobody waiting; `exec` makes new segments.
+
+**The one difference, which cannot be otherwise:** Plan 9's kernel reads
+`*addr` and calls `cmpswap(addr, …)` on the user address directly, because
+the process's segments are mapped in its address space. This kernel has no
+address space holding a process's memory, so the two operations go through
+the machine as `Machine::load(pid, addr)` and `Machine::cmpswap(pid, addr,
+old, new)`. `cmpswap` was already a machine function in Plan 9; the pid is
+added because the memory is the process's and not the kernel's. `okaddr`'s
+bounds check is the machine's answer to either: an address outside the
+process's memory is an error, which the kernel turns into `validaddr`'s
+*"sys: bad address in syscall"* and `Ebadarg`. The wasm machine reaches the
+memory of the process whose call is in progress, and only that one, for
+exactly the length of the call; Dis or the CLR would do the same with their
+own heap.
+
+`Segment` here is only its `sema` list: a segment's pages and bounds are
+the machine's. Its sharing is Plan 9's.
+
+**Found while doing it, in the host's import table:** `alarm` answered
+`i64` where the stub declares `long` (32 bits), so the first program to
+call `alarm()` would have failed to instantiate — nothing did, so nothing
+noticed; and `rendezvous` answered 0 whatever the kernel returned, so no
+process ever received the value it was swapped. Both fixed; a test now
+checks every stub in `sys.c` against its import's type.

@@ -49,12 +49,18 @@ SYS(alarm)	extern long	__alarm(ulong);
  * `notify`, `noted` and `rendezvous` — NOTIFY is call 28 in
  * `libc/9syscall/sys.h`, and Plan 9 generates their stubs from that file
  * with no C source at all. They are declared here for the same reason the
- * others are. `notify` and `noted` are answered; a handler is entered
- * through `__notestart` (procrfork.c). `rendezvous` is not built yet.
+ * others are. A handler is entered through `__notestart` (procrfork.c).
  */
 SYS(notify)	extern int	__notify(void*);
 SYS(noted)	extern int	__noted(int);
 SYS(rendezvous)	extern void*	__rendezvous(void*, void*);
+/*
+ * SEMACQUIRE 37, SEMRELEASE 38, TSEMACQUIRE 52 — calls, not a library:
+ * the kernel reads and swaps the word at the address it is given.
+ */
+SYS(semacquire)	extern int	__semacquire(long*, int);
+SYS(tsemacquire)	extern int	__tsemacquire(long*, ulong);
+SYS(semrelease)	extern long	__semrelease(long*, long);
 
 int	open(char *f, int m)			{ return __open(f, m); }
 int	create(char *f, int m, ulong p)		{ return __create(f, m, p); }
@@ -83,6 +89,9 @@ long	alarm(ulong n)				{ return __alarm(n); }
 int	notify(void (*f)(void*, char*))		{ return __notify(f); }
 int	noted(int v)				{ return __noted(v); }
 void*	rendezvous(void *tag, void *val)	{ return __rendezvous(tag, val); }
+int	semacquire(long *a, int b)		{ return __semacquire(a, b); }
+int	tsemacquire(long *a, ulong ms)		{ return __tsemacquire(a, ms); }
+long	semrelease(long *a, long n)		{ return __semrelease(a, n); }
 
 /*
  * `exits` is the one call whose stub is not a forwarding call. Two things

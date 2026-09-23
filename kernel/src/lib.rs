@@ -82,6 +82,13 @@ pub enum Call {
     Notify { f: u32 },
     Noted { how: i32 },
     Rendezvous { tag: u64, val: u64 },
+    /// `semacquire(long *addr, int block)` — `addr` is an address in the
+    /// process's memory, which the kernel reaches through the machine.
+    Semacquire { addr: u32, block: bool },
+    /// `tsemacquire(long *addr, ulong ms)`.
+    Tsemacquire { addr: u32, ms: u64 },
+    /// `semrelease(long *addr, long count)`.
+    Semrelease { addr: u32, delta: i32 },
 
     // the namespace
     Bind { name: String, old: String, flag: i32 },
@@ -205,6 +212,11 @@ impl Kernel {
         // name, as `namec` left it in `up->genbuf`.
         if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
             p.text = path.rsplit('/').next().unwrap_or(path).to_string();
+            // *"putseg(up->seg[i])"* and *"up->seg[DSEG] = newseg(SG_DATA,
+            // …)"* (`sysproc.c:513`, `:539`): the new image is a new memory,
+            // and a process that shared the old one by `RFMEM` no longer
+            // shares anything with this one.
+            p.seg = std::rc::Rc::new(std::cell::RefCell::new(proc::Segment::default()));
         }
         self.procs.borrow_mut().execnotes(pid);
         // *"if(up->hang) up->procctl = Proc_stopme"* (`sysproc.c:587`).
@@ -446,6 +458,9 @@ mod tests {
         /// What `delay` was asked to wait for, so a test can see that a
         /// sleep reached the machine without one actually happening.
         pub(crate) delayed: Vec<u64>,
+        /// The memory `load` and `cmpswap` reach: one, 64K long, shared by
+        /// every process a test makes — as `RFMEM` children share it.
+        pub(crate) mem: std::collections::HashMap<u32, i32>,
     }
 
     pub(crate) struct Recorder(Rc<RefCell<Log>>);
@@ -468,6 +483,19 @@ mod tests {
         /// A test machine does not wait; it records that it was asked to.
         fn delay(&self, ms: u64) {
             self.0.borrow_mut().delayed.push(ms);
+        }
+        fn load(&self, _pid: Pid, addr: u32) -> Result<i32, String> {
+            if addr >= 0x10000 {
+                return Err("address out of range".into());
+            }
+            Ok(self.0.borrow().mem.get(&addr).copied().unwrap_or(0))
+        }
+        fn cmpswap(&self, pid: Pid, addr: u32, old: i32, new: i32) -> Result<bool, String> {
+            if self.load(pid, addr)? != old {
+                return Ok(false);
+            }
+            self.0.borrow_mut().mem.insert(addr, new);
+            Ok(true)
         }
         fn touser(&self, pid: Pid, image: &[u8], _a: &[String]) -> Result<(), String> {
             let mut l = self.0.borrow_mut();
@@ -566,7 +594,7 @@ mod tests {
              TSEMACQUIRE NSEC";
         for c in "RFORK EXEC EXITS AWAIT SLEEP ALARM NOTIFY NOTED RENDEZVOUS BIND MOUNT \
              UNMOUNT CHDIR OPEN CREATE CLOSE PREAD PWRITE SEEK DUP PIPE REMOVE STAT FSTAT \
-             WSTAT FWSTAT FVERSION ERRSTR"
+             WSTAT FWSTAT FVERSION ERRSTR SEMACQUIRE TSEMACQUIRE SEMRELEASE"
             .split_whitespace()
         {
             assert!(plan9.split_whitespace().any(|p| p == c), "{c} is not a Plan 9 syscall");
@@ -590,6 +618,9 @@ fn sysctab(c: &Call) -> &'static str {
         Call::Notify { .. } => "Notify",
         Call::Noted { .. } => "Noted",
         Call::Rendezvous { .. } => "Rendez",
+        Call::Semacquire { .. } => "Semacquire",
+        Call::Tsemacquire { .. } => "Tsemacquire",
+        Call::Semrelease { .. } => "Semrelease",
         Call::Bind { .. } => "Bind",
         Call::Mount { .. } => "Mount",
         Call::Unmount { .. } => "Unmount",
@@ -1438,7 +1469,200 @@ impl Kernel {
                 }));
                 Ok(Ret::Ok)
             }
+            // `syssemacquire` (`sysproc.c:1187`).
+            Call::Semacquire { addr, block } => {
+                self.validlong(up, addr)?;
+                if self.machine.load(up, addr)? < 0 {
+                    return Err(proc::Procs::EBADARG.into());
+                }
+                self.semacquire(up, addr, if block { None } else { Some(0) })
+            }
+            // `systsemacquire` (`sysproc.c:1206`).
+            Call::Tsemacquire { addr, ms } => {
+                self.validlong(up, addr)?;
+                if self.machine.load(up, addr)? < 0 {
+                    return Err(proc::Procs::EBADARG.into());
+                }
+                self.semacquire(up, addr, Some(ms))
+            }
+            // `syssemrelease` (`sysproc.c:1225`): *"delta == 0 is a no-op,
+            // not a release"*.
+            Call::Semrelease { addr, delta } => {
+                self.validlong(up, addr)?;
+                if delta < 0 || self.machine.load(up, addr)? < 0 {
+                    return Err(proc::Procs::EBADARG.into());
+                }
+                self.semrelease(up, addr, delta).map(|v| Ret::N(v as u32 as usize))
+            }
         }
+    }
+
+    // ---- semaphores (`sysproc.c:954`–`:1240`) ----------------------------
+
+    /// *"validaddr(arg[0], sizeof(long), 1); validalign(arg[0],
+    /// sizeof(long));"* — the checks each semaphore call opens with.
+    ///
+    /// `validaddr` (`fault.c:310`) asks `okaddr`, which says *"suicide:
+    /// invalid address"* on the process's console, and then posts *"sys: bad
+    /// address in syscall"*; `validalign` (`pc/trap.c:964`) posts *"sys: odd
+    /// address"*. Both notes are `NDebug`, so the process dies of them on
+    /// its way out of the call, and both calls fail with `Ebadarg`.
+    fn validlong(&mut self, up: Pid, addr: u32) -> Result<(), String> {
+        if self.machine.load(up, addr).is_err() {
+            self.pprint(up, &format!("suicide: invalid address {addr:#x}/4 in sys call\n"));
+            self.procs.borrow_mut().postnote(up, "sys: bad address in syscall", proc::NoteFlag::NDebug);
+            return Err(proc::Procs::EBADARG.into());
+        }
+        if addr & 3 != 0 {
+            self.procs.borrow_mut().postnote(up, "sys: odd address", proc::NoteFlag::NDebug);
+            return Err(proc::Procs::EBADARG.into());
+        }
+        Ok(())
+    }
+
+    /// `canacquire` (`sysproc.c:1085`): *"while((value=*addr) > 0) if(cmpswap(addr,
+    /// value, value-1)) return 1;"*.
+    fn canacquire(&self, up: Pid, addr: u32) -> Result<bool, String> {
+        loop {
+            let value = self.machine.load(up, addr)?;
+            if value <= 0 {
+                return Ok(false);
+            }
+            if self.machine.cmpswap(up, addr, value, value - 1)? {
+                return Ok(true);
+            }
+        }
+    }
+
+    /// `semwakeup` (`sysproc.c:1057`): wake up `n` waiters on `addr`, oldest
+    /// first — *"p->waiting = 0; … wakeup(p);"*.
+    fn semwakeup(&mut self, seg: &std::rc::Rc<std::cell::RefCell<proc::Segment>>, addr: u32, mut n: i64) {
+        let mut woken = Vec::new();
+        for p in seg.borrow_mut().sema.iter_mut() {
+            if n <= 0 {
+                break;
+            }
+            if p.addr == addr && p.waiting {
+                p.waiting = false;
+                woken.push(p.p);
+                n -= 1;
+            }
+        }
+        let mut procs = self.procs.borrow_mut();
+        for p in woken {
+            procs.wakeup(proc::Rid::Sema(p));
+        }
+    }
+
+    /// `semrelease` (`sysproc.c:1075`): add `delta` by compare-and-swap, wake
+    /// that many, and answer the new value.
+    fn semrelease(&mut self, up: Pid, addr: u32, delta: i32) -> Result<i32, String> {
+        let value = loop {
+            let value = self.machine.load(up, addr)?;
+            if self.machine.cmpswap(up, addr, value, value.wrapping_add(delta))? {
+                break value;
+            }
+        };
+        let seg = self.procs.borrow().get(up).ok_or("no such process")?.seg.clone();
+        self.semwakeup(&seg, addr, delta as i64);
+        Ok(value.wrapping_add(delta))
+    }
+
+    /// `semacquire` (`sysproc.c:1109`) and `tsemacquire` (`:1143`), which are
+    /// the same function but for the clock: `ms` is `None` to wait for as
+    /// long as it takes, and otherwise how long to wait, `Some(0)` being
+    /// *"if(!block) return 0"* and *"if(ms == 0) return 0"* both.
+    fn semacquire(&mut self, up: Pid, addr: u32, ms: Option<u64>) -> Result<Ret, String> {
+        if self.canacquire(up, addr)? {
+            return Ok(Ret::N(1));
+        }
+        if ms == Some(0) {
+            return Ok(Ret::N(0));
+        }
+        // `semqueue` (`sysproc.c:1033`): onto the segment's list, at the
+        // tail. `phore` is zeroed first, so it is not yet waiting.
+        let seg = self.procs.borrow().get(up).ok_or("no such process")?.seg.clone();
+        seg.borrow_mut().sema.push(proc::Sema { addr, waiting: false, p: up });
+        self.semwait(up, addr, ms)
+    }
+
+    /// The `for(;;)` of `semacquire` and `tsemacquire`, from its top:
+    ///
+    /// ```c
+    /// phore.waiting = 1;
+    /// if(canacquire(addr)){ acquired = 1; break; }
+    /// if(waserror()) break;
+    /// t = m->ticks;                                   /* tsemacquire */
+    /// tsleep(&phore, semawoke, &phore, ms);
+    /// elms = TK2MS(m->ticks - t);
+    /// poperror();
+    /// if(elms >= ms){ timedout = 1; break; }
+    /// ms -= elms;
+    /// ```
+    ///
+    /// What follows the sleep runs when the process is entered again, as
+    /// every call's rest does here ([`Kernel::labels`]).
+    fn semwait(&mut self, up: Pid, addr: u32, ms: Option<u64>) -> Result<Ret, String> {
+        self.setwaiting(up, true);
+        match self.canacquire(up, addr) {
+            Ok(true) => return self.semdone(up, addr, Ok(Ret::N(1))),
+            Ok(false) => {}
+            Err(e) => return self.semdone(up, addr, Err(e)),
+        }
+        let r = proc::Rid::Sema(up);
+        let t = self.procs.borrow().m.ticks;
+        // `semawoke`: *"return !((Sema*)p)->waiting"* — false, having just
+        // been set.
+        let slept = match ms {
+            None => self.procs.borrow_mut().sleep(up, r, false),
+            Some(ms) => {
+                let deadline = self.machine.todget().nsec + ms * 1_000_000;
+                self.procs.borrow_mut().tsleep(up, r, false, deadline)
+            }
+        };
+        if !slept {
+            // A note was pending, so `sleep` did not commit and raised
+            // `Eintr`: *"if(waserror()) break;"*.
+            self.procs.borrow_mut().interrupted(up);
+            return self.semdone(up, addr, Err(proc::EINTR.into()));
+        }
+        self.setlabel(up, Box::new(move |k, up| {
+            if k.procs.borrow_mut().interrupted(up) {
+                return k.semdone(up, addr, Err(proc::EINTR.into()));
+            }
+            let Some(ms) = ms else { return k.semwait(up, addr, None) };
+            let elms = proc::tk2ms(k.procs.borrow().m.ticks.saturating_sub(t));
+            if elms >= ms {
+                return k.semdone(up, addr, Ok(Ret::N(0)));
+            }
+            k.semwait(up, addr, Some(ms - elms))
+        }));
+        Ok(Ret::Ok)
+    }
+
+    /// `phore.waiting`, for the process's own `Sema`.
+    fn setwaiting(&mut self, up: Pid, waiting: bool) {
+        let Some(seg) = self.procs.borrow().get(up).map(|p| p.seg.clone()) else { return };
+        let mut s = seg.borrow_mut();
+        if let Some(p) = s.sema.iter_mut().find(|p| p.p == up) {
+            p.waiting = waiting;
+        }
+    }
+
+    /// The end of both: *"semdequeue(s, &phore); if(!phore.waiting)
+    /// semwakeup(s, addr, 1);"* — a waiter that was woken and then did not
+    /// take the semaphore (it was interrupted, timed out, or another took
+    /// it first) passes the wakeup on — and then the answer.
+    fn semdone(&mut self, up: Pid, addr: u32, r: Result<Ret, String>) -> Result<Ret, String> {
+        let Some(seg) = self.procs.borrow().get(up).map(|p| p.seg.clone()) else { return r };
+        let phore = {
+            let mut s = seg.borrow_mut();
+            s.sema.iter().position(|p| p.p == up).map(|i| s.sema.remove(i))
+        };
+        if phore.is_some_and(|p| !p.waiting) {
+            self.semwakeup(&seg, addr, 1);
+        }
+        r
     }
 
     /// `namec` for the calling process: its namespace, its `slash`, its `dot`.
@@ -1819,6 +2043,105 @@ mod syscalls {
         );
         assert_eq!(k.syscall(1, Call::Rendezvous { tag: 7, val: 200 }), Ok(Ret::N(100)));
         assert_eq!(k.resume(c), Ok(Ret::N(200)));
+    }
+
+    /// `semrelease` adds and answers the new value; `semacquire` takes one
+    /// if there is one, and without `block` answers 0 at once if not
+    /// (`sysproc.c:1109`, `:1075`).
+    #[test]
+    fn a_semaphore_counts() {
+        let (mut k, log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        assert_eq!(k.syscall(1, Call::Semrelease { addr: 64, delta: 2 }), Ok(Ret::N(2)));
+        assert_eq!(k.syscall(1, Call::Semacquire { addr: 64, block: true }), Ok(Ret::N(1)));
+        assert_eq!(k.syscall(1, Call::Semacquire { addr: 64, block: false }), Ok(Ret::N(1)));
+        assert_eq!(k.syscall(1, Call::Semacquire { addr: 64, block: false }), Ok(Ret::N(0)));
+        assert_eq!(k.syscall(1, Call::Tsemacquire { addr: 64, ms: 0 }), Ok(Ret::N(0)));
+        assert_eq!(log.borrow().mem.get(&64), Some(&0));
+        assert_eq!(k.syscall(1, Call::Semrelease { addr: 64, delta: 0 }), Ok(Ret::N(0)), "a no-op, not a release");
+    }
+
+    /// A process with nothing to take sleeps on its own `Sema`, and a
+    /// release by a process sharing the memory wakes it, oldest first, one
+    /// per unit released. A process with a memory of its own is not woken:
+    /// the list is the segment's (`sysproc.c:1057`).
+    #[test]
+    fn semrelease_wakes_the_oldest_waiter_in_the_segment() {
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        let Ret::Pid(a) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::MEM }).unwrap() else { panic!() };
+        let Ret::Pid(b) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::MEM }).unwrap() else { panic!() };
+        let Ret::Pid(other) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        assert_eq!(k.syscall(other, Call::Semacquire { addr: 8, block: true }), Ok(Ret::Sched));
+        assert_eq!(k.syscall(a, Call::Semacquire { addr: 8, block: true }), Ok(Ret::Sched));
+        assert_eq!(k.syscall(b, Call::Semacquire { addr: 8, block: true }), Ok(Ret::Sched));
+        assert_eq!(k.procs.borrow().state(a), proc::State::Wakeme);
+        assert_eq!(k.syscall(1, Call::Semrelease { addr: 8, delta: 1 }), Ok(Ret::N(1)));
+        assert_eq!(k.procs.borrow().state(a), proc::State::Ready, "the oldest");
+        assert_eq!(k.procs.borrow().state(b), proc::State::Wakeme);
+        assert_eq!(k.procs.borrow().state(other), proc::State::Wakeme, "another segment");
+        assert_eq!(k.resume(a), Ok(Ret::N(1)));
+        assert!(k.procs.borrow().get(1).unwrap().seg.borrow().sema.iter().all(|p| p.p != a), "dequeued");
+    }
+
+    /// A waiter woken that then finds nothing — another took it first —
+    /// sleeps again, and one that leaves without taking it passes the
+    /// wakeup on (*"if(!phore.waiting) semwakeup(s, addr, 1)"*).
+    #[test]
+    fn a_woken_waiter_that_does_not_take_it_passes_the_wakeup_on() {
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        let Ret::Pid(a) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::MEM }).unwrap() else { panic!() };
+        let Ret::Pid(b) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::MEM }).unwrap() else { panic!() };
+        k.syscall(a, Call::Semacquire { addr: 8, block: true }).unwrap();
+        k.syscall(b, Call::Semacquire { addr: 8, block: true }).unwrap();
+        k.syscall(1, Call::Semrelease { addr: 8, delta: 1 }).unwrap();
+        // Before `a` runs, a note: it leaves with `Eintr`, having been woken,
+        // so `b` is woken in its place.
+        k.procs.borrow_mut().postnote(a, "interrupt", proc::NoteFlag::NUser);
+        assert_eq!(k.resume(a), Err(proc::EINTR.into()));
+        assert_eq!(k.procs.borrow().state(b), proc::State::Ready);
+        assert_eq!(k.resume(b), Ok(Ret::N(1)));
+    }
+
+    /// `tsemacquire` answers 0 when its time is up (`sysproc.c:1143`).
+    #[test]
+    fn tsemacquire_times_out() {
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        let now = k.machine.todget().nsec;
+        k.procs.borrow_mut().timersinit(now);
+        assert_eq!(k.syscall(1, Call::Tsemacquire { addr: 8, ms: 30 }), Ok(Ret::Sched));
+        for t in 1..=4 {
+            k.timerintr(now + t * 10_000_000);
+        }
+        assert_eq!(k.procs.borrow().state(1), proc::State::Ready, "the timer woke it");
+        assert_eq!(k.resume(1), Ok(Ret::N(0)));
+        assert!(k.procs.borrow().get(1).unwrap().seg.borrow().sema.is_empty());
+    }
+
+    /// An address outside the process's memory is `validaddr`'s: *"sys: bad
+    /// address in syscall"* and `Ebadarg`; one not on a `long` boundary is
+    /// `validalign`'s, *"sys: odd address"*. A negative semaphore is
+    /// `Ebadarg` alone, as is a negative release.
+    #[test]
+    fn semaphore_calls_check_their_address() {
+        let bad = Err(proc::Procs::EBADARG.to_string());
+        let notes = |k: &Kernel| -> Vec<String> {
+            k.procs.borrow().get(1).unwrap().note.iter().map(|n| n.msg.clone()).collect()
+        };
+        for (call, note) in [
+            (Call::Semacquire { addr: 0x20000, block: true }, Some("sys: bad address in syscall")),
+            (Call::Semrelease { addr: 6, delta: 1 }, Some("sys: odd address")),
+            (Call::Semacquire { addr: 16, block: false }, None),
+            (Call::Semrelease { addr: 20, delta: -1 }, None),
+        ] {
+            let (mut k, log) = tests::watched();
+            k.exec(1, "/boot/init", &[]).unwrap();
+            log.borrow_mut().mem.insert(16, -1);
+            assert_eq!(k.syscall(1, call.clone()), bad, "{call:?}");
+            assert_eq!(notes(&k), note.into_iter().map(String::from).collect::<Vec<_>>(), "{call:?}");
+        }
     }
 
     /// A note pulls a process out of a rendezvous with `~0` (`proc.c:1039`).

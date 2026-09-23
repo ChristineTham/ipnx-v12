@@ -111,24 +111,31 @@ slots are dropped entirely.
 never leaves the supervisor — **29 of 40 live calls are pure kernel calls**, which is the
 concrete answer to "which survive as kernel calls and which become 9P messages".
 
-## The subset — 28 calls
+## The subset — 31 calls
 
-Of the 40 live calls the kernel implements 28.
+Of the 40 live calls the kernel implements 31.
 
-| processes | `rfork` `exec` `exits` `await` `sleep` `alarm` `notify` `noted` `rendezvous` |
+| processes | `rfork` `exec` `exits` `await` `sleep` `alarm` `notify` `noted` `rendezvous` `semacquire` `tsemacquire` `semrelease` |
 |---|---|
 | **namespace** | `bind` `mount` `unmount` `chdir` |
 | **channels** | `open` `create` `close` `pread` `pwrite` `seek` `dup` `pipe` `remove` `stat` `fstat` `wstat` `fwstat` `fversion` `errstr` |
 
-The twelve it omits, and why:
+The nine it omits, and why:
 
 | omitted | why |
 |---|---|
 | `segbrk` `brk_` `segattach` `segdetach` `segfree` `segflush` | memory is the machine's, not the kernel's. A guest grows its own linear memory; on another machine the arrangement differs and the kernel does not change |
 | `fd2path` | a convenience over state the process already holds |
 | `fauth` | authentication is a file server's, established at attach |
-| `semacquire` `semrelease` `tsemacquire` | `rendezvous` is the primitive; semaphores are a library over it |
 | `nsec` | time is a file |
 
 Each omission is a call the kernel does not have, not a call answered
-elsewhere in the kernel. Adding one back is a deviation and needs approval.
+elsewhere in the kernel — **and each is itself a deviation**, because a
+kernel smaller than Plan 9's needs approval as a larger one does. None of the
+nine has it.
+
+The semaphores were on this list until 2026-09-23 as *"a library over
+`rendezvous`"*. That was wrong: they are kernel calls in Plan 9
+(`sysproc.c:1187`, `:1206`, `:1225`), keeping their waiters on the segment
+(`portdat.h:466`) and swapping the word in the process's memory with the
+machine's `cmpswap`. They are built, on Christine's instruction.

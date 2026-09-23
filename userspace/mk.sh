@@ -116,8 +116,6 @@ for c in "$here"/cmd/*.c; do
 	case $name in
 	# `boot` is the one file `#/boot` carries, as Plan 9's kernel carries
 	# `/boot/boot` and nothing else. Everything else is the file server's.
-	# `boot` is the one file `#/boot` carries, as Plan 9's kernel carries
-	# `/boot/boot` and nothing else.
 	boot)	cmd boot "$build/boot/boot";;
 	# and `init` sits beside the bin directory, not in it, because boot
 	# execs it by a name that must resolve before `/bin` exists
@@ -146,9 +144,6 @@ if [ -f "$here/rc/rc.h" ]; then
 		$CC $CFLAGS -I"$here/rc" -I"$build/rc" -c "$src" -o "$obj"
 		objs+=("$obj")
 	done
-	# rc.h's tentative definitions are common symbols everywhere but here;
-	# common.py explains the whole of it and puts the objects in the only
-	# order that keeps an initialised definition.
 	cp -f "$here/rc/rcmain" "$root/rc/lib/rcmain"
 	# rc.h's tentative definitions are common symbols everywhere but here;
 	# weaken.py explains the whole of it.
