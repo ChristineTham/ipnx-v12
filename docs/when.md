@@ -227,16 +227,9 @@ only a test ever set, so the running system read zeros. Page faults and the
 TLB have no counterpart here and stay zero. `cputime` and `/proc/n/status`
 report ticks converted with `TK2MS`, as Plan 9's do.
 
-**`pread` with an explicit offset is not reliable**, and `date` is the only
-thing that does it: `nsec(2)` is `pread(open("/dev/bintime"), b, 8, 0)`,
-where everything else reads with the channel's own offset. Three `date -n`
-in one session answer `-1`, `0` and a real clock in any order — an
-uninitialised 8-byte stack buffer, so `pread` is returning without the bytes
-landing. **The kernel is not at fault**: instrumented, `#c` is reached with
-`n=8 off=0` and serves the right bytes every time, and `cat /dev/bintime`
-(`n=8192`, the same import) is exact every time. Adding a write to stderr
-between the calls makes it go away, which is a timing signature. Root cause
-unknown; `date <seconds>` is exact, `date` is not.
+`date` reads the clock every time. It printed 0 or -1 about half the time
+until 2026-09-23 because clang promotes `uchar` to `int` and kencc to
+`unsigned int` (RESEARCH §15.6), not because of `pread`.
 
 ## The userspace — `userspace/`
 
@@ -244,7 +237,7 @@ unknown; `date <seconds>` is exact, `date` is not.
 |---|---|
 | `include/u.h` | the **wasm32 architecture header**. Plan 9 keeps one per architecture; this is 386's, with clang's `va_list`, because wasm passes arguments in the engine's value stack and only the compiler knows where a variadic one is |
 | `libc/wasm/` | the machine-dependent half. Plan 9 generates it from `9syscall/sys.h`; this machine's trap instruction is an import (`sys.c`), its `brk_` is `memory.grow` (`sbrk.c`), its `main9.s` is called with the argument block's address (`main9.c`), and `procrfork.c` is how a process makes a process |
-| `libc/{port,fmt,9sys}/` | vendored verbatim from `plan9/sys/src/libc/` |
+| `libc/{port,fmt,9sys}/` | vendored verbatim from `plan9/sys/src/libc/`, but for one cast in `nsec.c` — kencc's `uchar` promotes to unsigned int, clang's to int (RESEARCH §15.6) |
 | `libbio/`, `libauth/` | vendored: buffered i/o, and `newns` — which is all of libauth that is left once there is no factotum to talk to |
 | `rc/` | Plan 9's rc, with `ipnx.c` as its platform file — it ships three of those and the mkfile picks one — and `haventfork.c`, Plan 9's own file for a system that cannot fork. `termrc` and `rcmain` beside it |
 | `cmd/` | `boot` and `init`; `bind`, `cat`, `echo`, `ls`, `mkdir`, `rm`, `unmount`, a cut-down `tr` and `args`; and **`cp`, `date`, `mount`, `mv`, `ps`, `sleep`, `wc`** — vendored verbatim from `plan9/sys/src/cmd/` except `mount`, whose `amount0` is `fauth` plus `auth_proxy` there and `mount(fd, -1, …)` here, for the reason `newns.c` already carries. **Seventeen, against the demo's "twenty-four real Plan 9 commands"**, and that list of twenty-four is written down nowhere. `pwd` is not among them: `getwd` is `fd2path`, one of the twelve calls this kernel omits |

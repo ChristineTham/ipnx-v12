@@ -471,6 +471,22 @@ mod userspace {
         assert!(v[3] > 0, "syscalls: {line}");
     }
 
+    /// `date -n` is `nsec()/1e9`, and `nsec` assembles `/dev/bintime`'s low
+    /// word from `uchar`s. kencc promotes those to unsigned int
+    /// (`cc/sub.c:688`), clang to int, so under clang the word sign-extended
+    /// whenever its bit 31 was set and `date` printed 0 or -1. That bit
+    /// flips every 2.1 seconds; the readings here span more than one flip.
+    #[test]
+    fn date_reads_the_clock_every_time() {
+        let out = typing("date -n; sleep 1; date -n; sleep 1; date -n; sleep 1; date -n\n");
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+        let v: Vec<i64> = out.split(|c: char| !c.is_ascii_digit() && c != '-').filter_map(|w| w.parse().ok()).collect();
+        assert_eq!(v.len(), 4, "{out:?}");
+        for t in v {
+            assert!((now - t).abs() < 120, "{t} against {now}: {out:?}");
+        }
+    }
+
     /// `#ec` is bound under `#e` (`initcode.c:28`) and is EMPTY, because what
     /// fills it on a Plan 9 machine is every line of `plan9.ini`
     /// (`pc/main.c:257`) and this host has no counterpart to one. The three

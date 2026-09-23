@@ -3964,3 +3964,42 @@ clock running while a reader waits for a key.
 Verified on a real terminal (a pseudo-terminal driven by a script): `sleep
 30`, `^C` three seconds later, `echo after` — the sleep ended at once and
 the host went on.
+
+### §15.6 — `date` printed 0 and -1: kencc's promotion rule (2026-09-23)
+
+`docs/when.md` recorded *"`pread` with an explicit offset is not
+reliable"*, diagnosed as an uninitialised buffer with *"a timing
+signature"*. **That diagnosis was wrong, and the kernel and `pread` were
+never at fault.** The bytes arrived every time; the arithmetic on them
+differed.
+
+`nsec.c:4` (vendored verbatim) assembles each 32-bit word of
+`/dev/bintime` from `uchar`s:
+
+> `#define	U32(x)	(((((((x)[0]<<8)|(x)[1])<<8)|(x)[2])<<8)|(x)[3])`
+> `return (u64int)U32(b)<<32 | U32(b+4);`
+
+**kencc promotes `uchar` to UNSIGNED int.** `cc/sub.c:688`–`:691`, in
+`arith`:
+
+> `/* convert up to at least int */`
+> `while(k < TINT)`
+> `	k += 2;`
+
+and `cc.h:307` orders the types `TCHAR TUCHAR TSHORT TUSHORT TINT TUINT`,
+so `TUCHAR` steps to `TUSHORT` and then to `TUINT`. clang follows ANSI C
+and promotes `uchar` to `int`. So here `U32(b+4)` is signed, and the `|`
+with a `u64int` sign-extends it: whenever bit 31 of the low word is set,
+the high word becomes all ones, `nsec()` is a small negative number, and
+`time()` is 0 or -1. That bit flips every 2³¹ ns — 2.1 seconds — which is
+the "timing signature": a write to stderr between calls moved the reading
+into the other half.
+
+**Fixed at the site:** `(u32int)U32(b+4)`, commented with the rule. The
+other vendored places that widen bytes to 64 bits are safe: `fcall.h`'s
+`GBIT64` casts its low half to `u32int`, and `byteserial.c`'s `legetvl`
+and `begetvl` go through functions returning `uint`. **Any further vendored
+code carries the same exposure** — an expression of `uchar`s that is
+widened past 32 bits compiles differently here — and is checked when it
+arrives. Test: `date_reads_the_clock_every_time`, which fails on the old
+file.
