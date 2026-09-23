@@ -206,16 +206,7 @@ impl Drop for Clock {
 /// yield the fiber, so `gotolabel` returns and the scheduler finds the
 /// process still `Running` and puts it back on the queue.
 ///
-/// **Not while a `procrfork` child is on the parent's frames.** The child
-/// runs there only as far as its `exec` and cannot be entered anywhere else
-/// until then, so yielding would leave the parent's fiber with the child
-/// half-run on it and the child on the run queue with nothing to enter. The
-/// tick is still taken; the `sched()` waits, `delaysched` stays set, and the
-/// first interrupt after the child is gone acts on it — as Plan 9's `sched`
-/// returns with `delaysched` still counting while the switch cannot happen
-/// (`proc.c:145`).
-///
-/// Either way the next interrupt is one epoch on.
+/// The next interrupt is one epoch on.
 ///
 /// **Then `notify`** — *"if(user){ if(up->procctl || up->nnote)
 /// notify(ureg);"* (`pc/trap.c:443`). A note that ends the process ends it
@@ -226,18 +217,15 @@ fn clockintr(c: StoreContextMut<'_, Guest>) -> wasmtime::Result<UpdateDeadline> 
     // Sound for the same reason [`call`] is: this runs inside a poll, inside
     // `gotolabel`, where the kernel is entered and nothing else holds it.
     let sched = unsafe { (*kernel()).timerintr(&|| userpc(&c)) };
-    let borrowed = c.data().pid != c.data().up;
-    if !borrowed {
-        let up = c.data().up;
-        match unsafe { (*kernel()).notify(up, NoteAt::Clock) } {
-            Notify::Pexit => return Err(wasmtime::Error::new(Exited)),
-            // `procctl` stopped it: leave, and it goes on from here when
-            // `start` readies it.
-            Notify::Sched => return Ok(UpdateDeadline::Yield(1)),
-            _ => {}
-        }
+    let up = c.data().pid;
+    match unsafe { (*kernel()).notify(up, NoteAt::Clock) } {
+        Notify::Pexit => return Err(wasmtime::Error::new(Exited)),
+        // `procctl` stopped it: leave, and it goes on from here when
+        // `start` readies it.
+        Notify::Sched => return Ok(UpdateDeadline::Yield(1)),
+        _ => {}
     }
-    Ok(if sched && !borrowed { UpdateDeadline::Yield(1) } else { UpdateDeadline::Continue(1) })
+    Ok(if sched { UpdateDeadline::Yield(1) } else { UpdateDeadline::Continue(1) })
 }
 
 /// A process, as this machine holds one.
@@ -248,8 +236,11 @@ struct Fiber {
     /// What [`Machine::touser`] was given, until the fiber is built. It is
     /// built on first entry rather than at `exec` because instantiating is
     /// the machine's work and `sysexec` does not run the process.
-    image: Option<(Vec<u8>, Vec<String>)>,
+    image: Option<(Module, Vec<String>)>,
 }
+
+/// `Ebadexec` (`port/error.h:34`).
+const EBADEXEC: &str = "exec header invalid";
 
 /// **Leaving the processor**: `gotolabel(&m->sched)` (`pc/l.s:992`), at the
 /// end of `sched()`. Pending once, ready after — so the fiber suspends with
@@ -303,14 +294,10 @@ fn noop_waker() -> Waker {
 /// `call_async` — a promise the compiler could not check, whose failure would
 /// have been memory corruption with no message.
 pub struct Guest {
-    /// The process making the calls. It is not constant for the life of the
-    /// store: during a `procrfork` the child runs on this instance, and every
-    /// call it makes is the child's.
+    /// The process making the calls — the one whose fiber this is.
     pid: Pid,
-    /// The process whose fiber this is — the one `gotolabel` enters, and
-    /// the kernel's `up` while it runs. It differs from `pid` only while a
-    /// `procrfork` child is on these frames.
-    up: Pid,
+    /// The image it is running, which a `procrfork` child is made from.
+    module: Option<Module>,
     /// The words the import being made was called with — what the PC's
     /// `syscall()` finds above the user stack pointer (`Sargs`). Each import
     /// sets it on the way in.
@@ -377,6 +364,26 @@ thread_local! {
     /// memory can neither grow nor move and the pointer stays good. Outside
     /// a call it is empty and both answer an error.
     static UMEM: Cell<Option<(Pid, *mut u8, usize)>> = const { Cell::new(None) };
+}
+
+/// **A process `procrfork` made**, waiting for the machine to keep its
+/// fiber: its image, a copy of its parent's memory, and where it starts —
+/// the parent's stack pointer, and the function it was given.
+struct Fork {
+    pid: Pid,
+    module: Module,
+    mem: Vec<u8>,
+    sp: i32,
+    f: i32,
+    arg: i32,
+}
+
+thread_local! {
+    /// The children made during the poll now in progress. The import that
+    /// makes one cannot reach the machine's table — it holds only its own
+    /// store — so [`Machine::gotolabel`] takes them in when the poll ends,
+    /// before the scheduler can choose one to run.
+    static FORKED: RefCell<Vec<Fork>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Puts [`UMEM`] back as it was.
@@ -610,13 +617,17 @@ impl Machine for Wasm {
     }
 
     /// `touser` — the image is this process's now. It does not run.
+    ///
+    /// **Compiled here, so an image that is not a module is refused here**,
+    /// as `sysexec` refuses a bad header before it commits: *"exec header
+    /// invalid"*, `Ebadexec` (`sysproc.c:343`), and the process goes on in
+    /// its old image. Compiled any later, the failure came out of the
+    /// scheduler and ended the system.
     fn touser(&self, pid: Pid, image: &[u8], args: &[String]) -> Result<(), String> {
+        let module = Module::new(&self.engine, image).map_err(|_| EBADEXEC.to_string())?;
         // Replacing an entry IS `exec`: the old fiber goes, with whatever
         // was on it, because the process is the new image now.
-        self.procs.borrow_mut().insert(
-            pid,
-            Fiber { run: None, image: Some((image.to_vec(), args.to_vec())) },
-        );
+        self.procs.borrow_mut().insert(pid, Fiber { run: None, image: Some((module, args.to_vec())) });
         Ok(())
     }
 
@@ -645,6 +656,12 @@ impl Machine for Wasm {
             let _entered = enter(sys);
             run.as_mut().poll(&mut Context::from_waker(&waker))
         };
+        // The processes `procrfork` made during the poll: fibers of their own
+        // now, before the scheduler can choose one.
+        for k in FORKED.with(|q| std::mem::take(&mut *q.borrow_mut())) {
+            let run = self.child(k.pid, k.module.clone(), k.mem, k.sp, k.f, k.arg)?;
+            self.procs.borrow_mut().insert(k.pid, Fiber { run: Some(run), image: None });
+        }
         // Whatever `exec` left in the table wins; otherwise the fiber goes
         // back, suspended where it stopped.
         let replaced = self.procs.borrow().contains_key(&pid);
@@ -686,11 +703,10 @@ impl Wasm {
     fn start(
         &self,
         pid: Pid,
-        image: Vec<u8>,
+        module: Module,
         args: Vec<String>,
     ) -> Result<Pin<Box<dyn Future<Output = Result<(), wasmtime::Error>> + Send>>, String> {
-        let module = Module::new(&self.engine, &image).map_err(|e| e.to_string())?;
-        let mut store = Store::new(&self.engine, Guest { pid, up: pid, s: [0; MAXSYSARG] });
+        let mut store = Store::new(&self.engine, Guest { pid, module: Some(module.clone()), s: [0; MAXSYSARG] });
         // Interrupts on: the next epoch calls `clockintr`.
         store.set_epoch_deadline(1);
         store.epoch_deadline_callback(clockintr);
@@ -703,9 +719,51 @@ impl Wasm {
             start.call_async(&mut store, (argc, argv, heap)).await
         }))
     }
+
+    /// Build a `procrfork` child's fiber: a new instance of the parent's
+    /// image, the parent's memory copied into it, its stack pointer where
+    /// the parent's was — so whatever the parent's frames hold, the child
+    /// has too — and a call to `__childstart(f, arg)`.
+    ///
+    /// A module's data and stack are its memory, and the one other thing
+    /// the compiler keeps outside it is the stack pointer, which is set
+    /// here. Function pointers are indices into the module's table, which
+    /// the same image fills the same way.
+    fn child(
+        &self,
+        pid: Pid,
+        module: Module,
+        mem: Vec<u8>,
+        sp: i32,
+        f: i32,
+        arg: i32,
+    ) -> Result<Pin<Box<dyn Future<Output = Result<(), wasmtime::Error>> + Send>>, String> {
+        let mut store = Store::new(&self.engine, Guest { pid, module: Some(module.clone()), s: [0; MAXSYSARG] });
+        store.set_epoch_deadline(1);
+        store.epoch_deadline_callback(clockintr);
+        let linker = self.linker.clone();
+        Ok(Box::pin(async move {
+            let instance = linker.instantiate_async(&mut store, &module).await?;
+            let m = instance
+                .get_memory(&mut store, "memory")
+                .ok_or_else(|| wasmtime::Error::msg("the module exports no memory"))?;
+            const PAGE: usize = 64 * 1024;
+            let have = m.data_size(&store);
+            if mem.len() > have {
+                m.grow(&mut store, ((mem.len() - have) / PAGE) as u64)?;
+            }
+            m.write(&mut store, 0, &mem)?;
+            instance
+                .get_global(&mut store, "__stack_pointer")
+                .ok_or_else(|| wasmtime::Error::msg("the module exports no stack pointer"))?
+                .set(&mut store, Val::I32(sp))?;
+            let start: TypedFunc<(i32, i32), ()> = instance.get_typed_func(&mut store, "__childstart")?;
+            start.call_async(&mut store, (f, arg)).await
+        }))
+    }
 }
 
-/// Place the argument block/// Place the argument block, the way `sysexec` places one on the new stack
+/// Place the argument block, the way `sysexec` places one on the new stack
 /// (`sysproc.c:302`): the strings, then the `char*` array that points at them,
 /// then a nil.
 ///
@@ -1028,49 +1086,43 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     // It answers the child's pid — where libthread answers a thread id,
     // because there are threads there and none here.
     //
-    // The child runs on the PARENT'S INSTANCE, which is `RFMEM`: one memory,
-    // two processes, and only one of them running at a time. That is vfork's
-    // discipline, and the kernel tables the child needs of its own — fds,
-    // namespace, environment — are the kernel's, asked for by flag.
+    // **The child is a process of its own from the start**: a new instance of
+    // the parent's image with a COPY of the parent's memory, starting at
+    // `f(arg)` from the parent's stack pointer, so what the parent's frames
+    // hold — `arg` may point into them — the child's copy holds too. It runs
+    // on a fiber of its own, so it may sleep before it `exec`s — in a pipe,
+    // in a file server's reply — as any process may.
+    //
+    // A copy is `rfork` without `RFMEM`, which is what the calls here ask
+    // for. `RFMEM` itself cannot be given: one wasm memory cannot be in two
+    // instances, and one instance cannot run on two stacks. Asked for, it
+    // is refused rather than quietly not done.
     l.func_wrap_async(
         "sys",
         "procrfork",
         |mut c: Caller<'_, Guest>, (f, arg, _stack, flags): (i32, i32, i32, i32)| {
             Box::new(async move {
         c.data_mut().s = [f.word(), arg.word(), _stack.word(), flags.word(), 0];
-        let r = async {
-                let child = match kcall(&mut c, Call::Rfork { flags: flags | rf::PROC | rf::MEM }).await {
-                    Ok(Ret::Pid(p)) => p,
-                    _ => return -1i32,
-                };
-                let Some(start) = c.get_export("__childstart").and_then(|e| e.into_func()) else {
-                    return -1i32;
-                };
-                let Ok(start) = start.typed::<(i32, i32), ()>(&c) else { return -1i32 };
-                let parent = c.data().pid;
-                c.data_mut().pid = child;
-                // **The child runs here only as far as its `exec`**, and
-                // that is the whole of `RFMEM`: one memory, and only one of
-                // the two running at a time. The `exec` gives the child an
-                // image and a fiber of its own, then unwinds these frames as
-                // `Exited` — which is not a failure and is caught here, not
-                // by the scheduler, because the frames belong to the parent.
-                //
-                // A child that exits instead of execing unwinds the same
-                // way, having already told the kernel.
-                let ended = start.call_async(&mut c, (f, arg)).await;
-                // **A child that simply returns has ended.** Our own
-                // `__childstart` calls `exits("child returned")` when the
-                // function comes back (`libc/wasm/procrfork.c`), which is
-                // what `libthread`'s `threadexits` does; a module that
-                // exports its own must not leave a process the scheduler
-                // will try to enter and find nothing of. `Err` here is
-                // `exits` or `exec` unwinding, and both already told the
-                // kernel.
-                if ended.is_ok() {
-                    let _ = kcall(&mut c, Call::Exits { status: String::new() }).await;
+        let r: Result<i32, wasmtime::Error> = async {
+                if flags & rf::MEM != 0 {
+                    let _ = call(
+                        &mut c,
+                        Call::Errstr { buf: "procrfork: this machine cannot share one memory between two processes".into() },
+                    );
+                    return Ok(-1i32);
                 }
-                c.data_mut().pid = parent;
+                let Some(module) = c.data().module.clone() else { return Ok(-1i32) };
+                let child = match kcall(&mut c, Call::Rfork { flags: flags | rf::PROC }).await {
+                    Ok(Ret::Pid(p)) => p,
+                    _ => return Ok(-1i32),
+                };
+                let mem = memory(&mut c)?.data(&c).to_vec();
+                let sp = c
+                    .get_export("__stack_pointer")
+                    .and_then(|e| e.into_global())
+                    .and_then(|g| g.get(&mut c).i32())
+                    .ok_or_else(|| wasmtime::Error::msg("the module exports no stack pointer"))?;
+                FORKED.with(|q| q.borrow_mut().push(Fork { pid: child, module, mem, sp, f, arg }));
                 // **`ready(p); sched();`** — `sysrfork`'s last two lines
                 // (`sysproc.c`). The kernel did the `ready`; this is the
                 // `sched`, and it is not an optimisation. Without it the
@@ -1079,9 +1131,10 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
                 // sits `Ready` until the shell that made it has exited, and
                 // writes to a console that is gone.
                 Sched::new().await;
-                child as i32
+                Ok(child as i32)
             }
         .await;
+        let r = r?;
         deliver(&mut c).await?;
         Ok::<_, wasmtime::Error>(r)
     })
@@ -1325,7 +1378,7 @@ mod tests {
         use wasmtime::ValType;
         let src = include_str!("../../../userspace/libc/wasm/sys.c");
         let w = Wasm::new().unwrap();
-        let mut store = Store::new(&w.engine, Guest { pid: 0, up: 0, s: [0; MAXSYSARG] });
+        let mut store = Store::new(&w.engine, Guest { pid: 0, module: None, s: [0; MAXSYSARG] });
         let ty = |t: &str| if t.trim() == "vlong" { "i64" } else { "i32" };
         let mut n = 0;
         for line in src.lines().filter(|l| l.starts_with("SYS(")) {

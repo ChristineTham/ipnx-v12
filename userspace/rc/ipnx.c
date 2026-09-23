@@ -354,9 +354,9 @@ Updenv(void)
  * the fork itself returning twice, so the child's three steps are a function
  * and `procrfork` says where to begin (libc/wasm/procrfork.c).
  *
- * The argument block is on THIS function's stack and the child reads it
- * there, which is `RFMEM` and is what `procrfork` declares: one memory, two
- * processes, one of them running.
+ * The argument block is on THIS function's stack, and the child reads it
+ * in its copy of this memory, which `procrfork` makes from this stack
+ * pointer down (libc/wasm/procrfork.c).
  */
 typedef struct Fe Fe;
 struct Fe {

@@ -100,9 +100,18 @@ kills it and carries on. The idle loop waits a tick at a time, as
 A tick that falls due during a call is taken at the call's end, still
 `insyscall`, so it is `TSys`'s — Plan 9's interrupt held off by `splhi` and
 taken at `spllo`. Every call ends as `syscall()` does, in *"if(up->delaysched)
-sched();"* (`pc/trap.c:778`). The one difference is forced by `procrfork`:
-while a child is on its parent's frames the switch waits for it, as Plan 9's
-`sched` waits with `delaysched` counting (`proc.c:145`).
+sched();"* (`pc/trap.c:778`).
+
+**A `procrfork` child is a process of its own from the start** (2026-09-23;
+RESEARCH §15.9): a new instance of the parent's image, with a copy of the
+parent's memory and the parent's stack pointer, on a fiber of its own. It
+can sleep before it `exec`s — `exec` itself reads its image through a pipe
+or a server and waits there — and the parent goes on. It used to run on
+the parent's own frames, where a sleep left neither process enterable.
+`RFMEM` cannot be given on this machine and is refused. An image the
+machine cannot run fails `exec` with *"exec header invalid"*, leaving the
+process in its old image; it used to end the whole system from inside the
+scheduler.
 
 **A call that leaves the processor carries on where it stopped.** `sleep`,
 `qlock` and `sched` mark the process (`setlabel`), whatever it was doing
@@ -180,6 +189,13 @@ clock routine posts *"interrupt"* to the note group of the process reading
 it — the shell, which `init` now gives a group of its own (`RFNOTEG`, as
 Plan 9's does) — and drops what was typed and not yet sent, as `rio` does.
 rc's handler survives it; the command it is running does not.
+
+**The screen after `^C` is `rio`'s** (2026-09-23; RESEARCH §15.10). rc
+behaves as Plan 9's: a command it was running ends and it prompts again;
+interrupted at its prompt it prints the newline itself and prompts again
+(`rc/exec.c:976`). The host terminal used to echo `^C` in front of that
+prompt, where `rio` shows nothing; its echo of control characters is now
+off while the host runs, and restored when it exits.
 
 **The console no longer holds up the system.** A read of `cons` blocked the
 whole machine in a host `read_line`. Now the host reads the terminal on a

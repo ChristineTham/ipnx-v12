@@ -44,7 +44,9 @@ fn main() {
     };
 
     Host::catch_interrupt();
-    match startboot(&argv, &[], Box::new(Host), store) {
+    let r = startboot(&argv, &[], Box::new(Host), store);
+    Host::restore_terminal();
+    match r {
         Ok(status) if status.is_empty() => {}
         Ok(status) => {
             eprintln!("ipnx: {}: {status}", argv[0]);
@@ -177,11 +179,13 @@ mod tests {
 
     /// **`procrfork` makes a second process and runs a function in it.**
     ///
-    /// The child asks the kernel who it is — `#c/pid` — and writes the answer
-    /// where the parent can read it, which on this machine is the same memory
-    /// (`RFMEM`, declared). The parent then checks that the pid it was told
-    /// and the pid the child saw are the same number, and that its own is
-    /// different: that is the whole claim, that two processes existed.
+    /// The child starts with a COPY of the parent's memory (RESEARCH §15.9):
+    /// it finds the byte the parent wrote just before, and the parent's pid
+    /// the parent read into it. It asks the kernel who it is — `#c/pid` —
+    /// and ends in error if the answer is the parent's, or if the copy is
+    /// missing what the parent wrote. The parent reaps it and checks its
+    /// status is empty, and that what the child wrote went into the child's
+    /// memory and not its own.
     #[test]
     fn procrfork_runs_a_function_as_another_process() {
         const FORK: &str = r##"
@@ -190,15 +194,18 @@ mod tests {
   (import "sys" "pread"     (func $pread     (param i32 i32 i32 i64) (result i32)))
   (import "sys" "close"     (func $close     (param i32) (result i32)))
   (import "sys" "exits"     (func $exits     (param i32)))
+  (import "sys" "await"     (func $await     (param i32 i32) (result i32)))
   (import "sys" "procrfork" (func $procrfork (param i32 i32 i32 i32) (result i32)))
   (type $fn (func (param i32)))
   (memory (export "memory") 1)
+  (global (export "__stack_pointer") (mut i32) (i32.const 4096))
   (table 1 1 funcref)
   (elem (i32.const 0) $child)
   (data (i32.const 8)   "#c/pid\00")
-  (data (i32.const 64)  "the child saw a different pid\00")
-  (data (i32.const 128) "the child was this process\00")
-  (global $childpid (mut i32) (i32.const 0))
+  (data (i32.const 64)  "the child was this process\00")
+  (data (i32.const 96)  "the child's memory is not a copy\00")
+  (data (i32.const 160) "the child wrote into the parent\00")
+  (data (i32.const 200) "the child did not end cleanly\00")
 
   ;; read `#c/pid` into $at, NUL-terminated, and answer its length
   (func $pid (param $at i32) (result i32)
@@ -210,9 +217,15 @@ mod tests {
     (drop (call $close (local.get $fd)))
     (local.get $n))
 
-  ;; the child: say who you are, at 256
+  ;; the child: the parent's byte at 512 must be here; its own pid, at
+  ;; 256, must not be the parent's, at 384. `readnum` right-justifies a
+  ;; number in NUMSIZE-1 columns, so a small pid's last digit is at +10.
   (func $child (param $arg i32)
+    (if (i32.ne (i32.load8_u (i32.const 512)) (i32.const 89))
+      (then (call $exits (i32.const 96)) (return)))
     (drop (call $pid (i32.const 256)))
+    (if (i32.eq (i32.load8_u (i32.const 266)) (i32.load8_u (i32.const 394)))
+      (then (call $exits (i32.const 64)) (return)))
     (call $exits (i32.const 0)))
 
   (func (export "__childstart") (param $f i32) (param $arg i32)
@@ -220,21 +233,21 @@ mod tests {
     (call $exits (i32.const 0)))
 
   (func (export "_start") (param i32 i32 i32)
-    (local $me i32)
-    ;; RFPROC|RFFDG
-    (global.set $childpid
-      (call $procrfork (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 4)))
-    ;; The child wrote its pid at 256, as `readnum` writes one: right
-    ;; justified in NUMSIZE-1 columns with a trailing space (devcons.c), so
-    ;; the last digit of a small pid is at offset 10.
-    (if (i32.ne
-          (i32.load8_u (i32.const 266))
-          (i32.add (i32.const 48) (global.get $childpid)))
-      (then (call $exits (i32.const 64)) (return)))
-    ;; and it must not be us
+    (local $n i32)
+    (i32.store8 (i32.const 512) (i32.const 89))
     (drop (call $pid (i32.const 384)))
-    (if (i32.eq (i32.load8_u (i32.const 394)) (i32.load8_u (i32.const 266)))
-      (then (call $exits (i32.const 128)) (return)))
+    ;; RFFDG
+    (drop (call $procrfork (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 4)))
+    ;; `await`: "pid utime stime real 'status'" — an empty status is the
+    ;; two quotes at the end
+    (local.set $n (call $await (i32.const 640) (i32.const 128)))
+    (if (i32.or
+          (i32.ne (i32.load8_u (i32.add (i32.const 639) (local.get $n))) (i32.const 39))
+          (i32.ne (i32.load8_u (i32.add (i32.const 638) (local.get $n))) (i32.const 39)))
+      (then (call $exits (i32.const 200)) (return)))
+    ;; nothing the child wrote is here
+    (if (i32.ne (i32.load8_u (i32.const 266)) (i32.const 0))
+      (then (call $exits (i32.const 160)) (return)))
     (call $exits (i32.const 0))))
 "##;
         assert_eq!(run(FORK, &[]).unwrap(), "");
@@ -396,6 +409,33 @@ mod userspace {
     #[test]
     fn a_sleeping_process_comes_back() {
         assert!(typing("sleep 1\necho awake\n").contains("awake"));
+    }
+
+    /// **A `procrfork` child may sleep before it `exec`s.** The file rc runs
+    /// is the read end of a pipe, so the child sleeps in its `exec` until
+    /// `cat` has written the image. A child that ran on its parent's frames
+    /// could not sleep there without leaving neither of them enterable
+    /// (RESEARCH §15.9).
+    #[test]
+    fn a_child_may_sleep_before_it_execs() {
+        let out = typing(
+            "mkdir -p /tmp/p; bind '#|' /tmp/p\n\
+             cat /wasm/bin/echo >/tmp/p/data &\n\
+             /tmp/p/data1 it ran\n\
+             echo after\n",
+        );
+        assert!(out.contains("it ran\n"), "{out}");
+        assert!(out.contains("after\n"), "{out}");
+    }
+
+    /// An image the machine cannot run fails `exec` — `Ebadexec`, as
+    /// `sysexec` refuses a bad header — and the shell goes on. It used to
+    /// end the system from inside the scheduler.
+    #[test]
+    fn exec_of_something_that_is_not_a_module_fails_and_the_system_goes_on() {
+        let out = typing("echo junk >/tmp/j\n/tmp/j || echo refused\necho still here\n");
+        assert!(out.contains("refused"), "{out}");
+        assert!(out.contains("still here"), "{out}");
     }
 
     /// **A process in a tight loop does not stop the system** — P6's

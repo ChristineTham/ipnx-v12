@@ -4112,3 +4112,80 @@ that left the processor, which a traced one does. It now reads
 started with `startsyscall`, given an exit trace of the call it had
 already finished; the stop is past `syscall()`'s exit trace, and the tail
 now knows that by `insyscall`, which Plan 9 clears between the two.
+
+### §15.9 — A `procrfork` child of its own, and `exec` that can wait (2026-09-23)
+
+Christine: *"do 1-5"*, the fourth being the hazard recorded since §15.2: a
+`procrfork` child ran on its PARENT'S frames until its `exec`, so a child
+that slept before then — and one does as soon as its `exec` reads an image
+from anything that answers later than at once — left the parent's fiber
+suspended with the child half-run on it, and the child on the run queue
+with nothing to enter.
+
+**It is not hypothetical past P6.** rc's child does nothing before `exec`
+but `dup` and `close` (`ipnx.c`, as `plan9.c:329`), but `exec` reads the
+image through `devtab` (`sysproc.c:302`), and on a Plan 9 system `/bin` is
+a file server: every command would be read through the mount driver, whose
+reads sleep until the server answers. With userspace file servers in P7,
+every `exec` would have been exposed.
+
+**What changed, in the machine:** the child is a new instance of the
+parent's module with the parent's memory copied into it and the parent's
+stack pointer, and it calls `__childstart(f, arg)` on a fiber of its own.
+A compiled C module's state is its memory and its stack pointer — function
+pointers are table indices the same image fills the same way — so the copy
+is the parent as it stood, and `arg`, which may point into the parent's
+frames (rc's `Fe` does), is valid in it. The kernel is asked for `RFPROC`
+and the caller's flags: a copy of the data segment, which is `rfork`'s own
+behaviour without `RFMEM`. `RFMEM` cannot be given — a wasm memory belongs
+to one instance and an instance runs on one stack — and is refused rather
+than silently not done. libthread's `procrfork` adds `RFMEM` itself; ours
+does not, and says so (`procrfork.c`).
+
+This removes the one difference §15.2 recorded as forced: `clockintr` no
+longer defers a switch or a note while a child is on its parent's frames,
+because no child ever is. The rows in §15.2 and §15.3 that say so are
+records of what was true then.
+
+**Found with it, both fixed:**
+
+* **`exec` could not sleep.** `exec_image` read the image with `dread` in a
+  loop and nothing else, so a device that slept — a pipe here, the mount
+  driver later — handed back a short image. The read is now resumable as
+  `pread`'s is: when the device sleeps, the rest of `exec` is kept for when
+  the process is entered again.
+* **An image that was not a module ended the system.** `touser` kept the
+  bytes and the module was compiled on first entry, inside the scheduler,
+  whose error ended `schedinit`. `sysexec` refuses a bad header before it
+  commits — *"if(indir || line[0]!='#' || line[1]!='!') error(Ebadexec)"*
+  (`sysproc.c:343`) — so `touser` now compiles, and fails with *"exec header
+  invalid"*; the kernel asks it before committing anything, so the process
+  goes on in its old image.
+
+**Seen and not done:** `sysexec` also runs `#!` scripts, reading the
+interpreter from the first line (`sysproc.c:340`–`:360`). This kernel does
+not; a script run by name is refused as a bad header.
+
+### §15.10 — What the screen shows after `^C` (2026-09-23)
+
+Christine: *"do 1-5"*, the fifth being the observation that rc printed no
+fresh prompt after `^C`. **Compared with Plan 9, that was wrong.** On a
+pseudo-terminal: `sleep 30`, `^C`, gave `^C% ` — the prompt was there,
+after the terminal's echo of the key; `^C` at an idle prompt gave
+`% ^C` then a newline and `% `.
+
+rc is Plan 9's here, line for line. Its note handler is `plan9.c`'s
+unchanged (`notifyf`, `:510`–`:520`, `interrupted = 1`), and an
+interrupted read of the next command is *"if(Eintr()){ pchr(err, '\n');
+p->eof = 0; }"* then the prompt again (`exec.c:976`); a command it was
+running ends of the note and rc prompts as after any command.
+
+The difference was the host's: a terminal in cooked mode echoes `^C`
+(`ECHOCTL`), and `rio` echoes nothing for its interrupt key — it writes
+*"interrupt"* to the note group and that is all (`wind.c:651`). So the
+host turns `ECHOCTL` off while it runs and restores the terminal's settings
+when it exits. With it off the terminal echoes the bare control byte, which
+it does not display; the prompt now begins its line after a command is
+interrupted, as in a `rio` window. The terminal cannot be told not to echo
+the key at all without turning echo off for everything, which the host's
+cooked-mode line editing depends on.

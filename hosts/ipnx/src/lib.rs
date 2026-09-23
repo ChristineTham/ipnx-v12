@@ -48,6 +48,9 @@ static INTERRUPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool:
 static KEYS: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<Option<Vec<u8>>>>> =
     std::sync::OnceLock::new();
 
+/// The terminal's settings as the host found them.
+static TERMIOS: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
+
 impl Host {
     /// **Receive `^C`.** The terminal, in its own cooked mode, turns the key
     /// into `SIGINT` to this process; catching it stops it ending the host,
@@ -62,6 +65,34 @@ impl Host {
         // async-signal-safe.
         unsafe {
             libc::signal(libc::SIGINT, caught as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        }
+        // **And the key is not echoed.** `rio` shows nothing for its
+        // interrupt key: the command ends and rc's prompt is at the start
+        // of the line, or — at the prompt — rc prints the newline itself
+        // (*"if(Eintr()){ pchr(err, '\n'); …"*, `rc/exec.c:976`). A terminal
+        // in cooked mode writes `^C` first, and the prompt lands after it;
+        // so its echo of control characters is off while the host runs,
+        // and put back by [`Host::restore_terminal`].
+        //
+        // SAFETY: plain calls on the terminal's settings, with a struct
+        // `tcgetattr` filled.
+        unsafe {
+            let mut t: libc::termios = std::mem::zeroed();
+            if libc::isatty(0) == 1 && libc::tcgetattr(0, &mut t) == 0 {
+                let _ = TERMIOS.set(t);
+                t.c_lflag &= !libc::ECHOCTL;
+                libc::tcsetattr(0, libc::TCSANOW, &t);
+            }
+        }
+    }
+
+    /// Put the terminal back as [`Host::catch_interrupt`] found it.
+    pub fn restore_terminal() {
+        if let Some(t) = TERMIOS.get() {
+            // SAFETY: as in `catch_interrupt`.
+            unsafe {
+                libc::tcsetattr(0, libc::TCSANOW, t);
+            }
         }
     }
 

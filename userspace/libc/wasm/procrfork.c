@@ -17,17 +17,21 @@
  *	int procrfork(void (*f)(void*), void *arg, uint stacksize, int rforkflag)
  *		— libthread/create.c:103
  *
- * Two differences from libthread's, both because there are no threads here:
- * it answers the child's PID where libthread answers a thread id, and
- * `stacksize` is accepted and ignored, because the child runs on the memory
- * it was made from.
+ * Three differences from libthread's. It answers the child's PID where
+ * libthread answers a thread id, because there are no threads here.
+ * `stacksize` is accepted and ignored: the child's stack is where the
+ * parent's was. And **the memory is a copy, not shared** — libthread adds
+ * `RFMEM`, and this machine cannot: one wasm memory cannot belong to two
+ * instances, and one instance cannot run on two stacks. So the child is a
+ * new instance of the same image with the parent's memory copied into it,
+ * starting at `f(arg)` from the parent's stack pointer — `arg` may point
+ * into the parent's frames, and the copy has them — and the kernel is asked
+ * for `RFPROC` and the caller's flags, which is `rfork`'s own copy of the
+ * data segment. A caller asking for `RFMEM` is refused.
  *
- * That last part is `RFMEM`, and it is declared: the kernel is asked for
- * `RFPROC|RFMEM` whatever the caller passed, because one memory is the truth
- * of it. vfork's discipline applies — the child must exec or exit, and must
- * not expect the parent to see what it wrote. It is less dangerous here than
- * vfork ever was on Unix, because the descriptors, the namespace and the
- * working directory are the KERNEL's and the child asked for its own by flag.
+ * The child is a process of its own from its first instruction: it may
+ * sleep before it `exec`s — waiting for a pipe, or for a file server to
+ * answer — and the parent goes on meanwhile, as on Plan 9.
  */
 #include <u.h>
 #include <libc.h>

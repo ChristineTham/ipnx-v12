@@ -224,17 +224,70 @@ impl Kernel {
     /// where Plan 9's does: the image is the process's now, and it is
     /// `Ready`.
     pub fn exec(&mut self, pid: Pid, path: &str, args: &[String]) -> Result<(), String> {
-        let image = self.exec_image(pid, path)?;
+        let c = self.exec_open(pid, path)?;
+        self.exec_read(pid, c, Vec::new(), path.to_string(), args.to_vec())
+    }
+
+    /// Step 2, **as far as there is to read, however long that takes**: a
+    /// file served by a pipe or by a process answers when it answers, and
+    /// `sysexec`'s reads sleep there as any read does. The rest of the
+    /// `exec` is kept for when the process is entered again, as `pread`
+    /// keeps its own.
+    fn exec_read(&mut self, pid: Pid, mut c: Chan, mut image: Vec<u8>, path: String, args: Vec<String>) -> Result<(), String> {
+        loop {
+            let got = match self.tab.dread(&mut c, 8192, image.len() as u64) {
+                Ok(got) => got,
+                Err(e) => {
+                    self.tab.dclose(&mut c);
+                    return Err(e);
+                }
+            };
+            if self.procs.borrow().get(pid).is_some_and(|p| p.setlabel) {
+                self.setlabel(pid, Box::new(move |k, up| k.exec_read(up, c, image, path, args).map(|()| Ret::Ok)));
+                return Ok(());
+            }
+            if got.is_empty() {
+                break;
+            }
+            image.extend_from_slice(&got);
+        }
+        let r = self.exec_commit(pid, &c, &image, &path, &args);
+        self.tab.dclose(&mut c);
+        r
+    }
+
+    /// Step 3, and what `sysexec` commits. **The machine is asked first**:
+    /// Plan 9 reads the header and fails the call with `Ebadexec` before it
+    /// touches the process — an image that is neither a binary it knows nor
+    /// a `#!` line is *"if(indir || line[0]!='#' || line[1]!='!')
+    /// error(Ebadexec)"* (`sysproc.c:343`). Only a machine can tell whether
+    /// an image is one it can run, and `touser` is where it says so. Nothing
+    /// of the process has changed if it refuses.
+    fn exec_commit(&mut self, pid: Pid, c: &Chan, image: &[u8], path: &str, args: &[String]) -> Result<(), String> {
         self.machine.procsetup(pid)?;
-        // *"up->text = elem"* (`sysproc.c:483`) — the last element of the
-        // name, as `namec` left it in `up->genbuf`.
+        self.machine.touser(pid, image, args)?;
+        // *"img = attachimage(SG_TEXT|SG_RONLY, tc, UTZERO, …)"*
+        // (`sysproc.c:530`) — the text segment, shared with whatever else
+        // is running this file.
+        let tseg = self.attachimage(c, image.len() as u64);
         if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
+            // *"up->text = elem"* (`sysproc.c:483`) — the last element of
+            // the name, as `namec` left it in `up->genbuf`.
             p.text = path.rsplit('/').next().unwrap_or(path).to_string();
+            p.tseg = Some(tseg);
             // *"putseg(up->seg[i])"* and *"up->seg[DSEG] = newseg(SG_DATA,
             // …)"* (`sysproc.c:513`, `:539`): the new image is a new memory,
             // and a process that shared the old one by `RFMEM` no longer
             // shares anything with this one.
             p.seg = std::rc::Rc::new(std::cell::RefCell::new(proc::Segment::default()));
+            // *"'/' processes are higher priority (hack to make /ip more
+            // responsive)."* — `if(devtab[tc->type]->dc == L'/') up->basepri
+            // = PriRoot; up->priority = up->basepri;` (`sysproc.c:564`), on
+            // the line before `cclose(tc)`.
+            if c.dev == dev::DevId::Root {
+                p.basepri = proc::pri::ROOT;
+            }
+            p.priority = p.basepri;
         }
         self.procs.borrow_mut().execnotes(pid);
         // *"if(up->hang) up->procctl = Proc_stopme"* (`sysproc.c:587`).
@@ -243,7 +296,6 @@ impl Kernel {
                 p.procctl = Some(proc::Procctl::Stopme);
             }
         }
-        self.machine.touser(pid, &image, args)?;
         Ok(())
     }
 
@@ -413,57 +465,39 @@ impl Kernel {
         }
     }
 
-    /// Steps 1 and 2 alone: resolve and read. Split out because it is entirely
-    /// Plan 9's, and so it can be tested without a machine.
-    pub fn exec_image(&mut self, pid: Pid, path: &str) -> Result<Vec<u8>, String> {
+    /// Step 1: `namec(file, Aopen, OEXEC, 0)` — resolve through the
+    /// process's namespace and open for execution.
+    fn exec_open(&mut self, pid: Pid, path: &str) -> Result<Chan, String> {
         let (slash, dot, ns) = {
             let procs = self.procs.borrow();
             let p = procs.get(pid).ok_or("no such process")?;
             (p.slash.clone(), p.dot.clone(), p.ns.clone())
         };
         let ns = ns.borrow();
-        let mut c = namec::namec(
-            &mut self.tab,
-            &ns,
-            &slash,
-            &dot,
-            path,
-            namec::A::Open,
-            chan::mode::OEXEC,
-        )?;
-        // **Through the dispatcher, not at the device.** `sysexec` reads the
-        // image with `c->dev->read` reached from `devtab` (`sysproc.c:302`),
-        // which for a mounted file is the mount driver. Reaching the device
-        // directly worked for as long as every binary was in `#/boot`, and
-        // stopped the moment the commands moved onto a file server — which
-        // is what `/bin` IS on Plan 9.
+        namec::namec(&mut self.tab, &ns, &slash, &dot, path, namec::A::Open, chan::mode::OEXEC)
+    }
+
+    /// Steps 1 and 2 alone: resolve and read. It is entirely Plan 9's, and
+    /// can be tested without a machine.
+    ///
+    /// **Through the dispatcher, not at the device.** `sysexec` reads the
+    /// image with `c->dev->read` reached from `devtab` (`sysproc.c:302`),
+    /// which for a mounted file is the mount driver. Reaching the device
+    /// directly worked for as long as every binary was in `#/boot`, and
+    /// stopped the moment the commands moved onto a file server — which is
+    /// what `/bin` IS on Plan 9.
+    pub fn exec_image(&mut self, pid: Pid, path: &str) -> Result<Vec<u8>, String> {
+        let mut c = self.exec_open(pid, path)?;
         let mut image = Vec::new();
-        loop {
-            let got = self.tab.dread(&mut c, 8192, image.len() as u64)?;
-            if got.is_empty() {
-                break;
+        let r = loop {
+            match self.tab.dread(&mut c, 8192, image.len() as u64) {
+                Ok(got) if got.is_empty() => break Ok(image),
+                Ok(got) => image.extend_from_slice(&got),
+                Err(e) => break Err(e),
             }
-            image.extend_from_slice(&got);
-        }
-        // *"'/' processes are higher priority (hack to make /ip more
-        // responsive)."* — `if(devtab[tc->type]->dc == L'/') up->basepri =
-        // PriRoot; up->priority = up->basepri;` (`sysproc.c:564`), on the
-        // line before `cclose(tc)`.
-        if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
-            if c.dev == dev::DevId::Root {
-                p.basepri = proc::pri::ROOT;
-            }
-            p.priority = p.basepri;
-        }
-        // *"img = attachimage(SG_TEXT|SG_RONLY, tc, UTZERO, …)"*
-        // (`sysproc.c:530`) — the text segment, shared with whatever else
-        // is running this file.
-        let tseg = self.attachimage(&c, image.len() as u64);
-        if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
-            p.tseg = Some(tseg);
-        }
+        };
         self.tab.dclose(&mut c);
-        Ok(image)
+        r
     }
 
     /// `attachimage` (`segment.c:245`): the text segment of the image `c`
@@ -1001,8 +1035,8 @@ impl Kernel {
     /// still to come — and that `sched` zeroes `up->delaysched`
     /// (`proc.c:154`) before `syscall()` reaches *"if(up->delaysched)
     /// sched();"*, so the switch after an `rfork` is `sysrfork`'s, never a
-    /// second one. The machine takes it once the child has run on the
-    /// parent's frames (RESEARCH §5.2).
+    /// second one. The machine takes it when the call has made the child
+    /// (RESEARCH §5.2, §15.9).
     fn syscall_tail(&mut self, up: Pid, r: Result<Ret, String>) -> Result<Ret, String> {
         let (rfork, rforked) = {
             let procs = self.procs.borrow();
@@ -3299,7 +3333,7 @@ mod syscalls {
     #[test]
     fn an_image_from_the_root_device_runs_at_priroot() {
         let mut k = booted();
-        k.exec_image(1, "/boot/init").unwrap();
+        k.exec(1, "/boot/init", &[]).unwrap();
         let procs = k.procs.borrow();
         let p = procs.get(1).unwrap();
         assert_eq!((p.basepri, p.priority), (proc::pri::ROOT, proc::pri::ROOT));
