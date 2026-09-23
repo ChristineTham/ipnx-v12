@@ -343,6 +343,7 @@ name = "ipnx"
 version = "0.1.0"
 dependencies = [
  "ipnx-kernel",
+ "libc",
  "wasmtime",
  "wat",
 ]

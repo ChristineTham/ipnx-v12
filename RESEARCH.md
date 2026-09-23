@@ -3925,3 +3925,42 @@ readies it and it goes on from the instruction it was at.
 
 **Not built:** tracing — `startstop`, `startsyscall`, `/proc/<n>/syscall`,
 `profile`.
+
+### §15.5 — `^C`, and a console that does not block (2026-09-23)
+
+Christine: *"^C should be received by host app and then sent to relevant
+process as a signal"* — answering §15.3's finding that Plan 9's kernel
+console turns no key into a note.
+
+**Read before writing:** `rio/wind.c` `interruptproc` `:436`, DEL `:651`;
+`init.c` `fexec` `:127`–`:170`, `pinhead` `:119`; `devcons.c` `kbdputc`
+`:525`, `kbdputcclock` `:556`, `consinit`'s `addclock0link` `:671`,
+`consread` `:762`–`:800`.
+
+**What "the relevant process" is, from Plan 9:** a note **group**. `rio`
+writes *"interrupt"* to the window's `notepg`, so the shell in the window
+and everything it runs get it; rc's handler survives and the command dies.
+`init` gives the shell a group of its own — *"rfork(RFNOTEG)"* in `fexec` —
+and catches notes itself with `pinhead`, so an interrupt never ends `init`.
+Ours did neither (it predated notes); it does both now. The console's group
+is the group of the process reading it, which is the shell's.
+
+**Built:** the host catches `SIGINT` (the terminal's cooked mode turns `^C`
+into it) instead of dying of it, and reports it through `Console::interrupt`;
+`kbdputcclock` — the console's clock routine, every 22ms as there — posts
+*"interrupt"* to the group and drops the typed-ahead line, as `rio` does
+(*"w->qh = w->nr"*).
+
+**Found while doing it: the console blocked the machine.** `consread` asked
+the host for keys with a blocking `read_line`, inside the kernel, so while
+the shell waited at its prompt nothing else ran and no note could be taken.
+Plan 9's `kbdputc` stages keys at interrupt time, `kbdputcclock` takes them
+in at clock time, and `consread` sleeps in `qread(kbdq)` under
+`qlock(&kbd)`. That is what it does now: the host reads the terminal on a
+thread of its own, `Console::kbdchars` answers without waiting, and the
+reader sleeps and is woken by the clock routine. The idle loop keeps the
+clock running while a reader waits for a key.
+
+Verified on a real terminal (a pseudo-terminal driven by a script): `sleep
+30`, `^C` three seconds later, `echo after` — the sleep ended at once and
+the host went on.

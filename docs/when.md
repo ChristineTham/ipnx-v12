@@ -30,7 +30,7 @@ Measured 2026-09-20.
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 28 calls, `exec`, and `unionread` |
 
-196 kernel tests, and 30 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and twenty-three that boot the whole system.
+197 kernel tests, and 32 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and twenty-five that boot the whole system.
 
 ## The host — `hosts/ipnx`, three files
 
@@ -151,11 +151,21 @@ does. `/proc/<n>/status` shows the call a process is in (`Await`, `Pread`)
 before its state, so `ps` reads as Plan 9's. Only tracing — `startstop`,
 `startsyscall`, `/proc/<n>/syscall`, `profile` — is not built.
 
-**Plan 9's kernel console never turns a key into a note.** `devcons.c` has
-only the `^T^T` debug keys; the interrupt a user types is `rio`'s, which
-writes *"interrupt"* to the window's note group. So `^C` needs whatever
-plays `rio`'s part on a surface — a question for the CLI host and for emca,
-not for the kernel.
+**`^C` interrupts a command** (2026-09-23; RESEARCH §15.5) — P6's last
+acceptance test. Plan 9's kernel console turns no key into a note; `rio`
+does, writing *"interrupt"* to the window's note group. Christine's
+decision: *"^C should be received by host app and then sent to relevant
+process as a signal"*. So the host catches `SIGINT`, and the console's
+clock routine posts *"interrupt"* to the note group of the process reading
+it — the shell, which `init` now gives a group of its own (`RFNOTEG`, as
+Plan 9's does) — and drops what was typed and not yet sent, as `rio` does.
+rc's handler survives it; the command it is running does not.
+
+**The console no longer holds up the system.** A read of `cons` blocked the
+whole machine in a host `read_line`. Now the host reads the terminal on a
+thread of its own, `kbdputcclock` takes the keys in every 22ms
+(`devcons.c:556`, `:671`), and a reader sleeps in `qread(kbdq)` under
+`qlock(&kbd)` while everything else runs.
 
 ### `#M`, and the refactor it needed
 
@@ -272,7 +282,7 @@ exactly as `boot.c:171` does. `ls /` shows both halves because `unionread`
 reads every element. A file written under `/tmp` is a file on the host, so it
 is still there after the next boot.
 
-Thirty tests in `hosts/ipnx` — twenty typing at a scripted console
+Thirty-two tests in `hosts/ipnx` — twenty-two typing at a scripted console
 after a full boot, three booting twice into a filesystem of their own, five
 driving a guest module directly, and two on the machine: that `Guest` is
 `Send` with no `unsafe impl`, and that a thread nobody entered has no kernel. They need

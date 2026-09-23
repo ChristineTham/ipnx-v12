@@ -317,7 +317,14 @@ impl Kernel {
                     let procs = self.procs.borrow();
                     (procs.nextalarm(), procs.m.hz)
                 };
-                let Some(alarm) = alarm else {
+                // A reader waiting for the keyboard: a key is coming, and
+                // the clock takes it in.
+                let keyboard = self
+                    .tab
+                    .get(dev::DevId::Cons)
+                    .and_then(|d| d.as_any().downcast_mut::<devcons::Cons>())
+                    .is_some_and(|c| c.waiting());
+                let Some(alarm) = alarm.or(if keyboard { hz } else { None }) else {
                     return Ok(());
                 };
                 let when = hz.map_or(alarm, |h| h.min(alarm));
@@ -355,6 +362,13 @@ impl Kernel {
         procs.m.intr += 1;
         procs.m.perf.intrts = now;
         procs.timerintr(now);
+        drop(procs);
+        // `addclock0link(kbdputcclock, 22)` (`devcons.c:671`): the console's
+        // clock routine, which takes the keyboard in.
+        if let Some(c) = self.tab.get(dev::DevId::Cons).and_then(|d| d.as_any().downcast_mut::<devcons::Cons>()) {
+            c.kbdputcclock(now);
+        }
+        let mut procs = self.procs.borrow_mut();
         // `intrtime`: the time spent in the handler, taken out of the idle
         // time if the processor was idle (*"if(up == nil && m->perf.inidle
         // > diff) m->perf.inidle -= diff"*).

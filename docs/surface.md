@@ -38,7 +38,7 @@ or not emca is running**:
 
 | | |
 |---|---|
-| **without emca** | they connect straight to the host's screen, keyboard and mouse. IPNX is a CLI with no windows — a mode that must keep working |
+| **without emca** | they connect straight to the host's screen, keyboard and mouse. IPNX is a CLI with no windows — a mode that must keep working. **The host receives the interrupt key** — `^C` on a terminal — and the console posts *"interrupt"* to its note group, as `rio` does for a window (Christine, 2026-09-23) |
 | **with emca** | emca **virtualises** them per window, and a client cannot tell the difference |
 
 **This is rio's mechanism exactly.** Without rio, `/dev/cons` is `#c`'s

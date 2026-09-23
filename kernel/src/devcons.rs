@@ -16,7 +16,7 @@
 use crate::chan::Chan;
 use crate::dev::{Dev, DevId};
 use crate::ninep::{Qid, QTDIR, QTEXCL};
-use crate::proc::Up;
+use crate::proc::{NoteFlag, Pid, Rid, Up, EINTR};
 #[cfg(test)]
 use crate::proc::Procs;
 use std::cell::RefCell;
@@ -44,18 +44,21 @@ pub trait Console {
     /// architecture fills in, and `putstrn0` calls it. This is that pointer.
     fn putstrn(&mut self, s: &[u8]);
 
-    /// What the keyboard has produced, which Plan 9 gets asynchronously:
-    /// `kbdputc` (`devcons.c:525`) is called at interrupt time, stages the
-    /// runes and `qproduce`s them into `kbdq`; `consread` then BLOCKS in
-    /// `qread(kbdq, &ch, 1)` until there are some.
-    ///
-    /// **This machine has no interrupts**, so nothing can fill a queue behind
-    /// the kernel's back. The blocking read is therefore a call outward, made
-    /// at the same point in `consread` where Plan 9 blocks, with the same
-    /// meaning: return when there is input. An empty answer is end of input —
-    /// the terminal is gone — and `consread` treats it as the `^D` that Plan
-    /// 9's user would have typed.
-    fn kbdchars(&mut self) -> Vec<u8>;
+    /// What the keyboard has produced since last asked, **without waiting**
+    /// — the characters `kbdputc` stages at interrupt time (`devcons.c:525`),
+    /// taken in by `kbdputcclock` at clock time (`:556`). Nothing yet is an
+    /// empty answer; `None` is that input has ended — the terminal is gone —
+    /// which `consread` treats as the `^D` Plan 9's user would have typed.
+    fn kbdchars(&mut self) -> Option<Vec<u8>>;
+
+    /// **The interrupt key** — `^C` on a terminal — pressed since last asked.
+    /// The host receives it and the console posts *"interrupt"* to its note
+    /// group, as `rio` writes a window's `notepg` for DEL (`wind.c:651`).
+    /// Christine, 2026-09-23: *"^C should be received by host app and then
+    /// sent to relevant process as a signal"*.
+    fn interrupt(&mut self) -> bool {
+        false
+    }
 
     /// `todget` — nanoseconds since the epoch, and the fast-tick counter.
     fn now(&mut self) -> (u64, u64, u64);
@@ -127,6 +130,18 @@ struct Kbd {
     /// Set once the machine says there is no more input. Plan 9 has no
     /// counterpart because a keyboard does not end.
     eof: bool,
+    /// `kbd` is a `QLock` there: one reader of `cons` at a time
+    /// (`consread`'s *"qlock(&kbd)"*, `devcons.c:766`).
+    lock: crate::proc::QLock,
+    /// Each reader that left in the middle of `consread`, and whether it had
+    /// slept in `qread(kbdq)` (`true`) or was waiting for the lock.
+    reading: std::collections::HashMap<Pid, bool>,
+    /// The console's note group — the group of the process reading it, which
+    /// is the shell and what it runs, as a `rio` window's is.
+    noteid: u32,
+    /// When `kbdputcclock` next runs: *"addclock0link(kbdputcclock, 22)"*
+    /// (`devcons.c:671`), every 22ms.
+    clock: u64,
 }
 
 /// `kbd.line`'s size (`devcons.c:29`). A line this long is sent whether or not
@@ -259,23 +274,20 @@ impl Cons {
     ///
     /// In raw mode every character ends the line, which is how a program that
     /// wants keystrokes gets them.
+    ///
+    /// It takes only what `kbdputcclock` has put on `kbdq`; with nothing
+    /// there, the reader sleeps (`consread`).
     fn linedisc(&mut self) {
         while self.kbd.lineq.is_empty() {
             if self.kbd.kbdq.is_empty() {
                 if self.kbd.eof {
-                    return;
-                }
-                let got = self.host.kbdchars();
-                if got.is_empty() {
                     // End of input. Plan 9 never reaches this — a keyboard
                     // does not end — so it is treated as the `^D` its user
                     // would have typed: send what there is, and the empty
                     // line after it is the end-of-file a reader sees.
-                    self.kbd.eof = true;
                     self.sendline();
-                    return;
                 }
-                self.kbd.kbdq.extend(got);
+                return;
             }
             let ch = match self.kbd.kbdq.pop_front() {
                 Some(ch) => ch,
@@ -311,6 +323,102 @@ impl Cons {
                 self.sendline();
             }
         }
+    }
+
+    /// `kbdputcclock` (`devcons.c:556`) — *"we save up input characters till
+    /// clock time"*: take in what the keyboard produced and wake a reader
+    /// waiting in `qread(kbdq)`. And the interrupt key: *"interrupt"* to the
+    /// console's note group, and what was typed but not yet sent is dropped,
+    /// as `rio` drops it (`wind.c:652`, *"w->qh = w->nr"*).
+    ///
+    /// The kernel calls it on every clock tick; it runs every 22ms.
+    pub fn kbdputcclock(&mut self, now: u64) {
+        if now < self.kbd.clock {
+            return;
+        }
+        self.kbd.clock = now + 22_000_000;
+        let procs = self.up.borrow().procs.clone();
+        let mut procs = procs.borrow_mut();
+        if !self.kbd.eof {
+            let woke = match self.host.kbdchars() {
+                None => {
+                    self.kbd.eof = true;
+                    true
+                }
+                Some(b) if !b.is_empty() => {
+                    self.kbd.kbdq.extend(b);
+                    true
+                }
+                _ => false,
+            };
+            if woke {
+                procs.wakeup(Rid::Rr(DevId::Cons, 0, 0));
+            }
+        }
+        if self.host.interrupt() {
+            self.kbd.kbdq.clear();
+            self.kbd.line.clear();
+            if self.kbd.noteid != 0 {
+                procs.pgrpnote(0, self.kbd.noteid, "interrupt", NoteFlag::NUser);
+            }
+        }
+    }
+
+    /// Is a reader waiting for the keyboard? Then the machine must go on
+    /// taking clock ticks even with nothing else to run: a key is coming.
+    pub fn waiting(&self) -> bool {
+        !self.kbd.reading.is_empty()
+    }
+
+    /// `consread`'s `Qcons` (`devcons.c:762`): under `qlock(&kbd)`, run the
+    /// line discipline until there is a processed line, sleeping in
+    /// `qread(kbdq)` while there is nothing to process, then take from
+    /// `lineq`. A read answers a WHOLE line and no more, which is why a shell
+    /// gets a command rather than a character.
+    fn consread(&mut self, n: usize) -> Result<Vec<u8>, String> {
+        let (pid, procs) = {
+            let up = self.up.borrow();
+            (up.pid, up.procs.clone())
+        };
+        let mut procs = procs.borrow_mut();
+        if let Some(p) = procs.get(pid) {
+            self.kbd.noteid = p.noteid;
+        }
+        match self.kbd.reading.remove(&pid) {
+            // Woken from `qread`'s sleep; a note ends it with `Eintr`, and
+            // `consread`'s `waserror` lets go of the lock.
+            Some(true) => {
+                if procs.interrupted(pid) {
+                    procs.qunlock(&mut self.kbd.lock);
+                    return Err(EINTR.into());
+                }
+            }
+            // Handed the lock by `qunlock`.
+            Some(false) => {}
+            None => {
+                if !procs.qlock(&mut self.kbd.lock, pid) {
+                    self.kbd.reading.insert(pid, false);
+                    return Ok(Vec::new());
+                }
+            }
+        }
+        drop(procs);
+        self.linedisc();
+        let procs = self.up.borrow().procs.clone();
+        let mut procs = procs.borrow_mut();
+        if self.kbd.lineq.is_empty() && !self.kbd.eof {
+            if !procs.sleep(pid, Rid::Rr(DevId::Cons, 0, 0), false) {
+                procs.interrupted(pid);
+                procs.qunlock(&mut self.kbd.lock);
+                return Err(EINTR.into());
+            }
+            self.kbd.reading.insert(pid, true);
+            return Ok(Vec::new());
+        }
+        let take = n.min(self.kbd.lineq.len());
+        let got = self.kbd.lineq.drain(..take).collect();
+        procs.qunlock(&mut self.kbd.lock);
+        Ok(got)
     }
 
     /// `qwrite(lineq, kbd.line, kbd.x); kbd.x = 0;`
@@ -572,11 +680,7 @@ impl Dev for Cons {
             // An empty answer is end of file, and it is reached exactly where
             // Plan 9 would have a `^D`: the line before it was sent, and this
             // one is empty.
-            Q::Cons => {
-                self.linedisc();
-                let take = n.min(self.kbd.lineq.len());
-                self.kbd.lineq.drain(..take).collect()
-            }
+            Q::Cons => self.consread(n)?,
             // `consctl` is 0220 — write-only, and a read of it is `Eperm`
             // as it is of anything else this device will not read
             // (`consread`'s default, `devcons.c:968`).
@@ -735,6 +839,7 @@ mod tests {
     struct Term {
         out: Vec<u8>,
         keys: std::collections::VecDeque<Vec<u8>>,
+        interrupt: bool,
     }
 
     /// A host that reports fixed numbers, so a test can tell what came from
@@ -746,8 +851,11 @@ mod tests {
         fn putstrn(&mut self, s: &[u8]) {
             self.0.borrow_mut().out.extend_from_slice(s);
         }
-        fn kbdchars(&mut self) -> Vec<u8> {
-            self.0.borrow_mut().keys.pop_front().unwrap_or_default()
+        fn kbdchars(&mut self) -> Option<Vec<u8>> {
+            self.0.borrow_mut().keys.pop_front()
+        }
+        fn interrupt(&mut self) -> bool {
+            std::mem::take(&mut self.0.borrow_mut().interrupt)
         }
         fn now(&mut self) -> (u64, u64, u64) {
             (1_500_000_000_000_000_000, 42, 1_000_000)
@@ -791,6 +899,20 @@ mod tests {
         let host = FakeHost::default();
         host.0.borrow_mut().keys = keys.iter().map(|k| k.as_bytes().to_vec()).collect();
         (Cons::new(eve_(), up, vec![DevId::Cons], Box::new(host.clone())), host)
+    }
+
+    /// A read of `cons` as a process makes it: when the reader sleeps in
+    /// `qread(kbdq)`, the clock runs `kbdputcclock` — the keyboard's
+    /// interrupt, taken at clock time — and the read carries on.
+    fn typed(d: &mut Cons, c: &mut Chan) -> Vec<u8> {
+        loop {
+            let got = d.read(c, 256, 0).unwrap();
+            if !got.is_empty() || !d.waiting() {
+                return got;
+            }
+            d.kbd.clock = 0;
+            d.kbdputcclock(0);
+        }
     }
 
     fn open(d: &mut Cons, name: &str, mode: u16) -> Chan {
@@ -1071,8 +1193,8 @@ mod tests {
     fn a_read_of_cons_answers_a_line_at_a_time() {
         let (mut d, _) = cons_term(&["echo hi\nls\n"]);
         let mut c = open(&mut d, "cons", OREAD);
-        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"echo hi\n");
-        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"ls\n");
+        assert_eq!(typed(&mut d, &mut c), b"echo hi\n");
+        assert_eq!(typed(&mut d, &mut c), b"ls\n");
     }
 
     /// The discipline itself: backspace erases, `^U` kills the line, and
@@ -1082,9 +1204,9 @@ mod tests {
     fn backspace_kill_and_end_of_file() {
         let (mut d, _) = cons_term(&["abc\x08\x08X\n", "junk\x15kept\n", "\x04"]);
         let mut c = open(&mut d, "cons", OREAD);
-        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"aX\n");
-        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"kept\n");
-        assert!(d.read(&mut c, 256, 0).unwrap().is_empty(), "^D on an empty line is EOF");
+        assert_eq!(typed(&mut d, &mut c), b"aX\n");
+        assert_eq!(typed(&mut d, &mut c), b"kept\n");
+        assert!(typed(&mut d, &mut c).is_empty(), "^D on an empty line is EOF");
     }
 
     /// A terminal that ends is the `^D` its user never typed: what was typed
@@ -1093,8 +1215,29 @@ mod tests {
     fn input_that_stops_delivers_the_last_line_then_ends() {
         let (mut d, _) = cons_term(&["half typed"]);
         let mut c = open(&mut d, "cons", OREAD);
-        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"half typed");
-        assert!(d.read(&mut c, 256, 0).unwrap().is_empty());
+        assert_eq!(typed(&mut d, &mut c), b"half typed");
+        assert!(typed(&mut d, &mut c).is_empty());
+    }
+
+    /// **The host's interrupt key** is *"interrupt"* to the note group of
+    /// the process reading the console, and what was typed but not sent is
+    /// dropped — `rio`'s DEL (`wind.c:651`), taken at clock time.
+    #[test]
+    fn the_interrupt_key_is_a_note_to_the_readers_group() {
+        let (mut d, host) = cons_term(&["half"]);
+        let procs = d.up.borrow().procs.clone();
+        let c = procs.borrow_mut().rfork(1, crate::proc::rf::PROC).unwrap();
+        let mut cc = open(&mut d, "cons", OREAD);
+        assert!(d.read(&mut cc, 256, 0).unwrap().is_empty(), "nothing typed yet: it sleeps");
+        d.kbd.clock = 0;
+        d.kbdputcclock(0);
+        host.0.borrow_mut().interrupt = true;
+        d.kbd.clock = 0;
+        d.kbdputcclock(0);
+        let p = procs.borrow();
+        assert_eq!(p.get(1).unwrap().note.first().map(|n| n.msg.as_str()), Some("interrupt"));
+        assert_eq!(p.get(c).unwrap().note.first().map(|n| n.msg.as_str()), Some("interrupt"), "the whole group");
+        assert!(d.kbd.line.is_empty() && d.kbd.kbdq.is_empty(), "typed-ahead dropped");
     }
 
     /// `rawon` turns the discipline off, and then every keystroke is a read.
@@ -1105,7 +1248,7 @@ mod tests {
         let mut ctl = open(&mut d, "consctl", OWRITE);
         d.write(&mut ctl, b"rawon", 0).unwrap();
         let mut c = open(&mut d, "cons", OREAD);
-        assert_eq!(d.read(&mut c, 256, 0).unwrap(), b"ab", "no line ending needed");
+        assert_eq!(typed(&mut d, &mut c), b"ab", "no line ending needed");
 
         // *"last close of control file turns off raw"* (`devcons.c:722`).
         ctl.flag |= crate::chan::flag::COPEN;

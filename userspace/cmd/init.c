@@ -24,6 +24,17 @@ char	*cpu;
 char	*user;
 char	*systemname;
 int	manual;
+static int gotnote;
+
+/* `pinhead` (`init.c:119`): a note to init is reported and survived — it
+ * is the shell's group the interrupt is for, and init is not in it. */
+void
+pinhead(void*, char *msg)
+{
+	gotnote = 1;
+	fprint(2, "init got note '%s'\n", msg);
+	noted(NCONT);
+}
 
 /* `readenv` (`init.c:190`) — a file whose length may be 0 and still have
  * contents, which is true of every file `#c` serves. */
@@ -131,13 +142,21 @@ main(int argc, char *argv[])
 	 * restarted at once.
 	 */
 	for(;;){
-		pid = procrfork(rcexec, nil, 0, RFFDG|RFREND);
+		/* `fexec` (`init.c:127`): the child is put in a note group of its
+		 * own — *"rfork(RFNOTEG)"* — so an interrupt reaches the shell and
+		 * what it runs, and not init. */
+		pid = procrfork(rcexec, nil, 0, RFFDG|RFREND|RFNOTEG);
 		if(pid < 0){
 			print("init: can't start rc: %r\n");
 			exits("rc");
 		}
+		notify(pinhead);
+	casedefault:
+		gotnote = 0;
 		w = wait();
 		if(w == nil){
+			if(gotnote)
+				goto casedefault;
 			print("init: wait: %r\n");
 			exits(nil);
 		}

@@ -39,6 +39,58 @@ use std::rc::Rc;
 /// every number `devcons` reports — it reads them from the architecture.
 pub struct Host;
 
+/// The interrupt key has been pressed and not yet handed over.
+static INTERRUPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// What the terminal has typed, a line at a time, read on a thread of its
+/// own so that waiting for a key holds up nothing else — Plan 9's keyboard
+/// interrupts, as a machine without them has them. `None` is end of input.
+static KEYS: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<Option<Vec<u8>>>>> =
+    std::sync::OnceLock::new();
+
+impl Host {
+    /// **Receive `^C`.** The terminal, in its own cooked mode, turns the key
+    /// into `SIGINT` to this process; catching it stops it ending the host,
+    /// and the system is told at its next clock tick (Christine,
+    /// 2026-09-23: *"^C should be received by host app and then sent to
+    /// relevant process as a signal"*).
+    pub fn catch_interrupt() {
+        extern "C" fn caught(_: libc::c_int) {
+            INTERRUPT.store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        // SAFETY: the handler only stores to an atomic, which is
+        // async-signal-safe.
+        unsafe {
+            libc::signal(libc::SIGINT, caught as extern "C" fn(libc::c_int) as libc::sighandler_t);
+        }
+    }
+
+    fn keys() -> &'static std::sync::Mutex<std::sync::mpsc::Receiver<Option<Vec<u8>>>> {
+        KEYS.get_or_init(|| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                let stdin = std::io::stdin();
+                loop {
+                    let mut line = String::new();
+                    match stdin.lock().read_line(&mut line) {
+                        Ok(0) | Err(_) => {
+                            let _ = tx.send(None);
+                            return;
+                        }
+                        Ok(_) => {
+                            if tx.send(Some(line.into_bytes())).is_err() {
+                                return;
+                            }
+                        }
+                    }
+                }
+            });
+            std::sync::Mutex::new(rx)
+        })
+    }
+}
+
 impl Console for Host {
     /// `screenputs` (`devcons.c:12`). The screen this machine has is the
     /// terminal it was started from, and it is flushed at once: a prompt has
@@ -50,22 +102,29 @@ impl Console for Host {
         let _ = out.flush();
     }
 
-    /// The keyboard. Plan 9's driver calls `kbdputc` at interrupt time and
-    /// `consread` blocks on the queue; this machine has no interrupts, so the
-    /// kernel asks here and this blocks instead — the same wait, made at the
-    /// same point (`devcons.rs`'s `Console::kbdchars`).
+    /// The keyboard: what the reading thread has, without waiting.
     ///
     /// A line at a time, because that is what a terminal in its own cooked
     /// mode gives. The kernel runs its OWN discipline over whatever arrives,
     /// which is why `rawon` still works: raw mode is about what the kernel
     /// does with the bytes, not how many arrive at once.
-    fn kbdchars(&mut self) -> Vec<u8> {
-        use std::io::BufRead;
-        let mut line = String::new();
-        match std::io::stdin().lock().read_line(&mut line) {
-            Ok(0) | Err(_) => Vec::new(),
-            Ok(_) => line.into_bytes(),
+    fn kbdchars(&mut self) -> Option<Vec<u8>> {
+        use std::sync::mpsc::TryRecvError;
+        let rx = Self::keys().lock().ok()?;
+        let mut got = Vec::new();
+        loop {
+            match rx.try_recv() {
+                Ok(Some(line)) => got.extend(line),
+                Ok(None) | Err(TryRecvError::Disconnected) => {
+                    return if got.is_empty() { None } else { Some(got) };
+                }
+                Err(TryRecvError::Empty) => return Some(got),
+            }
         }
+    }
+
+    fn interrupt(&mut self) -> bool {
+        INTERRUPT.swap(false, std::sync::atomic::Ordering::SeqCst)
     }
 
     fn now(&mut self) -> (u64, u64, u64) {
@@ -351,33 +410,76 @@ pub fn startboot(
     let status = k.procs.borrow().status(1).unwrap_or_default();
     Ok(status)
 }
-#[derive(Default, Clone)]
 /// A console that answers with a script and remembers what it was shown —
 /// the counterpart of a person at a terminal, for a test or a suite. The
 /// keys go in, the screen comes out.
-#[allow(clippy::type_complexity)]
-pub struct Term(std::rc::Rc<std::cell::RefCell<(Vec<u8>, Vec<u8>)>>);
+///
+/// **`^C` in the script is the interrupt key**, pressed a moment after what
+/// comes before it was typed — long enough for a command started by that
+/// line to be running, which is when a person presses it. What comes after
+/// it is typed once the interrupt has been handed over.
+#[derive(Clone, Default)]
+pub struct Term(std::rc::Rc<std::cell::RefCell<Script>>);
+
+#[derive(Default)]
+pub struct Script {
+    screen: Vec<u8>,
+    /// The keys, split at each `^C`; the first is what is being typed now.
+    keys: std::collections::VecDeque<Vec<u8>>,
+    /// Whether the first has been typed.
+    typed: bool,
+    /// When the next `^C` is pressed.
+    at: Option<std::time::Instant>,
+}
+
+/// How long after the line before it a scripted `^C` is pressed.
+const INTERRUPT_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl Term {
     pub fn typing(keys: &str) -> Term {
         let t = Term::default();
-        t.0.borrow_mut().1 = keys.as_bytes().to_vec();
+        t.0.borrow_mut().keys = keys.split('\x03').map(|k| k.as_bytes().to_vec()).collect();
         t
     }
     /// What the console was shown.
     pub fn screen(&self) -> String {
-        String::from_utf8_lossy(&self.0.borrow().0).into_owned()
+        String::from_utf8_lossy(&self.0.borrow().screen).into_owned()
     }
 }
 
 impl Console for Term {
     fn putstrn(&mut self, s: &[u8]) {
-        self.0.borrow_mut().0.extend_from_slice(s);
+        self.0.borrow_mut().screen.extend_from_slice(s);
     }
-    /// All of it at once, then nothing — which is end of input, and is what a
-    /// terminal being closed looks like.
-    fn kbdchars(&mut self) -> Vec<u8> {
-        std::mem::take(&mut self.0.borrow_mut().1)
+    /// What is typed before the next `^C`, all at once; then nothing until
+    /// it is pressed; and after the last, the end of input — which is what
+    /// a terminal being closed looks like.
+    fn kbdchars(&mut self) -> Option<Vec<u8>> {
+        let mut t = self.0.borrow_mut();
+        let first = t.keys.front()?.clone();
+        if !t.typed {
+            t.typed = true;
+            if t.keys.len() > 1 {
+                t.at = Some(std::time::Instant::now() + INTERRUPT_AFTER);
+            }
+            return Some(first);
+        }
+        if t.keys.len() == 1 {
+            return None;
+        }
+        Some(Vec::new())
+    }
+    fn interrupt(&mut self) -> bool {
+        let mut t = self.0.borrow_mut();
+        match t.at {
+            Some(at) if std::time::Instant::now() >= at => {
+                t.at = None;
+                t.keys.pop_front();
+                t.typed = false;
+                true
+            }
+            _ => false,
+        }
     }
     fn now(&mut self) -> (u64, u64, u64) {
         Host.now()

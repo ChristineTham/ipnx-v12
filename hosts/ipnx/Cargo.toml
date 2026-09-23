@@ -14,3 +14,6 @@ ipnx-kernel = { path = "../../kernel" }
 # the executor is a poll loop and the run queue is the kernel's.
 wasmtime = { version = "39", default-features = false, features = ["cranelift", "runtime", "std", "async"] }
 wat = "1"
+# `SIGINT`: the terminal turns `^C` into a signal to this process, and the
+# host catches it to hand the system its interrupt key.
+libc = "0.2"

@@ -43,6 +43,7 @@ fn main() {
         }
     };
 
+    Host::catch_interrupt();
     match startboot(&argv, &[], Box::new(Host), store) {
         Ok(status) if status.is_empty() => {}
         Ok(status) => {
@@ -434,6 +435,26 @@ mod userspace {
         let out = typing("{exec sleep 30} &\necho kill >/proc/$apid/ctl\nwait\necho done\n");
         assert!(out.contains("done"), "{out}");
         assert!(t.elapsed() < std::time::Duration::from_secs(25), "it waited out the sleep");
+    }
+
+    /// **`^C` interrupts a command.** The host receives the key and the
+    /// console posts *"interrupt"* to its note group — the shell's, which
+    /// `init` made with `RFNOTEG` — so `sleep`, which has no handler, ends,
+    /// and rc, which has, carries on (P6's acceptance test).
+    #[test]
+    fn control_c_interrupts_a_command_and_the_shell_carries_on() {
+        let t = std::time::Instant::now();
+        let out = typing("sleep 30\n\x03echo after\n");
+        assert!(out.contains("after"), "{out}");
+        assert!(t.elapsed() < std::time::Duration::from_secs(25), "the sleep ran its course");
+    }
+
+    /// And a command waiting for the keyboard: `cat` asleep in `qread` is
+    /// woken by the note and ends.
+    #[test]
+    fn control_c_interrupts_a_command_reading_the_console() {
+        let out = typing("cat\n\x03echo after\n");
+        assert!(out.contains("after"), "{out}");
     }
 
     /// `/dev/sysstat` reads the machine: the clock has interrupted and
