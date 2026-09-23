@@ -45,17 +45,18 @@ pub enum Q {
     Proc,
     Status,
     Wait,
+    Profile,
+    Syscall,
 }
 
 /// name, which file, permission — `procdir[]`'s own values.
-/// `procdir[]` (`devproc.c:79`) is eighteen; this is **ten**, and each of
-/// the eight absent is absent for a stated reason:
+/// `procdir[]` (`devproc.c:79`) is eighteen; this is **twelve**, and each of
+/// the six absent is absent for a stated reason:
 ///
 /// | | |
 /// |---|---|
 /// | `fpregs` `kregs` `regs` | a register set. There is none — the machine's registers are the engine's and a guest has no `Ureg`. This is the narrow case that needs no approval |
 /// | `mem` `segment` `text` | an address space. A guest has ONE linear memory and no segments, and `text` is the module — what each should mean here is a design question, not a gap to fill in passing |
-/// | `profile` `syscall` | tracing. Plan 9 has both; neither is built |
 pub const PROCDIR: &[(&str, Q, u32)] = &[
     ("args", Q::Args, 0o660),
     ("ctl", Q::Ctl, 0o000),
@@ -67,7 +68,22 @@ pub const PROCDIR: &[(&str, Q, u32)] = &[
     ("proc", Q::Proc, 0o400),
     ("status", Q::Status, 0o444),
     ("wait", Q::Wait, 0o400),
+    ("profile", Q::Profile, 0o400),
+    ("syscall", Q::Syscall, 0o400),
 ];
+
+/// A file's length as `procgen` gives it: 0, but for `profile`, which is as
+/// long as the text segment's profile when one is kept (`devproc.c:267`).
+fn proclen(procs: &crate::proc::Procs, pid: Pid, q: Q) -> u64 {
+    if q != Q::Profile {
+        return 0;
+    }
+    procs
+        .get(pid)
+        .and_then(|p| p.tseg.as_ref())
+        .and_then(|s| s.borrow().profile.as_ref().map(|v| v.len() as u64 * 4))
+        .unwrap_or(0)
+}
 
 /// A qid carries both which process and which of its files: the pid in the
 /// high bits, the file in the low. Plan 9 does the same with `mkqid` and
@@ -248,7 +264,7 @@ impl Dev for ProcDev {
                 return Err(EPROCDIED.into());
             }
             self.nonone(pid)?;
-            if q == Q::Ns && mode & 3 != crate::chan::mode::OREAD {
+            if matches!(q, Q::Ns | Q::Profile) && mode & 3 != crate::chan::mode::OREAD {
                 return Err(EPERM.into());
             }
             // `procopen`'s `Qnotepg` (`devproc.c:446`): write only, never
@@ -309,14 +325,39 @@ impl Dev for ProcDev {
         if q == Q::Root && c.qid.is_dir() {
             self.nonone(pid)?;
             let user = procs.borrow().user(pid).ok_or(EPROCDIED)?;
+            let p = procs.borrow();
             let entries: Vec<crate::ninep::Dir> = PROCDIR
                 .iter()
                 .map(|(name, q, perm)| {
                     let qid = Qid { qtype: 0, vers: 0, path: qid_of(pid, *q) };
-                    crate::dev::devdir(c, qid, name, 0, &user, &self.eve.borrow(), *perm)
+                    crate::dev::devdir(c, qid, name, proclen(&p, pid, *q), &user, &self.eve.borrow(), *perm)
                 })
                 .collect();
             return Ok(crate::dev::devdirread(c, n, &entries));
+        }
+
+        // `procread`'s `Qsyscall` (`devproc.c:747`): the trace, while there
+        // is one.
+        if q == Q::Syscall {
+            self.nonone(pid)?;
+            let p = procs.borrow();
+            let t = p.get(pid).ok_or(EPROCDIED)?.syscalltrace.clone().unwrap_or_default();
+            let b = t.into_bytes();
+            let off = (off as usize).min(b.len());
+            return Ok(b[off..(off + n).min(b.len())].to_vec());
+        }
+        // `Qprofile` (`devproc.c:779`): the text segment's counts, as the
+        // machine stores a `ulong` — little-endian here, which `tprof`
+        // swaps from (`tprof.c:100`).
+        if q == Q::Profile {
+            let p = procs.borrow();
+            let s = p.get(pid).ok_or(EPROCDIED)?.tseg.clone();
+            let s = s.ok_or("profile is off")?;
+            let s = s.borrow();
+            let v = s.profile.as_ref().ok_or("profile is off")?;
+            let b: Vec<u8> = v.iter().flat_map(|c| c.to_le_bytes()).collect();
+            let off = (off as usize).min(b.len());
+            return Ok(b[off..(off + n).min(b.len())].to_vec());
         }
 
         // `procread`'s `Qnote` (`devproc.c:792`): take the first note —
@@ -441,7 +482,7 @@ impl Dev for ProcDev {
                 }
                 Q::Wait => return Err("wait is await's, not a read".into()),
                 Q::Ctl | Q::Notepg => return Err(EPERM.into()),
-                Q::Note => unreachable!("taken above"),
+                Q::Note | Q::Syscall | Q::Profile => unreachable!("taken above"),
             }
         };
         let b = s.into_bytes();
@@ -604,10 +645,35 @@ impl Dev for ProcDev {
                 }
                 p.get_mut(pid).ok_or(EPROCDIED)?.noteid = id;
             }
-            // `startstop` and `startsyscall` stop again at the next note or
-            // call for a tracer; `/proc/n/syscall` and tracing are not built.
-            (Q::Ctl, "startstop" | "startsyscall") => {
-                return Err("tracing is not built".into());
+            // `CMstartstop` and `CMstartsyscall` (`devproc.c:1404`, `:1411`):
+            // start a `Stopped` process and wait for it to stop again — at
+            // its next note, or on its way into or out of its next call.
+            (Q::Ctl, cmd @ ("startstop" | "startsyscall")) => {
+                use crate::proc::Procctl;
+                let ctl = if cmd == "startstop" { Procctl::Traceme } else { Procctl::Tracesyscall };
+                {
+                    let mut p = procs.borrow_mut();
+                    let t = p.get_mut(pid).ok_or(EPROCDIED)?;
+                    if t.state != crate::proc::State::Stopped {
+                        return Err(EBADCTL.into());
+                    }
+                    t.procctl = Some(ctl);
+                    t.psstate = None;
+                    p.ready(pid);
+                }
+                drop(procs);
+                if !self.procstopwait(pid, Some(ctl))? {
+                    return Ok(0);
+                }
+            }
+            // `CMprofile` (`devproc.c:1388`): start keeping a profile of the
+            // text segment, new and zeroed, *"npc = (s->top-s->base)>>LRESPROF"*.
+            (Q::Ctl, "profile") => {
+                let p = procs.borrow();
+                let s = p.get(pid).ok_or(EPROCDIED)?.tseg.clone().ok_or(EBADCTL)?;
+                let mut s = s.borrow_mut();
+                let npc = (s.size >> crate::proc::LRESPROF) as usize;
+                s.profile = Some(vec![0; npc]);
             }
             (Q::Ctl, _) => return Err("unknown control message".into()),
             _ => return Err(EPERM.into()),
@@ -630,7 +696,8 @@ impl Dev for ProcDev {
         } else {
             self.up.borrow().procs.borrow().user(pid).unwrap_or_else(|| self.eve.borrow().clone())
         };
-        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, &self.eve.borrow(), perm).conv_d2m())
+        let len = if pid == 0 { 0 } else { proclen(&self.up.borrow().procs.borrow(), pid, q) };
+        Ok(crate::dev::devdir(c, c.qid, &name, len, &user, &self.eve.borrow(), perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -938,6 +1005,59 @@ mod tests {
         d.write(&mut ctl, b"start", 0).unwrap();
         assert_eq!(procs.borrow().state(c), State::Ready);
         assert!(d.write(&mut ctl, b"nonsense", 0).is_err());
+    }
+
+    /// `startsyscall` and `startstop` (`devproc.c:1404`, `:1411`): only a
+    /// stopped process; it is readied with the tracer's `procctl` and the
+    /// writer waits for it to stop again. `syscall` reads the trace while
+    /// there is one, and nothing otherwise.
+    #[test]
+    fn startsyscall_and_startstop_start_a_stopped_process_and_wait() {
+        use crate::proc::{Procctl, State};
+        let (mut d, procs) = proc();
+        let c = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
+        let mut ctl = open(&mut d, c, "ctl", OWRITE);
+        assert_eq!(d.write(&mut ctl, b"startsyscall", 0), Err(EBADCTL.into()), "not stopped");
+        for (verb, want) in [(&b"startsyscall"[..], Procctl::Tracesyscall), (b"startstop", Procctl::Traceme)] {
+            procs.borrow_mut().get_mut(c).unwrap().state = State::Stopped;
+            assert_eq!(d.write(&mut ctl, verb, 0).unwrap(), 0, "the writer waits");
+            assert_eq!(procs.borrow().state(c), State::Ready);
+            assert_eq!(procs.borrow().get(c).unwrap().procctl, Some(want));
+            let mut p = procs.borrow_mut();
+            let dbg = p.get_mut(c).unwrap().pdbg.take().unwrap();
+            p.wakeup(crate::proc::Rid::Proc(dbg, crate::proc::Which::Sleep));
+            drop(p);
+            assert!(d.write(&mut ctl, verb, 0).is_ok(), "the write carries on and ends");
+        }
+        assert_eq!(read(&mut d, c, "syscall"), "");
+        procs.borrow_mut().get_mut(c).unwrap().syscalltrace = Some("2 x Close 0 3".into());
+        assert_eq!(read(&mut d, c, "syscall"), "2 x Close 0 3");
+    }
+
+    /// `profile` (`devproc.c:1388`) starts a profile of the text segment,
+    /// one count per eight bytes; `/proc/n/profile` is those counts and is
+    /// that long, and before it is started it is *"profile is off"*. A
+    /// process with no text segment cannot be profiled.
+    #[test]
+    fn profile_keeps_a_count_per_eight_bytes_of_text() {
+        let (mut d, procs) = proc();
+        let mut ctl = open(&mut d, 1, "ctl", OWRITE);
+        assert_eq!(d.write(&mut ctl, b"profile", 0), Err(EBADCTL.into()), "no text");
+        let seg = Rc::new(RefCell::new(crate::proc::Segment { size: 64, ..Default::default() }));
+        procs.borrow_mut().get_mut(1).unwrap().tseg = Some(seg.clone());
+        let mut c = open(&mut d, 1, "profile", OREAD);
+        assert_eq!(d.read(&mut c, 64, 0), Err("profile is off".into()));
+        d.write(&mut ctl, b"profile", 0).unwrap();
+        seg.borrow_mut().profile.as_mut().unwrap()[1] = 30;
+        let b = d.read(&mut c, 64, 0).unwrap();
+        assert_eq!(b.len(), 8 * 4);
+        assert_eq!(&b[4..8], &30u32.to_le_bytes());
+        let st = crate::ninep::Dir::parse_all(&d.stat(&c).unwrap()).remove(0);
+        assert_eq!(st.length, 32);
+        let root = d.attach("").unwrap();
+        let dir = d.walk(&root, "1").unwrap().unwrap();
+        let pf = d.walk(&dir, "profile").unwrap().unwrap();
+        assert!(d.open(pf, OWRITE).is_err(), "read only");
     }
 
     /// `hang` is kept on the process and inherited (`sysproc.c:171`).

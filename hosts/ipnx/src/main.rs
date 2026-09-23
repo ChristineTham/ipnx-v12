@@ -437,6 +437,30 @@ mod userspace {
         assert!(t.elapsed() < std::time::Duration::from_secs(25), "it waited out the sleep");
     }
 
+    /// **A tracer's view of a call** (`devproc.c:1411`, `pc/trap.c:682`):
+    /// stop `sleep` after its first second, start it with `startsyscall`,
+    /// and it stops again on its way into the next `sleep(1000)` — which
+    /// `/proc/n/syscall` shows as `syscallfmt` does, with the pc the call was
+    /// made from.
+    #[test]
+    fn startsyscall_shows_the_next_call() {
+        let out = typing(
+            "{exec sleep 2} &\n\
+             echo stop >/proc/$apid/ctl\n\
+             echo startsyscall >/proc/$apid/ctl\n\
+             cat /proc/$apid/syscall; echo\n\
+             echo start >/proc/$apid/ctl\n\
+             wait\necho done\n",
+        );
+        let line = out.lines().find(|l| l.contains(" sleep Sleep ")).unwrap_or_else(|| panic!("{out}"));
+        let w: Vec<&str> = line.split_whitespace().collect();
+        let at = w.iter().position(|&x| x == "Sleep").unwrap();
+        assert_eq!(w[at - 1], "sleep", "{line}");
+        assert!(u64::from_str_radix(w[at + 1], 16).is_ok_and(|pc| pc > 0), "a pc: {line}");
+        assert_eq!(w[at + 2], "1000", "{line}");
+        assert!(out.contains("done"), "{out}");
+    }
+
     /// **`^C` interrupts a command.** The host receives the key and the
     /// console posts *"interrupt"* to its note group — the shell's, which
     /// `init` made with `RFNOTEG` — so `sleep`, which has no handler, ends,

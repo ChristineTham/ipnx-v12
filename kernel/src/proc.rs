@@ -272,6 +272,11 @@ pub enum Procctl {
     Stopme,
     /// `Proc_exitme` — `kill`.
     Exitme,
+    /// `Proc_traceme` — `startstop`: stop at the next note (`proc.c:1498`).
+    Traceme,
+    /// `Proc_tracesyscall` — `startsyscall`: stop on the way into the next
+    /// call and on the way out of it (`pc/trap.c:682`, `:755`).
+    Tracesyscall,
 }
 
 /// `NBROKEN` (`proc.c:1063`) — *"weird thing: keep at most NBROKEN
@@ -353,7 +358,17 @@ pub struct Segment {
     /// `s->sema` — the waiters, oldest first: `semqueue` puts a new one at
     /// the tail (`sysproc.c:1033`) and `semwakeup` walks from the head.
     pub sema: Vec<Sema>,
+    /// `s->top - s->base` — for the text segment, the image's length: a
+    /// pc on this machine is an offset into it, so `base` is 0.
+    pub size: u64,
+    /// `s->profile` — the text segment's profile when one is being kept
+    /// (`devproc.c:1388`): a count of milliseconds per `1<<LRESPROF` bytes
+    /// of text, with the total in `[0]`.
+    pub profile: Option<Vec<u32>>,
 }
+
+/// `LRESPROF` (`portdat.h:850`) — a profile counts per 8 bytes of text.
+pub const LRESPROF: u32 = 3;
 
 /// Which of a process's two `Rendez` (`portdat.h:683`, `:720`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -453,6 +468,22 @@ pub struct Proc {
     pub rgrp: Rc<RefCell<Vec<Pid>>>,
     /// `p->seg` — the segment the process's memory is (see [`Segment`]).
     pub seg: Rc<RefCell<Segment>>,
+    /// `p->seg[TSEG]` — the text segment: the image, shared by everything
+    /// running it (`attachimage`, `segment.c:245`). A kernel process has none.
+    pub tseg: Option<Rc<RefCell<Segment>>>,
+    /// `up->scallnr` (`pc/trap.c:680`) — the call it is in, by Plan 9's
+    /// number (`sys.h`).
+    pub scallnr: u32,
+    /// `up->s` (`pc/trap.c:723`) — that call's arguments as the process
+    /// passed them.
+    pub s: [u64; crate::machine::MAXSYSARG],
+    /// `p->syscalltrace` — what `syscallfmt` or `sysretfmt` wrote while the
+    /// process is stopped for a tracer (`port/syscallfmt.c`).
+    pub syscalltrace: Option<String>,
+    /// `syscall()`'s local `startns` (`pc/trap.c:699`) — when a traced call
+    /// began. It lived on the kernel stack across the stop; the stack is not
+    /// kept here, so it is kept with the process.
+    pub startns: u64,
     /// `p->rendtag`, `p->rendval`.
     pub rendtag: u64,
     pub rendval: u64,
@@ -545,6 +576,11 @@ impl Proc {
             alarm: 0,
             rgrp: Rc::new(RefCell::new(Vec::new())),
             seg: Rc::new(RefCell::new(Segment::default())),
+            tseg: None,
+            scallnr: 0,
+            s: [0; crate::machine::MAXSYSARG],
+            syscalltrace: None,
+            startns: 0,
             rendtag: 0,
             rendval: 0,
             pdbg: None,
@@ -732,7 +768,14 @@ pub struct Procs {
     /// `alarms` (`alarm.c:7`) — the processes with an alarm set, soonest
     /// first, threaded through `p->palarm` there.
     alarms: Vec<Pid>,
+    /// The timer `procinit` adds for `profclock` — *"addclock0link((void
+    /// (*)(void))profclock, 113)"* (`devproc.c:309`), periodic, every 113ms
+    /// (*"Relative prime to HZ"*) — as when it next fires.
+    profclock: Option<u64>,
 }
+
+/// `profclock`'s period, in milliseconds (`devproc.c:309`).
+const PROFMS: u64 = 113;
 
 impl Procs {
     /// A fresh table with pid 1 in it. It takes the channel that is pid 1's
@@ -754,6 +797,7 @@ impl Procs {
             noteidalloc: 1,
             broken: Vec::new(),
             alarms: Vec::new(),
+            profclock: None,
         }
     }
 
@@ -1196,6 +1240,9 @@ impl Procs {
     /// `:55`).
     pub fn timersinit(&mut self, now: u64) {
         self.m.hz = Some(now + 1_000_000_000 / HZ);
+        // `profclock`'s timer, which Plan 9 adds at `procinit`; the clock
+        // starts here, so this is the first moment it can be added.
+        self.profclock = Some(now + PROFMS * 1_000_000);
         self.m.perf.last = now;
     }
 
@@ -1213,7 +1260,15 @@ impl Procs {
     /// loop takes it again while it is still due, counting — but the count
     /// is only tested, `if(callhzclock) hzclock(u)` (`:195`). Ticks an
     /// interrupt arrives too late for are lost, on Plan 9 as here.
-    pub fn timerintr(&mut self, now: u64) {
+    ///
+    /// `pc` is `ur->pc` when the interrupt came from user mode, and `None`
+    /// when it came in the kernel — a tick held off until a call ended.
+    pub fn timerintr(&mut self, now: u64, pc: Option<&dyn Fn() -> u64>) {
+        if let Some(when) = self.profclock.filter(|&w| w <= now) {
+            let period = PROFMS * 1_000_000;
+            self.profclock = Some(when + ((now - when) / period + 1) * period);
+            self.profclock_(pc);
+        }
         let due: Vec<Pid> = self
             .tab
             .values()
@@ -1233,6 +1288,32 @@ impl Procs {
         let period = 1_000_000_000 / HZ;
         self.m.hz = Some(when + ((now - when) / period + 1) * period);
         self.hzclock(now);
+    }
+
+    /// `profclock` (`devproc.c:169`): *"user profiling clock"* — in user
+    /// mode, charge a tick to the running process's text segment at the pc
+    /// it was interrupted at (`segclock`, `segment.c:786`).
+    ///
+    /// Plan 9 also adds the tick to `tos->clock`, in the page the kernel maps
+    /// at the top of the process's stack. There is no such page here — the
+    /// `Tos` is a variable of the process's own (`main9.c`) — so that half
+    /// cannot be done.
+    fn profclock_(&mut self, pc: Option<&dyn Fn() -> u64>) {
+        let Some(up) = self.up.filter(|&p| self.state(p) == State::Running) else { return };
+        let Some(pc) = pc else { return };
+        let Some(s) = self.tab.get(&up).and_then(|p| p.tseg.clone()) else { return };
+        let mut s = s.borrow_mut();
+        let size = s.size;
+        let Some(profile) = s.profile.as_mut() else { return };
+        let tick = tk2ms(1) as u32;
+        profile[0] = profile[0].wrapping_add(tick);
+        let pc = pc();
+        if pc < size {
+            let i = (pc >> LRESPROF) as usize;
+            if let Some(c) = profile.get_mut(i) {
+                *c = c.wrapping_add(tick);
+            }
+        }
     }
 
     /// `hzclock` (`portclock.c:136`) — the clock tick.
@@ -1514,7 +1595,10 @@ impl Procs {
             notify: parent.notify,
             notepending: false,
             noteid: if flags & rf::NOTEG != 0 { noteid } else { parent.noteid },
-            procctl: None,
+            // *"if(up && up->procctl == Proc_tracesyscall) p->procctl =
+            // Proc_tracesyscall"* (`proc.c:696`) — a traced process's
+            // children are traced.
+            procctl: parent.procctl.filter(|&c| c == Procctl::Tracesyscall),
             kp: false,
             alarm: 0,
             // *"if(flag & RFREND) p->rgrp = newrgrp(); else … up->rgrp"*
@@ -1524,6 +1608,13 @@ impl Procs {
             // RFMEM"* (`sysproc.c:114`): shared with `RFMEM`, copied — so
             // with no waiters — without.
             seg: if flags & rf::MEM != 0 { parent.seg.clone() } else { Rc::new(RefCell::new(Segment::default())) },
+            // *"case SG_TEXT: … goto sameseg"* (`segment.c:170`): text is
+            // shared whatever the flags.
+            tseg: parent.tseg.clone(),
+            scallnr: 0,
+            s: [0; crate::machine::MAXSYSARG],
+            syscalltrace: None,
+            startns: 0,
             rendtag: 0,
             rendval: 0,
             pdbg: None,
@@ -1780,6 +1871,8 @@ impl Procs {
         p.alarm = 0;
         p.rgrp = Rc::new(RefCell::new(Vec::new()));
         p.seg = Rc::new(RefCell::new(Segment::default()));
+        p.tseg = None;
+        p.syscalltrace = None;
         p.pdbg = None;
         p.psstate = None;
         p.errstr = String::new();
@@ -1957,9 +2050,9 @@ mod tests {
         assert!(p.tsleep(1, r, false, 500));
         assert_eq!(p.nextalarm(), Some(500));
 
-        p.timerintr(499);
+        p.timerintr(499, None);
         assert_eq!(p.state(1), State::Wakeme, "not yet");
-        p.timerintr(500);
+        p.timerintr(500, None);
         assert_eq!(p.state(1), State::Ready, "due");
         assert_eq!(p.nextalarm(), None);
     }
@@ -2197,11 +2290,11 @@ mod tests {
     fn a_process_that_has_had_its_quantum_is_marked_to_sched() {
         let (mut p, a, b) = two();
         for t in 1..=10 {
-            p.timerintr(t * TICK);
+            p.timerintr(t * TICK, None);
             assert_eq!(p.get(a).unwrap().delaysched, 0, "tick {t} is inside the quantum");
         }
         assert_eq!(p.m.readied, Some(b), "b is readied, and nothing has cleared it");
-        p.timerintr(11 * TICK);
+        p.timerintr(11 * TICK, None);
         assert_eq!(p.get(a).unwrap().delaysched, 1, "the eleventh tick is past it");
         assert_eq!(p.m.readied, None, "*avoid cooperative scheduling*");
     }
@@ -2217,7 +2310,7 @@ mod tests {
         p.ready(a);
         p.sched();
         for t in 1..=50 {
-            p.timerintr(t * TICK);
+            p.timerintr(t * TICK, None);
         }
         assert_eq!(p.get(a).unwrap().delaysched, 0);
     }
@@ -2230,7 +2323,7 @@ mod tests {
         p.dequeueproc(pri, b);
         p.queueproc(pri + 1, b);
         assert!(p.anyhigher(a));
-        p.timerintr(TICK);
+        p.timerintr(TICK, None);
         assert_eq!(p.get(a).unwrap().delaysched, 1);
     }
 
@@ -2241,10 +2334,10 @@ mod tests {
     fn a_late_interrupt_ticks_once() {
         let mut p = one();
         p.timersinit(0);
-        p.timerintr(5 * TICK + 3);
+        p.timerintr(5 * TICK + 3, None);
         assert_eq!(p.m.ticks, 1);
         assert_eq!(p.m.hz, Some(6 * TICK));
-        p.timerintr(5 * TICK + 4);
+        p.timerintr(5 * TICK + 4, None);
         assert_eq!(p.m.ticks, 1, "early: nothing is due");
     }
 
@@ -2253,13 +2346,13 @@ mod tests {
     #[test]
     fn a_tick_is_charged_to_the_running_process_and_to_the_load() {
         let (mut p, a, b) = two();
-        p.timerintr(TICK);
+        p.timerintr(TICK, None);
         assert_eq!(p.get(a).unwrap().time[TUSER], 1, "one tick");
         assert_eq!(p.get(b).unwrap().time[TUSER], 0, "b was waiting");
         // One running, one ready: `n = (1 + 1) * 1000`, decayed by HZ.
         assert_eq!(p.m.load, 2000 / HZ);
         p.up = None;
-        p.timerintr(2 * TICK);
+        p.timerintr(2 * TICK, None);
         assert_eq!(p.get(a).unwrap().time[TUSER], 1, "idle: charged to nobody");
     }
 
@@ -2275,10 +2368,10 @@ mod tests {
         // above it, and a quantum longer than the test.
         p.m.schedticks = u64::MAX;
         for t in 1..HZ {
-            p.timerintr(t * TICK);
+            p.timerintr(t * TICK, None);
         }
         assert_eq!(p.get(b).unwrap().priority, 3, "not yet a second");
-        p.timerintr(HZ * TICK);
+        p.timerintr(HZ * TICK, None);
         assert_eq!(p.get(b).unwrap().priority, base, "moved back to its base");
         assert_eq!(p.get(a).unwrap().delaysched, 0);
     }

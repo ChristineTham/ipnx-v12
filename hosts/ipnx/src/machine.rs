@@ -20,7 +20,7 @@
 //!     call on this thread's stack, so the import unwinds it — a trap out of
 //!     the engine, caught below, and NOT a fault.
 
-use ipnx_kernel::machine::{Left, Machine, NoteAt, Notify, Syscalls, Tod};
+use ipnx_kernel::machine::{Left, Machine, NoteAt, Notify, Syscalls, Tod, Ureg, MAXSYSARG};
 use ipnx_kernel::proc::{noted, NoteFlag, ERRMAX};
 use ipnx_kernel::proc::rf;
 use ipnx_kernel::{Call, Pid, Ret};
@@ -225,7 +225,7 @@ impl Drop for Clock {
 fn clockintr(c: StoreContextMut<'_, Guest>) -> wasmtime::Result<UpdateDeadline> {
     // Sound for the same reason [`call`] is: this runs inside a poll, inside
     // `gotolabel`, where the kernel is entered and nothing else holds it.
-    let sched = unsafe { (*kernel()).timerintr() };
+    let sched = unsafe { (*kernel()).timerintr(&|| userpc(&c)) };
     let borrowed = c.data().pid != c.data().up;
     if !borrowed {
         let up = c.data().up;
@@ -311,6 +311,39 @@ pub struct Guest {
     /// the kernel's `up` while it runs. It differs from `pid` only while a
     /// `procrfork` child is on these frames.
     up: Pid,
+    /// The words the import being made was called with — what the PC's
+    /// `syscall()` finds above the user stack pointer (`Sargs`). Each import
+    /// sets it on the way in.
+    s: [u64; MAXSYSARG],
+}
+
+/// One argument word, as the process passed it: a 32-bit value as its bits,
+/// a `vlong` whole.
+trait Word {
+    fn word(self) -> u64;
+}
+
+impl Word for i32 {
+    fn word(self) -> u64 {
+        self as u32 as u64
+    }
+}
+
+impl Word for i64 {
+    fn word(self) -> u64 {
+        self as u64
+    }
+}
+
+/// `ureg->pc` — where the process is: the innermost wasm frame's offset in
+/// its module. Only asked for when a call is traced or a profile kept, as
+/// finding it walks the stack.
+fn userpc(c: impl wasmtime::AsContext) -> u64 {
+    wasmtime::WasmBacktrace::force_capture(c)
+        .frames()
+        .first()
+        .and_then(|f| f.module_offset())
+        .unwrap_or(0) as u64
 }
 
 thread_local! {
@@ -419,11 +452,15 @@ fn kernel() -> *mut (dyn Syscalls + 'static) {
 fn call(c: &mut Caller<'_, Guest>, k: Call) -> Result<Ret, String> {
     let pid = c.data().pid;
     let _umem = umem(c);
+    let s = c.data().s;
+    let c = &*c;
+    let pc = || userpc(c);
+    let ureg = Ureg { s, pc: &pc };
     // Sound for as long as [`enter`]'s invariant holds: this runs inside a
     // poll, inside `gotolabel`, and nothing else makes a `&mut` to the kernel
     // while it does — every call finishes before control returns to the
     // guest.
-    unsafe { (*kernel()).syscall(pid, k) }
+    unsafe { (*kernel()).syscall(pid, k, &ureg) }
 }
 
 /// **A call, as the process makes it: to the end, however many times it
@@ -653,7 +690,7 @@ impl Wasm {
         args: Vec<String>,
     ) -> Result<Pin<Box<dyn Future<Output = Result<(), wasmtime::Error>> + Send>>, String> {
         let module = Module::new(&self.engine, &image).map_err(|e| e.to_string())?;
-        let mut store = Store::new(&self.engine, Guest { pid, up: pid });
+        let mut store = Store::new(&self.engine, Guest { pid, up: pid, s: [0; MAXSYSARG] });
         // Interrupts on: the next epoch calls `clockintr`.
         store.set_epoch_deadline(1);
         store.epoch_deadline_callback(clockintr);
@@ -715,6 +752,7 @@ fn place(
 /// The import table — this machine's `9syscall`.
 fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     l.func_wrap_async("sys", "open", |mut c: Caller<'_, Guest>, (p, mode): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [p.word(), mode.word(), 0, 0, 0];
         let r = async {
         let Ok(path) = cstr(&mut c, p) else { return -1 };
         or_fail(kcall(&mut c, Call::Open { path, mode }).await, |v| match v {
@@ -728,6 +766,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "create", |mut c: Caller<'_, Guest>, (p, mode, perm): (i32, i32, i32)| Box::new(async move {
+        c.data_mut().s = [p.word(), mode.word(), perm.word(), 0, 0];
         let r = async {
         let Ok(path) = cstr(&mut c, p) else { return -1 };
         or_fail(
@@ -744,6 +783,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "close", |mut c: Caller<'_, Guest>, (fd,): (i32,)| Box::new(async move {
+        c.data_mut().s = [fd.word(), 0, 0, 0, 0];
         let r = async {
         or_fail(kcall(&mut c, Call::Close { fd }).await, |_| 0)
     }
@@ -757,6 +797,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         "pread",
         |mut c: Caller<'_, Guest>, (fd, p, n, off): (i32, i32, i32, i64)| {
             Box::new(async move {
+        c.data_mut().s = [fd.word(), p.word(), n.word(), off.word(), 0];
         let r = async {
                 let d = match kcall(&mut c, Call::Pread { fd, n: n.max(0) as usize, off }).await {
                     Ok(Ret::Data(d)) => d,
@@ -775,6 +816,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     )?;
 
     l.func_wrap_async("sys", "pwrite", |mut c: Caller<'_, Guest>, (fd, p, n, off): (i32, i32, i32, i64)| Box::new(async move {
+        c.data_mut().s = [fd.word(), p.word(), n.word(), off.word(), 0];
         let r = async {
             let Ok(data) = read(&mut c, p, n) else { return -1 };
             or_fail(kcall(&mut c, Call::Pwrite { fd, data, off }).await, |v| match v {
@@ -788,6 +830,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "seek", |mut c: Caller<'_, Guest>, (fd, off, whence): (i32, i64, i32)| Box::new(async move {
+        c.data_mut().s = [fd.word(), off.word(), whence.word(), 0, 0];
         let r = async {
         match kcall(&mut c, Call::Seek { fd, off, whence }).await {
             Ok(Ret::N(n)) => n as i64,
@@ -800,6 +843,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "dup", |mut c: Caller<'_, Guest>, (old, new): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [old.word(), new.word(), 0, 0, 0];
         let r = async {
         or_fail(kcall(&mut c, Call::Dup { old, new }).await, |v| match v {
             Ret::Fd(fd) => fd,
@@ -812,6 +856,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "pipe", |mut c: Caller<'_, Guest>, (p,): (i32,)| Box::new(async move {
+        c.data_mut().s = [p.word(), 0, 0, 0, 0];
         let r = async {
         let (a, b) = match kcall(&mut c, Call::Pipe).await {
             Ok(Ret::Two(a, b)) => (a, b),
@@ -831,6 +876,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "remove", |mut c: Caller<'_, Guest>, (p,): (i32,)| Box::new(async move {
+        c.data_mut().s = [p.word(), 0, 0, 0, 0];
         let r = async {
         let Ok(path) = cstr(&mut c, p) else { return -1 };
         or_fail(kcall(&mut c, Call::Remove { path }).await, |_| 0)
@@ -841,6 +887,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "chdir", |mut c: Caller<'_, Guest>, (p,): (i32,)| Box::new(async move {
+        c.data_mut().s = [p.word(), 0, 0, 0, 0];
         let r = async {
         let Ok(path) = cstr(&mut c, p) else { return -1 };
         or_fail(kcall(&mut c, Call::Chdir { path }).await, |_| 0)
@@ -851,6 +898,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "bind", |mut c: Caller<'_, Guest>, (n, o, flag): (i32, i32, i32)| Box::new(async move {
+        c.data_mut().s = [n.word(), o.word(), flag.word(), 0, 0];
         let r = async {
         let (Ok(name), Ok(old)) = (cstr(&mut c, n), cstr(&mut c, o)) else { return -1 };
         or_fail(kcall(&mut c, Call::Bind { name, old, flag }).await, |_| 0)
@@ -861,6 +909,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "mount", |mut c: Caller<'_, Guest>, (fd, afd, o, flag, a): (i32, i32, i32, i32, i32)| Box::new(async move {
+        c.data_mut().s = [fd.word(), afd.word(), o.word(), flag.word(), a.word()];
         let r = async {
             let Ok(old) = cstr(&mut c, o) else { return -1 };
             let aname = if a == 0 { String::new() } else { cstr(&mut c, a).unwrap_or_default() };
@@ -872,6 +921,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "unmount", |mut c: Caller<'_, Guest>, (n, o): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [n.word(), o.word(), 0, 0, 0];
         let r = async {
         let Ok(old) = cstr(&mut c, o) else { return -1 };
         let name = if n == 0 { None } else { Some(cstr(&mut c, n).unwrap_or_default()) };
@@ -883,6 +933,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "stat", |mut c: Caller<'_, Guest>, (p, e, n): (i32, i32, i32)| Box::new(async move {
+        c.data_mut().s = [p.word(), e.word(), n.word(), 0, 0];
         let r = async {
         let Ok(path) = cstr(&mut c, p) else { return -1 };
         let r = kcall(&mut c, Call::Stat { path }).await;
@@ -894,6 +945,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "fstat", |mut c: Caller<'_, Guest>, (fd, e, n): (i32, i32, i32)| Box::new(async move {
+        c.data_mut().s = [fd.word(), e.word(), n.word(), 0, 0];
         let r = async {
         let r = kcall(&mut c, Call::Fstat { fd }).await;
         statlike(&mut c, r, e, n)
@@ -904,6 +956,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "wstat", |mut c: Caller<'_, Guest>, (p, e, n): (i32, i32, i32)| Box::new(async move {
+        c.data_mut().s = [p.word(), e.word(), n.word(), 0, 0];
         let r = async {
         let (Ok(path), Ok(edir)) = (cstr(&mut c, p), read(&mut c, e, n)) else { return -1 };
         or_fail(kcall(&mut c, Call::Wstat { path, edir }).await, |_| 0)
@@ -914,6 +967,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "fwstat", |mut c: Caller<'_, Guest>, (fd, e, n): (i32, i32, i32)| Box::new(async move {
+        c.data_mut().s = [fd.word(), e.word(), n.word(), 0, 0];
         let r = async {
         let Ok(edir) = read(&mut c, e, n) else { return -1 };
         or_fail(kcall(&mut c, Call::Fwstat { fd, edir }).await, |_| 0)
@@ -924,6 +978,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "fversion", |mut c: Caller<'_, Guest>, (fd, m, v, n): (i32, i32, i32, i32)| Box::new(async move {
+        c.data_mut().s = [fd.word(), m.word(), v.word(), n.word(), 0];
         let r = async {
         let Ok(version) = cstr(&mut c, v) else { return -1 };
         let _ = n;
@@ -938,6 +993,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "rfork", |mut c: Caller<'_, Guest>, (flags,): (i32,)| Box::new(async move {
+        c.data_mut().s = [flags.word(), 0, 0, 0, 0];
         let r = async {
         // **A bare `rfork(RFPROC)` cannot be answered on this machine**, and
         // saying so is better than pretending. It returns twice — once into
@@ -981,6 +1037,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         "procrfork",
         |mut c: Caller<'_, Guest>, (f, arg, _stack, flags): (i32, i32, i32, i32)| {
             Box::new(async move {
+        c.data_mut().s = [f.word(), arg.word(), _stack.word(), flags.word(), 0];
         let r = async {
                 let child = match kcall(&mut c, Call::Rfork { flags: flags | rf::PROC | rf::MEM }).await {
                     Ok(Ret::Pid(p)) => p,
@@ -1031,7 +1088,9 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         },
     )?;
 
-    l.func_wrap_async("sys", "exec", |mut c: Caller<'_, Guest>, (p, a): (i32, i32)| Box::new(async move { let r: Result<i32, wasmtime::Error> = async {
+    l.func_wrap_async("sys", "exec", |mut c: Caller<'_, Guest>, (p, a): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [p.word(), a.word(), 0, 0, 0];
+        let r: Result<i32, wasmtime::Error> = async {
         let (Ok(path), Ok(args)) = (cstr(&mut c, p), cargv(&mut c, a)) else {
             return Ok(-1);
         };
@@ -1050,7 +1109,9 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         Ok(r)
     }))?;
 
-    l.func_wrap_async("sys", "exits", |mut c: Caller<'_, Guest>, (p,): (i32,)| Box::new(async move { let r: Result<(), wasmtime::Error> = async {
+    l.func_wrap_async("sys", "exits", |mut c: Caller<'_, Guest>, (p,): (i32,)| Box::new(async move {
+        c.data_mut().s = [p.word(), 0, 0, 0, 0];
+        let r: Result<(), wasmtime::Error> = async {
         // `exits(nil)` is the empty status, and nil is address zero.
         let status = if p == 0 { String::new() } else { cstr(&mut c, p).unwrap_or_default() };
         let _ = kcall(&mut c, Call::Exits { status }).await;
@@ -1063,6 +1124,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
 
     l.func_wrap_async("sys", "await", |mut c: Caller<'_, Guest>, (p, n): (i32, i32)| {
         Box::new(async move {
+        c.data_mut().s = [p.word(), n.word(), 0, 0, 0];
         let r = async {
             let msg = match kcall(&mut c, Call::Await).await {
                 Ok(Ret::Str(s)) => s,
@@ -1082,6 +1144,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     })?;
 
     l.func_wrap_async("sys", "errstr", |mut c: Caller<'_, Guest>, (p, n): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [p.word(), n.word(), 0, 0, 0];
         let r = async {
         // `generrstr` (`sysproc.c:748`) EXCHANGES and answers 0, never a
         // length: what the buffer held becomes the process's error string and
@@ -1106,6 +1169,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
 
     l.func_wrap_async("sys", "sleep", |mut c: Caller<'_, Guest>, (ms,): (i32,)| {
         Box::new(async move {
+        c.data_mut().s = [ms.word(), 0, 0, 0, 0];
         let r = async {
             match kcall(&mut c, Call::Sleep { ms: ms.max(0) as u64 }).await {
                 Ok(_) => 0,
@@ -1119,6 +1183,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     })?;
 
     l.func_wrap_async("sys", "alarm", |mut c: Caller<'_, Guest>, (ms,): (i32,)| Box::new(async move {
+        c.data_mut().s = [ms.word(), 0, 0, 0, 0];
         let r = async {
         // `ulong` in, `long` out: both 32 bits on this architecture.
         match kcall(&mut c, Call::Alarm { ms: ms as u32 as u64 }).await {
@@ -1132,6 +1197,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     }))?;
 
     l.func_wrap_async("sys", "notify", |mut c: Caller<'_, Guest>, (f,): (i32,)| Box::new(async move {
+        c.data_mut().s = [f.word(), 0, 0, 0, 0];
         let r = async {
         or_fail(kcall(&mut c, Call::Notify { f: f as u32 }).await, |_| 0)
     }
@@ -1143,6 +1209,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     // the note interrupted (`NCONT`, `NRSTR`), on in the handler (`NSAVE`),
     // or out of a process that is gone.
     l.func_wrap_async("sys", "noted", |mut c: Caller<'_, Guest>, (v,): (i32,)| Box::new(async move {
+        c.data_mut().s = [v.word(), 0, 0, 0, 0];
         let r = async {
         let r: Result<i32, wasmtime::Error> = async {
             match kcall(&mut c, Call::Noted { how: v }).await {
@@ -1165,6 +1232,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     // `:1225`). The address crosses as a number; the kernel reads and
     // swaps the word through [`Machine::load`] and [`Machine::cmpswap`].
     l.func_wrap_async("sys", "semacquire", |mut c: Caller<'_, Guest>, (addr, block): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [addr.word(), block.word(), 0, 0, 0];
         let r = or_fail(kcall(&mut c, Call::Semacquire { addr: addr as u32, block: block != 0 }).await, |v| match v {
             Ret::N(n) => n as i32,
             _ => -1,
@@ -1173,6 +1241,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         Ok::<_, wasmtime::Error>(r)
     }))?;
     l.func_wrap_async("sys", "tsemacquire", |mut c: Caller<'_, Guest>, (addr, ms): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [addr.word(), ms.word(), 0, 0, 0];
         let r = or_fail(kcall(&mut c, Call::Tsemacquire { addr: addr as u32, ms: ms as u32 as u64 }).await, |v| match v {
             Ret::N(n) => n as i32,
             _ => -1,
@@ -1181,6 +1250,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         Ok::<_, wasmtime::Error>(r)
     }))?;
     l.func_wrap_async("sys", "semrelease", |mut c: Caller<'_, Guest>, (addr, delta): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [addr.word(), delta.word(), 0, 0, 0];
         let r = or_fail(kcall(&mut c, Call::Semrelease { addr: addr as u32, delta }).await, |v| match v {
             Ret::N(n) => n as i32,
             _ => -1,
@@ -1189,6 +1259,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         Ok::<_, wasmtime::Error>(r)
     }))?;
     l.func_wrap_async("sys", "rendezvous", |mut c: Caller<'_, Guest>, (tag, val): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [tag.word(), val.word(), 0, 0, 0];
         let r = async {
         or_fail(
             kcall(&mut c, Call::Rendezvous { tag: tag as u32 as u64, val: val as u32 as u64 }).await,
@@ -1254,7 +1325,7 @@ mod tests {
         use wasmtime::ValType;
         let src = include_str!("../../../userspace/libc/wasm/sys.c");
         let w = Wasm::new().unwrap();
-        let mut store = Store::new(&w.engine, Guest { pid: 0, up: 0 });
+        let mut store = Store::new(&w.engine, Guest { pid: 0, up: 0, s: [0; MAXSYSARG] });
         let ty = |t: &str| if t.trim() == "vlong" { "i64" } else { "i32" };
         let mut n = 0;
         for line in src.lines().filter(|l| l.starts_with("SYS(")) {

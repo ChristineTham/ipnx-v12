@@ -147,6 +147,23 @@ pub struct Kernel {
     notes: std::collections::HashMap<Pid, machine::Notify>,
     /// `clunkq.q` (`chan.c:515`) — one `closeproc` closes at a time.
     clunkq: proc::QLock,
+    /// `imagealloc`'s cache (`segment.c:245`) — each image some process is
+    /// running, and its text segment. A segment nobody holds any more is
+    /// gone, as `putseg` frees it; the entry goes with it.
+    images: Vec<(ImageKey, std::rc::Weak<std::cell::RefCell<proc::Segment>>)>,
+}
+
+/// What `attachimage` compares to find an image already running
+/// (`segment.c:262`): *"eqqid(c->qid, i->qid) && eqqid(c->mqid, i->mqid) &&
+/// c->mchan == i->mchan && c->type == i->type"*. Plan 9 compares `mchan` by
+/// pointer; a channel here is a value, so it is compared by what names it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ImageKey {
+    dev: dev::DevId,
+    devno: u32,
+    qid: (u64, u32),
+    mqid: (u64, u32),
+    mchan: Option<(dev::DevId, u32, u64)>,
 }
 
 /// The rest of a call — what [`Kernel::labels`] holds.
@@ -188,6 +205,7 @@ impl Kernel {
             labels: std::collections::HashMap::new(),
             notes: std::collections::HashMap::new(),
             clunkq: proc::QLock::default(),
+            images: Vec::new(),
         })
     }
 
@@ -346,7 +364,7 @@ impl Kernel {
                 // *"remember how much time we're here"* (`runproc`,
                 // `proc.c:558`).
                 self.procs.borrow_mut().m.perf.inidle += now - start;
-                self.timerintr(now);
+                self.timerintr(now, None);
                 continue;
             };
             self.up.borrow_mut().pid = pid;
@@ -369,11 +387,14 @@ impl Kernel {
     /// portable `timerintr` it reaches through the machine's `clockintr`
     /// (`kw/clock.c:46`, `i8253clock` on the PC). The counters are `Mach`'s,
     /// and the machine cannot reach `Mach`, so they are counted here.
-    pub fn timerintr(&mut self, now: u64) {
+    ///
+    /// `pc` is `ur->pc` for an interrupt taken in user mode, and `None` for
+    /// one taken in the kernel.
+    pub fn timerintr(&mut self, now: u64, pc: Option<&dyn Fn() -> u64>) {
         let mut procs = self.procs.borrow_mut();
         procs.m.intr += 1;
         procs.m.perf.intrts = now;
-        procs.timerintr(now);
+        procs.timerintr(now, pc);
         drop(procs);
         // `addclock0link(kbdputcclock, 22)` (`devcons.c:671`): the console's
         // clock routine, which takes the keyboard in.
@@ -434,8 +455,34 @@ impl Kernel {
             }
             p.priority = p.basepri;
         }
+        // *"img = attachimage(SG_TEXT|SG_RONLY, tc, UTZERO, …)"*
+        // (`sysproc.c:530`) — the text segment, shared with whatever else
+        // is running this file.
+        let tseg = self.attachimage(&c, image.len() as u64);
+        if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
+            p.tseg = Some(tseg);
+        }
         self.tab.dclose(&mut c);
         Ok(image)
+    }
+
+    /// `attachimage` (`segment.c:245`): the text segment of the image `c`
+    /// is, found in the cache if something is running it already, else new.
+    fn attachimage(&mut self, c: &Chan, len: u64) -> std::rc::Rc<std::cell::RefCell<proc::Segment>> {
+        let key = ImageKey {
+            dev: c.dev,
+            devno: c.devno,
+            qid: (c.qid.path, c.qid.vers),
+            mqid: (c.mqid.path, c.mqid.vers),
+            mchan: c.mchan.as_ref().map(|m| (m.dev, m.devno, m.qid.path)),
+        };
+        self.images.retain(|(_, s)| s.strong_count() > 0);
+        if let Some(s) = self.images.iter().find(|(k, _)| *k == key).and_then(|(_, s)| s.upgrade()) {
+            return s;
+        }
+        let s = std::rc::Rc::new(std::cell::RefCell::new(proc::Segment { size: len, ..Default::default() }));
+        self.images.push((key, std::rc::Rc::downgrade(&s)));
+        s
     }
 }
 
@@ -605,6 +652,97 @@ mod tests {
     }
 }
 
+/// The call numbers (`libc/9syscall/sys.h`) — `up->scallnr`.
+pub mod sysno {
+    pub const BIND: u32 = 2;
+    pub const CHDIR: u32 = 3;
+    pub const CLOSE: u32 = 4;
+    pub const DUP: u32 = 5;
+    pub const ALARM: u32 = 6;
+    pub const EXEC: u32 = 7;
+    pub const EXITS: u32 = 8;
+    pub const OPEN: u32 = 14;
+    pub const SLEEP: u32 = 17;
+    pub const RFORK: u32 = 19;
+    pub const PIPE: u32 = 21;
+    pub const CREATE: u32 = 22;
+    pub const REMOVE: u32 = 25;
+    pub const NOTIFY: u32 = 28;
+    pub const NOTED: u32 = 29;
+    pub const RENDEZVOUS: u32 = 34;
+    pub const UNMOUNT: u32 = 35;
+    pub const SEMACQUIRE: u32 = 37;
+    pub const SEMRELEASE: u32 = 38;
+    pub const SEEK: u32 = 39;
+    pub const FVERSION: u32 = 40;
+    pub const ERRSTR: u32 = 41;
+    pub const STAT: u32 = 42;
+    pub const FSTAT: u32 = 43;
+    pub const WSTAT: u32 = 44;
+    pub const FWSTAT: u32 = 45;
+    pub const MOUNT: u32 = 46;
+    pub const AWAIT: u32 = 47;
+    pub const PREAD: u32 = 50;
+    pub const PWRITE: u32 = 51;
+    pub const TSEMACQUIRE: u32 = 52;
+}
+
+/// A call's number, `scallnr`.
+fn scallnr(c: &Call) -> u32 {
+    use sysno::*;
+    match c {
+        Call::Rfork { .. } => RFORK,
+        Call::Exec { .. } => EXEC,
+        Call::Exits { .. } => EXITS,
+        Call::Await => AWAIT,
+        Call::Sleep { .. } => SLEEP,
+        Call::Alarm { .. } => ALARM,
+        Call::Notify { .. } => NOTIFY,
+        Call::Noted { .. } => NOTED,
+        Call::Rendezvous { .. } => RENDEZVOUS,
+        Call::Semacquire { .. } => SEMACQUIRE,
+        Call::Tsemacquire { .. } => TSEMACQUIRE,
+        Call::Semrelease { .. } => SEMRELEASE,
+        Call::Bind { .. } => BIND,
+        Call::Mount { .. } => MOUNT,
+        Call::Unmount { .. } => UNMOUNT,
+        Call::Chdir { .. } => CHDIR,
+        Call::Open { .. } => OPEN,
+        Call::Create { .. } => CREATE,
+        Call::Close { .. } => CLOSE,
+        Call::Pread { .. } => PREAD,
+        Call::Pwrite { .. } => PWRITE,
+        Call::Seek { .. } => SEEK,
+        Call::Dup { .. } => DUP,
+        Call::Pipe => PIPE,
+        Call::Remove { .. } => REMOVE,
+        Call::Stat { .. } => STAT,
+        Call::Fstat { .. } => FSTAT,
+        Call::Wstat { .. } => WSTAT,
+        Call::Fwstat { .. } => FWSTAT,
+        Call::Fversion { .. } => FVERSION,
+        Call::Errstr { .. } => ERRSTR,
+    }
+}
+
+/// What the process is answered — the value `syscall()` puts in the return
+/// register (`pc/trap.c:751`, *"ureg->ax = ret"*), which on this machine the
+/// host turns each answer into. A failure is −1.
+fn retval(nr: u32, s: &[u64; machine::MAXSYSARG], r: &Result<Ret, String>) -> i64 {
+    let Ok(v) = r else { return -1 };
+    match v {
+        Ret::Ok | Ret::Two(..) | Ret::Sched => 0,
+        Ret::Fd(fd) => *fd as i64,
+        Ret::N(n) if nr == sysno::SEEK => *n as i64,
+        Ret::N(n) => *n as u32 as i32 as i64,
+        Ret::Data(d) => d.len() as i64,
+        Ret::Pid(p) => *p as i64,
+        // `await` answers what fitted in the caller's buffer; `errstr`, 0.
+        Ret::Str(m) if nr == sysno::AWAIT => m.len().min(s[1] as u32 as usize) as i64,
+        Ret::Str(_) | Ret::Wait(..) => 0,
+    }
+}
+
 /// `sysctab[]` (`port/systab.h:114`) — each call's name as `ps` shows it
 /// while a process is in it.
 fn sysctab(c: &Call) -> &'static str {
@@ -709,8 +847,11 @@ fn closeproc1(k: &mut Kernel, me: Pid) -> bool {
 }
 
 impl machine::Syscalls for Kernel {
-    fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
-        Kernel::syscall(self, up, call)
+    fn syscall(&mut self, up: Pid, call: Call, ureg: &machine::Ureg) -> Result<Ret, String> {
+        if let Some(p) = self.procs.borrow_mut().get_mut(up) {
+            p.s = ureg.s;
+        }
+        self.syscall_(up, call, ureg.pc)
     }
 
     fn resume(&mut self, up: Pid) -> Result<Ret, String> {
@@ -728,9 +869,9 @@ impl machine::Syscalls for Kernel {
         }
     }
 
-    fn timerintr(&mut self) -> bool {
+    fn timerintr(&mut self, pc: &dyn Fn() -> u64) -> bool {
         let now = self.machine.todget().nsec;
-        Kernel::timerintr(self, now);
+        Kernel::timerintr(self, now, Some(pc));
         // *"if(up && up->delaysched && clockintr && m->ilockdepth == 0)
         // sched();"* (`pc/trap.c:438`) — `ilockdepth` is always 0 here.
         let procs = self.procs.borrow();
@@ -769,17 +910,27 @@ impl Kernel {
     /// global; here it is the argument, because a Rust kernel cannot hand a
     /// device an ambient mutable global — the same information, made explicit.
     pub fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
-        // *"m->syscall++; up->insyscall = 1;"* (`pc/trap.c:673`), and
-        // *"up->psstate = sysctab[scallnr]"* (`:727`) — what `ps` shows while
-        // the call lasts.
-        {
+        self.syscall_(up, call, &|| 0)
+    }
+
+    fn syscall_(&mut self, up: Pid, call: Call, pc: &dyn Fn() -> u64) -> Result<Ret, String> {
+        // *"m->syscall++; up->insyscall = 1;"* and *"up->scallnr =
+        // scallnr"* (`pc/trap.c:673`–`:680`).
+        let traced = {
             let mut procs = self.procs.borrow_mut();
             procs.m.syscall += 1;
-            if let Some(p) = procs.get_mut(up) {
-                p.insyscall = true;
-                p.psstate = Some(sysctab(&call).to_string());
+            match procs.get_mut(up) {
+                Some(p) => {
+                    p.insyscall = true;
+                    p.scallnr = scallnr(&call);
+                    if let Call::Rfork { flags } = call {
+                        p.s[0] = flags as u32 as u64;
+                    }
+                    p.procctl == Some(proc::Procctl::Tracesyscall)
+                }
+                None => false,
             }
-        }
+        };
         // **`up` is the calling process, and it is set on the way in.** Plan 9
         // does not have to: `syscall()` (`pc/trap.c:665`) runs on the trapping
         // process's own kernel stack, so the per-machine `up` already names
@@ -787,15 +938,50 @@ impl Kernel {
         // in `devsrv`, `up->fgrp` in `devdup`, `up->egrp` in `devenv` — and if
         // it is not set, every one of them answers for whoever ran last.
         self.up.borrow_mut().pid = up;
-        // `sysrfork` ends *"ready(p); sched();"*, and that `sched` zeroes
-        // `up->delaysched` (`proc.c:154`) before `syscall()` reaches its own
-        // *"if(up->delaysched) sched();"* — so the switch after an `rfork`
-        // is `sysrfork`'s, never a second one. The machine takes it once
-        // the child has run on the parent's frames (RESEARCH §5.2).
-        let rforked = matches!(call, Call::Rfork { flags } if flags & proc::rf::PROC != 0);
-        let rfork = matches!(call, Call::Rfork { .. });
-        let r = self.dispatch(up, call);
-        self.syscall_tail(up, r, rforked, rfork)
+        // *"if(up->procctl == Proc_tracesyscall){ syscallfmt(…); up->procctl
+        // = Proc_stopme; procctl(up); … startns = todget(nil, nil); }"*
+        // (`pc/trap.c:682`) — stop before the call, with what it is about
+        // to do where a tracer reads it; the call runs when it is started.
+        if traced {
+            // `syscallfmt` reads the process's strings, and a bad address is
+            // `validaddr`'s error there, raised outside the call's own
+            // `waserror`: the call does not run, and fails with it.
+            let t = match self.syscallfmt(up, &call, pc) {
+                Ok(t) => t,
+                Err(e) => {
+                    self.procs.borrow_mut().get_mut(up).map(|p| p.procctl = None);
+                    return self.syscall_tail(up, Err(e));
+                }
+            };
+            {
+                let mut procs = self.procs.borrow_mut();
+                let p = procs.get_mut(up).expect("traced");
+                p.syscalltrace = Some(t);
+                p.procctl = Some(proc::Procctl::Stopme);
+            }
+            self.procctl(up);
+            self.procs.borrow_mut().take_setlabel(up);
+            self.labels.insert(up, Box::new(move |k, up| {
+                let now = k.machine.todget().nsec;
+                if let Some(p) = k.procs.borrow_mut().get_mut(up) {
+                    p.syscalltrace = None;
+                    p.startns = now;
+                }
+                k.dispatch_(up, call)
+            }));
+            return Ok(Ret::Sched);
+        }
+        let r = self.dispatch_(up, call);
+        self.syscall_tail(up, r)
+    }
+
+    /// *"up->psstate = sysctab[scallnr]; ret = systab[scallnr](up->s.args);"*
+    /// (`pc/trap.c:727`) — what `ps` shows while the call lasts, and the call.
+    fn dispatch_(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
+        if let Some(p) = self.procs.borrow_mut().get_mut(up) {
+            p.psstate = Some(sysctab(&call).to_string());
+        }
+        self.dispatch(up, call)
     }
 
     /// **The process is entered again in the middle of a call it left** —
@@ -805,22 +991,25 @@ impl Kernel {
         self.up.borrow_mut().pid = up;
         let label = self.labels.remove(&up).ok_or("the process left no call to go back to")?;
         let r = label(self, up);
-        self.syscall_tail(up, r, false, false)
+        self.syscall_tail(up, r)
     }
 
     /// The end of `syscall()` (`pc/trap.c:739`–`:780`), after the call's own
-    /// work.
-    /// `rforked`: the call was `rfork(RFPROC)`, whose own `sched` is still
-    /// to come.
-    /// `rfork`: it was `rfork` at all, which `notify` is not called after
-    /// (`pc/trap.c:773`, *"scallnr!=RFORK"*).
-    fn syscall_tail(
-        &mut self,
-        up: Pid,
-        r: Result<Ret, String>,
-        rforked: bool,
-        rfork: bool,
-    ) -> Result<Ret, String> {
+    /// work. What it does depends on which call it was, `up->scallnr`: an
+    /// `rfork` is not followed by `notify` (`:773`, *"scallnr!=RFORK"*), and
+    /// after `rfork(RFPROC)` `sysrfork`'s own *"ready(p); sched();"* is
+    /// still to come — and that `sched` zeroes `up->delaysched`
+    /// (`proc.c:154`) before `syscall()` reaches *"if(up->delaysched)
+    /// sched();"*, so the switch after an `rfork` is `sysrfork`'s, never a
+    /// second one. The machine takes it once the child has run on the
+    /// parent's frames (RESEARCH §5.2).
+    fn syscall_tail(&mut self, up: Pid, r: Result<Ret, String>) -> Result<Ret, String> {
+        let (rfork, rforked) = {
+            let procs = self.procs.borrow();
+            let p = procs.get(up);
+            let rfork = p.is_some_and(|p| p.scallnr == sysno::RFORK);
+            (rfork, rfork && p.is_some_and(|p| p.s[0] as i32 & proc::rf::PROC != 0))
+        };
         // `ccloseq` could not make a `closeproc` from inside a device; the
         // call's end can.
         if std::mem::take(&mut self.procs.borrow_mut().closeproc) {
@@ -840,7 +1029,43 @@ impl Kernel {
         // `insyscall`, so the tick is `TSys`'s (`accounttime`, `proc.c:1624`).
         let now = self.machine.todget().nsec;
         if self.procs.borrow().m.hz.is_some_and(|h| h <= now) {
-            self.timerintr(now);
+            self.timerintr(now, None);
+        }
+        // *"if(up->procctl == Proc_tracesyscall){ stopns = todget(nil, nil);
+        // up->procctl = Proc_stopme; sysretfmt(…); procctl(up); … }"*
+        // (`pc/trap.c:755`) — stop after the call, with what it answered.
+        // When the process is started again it comes back here with the
+        // trace still set, and *"free(up->syscalltrace); up->syscalltrace =
+        // nil"* is what it does then.
+        //
+        // A process stopped later than this — in `notify`'s `procctl`, or
+        // by the `sched` at the very end — is past this point, and has
+        // `insyscall` clear already (`pc/trap.c:767`): started again with
+        // `startsyscall`, it is traced from its NEXT call, not this one.
+        let (back, tracing, startns) = {
+            let mut procs = self.procs.borrow_mut();
+            match procs.get_mut(up) {
+                Some(p) => (
+                    p.syscalltrace.take().is_some(),
+                    p.insyscall && p.procctl == Some(proc::Procctl::Tracesyscall),
+                    p.startns,
+                ),
+                None => (false, false, 0),
+            }
+        };
+        if !back && tracing {
+            let t = self.sysretfmt(up, &r, startns, now);
+            {
+                let mut procs = self.procs.borrow_mut();
+                let p = procs.get_mut(up).expect("tracing");
+                p.procctl = Some(proc::Procctl::Stopme);
+                p.syscalltrace = Some(t);
+            }
+            self.procctl(up);
+            self.procs.borrow_mut().take_setlabel(up);
+            let answer = r.clone();
+            self.labels.insert(up, Box::new(move |_, _| answer));
+            return Ok(Ret::Sched);
         }
         // *"up->insyscall = 0; up->psstate = 0;"* (`pc/trap.c:767`).
         if let Some(p) = self.procs.borrow_mut().get_mut(up) {
@@ -1019,6 +1244,46 @@ impl Kernel {
     /// because a machine whose guest can only be entered from a host call
     /// cannot enter it from an interrupt. A note that ends the process does
     /// not wait.
+    /// `procctl` (`proc.c:1480`) — do what `p->procctl` asks. `None` is it
+    /// asked nothing this can do now, and the caller carries on.
+    fn procctl(&mut self, up: Pid) -> Option<machine::Notify> {
+        use proc::{Procctl, State};
+        let (procctl, nnote) = {
+            let procs = self.procs.borrow();
+            let p = procs.get(up)?;
+            (p.procctl, p.note.len())
+        };
+        match procctl {
+            // *"case Proc_exitme: pexit("Killed", 1)"*.
+            Some(Procctl::Exitme) => {
+                self.procs.borrow_mut().get_mut(up).map(|p| p.procctl = None);
+                self.pexit(up, "Killed", true);
+                Some(machine::Notify::Pexit)
+            }
+            // *"case Proc_traceme: if(p->nnote == 0) return; /* No break
+            // */"* — a tracer asked to see the next note.
+            Some(Procctl::Traceme) if nnote == 0 => None,
+            // *"case Proc_stopme: p->procctl = 0; … p->psstate = "Stopped";
+            // … wakeup(&p->pdbg->sleep) … p->state = Stopped; sched();"*.
+            // The `psstate` it had is put back when it is started (`start`
+            // clears it here, and the call's own resumes).
+            Some(Procctl::Traceme) | Some(Procctl::Stopme) => {
+                let mut procs = self.procs.borrow_mut();
+                let p = procs.get_mut(up).expect("checked");
+                p.procctl = None;
+                p.psstate = Some("Stopped".into());
+                let pdbg = p.pdbg.take();
+                p.state = State::Stopped;
+                if let Some(d) = pdbg {
+                    procs.wakeup(proc::Rid::Proc(d, proc::Which::Sleep));
+                }
+                procs.setlabel(up);
+                Some(machine::Notify::Sched)
+            }
+            Some(Procctl::Tracesyscall) | None => None,
+        }
+    }
+
     fn notify_(&mut self, up: Pid, at: machine::NoteAt) -> machine::Notify {
         use machine::Notify;
         use proc::{NoteFlag, Procctl, State};
@@ -1030,29 +1295,12 @@ impl Kernel {
         if matches!(state, State::Moribund | State::Dead) {
             return Notify::Pexit;
         }
-        // `procctl` (`proc.c:1494`): *"case Proc_exitme: pexit("Killed", 1)"*.
-        if procctl == Some(Procctl::Exitme) {
-            self.procs.borrow_mut().get_mut(up).map(|p| p.procctl = None);
-            self.pexit(up, "Killed", true);
-            return Notify::Pexit;
-        }
-        // `procctl`'s `Proc_stopme` (`proc.c:1503`): *"Stopped"*, free a
-        // waiting debugger, and `sched()`.
-        if procctl == Some(Procctl::Stopme) {
-            if at == machine::NoteAt::Fault {
-                return Notify::No;
+        // *"if(up->procctl) procctl(up);"* (`pc/trap.c:796`). A fault leaves
+        // nothing to stop in: the process is ending.
+        if procctl.is_some() && !(at == machine::NoteAt::Fault && procctl != Some(Procctl::Exitme)) {
+            if let Some(n) = self.procctl(up) {
+                return n;
             }
-            let mut procs = self.procs.borrow_mut();
-            let p = procs.get_mut(up).expect("checked");
-            p.procctl = None;
-            p.psstate = Some("Stopped".into());
-            let pdbg = p.pdbg.take();
-            p.state = State::Stopped;
-            if let Some(d) = pdbg {
-                procs.wakeup(proc::Rid::Proc(d, proc::Which::Sleep));
-            }
-            procs.setlabel(up);
-            return Notify::Sched;
         }
         let (n, notified, handler) = {
             let procs = self.procs.borrow();
@@ -1338,20 +1586,6 @@ impl Kernel {
             // if(n < TK2MS(1)) n = TK2MS(1);
             // tsleep(&up->sleep, return0, 0, n);
             // ```
-            //
-            // **`yield` is a no-op here and that is not an approximation.**
-            // It gives up the processor to whatever else is runnable, and on
-            // this machine nothing else is: a child made by `procrfork` runs
-            // to its end inside the call that made it (`machine.rs`), so at
-            // any moment exactly one process can run. Yielding to nobody is
-            // returning.
-            //
-            // For the other branch Plan 9 has two mechanisms and this kernel
-            // has the second: `tsleep` puts the process on a queue and
-            // `sched()`s, which needs a scheduler; `delay` (`pc/fns.h:23`)
-            // waits where it stands. **With one runnable process they are
-            // observationally the same thing**, so the wait goes to the
-            // machine, which is where Plan 9 puts `delay` too.
             Call::Sleep { ms } => {
                 if ms == 0 {
                     // `yield()` (`proc.c:454`): *"if(anyready()){ ... sched();
@@ -1497,6 +1731,235 @@ impl Kernel {
         }
     }
 
+    // ---- syscall tracing (`port/syscallfmt.c`) -----------------------------
+
+    /// `validaddr` (`fault.c:310`) for a read the kernel makes of the
+    /// process's memory: `okaddr`'s *"suicide: invalid address"*, then
+    /// *"sys: bad address in syscall"* and `Ebadarg`.
+    fn validaddr(&mut self, up: Pid, addr: u32, len: u32) -> Result<(), String> {
+        let last = addr.checked_add(len.max(1) - 1);
+        let ok = last.is_some_and(|l| self.machine.load(up, addr & !3).is_ok() && self.machine.load(up, l & !3).is_ok());
+        if !ok {
+            self.pprint(up, &format!("suicide: invalid address {addr:#x}/{len} in sys call\n"));
+            self.procs.borrow_mut().postnote(up, "sys: bad address in syscall", proc::NoteFlag::NDebug);
+            return Err(proc::Procs::EBADARG.into());
+        }
+        Ok(())
+    }
+
+    /// `validalign` (`pc/trap.c:964`): *"sys: odd address"* and `Ebadarg`.
+    fn validalign(&mut self, up: Pid, addr: u32, align: u32) -> Result<(), String> {
+        if addr & (align - 1) != 0 {
+            self.procs.borrow_mut().postnote(up, "sys: odd address", proc::NoteFlag::NDebug);
+            return Err(proc::Procs::EBADARG.into());
+        }
+        Ok(())
+    }
+
+    /// The byte at `addr` in the process's memory, by the word it is in —
+    /// the only way the machine reaches that memory (`Machine::load`).
+    fn userbyte(&self, up: Pid, addr: u32) -> Result<u8, String> {
+        let w = self.machine.load(up, addr & !3)?;
+        Ok(w.to_le_bytes()[(addr & 3) as usize])
+    }
+
+    /// `fmtuserstring` (`syscallfmt.c:37`): *"%#p/\"%s\"%s"*, or *"0/\"\""*
+    /// for nil — the string read out of the process up to its NUL
+    /// (`vmemchr`).
+    fn fmtuserstring(&mut self, up: Pid, f: &mut String, a: u32, suffix: &str) -> Result<(), String> {
+        if a == 0 {
+            f.push_str(&format!("0/\"\"{suffix}"));
+            return Ok(());
+        }
+        self.validaddr(up, a, 1)?;
+        let mut t = Vec::new();
+        let mut at = a;
+        loop {
+            let b = match self.userbyte(up, at) {
+                Ok(b) => b,
+                Err(_) => return self.validaddr(up, at, 1),
+            };
+            if b == 0 {
+                break;
+            }
+            t.push(b);
+            at = at.wrapping_add(1);
+        }
+        f.push_str(&format!("{a:#x}/\"{}\"{suffix}", String::from_utf8_lossy(&t)));
+        Ok(())
+    }
+
+    /// `fmtrwdata` (`syscallfmt.c:13`): *" %#p/\"%s\"%s"* with anything
+    /// that is not printable ASCII as a dot, or *"0x0"* for nil. The bytes
+    /// are given: a write's are the call's own, and a read's are what it
+    /// answered, which the machine has not yet written into the process
+    /// when the trace is made.
+    fn fmtrwdata(f: &mut String, a: u32, data: &[u8], suffix: &str) {
+        if a == 0 {
+            f.push_str(&format!("0x0{suffix}"));
+            return;
+        }
+        let t: String = data.iter().map(|&c| if (0x20..0x7f).contains(&c) { c as char } else { '.' }).collect();
+        f.push_str(&format!(" {a:#x}/\"{t}\"{suffix}"));
+    }
+
+    /// `syscallfmt` (`syscallfmt.c:55`) — the line a tracer reads from
+    /// `/proc/n/syscall` while the process is stopped on its way into a call:
+    /// pid, text, the call's name, the pc, and its arguments as the process
+    /// passed them, strings read out of its memory.
+    fn syscallfmt(&mut self, up: Pid, call: &Call, pc: &dyn Fn() -> u64) -> Result<String, String> {
+        let (text, sa) = {
+            let procs = self.procs.borrow();
+            let p = procs.get(up).ok_or("no such process")?;
+            (p.text.clone(), p.s)
+        };
+        let a = |i: usize| sa[i] as u32;
+        let d = |i: usize| sa[i] as u32 as i32;
+        let mut f = format!("{up} {text} {} {:x} ", sysctab(call), pc());
+        match call {
+            Call::Chdir { .. } | Call::Exits { .. } | Call::Remove { .. } => {
+                self.fmtuserstring(up, &mut f, a(0), "")?;
+            }
+            Call::Bind { .. } => {
+                self.fmtuserstring(up, &mut f, a(0), " ")?;
+                self.fmtuserstring(up, &mut f, a(1), " ")?;
+                f.push_str(&format!("{:#x}", a(2)));
+            }
+            Call::Close { .. } | Call::Noted { .. } => f.push_str(&format!("{}", d(0))),
+            Call::Dup { .. } => f.push_str(&format!("{} {}", d(0), d(1))),
+            Call::Alarm { .. } => f.push_str(&format!("{} ", a(0))),
+            Call::Exec { .. } => {
+                self.fmtuserstring(up, &mut f, a(0), "")?;
+                let mut argv = a(1);
+                self.validalign(up, argv, 4)?;
+                loop {
+                    self.validaddr(up, argv, 4)?;
+                    let s = self.machine.load(up, argv)? as u32;
+                    if s == 0 {
+                        break;
+                    }
+                    f.push(' ');
+                    self.fmtuserstring(up, &mut f, s, "")?;
+                    argv = argv.wrapping_add(4);
+                }
+            }
+            Call::Rendezvous { .. } => f.push_str(&format!("{:#x} {:#x}", a(0), a(1))),
+            Call::Open { .. } => {
+                self.fmtuserstring(up, &mut f, a(0), " ")?;
+                f.push_str(&format!("{:#x}", a(1)));
+            }
+            Call::Sleep { .. } => f.push_str(&format!("{}", d(0))),
+            Call::Rfork { .. } => f.push_str(&format!("{:#x}", a(0))),
+            Call::Pipe | Call::Notify { .. } => f.push_str(&format!("{:#x}", a(0))),
+            Call::Create { .. } => {
+                self.fmtuserstring(up, &mut f, a(0), " ")?;
+                f.push_str(&format!("{:#x} {:#x}", a(1), a(2)));
+            }
+            Call::Fstat { .. } | Call::Fwstat { .. } => {
+                f.push_str(&format!("{} {:#x} {}", d(0), a(1), a(2)));
+            }
+            Call::Unmount { .. } => {
+                self.fmtuserstring(up, &mut f, a(0), " ")?;
+                self.fmtuserstring(up, &mut f, a(1), "")?;
+            }
+            Call::Semacquire { .. } | Call::Semrelease { .. } | Call::Tsemacquire { .. } => {
+                f.push_str(&format!("{:#x} {}", a(0), d(1)));
+            }
+            // *"%#p %d %#llux %d"* — the first is where the PC's stub has the
+            // kernel write the new offset. This machine answers it instead,
+            // so there is no such address, and it is nil.
+            Call::Seek { .. } => {
+                f.push_str(&format!("{:#x} {} {:#x} {}", 0, d(0), sa[1], d(2)));
+            }
+            Call::Fversion { .. } => {
+                f.push_str(&format!("{} {} ", d(0), d(1)));
+                self.fmtuserstring(up, &mut f, a(2), " ")?;
+                f.push_str(&format!("{}", a(3)));
+            }
+            Call::Wstat { .. } | Call::Stat { .. } => {
+                self.fmtuserstring(up, &mut f, a(0), " ")?;
+                f.push_str(&format!("{:#x} {}", a(1), a(2)));
+            }
+            Call::Errstr { .. } | Call::Await => f.push_str(&format!("{:#x} {}", a(0), a(1))),
+            Call::Mount { .. } => {
+                f.push_str(&format!("{} {} ", d(0), d(1)));
+                self.fmtuserstring(up, &mut f, a(2), " ")?;
+                f.push_str(&format!("{:#x} ", a(3)));
+                self.fmtuserstring(up, &mut f, a(4), "")?;
+            }
+            Call::Pread { .. } => {
+                f.push_str(&format!("{} {:#x} {} {}", d(0), a(1), d(2), sa[3] as i64));
+            }
+            Call::Pwrite { data, .. } => {
+                f.push_str(&format!("{} ", d(0)));
+                Self::fmtrwdata(&mut f, a(1), &data[..data.len().min(64)], " ");
+                f.push_str(&format!("{} {}", d(2), sa[3] as i64));
+            }
+        }
+        Ok(f)
+    }
+
+    /// `sysretfmt` (`syscallfmt.c:338`) — the line for the way out: what the
+    /// call answered, its error if it failed, and when it began and ended.
+    fn sysretfmt(&mut self, up: Pid, r: &Result<Ret, String>, start: u64, stop: u64) -> String {
+        let (nr, sa, syserrstr) = {
+            let procs = self.procs.borrow();
+            let Some(p) = procs.get(up) else { return String::new() };
+            (p.scallnr, p.s, p.errstr.clone())
+        };
+        let a = |i: usize| sa[i] as u32;
+        let e = r.as_ref().err().cloned().unwrap_or_default();
+        let ret = retval(nr, &sa, r);
+        let mut errstr = "\"\"".to_string();
+        let mut f = String::new();
+        match nr {
+            sysno::EXEC | sysno::RENDEZVOUS => {
+                if ret as u32 == u32::MAX {
+                    errstr = e;
+                }
+                f.push_str(&format!(" = {:#x}", ret as u32));
+            }
+            sysno::AWAIT => {
+                let (l, msg) = (a(1), match r {
+                    Ok(Ret::Str(m)) => m.clone(),
+                    _ => String::new(),
+                });
+                if ret > 0 {
+                    let b = &msg.as_bytes()[..ret as usize];
+                    f.push_str(&format!("{:#x}/\"{}\" ", a(0), String::from_utf8_lossy(b)));
+                    f.push_str(&format!("{l} = {ret}"));
+                } else {
+                    f.push_str(&format!("{:#x}/\"\" {l} = {ret}", a(0)));
+                    errstr = e;
+                }
+            }
+            // `generrstr` answers 0, so this is always the second branch,
+            // and *"errstr = up->syserrstr"* is what the exchange left.
+            sysno::ERRSTR => {
+                f.push_str(&format!("\"\" {} = {ret}", a(1)));
+                errstr = syserrstr;
+            }
+            sysno::PREAD => {
+                match r {
+                    Ok(Ret::Data(b)) if ret > 0 => Self::fmtrwdata(&mut f, a(1), &b[..b.len().min(64)], ""),
+                    _ => {
+                        f.push_str("/\"\"");
+                        errstr = e;
+                    }
+                }
+                f.push_str(&format!(" {} {} = {ret}", sa[2] as u32 as i32, sa[3] as i64));
+            }
+            _ => {
+                if ret == -1 {
+                    errstr = e;
+                }
+                f.push_str(&format!(" = {ret}"));
+            }
+        }
+        f.push_str(&format!(" {errstr} {start} {stop}\n"));
+        f
+    }
+
     // ---- semaphores (`sysproc.c:954`–`:1240`) ----------------------------
 
     /// *"validaddr(arg[0], sizeof(long), 1); validalign(arg[0],
@@ -1508,16 +1971,8 @@ impl Kernel {
     /// address"*. Both notes are `NDebug`, so the process dies of them on
     /// its way out of the call, and both calls fail with `Ebadarg`.
     fn validlong(&mut self, up: Pid, addr: u32) -> Result<(), String> {
-        if self.machine.load(up, addr).is_err() {
-            self.pprint(up, &format!("suicide: invalid address {addr:#x}/4 in sys call\n"));
-            self.procs.borrow_mut().postnote(up, "sys: bad address in syscall", proc::NoteFlag::NDebug);
-            return Err(proc::Procs::EBADARG.into());
-        }
-        if addr & 3 != 0 {
-            self.procs.borrow_mut().postnote(up, "sys: odd address", proc::NoteFlag::NDebug);
-            return Err(proc::Procs::EBADARG.into());
-        }
-        Ok(())
+        self.validaddr(up, addr, 4)?;
+        self.validalign(up, addr, 4)
     }
 
     /// `canacquire` (`sysproc.c:1085`): *"while((value=*addr) > 0) if(cmpswap(addr,
@@ -2016,7 +2471,7 @@ mod syscalls {
         k.runkproc(alarm);
         k.procs.borrow_mut().timersinit(0);
         for t in 1..=3 {
-            k.timerintr(t * 10_000_000);
+            k.timerintr(t * 10_000_000, None);
         }
         assert_eq!(k.procs.borrow().state(alarm), proc::State::Ready, "checkalarms woke it");
         k.runkproc(alarm);
@@ -2043,6 +2498,166 @@ mod syscalls {
         );
         assert_eq!(k.syscall(1, Call::Rendezvous { tag: 7, val: 200 }), Ok(Ret::N(100)));
         assert_eq!(k.resume(c), Ok(Ret::N(200)));
+    }
+
+    /// Put a NUL-terminated string into the test machine's memory at `at`.
+    fn poke(log: &std::rc::Rc<std::cell::RefCell<tests::Log>>, at: u32, text: &str) {
+        let mut b = text.as_bytes().to_vec();
+        b.push(0);
+        while b.len() % 4 != 0 {
+            b.push(0);
+        }
+        for (i, w) in b.chunks(4).enumerate() {
+            log.borrow_mut().mem.insert(at + 4 * i as u32, i32::from_le_bytes([w[0], w[1], w[2], w[3]]));
+        }
+    }
+
+    /// A call as the machine makes it, with the raw words and a pc.
+    fn trap(k: &mut Kernel, up: Pid, call: Call, s: [u64; machine::MAXSYSARG]) -> Result<Ret, String> {
+        machine::Syscalls::syscall(k, up, call, &machine::Ureg { s, pc: &|| 0x1234 })
+    }
+
+    fn trace(k: &Kernel, pid: Pid) -> Option<String> {
+        k.procs.borrow().get(pid).and_then(|p| p.syscalltrace.clone())
+    }
+
+    /// `startsyscall`: the process stops on its way into its next call with
+    /// `syscallfmt`'s line (`pc/trap.c:682`), runs the call when started, and
+    /// — started with `startsyscall` again — stops on the way out with
+    /// `sysretfmt`'s (`:755`). Started plainly, it goes on.
+    #[test]
+    fn a_traced_call_stops_on_the_way_in_and_out() {
+        let (mut k, log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        poke(&log, 0x40, "/nothing");
+        k.procs.borrow_mut().get_mut(1).unwrap().procctl = Some(proc::Procctl::Tracesyscall);
+        let open = Call::Open { path: "/nothing".into(), mode: 0 };
+        assert_eq!(trap(&mut k, 1, open, [0x40, 0, 0, 0, 0]), Ok(Ret::Sched));
+        assert_eq!(k.procs.borrow().state(1), proc::State::Stopped);
+        assert_eq!(trace(&k, 1).as_deref(), Some("1 init Open 1234 0x40/\"/nothing\" 0x0"));
+        // `startsyscall` again: ready, and traced on the way out.
+        k.procs.borrow_mut().get_mut(1).unwrap().procctl = Some(proc::Procctl::Tracesyscall);
+        k.procs.borrow_mut().ready(1);
+        assert_eq!(k.resume(1), Ok(Ret::Sched));
+        assert_eq!(k.procs.borrow().state(1), proc::State::Stopped);
+        let t = trace(&k, 1).unwrap();
+        assert!(t.starts_with(" = -1 'nothing' does not exist ") && t.ends_with('\n'), "{t:?}");
+        // `start`: the call ends as it would have, and the trace is gone.
+        k.procs.borrow_mut().ready(1);
+        assert!(k.resume(1).is_err());
+        assert_eq!(trace(&k, 1), None);
+        // Nothing asked for more: the next call is not stopped.
+        assert_eq!(trap(&mut k, 1, Call::Close { fd: 9 }, [9, 0, 0, 0, 0]).is_err(), true);
+    }
+
+    /// The arguments are shown as `syscallfmt` shows them — addresses as
+    /// addresses, strings read out of the process, a write's first bytes
+    /// with the unprintable as dots — and a read's answer as `sysretfmt`
+    /// does.
+    #[test]
+    fn syscallfmt_shows_the_arguments_as_the_process_passed_them() {
+        let (mut k, log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        poke(&log, 0x80, "new");
+        poke(&log, 0x90, "old");
+        let cases: Vec<(Call, [u64; 5], &str)> = vec![
+            (Call::Bind { name: "new".into(), old: "old".into(), flag: 1 }, [0x80, 0x90, 1, 0, 0], "Bind 1234 0x80/\"new\" 0x90/\"old\" 0x1"),
+            (Call::Pwrite { fd: 1, data: b"hi\n".to_vec(), off: -1 }, [1, 0x100, 3, u64::MAX, 0], "Pwrite 1234 1  0x100/\"hi.\" 3 -1"),
+            (Call::Pread { fd: 0, n: 8, off: 0 }, [0, 0x200, 8, 0, 0], "Pread 1234 0 0x200 8 0"),
+            (Call::Unmount { name: None, old: "old".into() }, [0, 0x90, 0, 0, 0], "Unmount 1234 0/\"\" 0x90/\"old\""),
+            (Call::Sleep { ms: 10 }, [10, 0, 0, 0, 0], "Sleep 1234 10"),
+            (Call::Rfork { flags: 0x20 }, [0x20, 0, 0, 0, 0], "Rfork 1234 0x20"),
+        ];
+        for (call, s, want) in cases {
+            k.procs.borrow_mut().get_mut(1).unwrap().s = s;
+            let got = k.syscallfmt(1, &call, &|| 0x1234).unwrap();
+            assert_eq!(got, format!("1 init {want}"));
+        }
+        k.procs.borrow_mut().get_mut(1).unwrap().scallnr = sysno::PREAD;
+        k.procs.borrow_mut().get_mut(1).unwrap().s = [0, 0x200, 8, 0, 0];
+        let t = k.sysretfmt(1, &Ok(Ret::Data(b"ab\x01".to_vec())), 5, 7);
+        assert_eq!(t, " 0x200/\"ab.\" 8 0 = 3 \"\" 5 7\n");
+    }
+
+    /// A string that runs off the process's memory is `validaddr`'s: the
+    /// call fails without running, and the `NDebug` note ends the process on
+    /// its way out, as *"sys: bad address in syscall"* does.
+    #[test]
+    fn a_traced_call_with_a_bad_string_fails() {
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        k.procs.borrow_mut().get_mut(1).unwrap().procctl = Some(proc::Procctl::Tracesyscall);
+        let r = trap(&mut k, 1, Call::Chdir { path: "x".into() }, [0x20000, 0, 0, 0, 0]);
+        assert_eq!(r, Err(proc::Procs::EBADARG.into()));
+        assert_eq!(k.procs.borrow().state(1), proc::State::Broken);
+    }
+
+    /// A process `stop`ped at the end of a call and started with
+    /// `startsyscall` is traced from its next call: the stop was in
+    /// `notify`, past the point where the call's own exit is traced.
+    #[test]
+    fn startsyscall_after_a_stop_traces_the_next_call() {
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        k.procs.borrow_mut().get_mut(1).unwrap().procctl = Some(proc::Procctl::Stopme);
+        assert_eq!(trap(&mut k, 1, Call::Sleep { ms: 0 }, [0; 5]), Ok(Ret::Sched));
+        assert_eq!(k.procs.borrow().state(1), proc::State::Stopped);
+        k.procs.borrow_mut().get_mut(1).unwrap().procctl = Some(proc::Procctl::Tracesyscall);
+        k.procs.borrow_mut().ready(1);
+        assert_eq!(k.resume(1), Ok(Ret::Ok), "no trace of the call that had ended");
+        assert_eq!(trace(&k, 1), None);
+        assert_eq!(trap(&mut k, 1, Call::Sleep { ms: 0 }, [0; 5]), Ok(Ret::Sched));
+        assert_eq!(trace(&k, 1).as_deref(), Some("1 init Sleep 1234 0"));
+    }
+
+    /// `startstop` is `Proc_traceme`: nothing happens until a note is
+    /// pending, and then the process stops before taking it (`proc.c:1498`).
+    #[test]
+    fn traceme_stops_at_the_next_note() {
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        k.procs.borrow_mut().get_mut(1).unwrap().procctl = Some(proc::Procctl::Traceme);
+        assert_eq!(k.syscall(1, Call::Sleep { ms: 0 }), Ok(Ret::Ok), "no note: it runs on");
+        k.procs.borrow_mut().postnote(1, "interrupt", proc::NoteFlag::NUser);
+        assert_eq!(k.syscall(1, Call::Sleep { ms: 0 }), Ok(Ret::Sched));
+        assert_eq!(k.procs.borrow().state(1), proc::State::Stopped);
+        assert_eq!(k.procs.borrow().get(1).unwrap().note.len(), 1, "the note is still there to take");
+    }
+
+    /// `exec` attaches the text segment, and two processes running the same
+    /// file share one (`attachimage`); `rfork` shares it whatever the flags.
+    #[test]
+    fn processes_running_the_same_image_share_its_text() {
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        let Ret::Pid(c) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        let Ret::Pid(d) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        k.exec(d, "/boot/init", &[]).unwrap();
+        let p = k.procs.borrow();
+        let t = |pid| p.get(pid).unwrap().tseg.clone().unwrap();
+        assert!(std::rc::Rc::ptr_eq(&t(1), &t(c)), "rfork shares it");
+        assert!(std::rc::Rc::ptr_eq(&t(1), &t(d)), "exec of the same file finds it");
+        assert_eq!(t(1).borrow().size, b"an image".len() as u64);
+    }
+
+    /// `profclock`: every 113ms in user mode, a tick is charged to the text
+    /// segment's profile at the pc — the total in `[0]` — and nothing is
+    /// charged for a tick taken in the kernel (`devproc.c:169`).
+    #[test]
+    fn profclock_charges_the_text_at_the_pc() {
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        let tseg = k.procs.borrow().get(1).unwrap().tseg.clone().unwrap();
+        tseg.borrow_mut().profile = Some(vec![0; 1]);
+        k.procs.borrow_mut().timersinit(0);
+        k.procs.borrow_mut().up = Some(1);
+        k.procs.borrow_mut().setstate(1, proc::State::Running);
+        k.timerintr(113_000_000, None);
+        assert_eq!(tseg.borrow().profile.as_ref().unwrap()[0], 0, "in the kernel: not charged");
+        k.timerintr(226_000_000, Some(&|| 4));
+        assert_eq!(tseg.borrow().profile.as_ref().unwrap()[0], 20, "total and the pc's slot are both [0] here");
+        k.timerintr(250_000_000, Some(&|| 4));
+        assert_eq!(tseg.borrow().profile.as_ref().unwrap()[0], 20, "not due yet");
     }
 
     /// `semrelease` adds and answers the new value; `semacquire` takes one
@@ -2113,7 +2728,7 @@ mod syscalls {
         k.procs.borrow_mut().timersinit(now);
         assert_eq!(k.syscall(1, Call::Tsemacquire { addr: 8, ms: 30 }), Ok(Ret::Sched));
         for t in 1..=4 {
-            k.timerintr(now + t * 10_000_000);
+            k.timerintr(now + t * 10_000_000, None);
         }
         assert_eq!(k.procs.borrow().state(1), proc::State::Ready, "the timer woke it");
         assert_eq!(k.resume(1), Ok(Ret::N(0)));

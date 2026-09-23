@@ -3924,7 +3924,7 @@ preemption, still `Stopped`, so the scheduler does not put it back; `start`
 readies it and it goes on from the instruction it was at.
 
 **Not built:** tracing — `startstop`, `startsyscall`, `/proc/<n>/syscall`,
-`profile`.
+`profile`. (Built later the same day: §15.8.)
 
 ### §15.5 — `^C`, and a console that does not block (2026-09-23)
 
@@ -4055,3 +4055,60 @@ call `alarm()` would have failed to instantiate — nothing did, so nothing
 noticed; and `rendezvous` answered 0 whatever the kernel returned, so no
 process ever received the value it was swapped. Both fixed; a test now
 checks every stub in `sys.c` against its import's type.
+
+### §15.8 — Tracing (2026-09-23)
+
+The last of P6. Christine: *"do 1-5"*, the third being tracing.
+
+**Read before writing:** `pc/trap.c:660`–`:790` (`syscall`, the two
+`Proc_tracesyscall` blocks at `:682` and `:755`); `port/syscallfmt.c`
+entire; `port/proc.c:1480` (`procctl`, `Proc_traceme` at `:1498`) and
+`:696` (a traced process's children are traced); `port/devproc.c:169`
+(`profclock`), `:309` (*"addclock0link(profclock, 113)"*), `:267`
+(`profile`'s length), `:747` (`Qsyscall`), `:779` (`Qprofile`), `:1388`
+(`CMprofile`), `:1404`, `:1411` (`CMstartstop`, `CMstartsyscall`);
+`port/segment.c:245` (`attachimage`), `:786` (`segclock`), `:170`
+(text shared by `dupseg`); `libc/fmt/dofmt.c:315`–`:447` (`%#p`, `%#ux`);
+`port/systab.h:114`; `cmd/tprof.c:100`.
+
+**What is Plan 9's, as it is:** the stop on the way into a call with
+`syscallfmt`'s line and on the way out with `sysretfmt`'s, each as a
+`Proc_stopme` through `procctl`; the trace freed when the process goes on;
+`Proc_traceme` stopping only when a note is pending; children of a traced
+process traced; `startstop` and `startsyscall` refusing a process that is
+not `Stopped`, readying it and waiting in `procstopwait`; every format as
+`syscallfmt.c` writes it (`%#p` and `%#ux` always carry `0x`); the text
+segment found in the image cache by qid, `mqid`, `mchan` and type, and
+shared by `rfork` whatever the flags; `profile` a zeroed count per
+`1<<LRESPROF` bytes of text; `profclock` every 113ms, charging `TK2MS(1)`
+to `[0]` and to the pc's slot, in user mode only.
+
+**What `syscall()` needed from the machine, and got:** the raw argument
+words and the pc — Plan 9's `up->s`, *"*((Sargs*)(sp+BY2WD))"*, and
+`ureg->pc`. The decoded `Call` has lost what the trace prints: every string
+is shown as its address and its text (`%#p/"%s"`). So `Syscalls::syscall`
+takes a `Ureg` of the two, the host setting the words on the way into each
+import and finding the pc — the innermost wasm frame's offset in its module
+— by a backtrace, asked for only when a call is traced; `timerintr` takes
+the pc the same way for `profclock`. Strings are read through
+`Machine::load`, the one way the kernel reaches a process's memory.
+
+**Differences that cannot be otherwise, stated where they are:**
+
+* `profclock` also adds the tick to `tos->clock`. The kernel maps no `Tos`
+  here (`main9.c`), so that half is not done.
+* `seek`'s first argument on the PC is where the kernel writes the result;
+  this machine answers it, so the trace shows it as nil.
+* `sysretfmt` reads a `pread`'s data and `await`'s message out of the
+  process; here the machine writes them into the process after the kernel
+  answers, so the trace takes them from the answer — the same bytes.
+* A trace's pc is a module offset, not an address; the text segment is the
+  module, based at 0.
+
+**Found while doing it:** `syscall_tail` was told whether the call was
+`rfork` by its caller, and `resume` always said no — wrong for any `rfork`
+that left the processor, which a traced one does. It now reads
+`up->scallnr` as Plan 9 does. And a process `stop`ped at `notify` was, once
+started with `startsyscall`, given an exit trace of the call it had
+already finished; the stop is past `syscall()`'s exit trace, and the tail
+now knows that by `insyscall`, which Plan 9 clears between the two.

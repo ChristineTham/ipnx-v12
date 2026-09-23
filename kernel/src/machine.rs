@@ -28,7 +28,10 @@ use crate::{Call, Ret};
 /// machine here is handed this instead, and the reentrancy is explicit:
 /// `touser` is running, and the process inside it is calling back.
 pub trait Syscalls {
-    fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String>;
+    /// `syscall(Ureg*)` (`pc/trap.c:660`). `call` is the arguments decoded;
+    /// `ureg` is what the trap left — the raw words and the pc — which only
+    /// syscall tracing reads.
+    fn syscall(&mut self, up: Pid, call: Call, ureg: &Ureg) -> Result<Ret, String>;
 
     /// **Back into a call the process left in the middle.** A call answers
     /// [`Ret::Sched`] when it `sleep`s, `qlock`s or `sched()`s part way; the
@@ -53,7 +56,11 @@ pub trait Syscalls {
     /// A machine calls this at `HZ` (`proc::HZ`), or as near as it can.
     /// Calling it early is harmless — `timerintr` fires only what is due —
     /// and calling it late loses ticks, as a late interrupt does on Plan 9.
-    fn timerintr(&mut self) -> bool;
+    ///
+    /// `pc` is `ur->pc`, where the process was when the interrupt came —
+    /// asked for only when a profile is being kept (`profclock`,
+    /// `devproc.c:169`), because a machine may have to work to find it.
+    fn timerintr(&mut self, pc: &dyn Fn() -> u64) -> bool;
 
     /// `postnote` (`proc.c:981`), which a machine's `trap()` calls for a
     /// fault: *"sys: trap: …"*, `NDebug` (`pc/trap.c:366`).
@@ -68,6 +75,24 @@ pub trait Syscalls {
     /// `syscall()` already decided (`pc/trap.c:773`) and this hands the
     /// decision over; at a clock interrupt's tail (`:443`); or at a fault.
     fn notify(&mut self, up: Pid, at: NoteAt) -> Notify;
+}
+
+/// `MAXSYSARG` (`pc/dat.h`) — the most arguments any call takes.
+pub const MAXSYSARG: usize = 5;
+
+/// What `syscall()` reads from the trap (`pc/trap.c:673`–`:723`).
+///
+/// Plan 9's `Ureg` is the register set; of it, `syscall()` reads the pc and
+/// the user stack pointer, above which the arguments are — *"up->s =
+/// *((Sargs*)(sp+BY2WD))"*. That pair is all this is.
+pub struct Ureg<'a> {
+    /// `up->s.args` — the call's arguments as the process passed them, one
+    /// per argument of the C stub, addresses as addresses. On the PC a
+    /// `vlong` takes two words; here each argument is one, whatever its
+    /// size.
+    pub s: [u64; MAXSYSARG],
+    /// `ureg->pc` — where the call was made from.
+    pub pc: &'a dyn Fn() -> u64,
 }
 
 /// Where a machine asks [`Syscalls::notify`] from.

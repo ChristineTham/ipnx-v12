@@ -148,8 +148,19 @@ out with `~0`; `#p/<n>/ctl`'s `start`, `stop`, `waitstop`, `hang` and
 `nohang`, with `Stopped` and `procstopwait`. A process a fault or a suicide
 ends is kept `Broken` — at most four — until `kill` lets it go, as `pexit`
 does. `/proc/<n>/status` shows the call a process is in (`Await`, `Pread`)
-before its state, so `ps` reads as Plan 9's. Only tracing — `startstop`,
-`startsyscall`, `/proc/<n>/syscall`, `profile` — is not built.
+before its state, so `ps` reads as Plan 9's.
+
+**Tracing is built** (2026-09-23; RESEARCH §15.8). `startsyscall` stops a
+process on its way into its next call and, started the same way, on its
+way out, with `syscallfmt`'s and `sysretfmt`'s lines in `/proc/<n>/syscall`
+— the pc is the wasm frame's offset in its module, found by a backtrace
+only when a call is traced. `startstop` stops it at its next note.
+`profile` keeps a count per eight bytes of the text segment, which
+processes running the same file share (`attachimage`), charged every
+113ms in user mode; `/proc/<n>/profile` is the counts. What differs: the
+`Tos` clock is not advanced, as the kernel maps no `Tos`; `seek`'s trace
+shows a nil return pointer, as this machine answers the offset; and there
+is no `tprof` or `ratrace` here to read either file.
 
 **The semaphores are built** (2026-09-23; RESEARCH §15.7): `semacquire`,
 `tsemacquire` and `semrelease`, as `sysproc.c` has them — a waiter on its
