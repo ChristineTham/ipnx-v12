@@ -91,6 +91,9 @@ pub enum Notify {
     Handler { f: u32, msg: String },
     /// `pexit` — the process is gone, and the machine must leave it.
     Pexit,
+    /// `procctl`'s *"p->state = Stopped; sched();"* (`proc.c:1516`) — the
+    /// process has stopped, and the machine must leave it until `start`.
+    Sched,
 }
 
 /// **Every method takes `&self`, and that is load-bearing.** Plan 9's machine

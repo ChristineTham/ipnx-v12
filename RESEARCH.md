@@ -3892,3 +3892,36 @@ writes *"interrupt"* to the window's process group's `notepg`. So the
 kernel side is done — a note written there interrupts a command, and a test
 shows rc catching one — and the key is a job for whatever plays `rio`'s
 part: the CLI host's terminal, and emca.
+
+### §15.4 — `rendezvous`, the process controls, `Broken` and `psstate` (2026-09-23)
+
+**Read before writing:** `sysproc.c` `sysrendezvous` `:910`–`:946`,
+`sysrfork` `:153`–`:171`, `sysexec` `:587`; `portdat.h` `Rgrp` `:472`–`:497`,
+`psstate` `:671`, `pdbg` `:711`; `proc.c` `postnote`'s rendezvous branch
+`:1039`–`:1057`, `NBROKEN`/`addbroken`/`unbreak` `:1061`–`:1104`, `pexit`
+`:1227`, `procctl` `:1484`–`:1522`; `devproc.c` `procstopwait` `:1223`,
+`procctlreq` `:1321`–`:1440`, `procstopped` `:1501`, `status` `:865`;
+`port/systab.h:114` (`sysctab[]`).
+
+**Built as read.** `rendezvous` finds the first waiter with the tag in the
+caller's `Rgrp`, swaps values and readies it, or waits `Rendezvous` to be
+found; the group is shared across `rfork` unless `RFREND`; `postnote` pulls
+a waiter out answering `~0`. `stop` is `procstopwait(p, Proc_stopme)` — the
+writer sleeps on its own `sleep` until the process, on its way out of the
+kernel, reaches `procctl`, becomes `Stopped`, wakes `pdbg` and leaves the
+processor; `waitstop` waits without asking; `start` readies a stopped
+process; `hang` makes the next `exec` stop; `kill` of a `Stopped` process
+readies it to die and of a `Broken` one `unbreak`s it. `pexit` with
+`freemem` false — a note that was `NDebug`, a *"Suicide"* — keeps the
+process `Broken`, at most `NBROKEN` (4); there is no `*nobroken` to say
+otherwise. `psstate` is set to `sysctab[]`'s name on the way into a call
+and cleared on the way out, so `/proc/<n>/status` — and `ps` — shows
+`Await`, `Pread`, `Sleep`, `Stopwait`, `Stopped` as Plan 9's does; it had
+shown only the scheduler state.
+
+**A stop at a clock interrupt** leaves the processor by the same yield as a
+preemption, still `Stopped`, so the scheduler does not put it back; `start`
+readies it and it goes on from the instruction it was at.
+
+**Not built:** tracing — `startstop`, `startsyscall`, `/proc/<n>/syscall`,
+`profile`.

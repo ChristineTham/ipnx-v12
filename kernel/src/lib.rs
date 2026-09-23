@@ -207,6 +207,12 @@ impl Kernel {
             p.text = path.rsplit('/').next().unwrap_or(path).to_string();
         }
         self.procs.borrow_mut().execnotes(pid);
+        // *"if(up->hang) up->procctl = Proc_stopme"* (`sysproc.c:587`).
+        if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
+            if p.hang {
+                p.procctl = Some(proc::Procctl::Stopme);
+            }
+        }
         self.machine.touser(pid, &image, args)?;
         Ok(())
     }
@@ -265,9 +271,13 @@ impl Kernel {
                     (machine::Left::Exited, _) => {
                         drop(procs);
                         if self.procs.borrow().status(pid).is_none() {
-                            self.pexit(pid, "");
+                            self.pexit(pid, "", true);
                         }
-                        self.procs.borrow_mut().setstate(pid, proc::State::Dead);
+                        // A process `pexit` kept `Broken` stays so until it
+                        // is killed; nothing of it runs again.
+                        if self.procs.borrow().state(pid) != proc::State::Broken {
+                            self.procs.borrow_mut().setstate(pid, proc::State::Dead);
+                        }
                     }
                     // *"case Running: ready(up)"* — it gave up the processor
                     // without going to sleep, so it goes back on the queue.
@@ -553,6 +563,41 @@ mod tests {
     }
 }
 
+/// `sysctab[]` (`port/systab.h:114`) — each call's name as `ps` shows it
+/// while a process is in it.
+fn sysctab(c: &Call) -> &'static str {
+    match c {
+        Call::Rfork { .. } => "Rfork",
+        Call::Exec { .. } => "Exec",
+        Call::Exits { .. } => "Exits",
+        Call::Await => "Await",
+        Call::Sleep { .. } => "Sleep",
+        Call::Alarm { .. } => "Alarm",
+        Call::Notify { .. } => "Notify",
+        Call::Noted { .. } => "Noted",
+        Call::Rendezvous { .. } => "Rendez",
+        Call::Bind { .. } => "Bind",
+        Call::Mount { .. } => "Mount",
+        Call::Unmount { .. } => "Unmount",
+        Call::Chdir { .. } => "Chdir",
+        Call::Open { .. } => "Open",
+        Call::Create { .. } => "Create",
+        Call::Close { .. } => "Close",
+        Call::Pread { .. } => "Pread",
+        Call::Pwrite { .. } => "Pwrite",
+        Call::Seek { .. } => "Seek",
+        Call::Dup { .. } => "Dup",
+        Call::Pipe => "Pipe",
+        Call::Remove { .. } => "Remove",
+        Call::Stat { .. } => "Stat",
+        Call::Fstat { .. } => "Fstat",
+        Call::Wstat { .. } => "Wstat",
+        Call::Fwstat { .. } => "Fwstat",
+        Call::Errstr { .. } => "Errstr",
+        Call::Fversion { .. } => "Fversion",
+    }
+}
+
 /// `alarmkproc` (`alarm.c:11`): post *"alarm"* to every process whose alarm
 /// is due, then sleep on `alarmr` until `checkalarms` wakes it.
 fn alarmkproc(k: &mut Kernel, me: Pid) -> Result<Ret, String> {
@@ -593,7 +638,7 @@ fn closeprocwoken(k: &mut Kernel, me: Pid) -> Result<Ret, String> {
     k.procs.borrow_mut().interrupted(me);
     if k.procs.borrow().clunkq.is_empty() {
         k.procs.borrow_mut().qunlock(&mut k.clunkq);
-        k.pexit(me, "no work");
+        k.pexit(me, "no work", true);
         return Ok(Ret::Ok);
     }
     if closeproc1(k, me) {
@@ -679,12 +724,15 @@ impl Kernel {
     /// global; here it is the argument, because a Rust kernel cannot hand a
     /// device an ambient mutable global — the same information, made explicit.
     pub fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
-        // *"m->syscall++; up->insyscall = 1;"* (`pc/trap.c:673`).
+        // *"m->syscall++; up->insyscall = 1;"* (`pc/trap.c:673`), and
+        // *"up->psstate = sysctab[scallnr]"* (`:727`) — what `ps` shows while
+        // the call lasts.
         {
             let mut procs = self.procs.borrow_mut();
             procs.m.syscall += 1;
             if let Some(p) = procs.get_mut(up) {
                 p.insyscall = true;
+                p.psstate = Some(sysctab(&call).to_string());
             }
         }
         // **`up` is the calling process, and it is set on the way in.** Plan 9
@@ -749,9 +797,10 @@ impl Kernel {
         if self.procs.borrow().m.hz.is_some_and(|h| h <= now) {
             self.timerintr(now);
         }
-        // *"up->insyscall = 0;"* (`pc/trap.c:767`).
+        // *"up->insyscall = 0; up->psstate = 0;"* (`pc/trap.c:767`).
         if let Some(p) = self.procs.borrow_mut().get_mut(up) {
             p.insyscall = false;
+            p.psstate = None;
         }
         if let Err(e) = &r {
             self.procs.borrow_mut().seterrstr(up, e);
@@ -760,6 +809,14 @@ impl Kernel {
         // (`pc/trap.c:773`) — decided now, in Plan 9's order, and acted on
         // by the machine on its way back to the process.
         let n = if rfork { machine::Notify::No } else { self.notify_(up, machine::NoteAt::Syscall) };
+        // `procctl` stopped it: the call is over, and its answer waits until
+        // `start` — the rest of `notify` is taken again then.
+        if n == machine::Notify::Sched {
+            self.procs.borrow_mut().take_setlabel(up);
+            let answer = r.clone();
+            self.labels.insert(up, Box::new(move |_, _| answer));
+            return Ok(Ret::Sched);
+        }
         let gone = n == machine::Notify::Pexit;
         self.notes.insert(up, n);
         if gone {
@@ -849,12 +906,19 @@ impl Kernel {
         Ok(Ret::N(n))
     }
 
-    /// `pexit`'s own work, where it needs the kernel: *"closefgrp(fgrp)"*
-    /// (`proc.c:1160`) — `cclose` each channel whose last reference went.
-    pub fn pexit(&mut self, pid: Pid, status: &str) {
+    /// `pexit(exitstr, freemem)` (`proc.c:1123`), where it needs the
+    /// kernel: *"closefgrp(fgrp)"* (`:1160`) — `cclose` each channel whose
+    /// last reference went — and, when `freemem` is false, which is a note
+    /// that was a fault or a suicide, *"addbroken(up)"* (`:1227`): the
+    /// process is kept `Broken` for a debugger. `*nobroken` would stop that,
+    /// and it is a configuration this system has no source for.
+    pub fn pexit(&mut self, pid: Pid, status: &str, freemem: bool) {
         let last = self.procs.borrow_mut().exits(pid, status);
         for mut c in last {
             self.tab.dclose(&mut c);
+        }
+        if !freemem {
+            self.procs.borrow_mut().addbroken(pid);
         }
     }
 
@@ -924,8 +988,26 @@ impl Kernel {
         // `procctl` (`proc.c:1494`): *"case Proc_exitme: pexit("Killed", 1)"*.
         if procctl == Some(Procctl::Exitme) {
             self.procs.borrow_mut().get_mut(up).map(|p| p.procctl = None);
-            self.pexit(up, "Killed");
+            self.pexit(up, "Killed", true);
             return Notify::Pexit;
+        }
+        // `procctl`'s `Proc_stopme` (`proc.c:1503`): *"Stopped"*, free a
+        // waiting debugger, and `sched()`.
+        if procctl == Some(Procctl::Stopme) {
+            if at == machine::NoteAt::Fault {
+                return Notify::No;
+            }
+            let mut procs = self.procs.borrow_mut();
+            let p = procs.get_mut(up).expect("checked");
+            p.procctl = None;
+            p.psstate = Some("Stopped".into());
+            let pdbg = p.pdbg.take();
+            p.state = State::Stopped;
+            if let Some(d) = pdbg {
+                procs.wakeup(proc::Rid::Proc(d, proc::Which::Sleep));
+            }
+            procs.setlabel(up);
+            return Notify::Sched;
         }
         let (n, notified, handler) = {
             let procs = self.procs.borrow();
@@ -937,14 +1019,14 @@ impl Kernel {
             if n.flag == NoteFlag::NDebug {
                 self.pprint(up, &format!("suicide: {}\n", n.msg));
             }
-            self.pexit(up, &n.msg);
+            self.pexit(up, &n.msg, n.flag != NoteFlag::NDebug);
             return Notify::Pexit;
         }
         if notified {
             return Notify::No;
         }
         if handler == 0 {
-            self.pexit(up, &n.msg);
+            self.pexit(up, &n.msg, n.flag != NoteFlag::NDebug);
             return Notify::Pexit;
         }
         match at {
@@ -955,7 +1037,7 @@ impl Kernel {
                 if n.flag == NoteFlag::NDebug {
                     self.pprint(up, &format!("suicide: {}\n", n.msg));
                 }
-                self.pexit(up, &n.msg);
+                self.pexit(up, &n.msg, n.flag != NoteFlag::NDebug);
                 return Notify::Pexit;
             }
             machine::NoteAt::Syscall => {}
@@ -999,7 +1081,7 @@ impl Kernel {
                 Ok(Ret::Ok)
             }
             Call::Exits { status } => {
-                self.pexit(up, &status);
+                self.pexit(up, &status, true);
                 Ok(Ret::Ok)
             }
             // `sysawait` (`sysproc.c:715`) formats the message in the KERNEL
@@ -1288,7 +1370,7 @@ impl Kernel {
                 let notified = self.procs.borrow().get(up).is_some_and(|p| p.notified);
                 if how != NRSTR && !notified {
                     self.pprint(up, "call to noted() when not notified\n");
-                    self.pexit(up, "Suicide");
+                    self.pexit(up, "Suicide", false);
                     return Ok(Ret::N(NDFLT as usize));
                 }
                 let last = {
@@ -1308,13 +1390,39 @@ impl Kernel {
                         if flag == proc::NoteFlag::NDebug {
                             self.pprint(up, &format!("suicide: {}\n", last.msg));
                         }
-                        self.pexit(up, &last.msg);
+                        self.pexit(up, &last.msg, flag != proc::NoteFlag::NDebug);
                         Ok(Ret::N(NDFLT as usize))
                     }
                 }
             }
-            Call::Rendezvous { .. } => {
-                Err("rendezvous needs a scheduler; this machine has none yet".into())
+            // `sysrendezvous` (`sysproc.c:910`): find a process in this
+            // rendezvous group waiting on the same tag, swap values with it
+            // and ready it; or wait, `Rendezvous`, to be found.
+            Call::Rendezvous { tag, val } => {
+                let mut procs = self.procs.borrow_mut();
+                let rgrp = procs.get(up).ok_or("no such process")?.rgrp.clone();
+                procs.get_mut(up).expect("checked").rendval = !0;
+                let found = rgrp.borrow().iter().position(|q| procs.get(*q).is_some_and(|q| q.rendtag == tag));
+                if let Some(i) = found {
+                    let q = rgrp.borrow_mut().remove(i);
+                    let other = procs.get_mut(q).expect("waiting");
+                    let got = other.rendval;
+                    other.rendval = val;
+                    procs.ready(q);
+                    return Ok(Ret::N(got as usize));
+                }
+                let me = procs.get_mut(up).expect("checked");
+                me.rendtag = tag;
+                me.rendval = val;
+                me.state = proc::State::Rendezvous;
+                rgrp.borrow_mut().push(up);
+                procs.setlabel(up);
+                drop(procs);
+                // *"sched(); return up->rendval;"*
+                self.setlabel(up, Box::new(|k, up| {
+                    Ok(Ret::N(k.procs.borrow().get(up).map_or(!0, |p| p.rendval) as usize))
+                }));
+                Ok(Ret::Ok)
             }
         }
     }
@@ -1676,6 +1784,61 @@ mod syscalls {
         k.runkproc(alarm);
         let p = k.procs.borrow();
         assert_eq!(p.get(1).unwrap().note.first().map(|n| n.msg.as_str()), Some("alarm"));
+    }
+
+    /// `rendezvous` (`sysproc.c:910`): the first to arrive waits; the second
+    /// with the same tag finds it, and each gets the other's value. A
+    /// different rendezvous group (`RFREND`) is not met.
+    #[test]
+    fn rendezvous_swaps_values_between_two_processes() {
+        let mut k = booted();
+        let Ret::Pid(c) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        let Ret::Pid(other) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::REND }).unwrap() else {
+            panic!()
+        };
+        assert_eq!(k.syscall(c, Call::Rendezvous { tag: 7, val: 100 }), Ok(Ret::Sched));
+        assert_eq!(k.procs.borrow().state(c), proc::State::Rendezvous);
+        assert_eq!(
+            k.syscall(other, Call::Rendezvous { tag: 7, val: 5 }),
+            Ok(Ret::Sched),
+            "another group: it waits too"
+        );
+        assert_eq!(k.syscall(1, Call::Rendezvous { tag: 7, val: 200 }), Ok(Ret::N(100)));
+        assert_eq!(k.resume(c), Ok(Ret::N(200)));
+    }
+
+    /// A note pulls a process out of a rendezvous with `~0` (`proc.c:1039`).
+    #[test]
+    fn a_note_pulls_a_process_out_of_a_rendezvous() {
+        let mut k = booted();
+        let Ret::Pid(c) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        k.syscall(c, Call::Rendezvous { tag: 1, val: 1 }).unwrap();
+        k.procs.borrow_mut().postnote(c, "interrupt", proc::NoteFlag::NUser);
+        assert_eq!(k.procs.borrow().state(c), proc::State::Ready);
+        assert_eq!(k.resume(c), Ok(Ret::N(!0usize)));
+    }
+
+    /// A process `pexit` ends with a fault or a suicide stays `Broken`
+    /// (`proc.c:1227`) — at most `NBROKEN` of them — and `kill` lets it go.
+    #[test]
+    fn a_suicide_is_kept_broken_until_it_is_killed() {
+        let mut k = booted();
+        let Ret::Pid(c) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        k.syscall(c, Call::Noted { how: proc::noted::NCONT }).unwrap();
+        assert_eq!(k.procs.borrow().state(c), proc::State::Broken);
+        k.procs.borrow_mut().unbreak(c);
+        assert_eq!(k.procs.borrow().state(c), proc::State::Dead);
+    }
+
+    /// `ps` shows the call a process is in (`pc/trap.c:727`, `devproc.c:865`).
+    #[test]
+    fn a_process_in_a_call_shows_the_call() {
+        let mut k = booted();
+        let Ret::Pid(c) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        k.syscall(c, Call::Sleep { ms: 1000 }).unwrap();
+        assert_eq!(k.procs.borrow().get(c).unwrap().psstate.as_deref(), Some("Sleep"));
+        k.syscall(1, Call::Errstr { buf: String::new() }).unwrap();
+        assert_eq!(k.procs.borrow().get(1).unwrap().psstate, None, "cleared on the way out");
     }
 
     /// `RFNOTEG` gives a new note group (`sysproc.c:87`, `:188`); without
@@ -2115,7 +2278,6 @@ mod syscalls {
         let mut k = booted();
         for c in [
             Call::Mount { fd: 0, afd: -1, old: "/n".into(), flag: 0, aname: String::new() },
-            Call::Rendezvous { tag: 0, val: 0 },
         ] {
             let e = k.syscall(1, c).unwrap_err();
             assert!(!e.contains("P3"), "a phase is not a reason: {e}");

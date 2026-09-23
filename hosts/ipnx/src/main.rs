@@ -384,9 +384,9 @@ mod userspace {
         let out = typing("echo shouting | tr a-z A-Z\ncat /proc/1/status\n");
         assert!(out.contains("SHOUTING"), "{out}");
         // Pid 1 is `init`, asleep in `await` for as long as a shell runs —
-        // `pwait`'s `sleep(&up->waitr, haswaitq, up)`. It reports `Wakeme`
-        // because that is what it is.
-        assert!(out.contains("Wakeme"), "init waits in pwait: {out}");
+        // `pwait`'s `sleep(&up->waitr, haswaitq, up)` — and `status` shows
+        // the call it is in, `psstate`, as Plan 9's does (`devproc.c:865`).
+        assert!(out.contains("Await"), "init waits in pwait: {out}");
     }
 
     /// `sleep` leaves the processor: the process is `Wakeme` with a

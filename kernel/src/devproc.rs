@@ -6,10 +6,8 @@
 //! `mount` lines that would rebuild it — which is what makes a namespace
 //! inspectable at all.
 //!
-//! `procdir[]` (`devproc.c:79`) is 18 files. Eight are here; the rest —
-//! `mem`, `regs`, `fpregs`, `kregs`, `text`, `segment`, `profile` — describe
-//! an address space and a register set this kernel does not have, and are
-//! absent for the reason `#i` and `#m` are rather than by a separate rule.
+//! `procdir[]` (`devproc.c:79`) is 18 files. Ten are here; `PROCDIR` says
+//! why each of the other eight is not.
 
 use crate::chan::Chan;
 use crate::dev::{Dev, DevId, Eve};
@@ -20,6 +18,8 @@ use std::rc::Rc;
 
 const EPERM: &str = "permission denied";
 const EPROCDIED: &str = "process exited";
+/// `Einuse` (`error.h:19`).
+const EINUSE: &str = "device or object already in use";
 /// `Etoosmall`, `Etoobig`, `Ebadarg` (`error.h`).
 const ETOOSMALL: &str = "read or write too small";
 const ETOOBIG: &str = "read or write too large";
@@ -95,11 +95,48 @@ pub struct ProcDev {
     /// server behind a mount, and reaches because Plan 9's is a file-scope
     /// global with the function declared in `portfns.h`.
     srv: crate::devsrv::Srvtab,
+    /// Each process asleep in `procstopwait`, and the process it waits for
+    /// to stop — where its `ctl` write carries on when it is woken.
+    stopwait: std::collections::HashMap<Pid, Pid>,
 }
 
 impl ProcDev {
     pub fn new(up: Rc<RefCell<Up>>) -> ProcDev {
-        ProcDev { up, eve: Eve::default(), srv: Default::default() }
+        ProcDev { up, eve: Eve::default(), srv: Default::default(), stopwait: Default::default() }
+    }
+
+    /// `procstopwait` (`devproc.c:1223`): wait for `p` to stop — asking it to
+    /// with `ctl`, or not. `Ok(true)` is it has; `Ok(false)` is the caller
+    /// is asleep and the write is not over.
+    fn procstopwait(&mut self, p: Pid, ctl: Option<crate::proc::Procctl>) -> Result<bool, String> {
+        use crate::proc::{Rid, State, Which};
+        let (me, procs) = {
+            let up = self.up.borrow();
+            (up.pid, up.procs.clone())
+        };
+        let mut procs = procs.borrow_mut();
+        let target = procs.get_mut(p).ok_or(EPROCDIED)?;
+        if target.pdbg.is_some() {
+            return Err(EINUSE.into());
+        }
+        if matches!(target.state, State::Stopped | State::Broken) {
+            return Ok(true);
+        }
+        if ctl.is_some() {
+            target.procctl = ctl;
+        }
+        target.pdbg = Some(me);
+        if let Some(m) = procs.get_mut(me) {
+            m.psstate = Some("Stopwait".into());
+        }
+        // *"sleep(&up->sleep, procstopped, p)"*.
+        if !procs.sleep(me, Rid::Proc(me, Which::Sleep), false) {
+            procs.interrupted(me);
+            procs.get_mut(p).map(|t| t.pdbg = None);
+            return Err(crate::proc::EINTR.into());
+        }
+        self.stopwait.insert(me, p);
+        Ok(false)
     }
 
     /// Hand it `#s`'s table. Without one, a mount names its wire channel —
@@ -323,7 +360,10 @@ impl Dev for ProcDev {
                     // `priority` (`devproc.c:869`–`:890`). The memory is the
                     // sum of the segments, and a process here has none: its
                     // memory is the machine's, which `#p` cannot see.
-                    let state = proc.state.name();
+                    // *"sps = p->psstate; if(sps == 0) sps = statename[p->state]"*
+                    // (`devproc.c:865`).
+                    let state = proc.psstate.clone().unwrap_or_else(|| proc.state.name().into());
+                    let state = state.as_str();
                     let field = |v: &str, w: usize| {
                         let v: String = v.chars().take(w - 1).collect();
                         format!("{v:<w$}")
@@ -424,6 +464,24 @@ impl Dev for ProcDev {
         let mut word = text.split_whitespace();
         let cmd = word.next().unwrap_or("");
         let procs = self.up.borrow().procs.clone();
+        // *"if(p->kp) error(Eperm)"* — *"no ctl requests to kprocs"*
+        // (`devproc.c:1330`).
+        if q == Q::Ctl && procs.borrow().get(pid).is_some_and(|p| p.kp) {
+            return Err(EPERM.into());
+        }
+        // The end of `procstopwait`, for a writer woken there: a note ends
+        // it with `Eintr`; otherwise the process it waited for has stopped,
+        // or gone (*"if(p->pid != pid) error(Eprocdied)"*).
+        let me = self.up.borrow().pid;
+        if let Some(target) = self.stopwait.remove(&me) {
+            let mut p = procs.borrow_mut();
+            if p.interrupted(me) {
+                p.get_mut(target).map(|t| t.pdbg = None);
+                return Err(crate::proc::EINTR.into());
+            }
+            p.get(target).ok_or(EPROCDIED)?;
+            return Ok(data.len());
+        }
         match (q, cmd) {
             // `CMkill` (`devproc.c:1352`): *"p->procctl = Proc_exitme;
             // postnote(p, 0, "sys: killed", NExit)"* — the process ends
@@ -431,9 +489,41 @@ impl Dev for ProcDev {
             // or `Stopped` process is started first there; neither state
             // is built.
             (Q::Ctl, "kill") => {
+                use crate::proc::State;
                 let mut p = procs.borrow_mut();
-                p.get_mut(pid).ok_or(EPROCDIED)?.procctl = Some(crate::proc::Procctl::Exitme);
-                p.postnote(pid, "sys: killed", crate::proc::NoteFlag::NExit);
+                match p.get(pid).ok_or(EPROCDIED)?.state {
+                    State::Broken => p.unbreak(pid),
+                    st => {
+                        p.get_mut(pid).expect("checked").procctl = Some(crate::proc::Procctl::Exitme);
+                        p.postnote(pid, "sys: killed", crate::proc::NoteFlag::NExit);
+                        if st == State::Stopped {
+                            p.ready(pid);
+                        }
+                    }
+                }
+            }
+            // `CMstart` (`devproc.c`): only a `Stopped` process.
+            (Q::Ctl, "start") => {
+                let mut p = procs.borrow_mut();
+                if p.get(pid).ok_or(EPROCDIED)?.state != crate::proc::State::Stopped {
+                    return Err(EBADCTL.into());
+                }
+                p.get_mut(pid).expect("checked").psstate = None;
+                p.ready(pid);
+            }
+            // `CMstop` and `CMwaitstop`: `procstopwait`, asking or not.
+            (Q::Ctl, cmd @ ("stop" | "waitstop")) => {
+                let ctl = (cmd == "stop").then_some(crate::proc::Procctl::Stopme);
+                drop(procs);
+                if !self.procstopwait(pid, ctl)? {
+                    return Ok(0);
+                }
+            }
+            (Q::Ctl, "hang") => {
+                procs.borrow_mut().get_mut(pid).ok_or(EPROCDIED)?.hang = true;
+            }
+            (Q::Ctl, "nohang") => {
+                procs.borrow_mut().get_mut(pid).ok_or(EPROCDIED)?.hang = false;
             }
             (Q::Ctl, "close") => {
                 let fd: Fd = word.next().and_then(|w| w.parse().ok()).ok_or("bad fd")?;
@@ -514,12 +604,10 @@ impl Dev for ProcDev {
                 }
                 p.get_mut(pid).ok_or(EPROCDIED)?.noteid = id;
             }
-            (Q::Ctl, "start" | "stop" | "waitstop" | "hang" | "nohang") => {
-                // `procctlreq` (`devproc.c`) moves a process between
-                // `Running`, `Stopped` and `Broken` and `sched()`s. A
-                // process here runs inside one call on the machine and
-                // cannot be stopped part way through it.
-                return Err("stopping a process is not built yet".into());
+            // `startstop` and `startsyscall` stop again at the next note or
+            // call for a tracer; `/proc/n/syscall` and tracing are not built.
+            (Q::Ctl, "startstop" | "startsyscall") => {
+                return Err("tracing is not built".into());
             }
             (Q::Ctl, _) => return Err("unknown control message".into()),
             _ => return Err(EPERM.into()),
@@ -824,14 +912,43 @@ mod tests {
         assert!(d.open(c, OREAD).is_err(), "none must not read another's state");
     }
 
-    /// What wants a scheduler says so rather than pretending to work.
+    /// `stop` (`devproc.c:1230`): the writer waits until the process stops,
+    /// which it does in `procctl` on its way out of the kernel; `start`
+    /// readies it; `start` of a process that is not stopped is `Ebadctl`.
     #[test]
-    fn the_verbs_that_need_a_scheduler_refuse() {
-        let (mut d, _) = proc();
-        let mut ctl = open(&mut d, 1, "ctl", OWRITE);
-        for v in ["start", "stop", "waitstop", "hang"] {
-            assert!(d.write(&mut ctl, v.as_bytes(), 0).is_err(), "{v}");
+    fn stop_waits_for_the_process_to_stop_and_start_readies_it() {
+        use crate::proc::State;
+        let (mut d, procs) = proc();
+        let c = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
+        let mut ctl = open(&mut d, c, "ctl", OWRITE);
+        assert!(d.write(&mut ctl, b"start", 0).is_err(), "not stopped");
+        assert_eq!(d.write(&mut ctl, b"stop", 0).unwrap(), 0, "the writer waits");
+        assert_eq!(procs.borrow().state(1), State::Wakeme);
+        assert_eq!(procs.borrow().get(c).unwrap().procctl, Some(crate::proc::Procctl::Stopme));
+        // What `procctl` does when the child next leaves the kernel.
+        {
+            let mut p = procs.borrow_mut();
+            let child = p.get_mut(c).unwrap();
+            child.procctl = None;
+            child.state = State::Stopped;
+            let dbg = child.pdbg.take().unwrap();
+            p.wakeup(crate::proc::Rid::Proc(dbg, crate::proc::Which::Sleep));
         }
+        assert_eq!(d.write(&mut ctl, b"stop", 0).unwrap(), 4, "the write carries on and ends");
+        d.write(&mut ctl, b"start", 0).unwrap();
+        assert_eq!(procs.borrow().state(c), State::Ready);
         assert!(d.write(&mut ctl, b"nonsense", 0).is_err());
+    }
+
+    /// `hang` is kept on the process and inherited (`sysproc.c:171`).
+    #[test]
+    fn hang_is_set_by_ctl_and_inherited() {
+        let (mut d, procs) = proc();
+        let mut ctl = open(&mut d, 1, "ctl", OWRITE);
+        d.write(&mut ctl, b"hang", 0).unwrap();
+        let c = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
+        assert!(procs.borrow().get(c).unwrap().hang);
+        d.write(&mut ctl, b"nohang", 0).unwrap();
+        assert!(!procs.borrow().get(1).unwrap().hang);
     }
 }

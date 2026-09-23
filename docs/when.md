@@ -30,7 +30,7 @@ Measured 2026-09-20.
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 28 calls, `exec`, and `unionread` |
 
-191 kernel tests, and 30 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and twenty-three that boot the whole system.
+196 kernel tests, and 30 in `hosts/ipnx` — two on the machine itself, five that run a guest module against a real kernel, and twenty-three that boot the whole system.
 
 ## The host — `hosts/ipnx`, three files
 
@@ -60,8 +60,9 @@ ambient mutable global.
 
 Answered: `rfork` `exec` `exits` `await` `errstr` `bind` `mount` `unmount`
 `chdir` `open` `create` `close` `pread` `pwrite` `seek` `dup` `pipe` `remove`
-`stat` `fstat` `wstat` `fwstat` `sleep` `alarm` `notify` `noted` — **26 of
-28**; `rendezvous` is not built, and `fversion` is refused because `mount` does the version exchange itself (`mntversion`). A failed call leaves its reason where
+`stat` `fstat` `wstat` `fwstat` `sleep` `alarm` `notify` `noted`
+`rendezvous` — **27 of 28**; `fversion` is refused because `mount` does the
+version exchange itself (`mntversion`). A failed call leaves its reason where
 `errstr` finds it, and reading exchanges it as Plan 9's does.
 
 **`sleep` is a real `tsleep`** (P6, 2026-09-21). `n <= 0` is `yield()`,
@@ -141,8 +142,14 @@ for the process's next call to end, because the guest can only be entered
 from a host call; a note that ends the process does not wait. There is no
 `Ureg` for a handler to see, and *"sys:"* notes gain no *" pc=…"*.
 
-**`rendezvous` is the one call left**, with `#p/<n>/ctl`'s
-`start`/`stop`/`waitstop`/`hang`/`nohang`.
+**`rendezvous` and the process controls are built** (2026-09-23): a
+rendezvous group per `Rgrp`, new with `RFREND`, and a note pulls a process
+out with `~0`; `#p/<n>/ctl`'s `start`, `stop`, `waitstop`, `hang` and
+`nohang`, with `Stopped` and `procstopwait`. A process a fault or a suicide
+ends is kept `Broken` — at most four — until `kill` lets it go, as `pexit`
+does. `/proc/<n>/status` shows the call a process is in (`Await`, `Pread`)
+before its state, so `ps` reads as Plan 9's. Only tracing — `startstop`,
+`startsyscall`, `/proc/<n>/syscall`, `profile` — is not built.
 
 **Plan 9's kernel console never turns a key into a note.** `devcons.c` has
 only the `^T^T` debug keys; the interrupt a user types is `rio`'s, which

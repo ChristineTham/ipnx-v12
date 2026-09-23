@@ -82,7 +82,9 @@ async fn deliver(c: &mut Caller<'_, Guest>) -> wasmtime::Result<()> {
         // Sound as [`call`] is: a poll, inside `gotolabel`.
         let n = unsafe { (*kernel()).notify(pid, NoteAt::Syscall) };
         match n {
-            Notify::No => return Ok(()),
+            // A stop at a call's end is the kernel's own: the call answered
+            // `Sched`, and `kcall` has already left and come back.
+            Notify::No | Notify::Sched => return Ok(()),
             Notify::Pexit => return Err(wasmtime::Error::new(Exited)),
             Notify::Handler { f, msg } => handler(c, f, &msg).await?,
         }
@@ -227,8 +229,12 @@ fn clockintr(c: StoreContextMut<'_, Guest>) -> wasmtime::Result<UpdateDeadline> 
     let borrowed = c.data().pid != c.data().up;
     if !borrowed {
         let up = c.data().up;
-        if unsafe { (*kernel()).notify(up, NoteAt::Clock) } == Notify::Pexit {
-            return Err(wasmtime::Error::new(Exited));
+        match unsafe { (*kernel()).notify(up, NoteAt::Clock) } {
+            Notify::Pexit => return Err(wasmtime::Error::new(Exited)),
+            // `procctl` stopped it: leave, and it goes on from here when
+            // `start` readies it.
+            Notify::Sched => return Ok(UpdateDeadline::Yield(1)),
+            _ => {}
         }
     }
     Ok(if sched && !borrowed { UpdateDeadline::Yield(1) } else { UpdateDeadline::Continue(1) })

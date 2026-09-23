@@ -268,9 +268,15 @@ pub struct Note {
 /// acted on by `procctl` at the process's next exit from the kernel.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Procctl {
+    /// `Proc_stopme` — `stop`, and `hang` after an `exec`.
+    Stopme,
     /// `Proc_exitme` — `kill`.
     Exitme,
 }
+
+/// `NBROKEN` (`proc.c:1063`) — *"weird thing: keep at most NBROKEN
+/// around"*: how many processes a fault left `Broken` for a debugger.
+pub const NBROKEN: usize = 4;
 
 /// `NCONT`, `NDFLT`, `NSAVE`, `NRSTR` (`libc.h:582`) — what `noted` is
 /// told to do.
@@ -410,6 +416,21 @@ pub struct Proc {
     pub kp: bool,
     /// `p->alarm` — the tick an `alarm` is due on; 0 is none (`alarm.c`).
     pub alarm: u64,
+    /// `p->rgrp` — the rendezvous group: the processes waiting in
+    /// `rendezvous`, oldest first. Plan 9 hashes them by tag
+    /// (`portdat.h:493`); a search for the first with the tag finds the same
+    /// one.
+    pub rgrp: Rc<RefCell<Vec<Pid>>>,
+    /// `p->rendtag`, `p->rendval`.
+    pub rendtag: u64,
+    pub rendval: u64,
+    /// `p->pdbg` — *"the debugging process"*, waiting for this one to stop.
+    pub pdbg: Option<Pid>,
+    /// `p->hang` — stop at the next `exec` (`sysproc.c:587`).
+    pub hang: bool,
+    /// `p->psstate` — *"What /proc/#/status reports"* when set: the call the
+    /// process is in (`pc/trap.c:727`), or *"Stopped"*, *"Stopwait"*.
+    pub psstate: Option<String>,
     /// `up->errstr`. Set when a call fails, and taken by `errstr(2)`.
     pub errstr: String,
     /// `up->slash` and `up->dot`. Plan 9 holds both as CHANNELS, not as text —
@@ -490,6 +511,12 @@ impl Proc {
             procctl: None,
             kp: false,
             alarm: 0,
+            rgrp: Rc::new(RefCell::new(Vec::new())),
+            rendtag: 0,
+            rendval: 0,
+            pdbg: None,
+            hang: false,
+            psstate: None,
             errstr: String::new(),
             ns: Rc::new(RefCell::new(Ns::new())),
             fds: Rc::new(RefCell::new(Fds::default())),
@@ -667,6 +694,8 @@ pub struct Procs {
     pub closeproc: bool,
     /// `noteidalloc` (`proc.c:12`).
     noteidalloc: u32,
+    /// `broken` (`proc.c:1064`).
+    broken: Vec<Pid>,
     /// `alarms` (`alarm.c:7`) — the processes with an alarm set, soonest
     /// first, threaded through `p->palarm` there.
     alarms: Vec<Pid>,
@@ -690,6 +719,7 @@ impl Procs {
             clunkq: Vec::new(),
             closeproc: false,
             noteidalloc: 1,
+            broken: Vec::new(),
             alarms: Vec::new(),
         }
     }
@@ -925,7 +955,8 @@ impl Procs {
     /// no handler or one is already running (`:990`) — it is going to end
     /// the process, and nothing queued before it will be seen.
     ///
-    /// `Rendezvous` is not pulled out of here: `rendezvous` is not built.
+    /// A process in `rendezvous` is pulled out of it, answering `~0`
+    /// (`:1039`).
     pub fn postnote(&mut self, pid: Pid, msg: &str, flag: NoteFlag) -> bool {
         let Some(p) = self.tab.get_mut(&pid) else { return false };
         if flag != NoteFlag::NUser && (p.notify == 0 || p.notified) {
@@ -944,8 +975,39 @@ impl Procs {
             p.twhen = None;
             self.rendez_mut(r).p = None;
             self.ready(pid);
+            return posted;
+        }
+        // *"Try and pull out of a rendezvous"*.
+        let p = self.tab.get_mut(&pid).expect("checked");
+        if p.state == State::Rendezvous {
+            p.rendval = !0;
+            p.rgrp.borrow_mut().retain(|&q| q != pid);
+            self.ready(pid);
         }
         posted
+    }
+
+    /// `addbroken` (`proc.c:1072`): keep a process a fault ended, `Broken`,
+    /// for a debugger — at most `NBROKEN`, the oldest let go to die when
+    /// there would be more.
+    pub fn addbroken(&mut self, pid: Pid) {
+        if self.broken.len() == NBROKEN {
+            let old = self.broken.remove(0);
+            self.setstate(old, State::Dead);
+        }
+        self.broken.push(pid);
+        if let Some(p) = self.tab.get_mut(&pid) {
+            p.state = State::Broken;
+            p.psstate = None;
+        }
+    }
+
+    /// `unbreak` (`proc.c:1090`): let a `Broken` process finish dying.
+    pub fn unbreak(&mut self, pid: Pid) {
+        if let Some(i) = self.broken.iter().position(|&p| p == pid) {
+            self.broken.remove(i);
+            self.setstate(pid, State::Dead);
+        }
     }
 
     /// The end of `sleep` (`proc.c:879`): *"if(up->notepending) {
@@ -1392,6 +1454,9 @@ impl Procs {
             if flags & rf::NOTEG != 0 {
                 me.noteid = noteid;
             }
+            if flags & rf::REND != 0 {
+                me.rgrp = Rc::new(RefCell::new(Vec::new()));
+            }
             return None;
         }
 
@@ -1419,6 +1484,14 @@ impl Procs {
             procctl: None,
             kp: false,
             alarm: 0,
+            // *"if(flag & RFREND) p->rgrp = newrgrp(); else … up->rgrp"*
+            // (`sysproc.c:153`); *"p->hang = up->hang"* (`:171`).
+            rgrp: if flags & rf::REND != 0 { Rc::new(RefCell::new(Vec::new())) } else { parent.rgrp.clone() },
+            rendtag: 0,
+            rendval: 0,
+            pdbg: None,
+            hang: parent.hang,
+            psstate: None,
             errstr: String::new(),
             ns,
             fds,
@@ -1668,6 +1741,9 @@ impl Procs {
         p.noteid = self.noteidalloc;
         p.procctl = None;
         p.alarm = 0;
+        p.rgrp = Rc::new(RefCell::new(Vec::new()));
+        p.pdbg = None;
+        p.psstate = None;
         p.errstr = String::new();
         self.tab.insert(pid, p);
         self.procpriority(pid, pri::KPROC, false);
