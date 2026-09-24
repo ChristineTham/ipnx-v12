@@ -237,14 +237,21 @@ is the architecture's, exactly as `touser` is. So this phase is
 | **does NOT build** | `rfork(RFPROC)` returning twice. A fork duplicates an address space AND a stack; a fiber's stack holds host frames pointing into the instance, and a worker's is another thread's. `procrfork` stays (RESEARCH §5.2) |
 | **exposes** | `alarm`, `notify`, `noted`, `rendezvous`, `RFNOTEG`, `#p/<n>/note`, `#p/<n>/ctl`'s `start`/`stop`/`waitstop`/`hang`, and `/proc/<n>/status`'s real states — every one of them a call or a file Plan 9 has and this kernel refuses today |
 
-## P7 — the registries
+## P7 — packages, services, templates, projects and profiles *(designed and endorsed 2026-09-24)*
+
+The design is [packages.md](packages.md). Built bottom-up, each step on the
+one before:
 
 | | |
 |---|---|
-| **builds** | **Three different things, not one format** (Christine, 2026-09-24: *"either these are all the same or they are different thing. In my original concept they are completely different"*). What each is, in her words (2026-09-24, `verbatim.md`): **`/pkg`** — *"like a FreeBSD pkg or apt… a list files to be bound in the namespace, plus potentially initialisation scripts (write out config files, set out environment etc.)"*; **`/template`** — *"a prototype for a project (ie. a NodeJS project, a Python project) - it may install packages, but contains project scaffolding"*, and *"the key difference… is that a templates instantiates new versions of files (scaffolding), not just binds of files shared across namespaces"*; **`/profile`** — *"any files required to configure a system - the kind of stuff in Unix /etc. network config, namespace bindings, init scripts etc."*, with the user's in `/home/profile`, `/home` being `/usr/<username>`; `/rc`'s configuration moves into it and **`/rc` is retired**. **`/pkg`, `/service`, `/template`** hold the packages, services and templates themselves — *"/pkg only contains packages. list of installed packages is /profile/pkg etc"*; there is no `/store`. A package installs **to the system, the user, or the namespace** — *"available to every user, process"*, *"whenever the user logs in"*, or *"only valid for current process"* — and a template installs its packages into the project, which *"ensures all packages are available"* when it is opened. A package is *"like installing a toolchain or a library"*; **services** install daemons, a separate thing with their own spec (*"services and packages should be different"*): started with the system, at login or when a project is opened, and ended with it. **A project** is a window type, opened from a project file, at `/project/<x>` bound per user. The designs are proposals: [proposals.md](proposals.md). A package's files are never changed after verification, and are prunable (*"a store entry never changes after verification"*; *"the store must be prunable"*, said while there was a `/store`). **None of them is designed beyond that**; each needs a proposal reviewed before anything is built. An earlier version of this row said *"one format, three registries"*, drawn from her remark that a package *"is actually very similar to template"*, which was read as "the same" |
+| **1. `/profile`** | the system's configuration — the namespace file (was `/lib/namespace`), `startrc` (was `/rc/bin/termrc`), `shellrc`, `stoprc` — and the user's in `/home/profile`, `/home` being `/usr/$user`. `/rc` retired. `test` vendored, which rc's startup already calls |
+| **2. `/pkg`** | the system's programs as packages in `/pkg/<name>/<version>/`, bound onto `/bin` from the profile, listed in `/profile/pkg`; `rcmain` in rc's |
+| **3. `pkg`** | `install` and `remove`, to the system, the user or the namespace; `installrc`, `removerc`; a repository mounted as a file server; a SHA-256 per package checked against its index — which needs a hash command |
+| **4. services** | `/service/<name>/` with `startrc`/`stoprc`, started with their scope and ended by *"hangup"* to its note group |
+| **5. templates and projects** | instantiation; a project as a window type (with P8's emca) |
+| **6. identity** | `auth/login`, `su`/`sudo`, `auth/none` — over `#¤`, which the kernel has; with `factotum` for the authenticated connection step 3 wants |
 | **depends on** | P6 |
-| **acceptance** | a package installs as a bind, `pkg remove` unbinds, and the store entry survives it |
-| **exposes** | — |
+| **acceptance** | a package installs as a bind, `pkg remove` unbinds, and the package's files survive it |
 
 ## P8 — emca, and the browser *(the website)*
 

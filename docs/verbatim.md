@@ -377,3 +377,5 @@ On `/store`:
   <br>— cited in `docs/proposals.md`
 - *"user defined pkg services are in /home/pkg etc"*
   <br>— cited in `docs/proposals.md`
+- *"yet that's look very symmetrical, let's build"* — endorsing P7's design
+  <br>— cited in `docs/packages.md`
