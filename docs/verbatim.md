@@ -365,3 +365,5 @@ Of the two questions left open — whose signature an index carries, and identit
 
 - *"for both questions, what does plan 9 do?"*
   <br>— cited in `RESEARCH.md`
+- *"plan 9 way"* — choosing, for verification, a hash per package over an authenticated connection rather than apt's signed index
+  <br>— cited in `docs/proposals.md`

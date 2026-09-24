@@ -72,11 +72,16 @@ library"*; installed *"to the system… to the namespace… or to the user"*.
    dependencies with version bounds, the packages it breaks; and the file.
    The repository's **index** lists every package so, with **the file's
    SHA-256**, as apt's `Packages` does.
-3. **Verification** — apt's chain (§16.1): **the index is signed, and the
-   index's hashes cover every package.** A package is copied into
-   `/store/<name>/<version>` only if its SHA-256 matches the index, and the
-   store entry never changes after (*"a store entry never changes after
-   verification"*).
+3. **Verification is Plan 9's** — decided 2026-09-24 (*"plan 9 way"*;
+   RESEARCH §16.4): **a hash per package in the repository's index, and the
+   index fetched over an authenticated connection** — the 9P session
+   authenticated through `factotum`, as `srv` does without `-n`. No signed
+   index and no keyring: trust is the connection, as everywhere in Plan 9.
+   A package is copied into `/store/<name>/<version>` only if its hash
+   matches the index, as 9legacy's `replica` refuses a file whose hash does
+   not match its log (`applylog.c:1055`), and the store entry never changes
+   after (*"a store entry never changes after verification"*). The hash is
+   SHA-256, as apt's and Cargo's are (§16.1, §16.2); 9legacy's is SHA-1.
 4. **Its files appear by `bind`** — lines in a namespace file, as
    `/lib/namespace` is written, which `newns` reads.
 5. **Its scripts** — `installrc` and `removerc` (below, *the scripts*);
@@ -254,14 +259,10 @@ repository's index (§16.1, §16.3). The user's are at `/home/pkg`,
 `/home/service` and `/home/template`, as the user's profile is at
 `/home/profile`.
 
-### Open — what the research cannot decide
+### Decided
 
-1. **Whether an index is signed.** Plan 9 does not sign: stock Plan 9
-   mounts its distribution without authentication, and 9legacy adds a hash
-   per file against corruption; where Plan 9 authenticates, trust is the
-   connection, and keys live in `factotum` (RESEARCH §16.4). apt signs its
-   index (§16.1). Plan 9's way — a hash per package, fetched over an
-   authenticated connection — needs no keyring; apt's needs one.
+**Verification** — the Plan 9 way (Christine, 2026-09-24: *"plan 9 way"*),
+now in the package design above.
 
 **Identity is Plan 9's** (RESEARCH §16.4), and the kernel already has the
 capability device it runs on: a terminal's user is the host owner, named at
