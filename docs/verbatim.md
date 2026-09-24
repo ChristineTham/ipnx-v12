@@ -311,3 +311,11 @@ deviations:
 Rejecting the hedge in the first draft of that rule:
 
 - *"That cannot be right. You said you did not look at struct Dev. That would not have happened if you were forced and no deviations allowed"*
+
+## 2026-09-24
+
+On P7's *"`/profile`, `/pkg` and `/template` as one format, three
+registries"*:
+
+- *"I am questioning "one format, three registries" - either these are all the same or they are different thing. In my original concept they are completely different"*
+  <br>— cited in `docs/implementation.md`

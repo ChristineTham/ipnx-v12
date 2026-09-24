@@ -241,7 +241,7 @@ is the architecture's, exactly as `touser` is. So this phase is
 
 | | |
 |---|---|
-| **builds** | `/profile`, `/pkg` and `/template` as one format, three registries: a list of bindings plus commands. `/store` for fetched bytes, served by a userspace file server so verification is IPNX's |
+| **builds** | **Three different things, not one format** (Christine, 2026-09-24: *"either these are all the same or they are different thing. In my original concept they are completely different"*). What each is, in her words and no further: **`/pkg`** — *"a list of bindings… plus commands that may need to be invoked during install"*; **`/template`** — *"`/template/system` is the template. The `/` namespace is a 'project' instantiated from that template"*, and *"a template really is a proto project"*; **`/profile`** — a system `/profile`, and the user's at `/home/profile`. **`/store`** — *"a store entry never changes after verification"*, and *"the store must be prunable."* **None of the four is designed beyond that**; each needs a proposal reviewed before anything is built. An earlier version of this row said *"one format, three registries"*, drawn from her remark that a package *"is actually very similar to template"*, which was read as "the same" |
 | **depends on** | P6 |
 | **acceptance** | a package installs as a bind, `pkg remove` unbinds, and the store entry survives it |
 | **exposes** | — |
