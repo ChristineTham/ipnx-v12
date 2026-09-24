@@ -26,7 +26,7 @@ template, profile or project carries says what it is by its extension:
 | extension | what it is | read by |
 |---|---|---|
 | **`.rc`** | an rc script, named by its role — `start.rc`, `shell.rc`, `stop.rc`, `install.rc`, `remove.rc` — or by the kind it makes a project into (projects.md) | rc |
-| **`.env`** | environment variables for the script of the same name — `/profile/start.env` for `/profile/start.rc` | the script's starter, before the script |
+| **`.env`** | environment variables for the script of the same name — `/profile/start.env` for `/profile/start.rc` — **in rc's own form**, what `whatis` prints: `name=value`, `list=(a b)`, `'…'` for spaces (decided 2026-09-24; RESEARCH §16.7). Saving the environment is `whatis` into one | whatever runs the `.rc`, with `.`, before it |
 | **`.lock`** | what was installed — exact versions and SHA-256, in `ndb` — written by `pkg`, never by hand: `project.lock` | `pkg` |
 | **`.cfg`** | the configuration — `pkg.cfg`, `service.cfg`, `template.cfg`, `profile.cfg`, `project.cfg`: *"name of template, version, date other properties"* | `libndb`; `ndb/query` from rc |
 
@@ -113,7 +113,8 @@ opened, terminates when project is closed."* *"services installs daemons."*
    does for `redis-server` (§16.1).
 3. **Its settings are a separate file the script reads** — Debian's
    `/etc/default/redis-server`, sourced at start (§16.1) — kept on removal
-   as configuration. *Proposed:* that file is its `start.env`.
+   as configuration. *Proposed:* that file is its `start.env`, now that a
+   `.env` is rc's form — which is what Debian's is too.
 4. **It runs in a namespace of its own, as its own user** — Plan 9's
    `listen` runs a service as `none` in a namespace made from a namespace
    file (`/lib/namespace.httpd`, §16.3); Debian runs `redis` as user

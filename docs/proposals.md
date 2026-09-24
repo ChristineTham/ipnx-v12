@@ -50,19 +50,21 @@ after *"rc files must always end in extension .rc"*, the `.env` and `.cfg`
 files, and `ndb` for every `.cfg` ([packages.md](packages.md), *Files are
 named by what they are*; [projects.md](projects.md)).
 
-1. **What is in a `.env`, and who reads it?** Plan 9 has a way, and it is
-   rc's own (RESEARCH §16.7): the format `whatis` prints — `name=value`,
-   `list=(a b)`, `'…'` for spaces — read back with `.` or `ifs=() eval
-   \`{cat start.env}`, as Plan 9's scripts read `aux/getflags`'s output.
-   *Proposed:* that — a `.env` is what `whatis` writes, and whatever runs
-   `start.rc` first runs `. start.env`; so saving the environment is
-   `whatis` into a `.env`. Not `ndb`, whose `"` rc does not read; and not
-   `plan9.ini`'s `name=value`-to-end-of-line, which cannot hold a list. A
-   service's settings would be its `start.env` — what Debian's
-   `/etc/default/redis-server` is (RESEARCH §16.1).
-2. **Does `/profile/namespace` take an extension?** It is neither rc nor
-   `ndb`: `newns`'s own language (`plan9/sys/src/libauth/newns.c`). Plan 9
-   gives it none. *Proposed:* none.
+1. **What does the namespace file take?** It is neither rc nor `ndb` but
+   its own format (`namespace(6)`). Plan 9 puts the *variant* where the
+   extension goes — `/lib/namespace.httpd`, `namespace.ftp`,
+   `namespace.noworld` (`ip/httpd/httpd.c:103`, `ip/ftpd.c:120`, `:606`).
+   *Proposed:* **`.ns`**, named by role like the rest — **`start.ns`** —
+   after Plan 9's own `ns(1)` and `/proc/<pid>/ns`, which print in exactly
+   this format. Then `start.ns`, `start.env`, `start.rc` are one trio, run
+   in that order, which is `init`'s order: `newns`, the environment, rc.
+   `/profile/start.ns` is the system's (`newns`); `/home/profile/start.ns`
+   the user's, added at login (`addns`, `auth/newns -a`,
+   `cmd/auth/newns.c:36`); `/service/<name>/start.ns` is what
+   `/lib/namespace.httpd` is, built for `none` (`aux/listen.c:375`). Saving
+   the namespace is `ns` into one, as saving the environment is `whatis`
+   into a `.env`.
+
 ## Decided, and moved into the specs
 
 **P7 — a package, a service, a template, a project, a profile** — proposed
@@ -73,7 +75,7 @@ the names were made symmetric — `start.rc`, `start.env`, `pkg.cfg` — and
 every `.cfg` made `ndb`. Of what that left open, decided the same day: a command
 written in rc keeps its bare name; the installed lists stay files of their
 own, not entries in `profile.cfg`; the lock is not in `project.cfg`; and
-promotion is to the user by default, to the system with `su`. And `rcmain` ships in rc's package, keeping its name. A project's lock is `project.lock`.
+promotion is to the user by default, to the system with `su`. And `rcmain` ships in rc's package, keeping its name. A project's lock is `project.lock`. A `.env` is rc's own form, what `whatis` prints.
 
 **The scheduler** — proposed and decided 2026-09-21, and it is now
 [implementation.md](implementation.md)'s **P6**, before the registries,
