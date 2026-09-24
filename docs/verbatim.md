@@ -421,3 +421,5 @@ On building P7, and on names:
 - *"Why are you not building all commands. You need to build all the libraries as well. a missing library is not an excuse"*
   <br>— cited in `CLAUDE.md`
 - *"I hit my usage limit while you were working, but it has reset now. Please continue from where you left off."*
+- Answering how this machine gives Plan 9's programs `fork` and libthread's coroutines: *"Asyncify (Recommended)"*; and whether `RFMEM` is wasm shared memory: *"Yes, shared memory (Recommended)"*
+  <br>— cited in `docs/implementation.md`, `RESEARCH.md`

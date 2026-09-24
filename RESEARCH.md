@@ -4643,7 +4643,7 @@ one each of `qlock`, `truerand`, `read9pmsg`, `amount`, `auth_proxy`,
 `fauth`. Two define no `main` of their own. The cut-down `cat`, `echo`, `ls`
 and `tr` written earlier had no cause: Plan 9's own compile unchanged.
 
-**`setjmp` on a machine whose stack cannot be saved.** Plan 9's is two
+**`setjmp` on a machine whose stack cannot be saved** (superseded by §16.12). Plan 9's is two
 instructions a side on the 386 (`libc/386/setjmp.s`): save SP and the return
 pc, restore them. Wasm has no addressable stack. clang lowers `setjmp` and
 `longjmp` onto wasm exception handling (`-mllvm -wasm-enable-sjlj`, with
@@ -4731,3 +4731,60 @@ generated at build time — `%.c:D: %.mp` → `mpc $prereq >> $target`
 it is building, `ipnx rc recipe.rc` over the store, one at a time: 35 lines
 of `.mp` become 164 lines of C, and libsec builds. `mk.sh` makes this its
 second pass.
+
+### 16.12 `setjmp`, `longjmp` and `fork` by asyncify (2026-09-24)
+
+**Christine's decision** (`docs/verbatim.md`): this machine gives Plan 9's
+programs `fork` and libthread's coroutines by Binaryen's asyncify, and
+`RFMEM` by wasm shared memory. It replaces §16.9's wasm-exception `setjmp`,
+which could not have given `fork` at all: a wasm call's frames are the
+engine's, and only a program transformed to save its own can be copied.
+
+**Asyncify cannot run over wasm exception handling.** Measured with Binaryen
+132 on an image built with `-mllvm -wasm-enable-sjlj`: the pass's `Flatten`
+stops at `try_table` (*"unexpected expr type"*). So the two could not
+coexist, and the exception flags, the `__c_longjmp` tag and wasmtime's `gc`
+and `gc-null` features are gone.
+
+**The mechanism.** `mk.sh` and `mkfile.py` run `wasm-opt --asyncify
+--pass-arg=asyncify-imports@sys.setjmp,sys.longjmp,sys.rfork -O2` over every
+linked image, so only call paths that can reach those three imports are
+instrumented. `libc/wasm/setjmp.c` is the library's half: two calls, and a
+megabyte of bss the stack unwinds into (`__asyncbuf`). An import that needs
+the stack records why, sets the buffer's header and calls
+`asyncify_start_unwind`; the process's code returns frame by frame to the
+machine's run loop (`hosts/ipnx/src/machine.rs`, `run`), which:
+
+| call | what the machine does | the call answers |
+|---|---|---|
+| `setjmp(j)` | keeps a copy of the frames and the stack pointer under j's address, and winds the same stack back | 0 |
+| `longjmp(j, v)` | drops this stack and winds back the copy kept under j | v, from setjmp's call |
+| `rfork(RFPROC)` | the kernel's `sysrfork`; then a new instance with a copy of all of memory, the stack wound back in it — and the parent's wound back here, `ready(p); sched()` as `sysrfork` ends | 0 in the child, its pid in the parent |
+
+Two things measured the hard way. **Rewinding reads the frames from the
+end**: the header's first word must be past the frames, as unwinding left
+it — pointing it at their start makes the rewind read garbage, and the
+first symptom was an unrelated `Binits: unknown mode` trap. And **the stack
+pointer** is a global the compiler keeps outside memory, so it is saved with
+each copy and restored before each rewind.
+
+Measured: `sed 's/[/y/'` unwinds from `regcomp`'s `setjmp`; `ed` answers two
+bad commands by `longjmp` to one `setjmp` and runs the third; `time echo`
+forks, the child `exec`s and the parent reports its times (`time.c`
+unchanged). sed grows from 69,524 bytes linked to 101,626 asyncified; the
+whole `system` package's programs are 26,001,716 bytes.
+
+**A string literal is writable data in kencc.** `outstring`
+(`8c/swt.c:106`) emits each literal byte by byte as `ADATA` into `.string`,
+an ordinary static (`cc/lex.c:1263`); Plan 9's code relies on it —
+`ed.c:159` passes `"/tmp/eXXXXX"` to its own `mktemp`, which writes the Xs.
+clang makes a literal `constant` and, having inlined that `mktemp`, deletes
+the stores, so every `ed` named its temporary file `/tmp/eXXXXX` and the
+second failed. `kencc.py` now compiles each file to IR with the optimiser
+off, makes every `@.str` an `internal global`, and optimises that.
+
+**Not yet:** `RFMEM` (shared memory, the decision's second half) and
+libthread's machine file (`libthread/wasm.c`, its coroutines by the same
+unwinding). rc and init were cut down to `procrfork` because nothing could
+fork; with `fork`, Plan 9's own `havefork.c`, `plan9.c` and `init.c` can be
+built as they are.

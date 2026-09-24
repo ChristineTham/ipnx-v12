@@ -8,7 +8,10 @@ after. The *plan* is [implementation.md](implementation.md).
 A Rust toolchain; **wasi-sdk** at `~/.local/opt/wasi-sdk` (override with
 `WASI_SDK`), for its wasm backend and nothing else — no wasi is linked, and a
 built binary imports exactly the calls in `userspace/sys/src/libc/wasm/sys.c`;
-**bison**, for rc's grammar; and **Python 3**, for `userspace/weaken.py`.
+**Binaryen** at `~/.local/opt/binaryen` (override with `BINARYEN`), whose
+`wasm-opt --asyncify` gives every image `setjmp`, `longjmp` and `fork`
+(RESEARCH §16.12); **bison**, for rc's grammar; and **Python 3**, for
+`userspace/kencc.py`, `mkfile.py` and `weaken.py`.
 
 And the two Plan 9 trees, which are gitignored and never built or edited:
 
@@ -46,7 +49,7 @@ and `cargo test -p ipnx`.
 ### CI
 
 `.github/workflows/ci.yml` does exactly the above on every push: bison and a
-pinned wasi-sdk 34.0, `bash userspace/mk.sh`, then the kernel's tests, the
+pinned wasi-sdk 34.0 and Binaryen 132, `bash userspace/mk.sh`, then the kernel's tests, the
 host's tests on the world just built, and `RUSTFLAGS=-D warnings cargo build
 --workspace --all-targets`. Conformance runs with `continue-on-error` so its
 count is visible without gating the branch.

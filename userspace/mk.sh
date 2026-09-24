@@ -12,10 +12,11 @@
 # `-fno-builtin` is load-bearing (RESEARCH §9.4): clang's libcall recogniser
 # otherwise rewrites strlen's own body into a call to strlen.
 #
-# `-wasm-enable-sjlj` is how this machine has `setjmp` at all: the compiler
-# turns it into wasm exception handling, in the `try_table` encoding (the
-# legacy one is rejected by these engines), and `libc/wasm/setjmp.c` is the
-# library's half of it.
+# **Asyncify** (Binaryen's `wasm-opt`, at `$BINARYEN`) is how this machine has
+# `setjmp`, `longjmp` and `fork` at all: a stack the program cannot reach is
+# unwound into memory and wound back by the machine (RESEARCH §16.12). Every
+# image is transformed after linking, and only the functions that can reach
+# those three calls are instrumented.
 set -e
 
 WASI_SDK=${WASI_SDK:-$HOME/.local/opt/wasi-sdk}
@@ -32,10 +33,15 @@ sys=$here/sys
 root=$here/root
 
 [ -x "$CC" ] || { echo "mk.sh: no wasi-sdk at $WASI_SDK (set WASI_SDK)" >&2; exit 1; }
+BINARYEN=${BINARYEN:-$HOME/.local/opt/binaryen}
+WASMOPT=$BINARYEN/bin/wasm-opt
+[ -x "$WASMOPT" ] || { echo "mk.sh: no binaryen at $BINARYEN (set BINARYEN)" >&2; exit 1; }
+ASYNCIFY="--asyncify --pass-arg=asyncify-imports@sys.setjmp,sys.longjmp,sys.rfork
+	--enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext
+	--enable-mutable-globals -O2"
 
 CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-extensions -std=gnu89 -O2
 	-mbulk-memory -mnontrapping-fptoint -msign-ext
-	-mexception-handling -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false
 	-I$here/wasm/include -I$sys/include -I$sys/src/libc/fmt
 	-Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-missing-braces
 	-Wno-unused-value -Wno-unused-but-set-variable -Wno-incompatible-pointer-types
@@ -63,8 +69,8 @@ mkdir -p "$build" "$build/boot" \
 	"$pkg/$OBJTYPE/bin" "$pkg/lib" "$root/$OBJTYPE" "$root/lib" "$root/profile" "$root/home" \
 	"$root/usr/kitty/profile" "$root/etc" "$root/tmp"
 
-cc() {	# cc <src> <obj>
-	$CC $CFLAGS -c "$1" -o "$2"
+cc() {	# cc <src> <obj> [flag...] — as kencc would: kencc.py says how
+	CC=$CC CFLAGS=$CFLAGS python3 "$here/kencc.py" cc "$@"
 }
 
 # ---- libc -----------------------------------------------------------------
@@ -101,22 +107,23 @@ libc() {
 # it. What does not build goes into build/failed with its reason.
 link() {	# link <into> <obj>...
 	local into=$1; shift
-	$LD $LDFLAGS -o "$into" "$@" "$build"/lib/*.a "$build/libc.a"
+	$LD $LDFLAGS -o "$into" "$@" "$build"/lib/*.a "$build/libc.a" &&
+	$WASMOPT $ASYNCIFY "$into" -o "$into"
 }
 
 libc
 failed=$build/failed
 : >"$failed"
-export CC LD AR CFLAGS LDFLAGS build pkg root OBJTYPE
+export CC LD AR CFLAGS LDFLAGS build pkg root OBJTYPE WASMOPT ASYNCIFY
 python3 "$here/mkfile.py" libs libc
 python3 "$here/mkfile.py" cmds
 
 # `boot` is the one file `#/boot` carries, as Plan 9's kernel carries
 # `/boot/boot` and nothing else; this machine's, not Plan 9's (`boot/`).
-$CC $CFLAGS -c "$here/cmd/boot.c" -o "$build/boot.o"
+cc "$here/cmd/boot.c" "$build/boot.o"
 link "$build/boot/boot" "$build/boot.o"
 # `args`, a test's: what a program is given
-$CC $CFLAGS -c "$here/cmd/args.c" -o "$build/args.o"
+cc "$here/cmd/args.c" "$build/args.o"
 link "$pkg/$OBJTYPE/bin/args" "$build/args.o"
 
 # ---- the rest of the rootfs -----------------------------------------------
@@ -141,10 +148,10 @@ cp -f "$build/rc/y.tab.h" "$build/rc/x.tab.h"
 objs=()
 for f in $rcfiles ipnx; do
 	obj=$build/rc/$f.o
-	$CC $CFLAGS -I"$rcdir" -I"$build/rc" -c "$rcdir/$f.c" -o "$obj"
+	cc "$rcdir/$f.c" "$obj" -I"$rcdir" -I"$build/rc"
 	objs+=("$obj")
 done
-$CC $CFLAGS -I"$rcdir" -I"$build/rc" -c "$build/rc/y.tab.c" -o "$build/rc/y.tab.o"
+cc "$build/rc/y.tab.c" "$build/rc/y.tab.o" -I"$rcdir" -I"$build/rc"
 objs+=("$build/rc/y.tab.o")
 cp -f "$rcdir/rcmain" "$pkg/lib/rcmain"
 # rc.h's tentative definitions are common symbols everywhere but here;

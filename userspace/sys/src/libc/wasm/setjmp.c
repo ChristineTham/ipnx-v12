@@ -1,71 +1,61 @@
 /*
  * `setjmp` and `longjmp` — the machine-dependent pair, as Plan 9's are:
  * `libc/386/setjmp.s` saves SP and the return pc and `longjmp` puts them
- * back. This machine's stack is not addressable, so neither can be saved;
- * what it has instead is wasm's exception handling, and the compiler does the
- * rest (`-mllvm -wasm-enable-sjlj`, mk.sh). A function that calls `setjmp` is
- * compiled to catch `__c_longjmp`, and every call it makes to test, after a
- * catch, whether this jmp_buf was the one thrown to; the three functions
- * below are the half of that the compiler leaves to the library, and their
- * names and shapes are its contract (LLVM's
- * `WebAssemblyLowerEmscriptenEHSjLj.cpp`).
+ * back. This machine's call stack is the engine's, where a program cannot
+ * reach it, so neither can be saved by the program. The machine does it:
+ * every image is transformed after linking by Binaryen's asyncify (mk.sh),
+ * which lets a stack be unwound into memory and wound back up, and these
+ * two are calls to the machine that do exactly that (Christine, 2026-09-24:
+ * asyncify, for `fork` and libthread as well — RESEARCH §16.12).
  *
- * `jmp_buf` is four longs here (`u.h`), which is what this needs.
+ *   setjmp(j)      the stack unwinds into `asyncbuf`, the machine keeps a
+ *                  copy of it and the stack pointer under j, and winds it
+ *                  back: the call answers 0.
+ *   longjmp(j, v)  the stack unwinds and is dropped, the copy kept under j
+ *                  is wound back instead, and setjmp's call answers v —
+ *                  *"ansi: longjmp(0) => longjmp(1)"*, as setjmp.s says.
+ *
+ * `jmp_buf` holds nothing the machine reads: its address is the key.
  */
 #include <u.h>
 #include <libc.h>
 
-typedef struct Jmp Jmp;
-struct Jmp
-{
-	void	*invocation;	/* which call of the function that called setjmp */
-	ulong	label;		/* which setjmp in it */
-	void	*env;		/* the thrown value: the jmp_buf... */
-	int	val;		/* ...and what setjmp is to return */
-};
+#define SYS(name) __attribute__((import_module("sys"), import_name(#name)))
+
+SYS(setjmp)	extern int	__setjmp(long*);
+SYS(longjmp)	extern void	__longjmp(long*, int);
 
 /*
- * The tag `longjmp` throws, which the compiler names and every catch it
- * writes matches: one i32, the address of the Jmp's `env`. It is defined
- * once, here, as the library that throws it; `__builtin_wasm_throw`'s 1
- * below is the compiler's index for it.
+ * Where a stack unwinds to: asyncify's two words — the next free byte and
+ * the end — then the frames. A megabyte of bss costs the image nothing.
  */
-__asm__(
-	".globl __c_longjmp\n"
-	".tagtype __c_longjmp i32\n"
-	"__c_longjmp:\n"
-);
-void
-__wasm_setjmp(void *env, ulong label, void *invocation)
-{
-	Jmp *j;
+enum { Asyncbuf = 1<<20 };
+static uchar asyncbuf[Asyncbuf];
 
-	j = env;
-	j->invocation = invocation;
-	j->label = label;
+__attribute__((export_name("__asyncbuf")))
+void*
+__asyncbuf(void)
+{
+	return asyncbuf;
 }
 
-ulong
-__wasm_setjmp_test(void *env, void *invocation)
+__attribute__((export_name("__asyncbufsize")))
+int
+__asyncbufsize(void)
 {
-	Jmp *j;
+	return Asyncbuf;
+}
 
-	j = env;
-	if(j->invocation == invocation)
-		return j->label;
-	return 0;
+int
+setjmp(jmp_buf j)
+{
+	return __setjmp(j);
 }
 
 void
-__wasm_longjmp(void *env, int val)
+longjmp(jmp_buf j, int v)
 {
-	Jmp *j;
-
-	j = env;
-	/* `setjmp.s`: *"ansi: longjmp(0) => longjmp(1)"* */
-	if(val == 0)
-		val = 1;
-	j->env = env;
-	j->val = val;
-	__builtin_wasm_throw(1, &j->env);
+	if(v == 0)
+		v = 1;
+	__longjmp(j, v);
 }

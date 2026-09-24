@@ -33,7 +33,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wasmtime::{
-    Caller, Engine, Instance, Linker, Memory, Module, Store, StoreContextMut, TypedFunc,
+    Caller, Engine, Instance, Linker, Memory, Module, Store, StoreContextMut,
     UpdateDeadline, Val,
 };
 
@@ -316,6 +316,54 @@ pub struct Guest {
     /// `syscall()` finds above the user stack pointer (`Sargs`). Each import
     /// sets it on the way in.
     s: [u64; MAXSYSARG],
+    /// **The stack, as asyncify lets this machine hold it** (RESEARCH
+    /// §16.12). What an unwinding stack is being unwound for, and the stack
+    /// pointer when it began — the compiler keeps that one thing outside
+    /// memory, so it is kept here.
+    op: Option<(Op, i32)>,
+    /// What the call being wound back into answers, when it is reached.
+    rewind: Option<i32>,
+    /// Each `setjmp`'s stack, by its jmp_buf's address.
+    jmps: HashMap<i32, Saved>,
+    /// What the process was entered through, which a stack wound back must
+    /// be entered through again.
+    entry: Entry,
+}
+
+impl Guest {
+    fn new(pid: Pid, module: Option<Module>) -> Guest {
+        Guest { pid, module, s: [0; MAXSYSARG], op: None, rewind: None, jmps: HashMap::new(), entry: Entry::None }
+    }
+}
+
+/// Why a stack is being unwound.
+#[derive(Clone, Copy, Debug)]
+enum Op {
+    /// `setjmp(j)`: keep it under j and wind it straight back.
+    Setjmp { env: i32 },
+    /// `longjmp(j, v)`: drop it, and wind back the one kept under j.
+    Longjmp { env: i32, val: i32 },
+    /// `fork`: a copy for the child, wound back in both.
+    Fork { child: Pid },
+}
+
+/// A stack kept by `setjmp`: its frames as asyncify wrote them, the stack
+/// pointer, and the entry it runs from.
+#[derive(Clone, Debug)]
+struct Saved {
+    frames: Vec<u8>,
+    sp: i32,
+    entry: Entry,
+}
+
+/// Where a process's code is entered — the bottom of every stack it has.
+#[derive(Clone, Copy, Debug)]
+enum Entry {
+    None,
+    /// `_start(argc, argv, heap)` — `main9.c`
+    Start(i32, i32, i32),
+    /// `__childstart(f, arg)` — a `procrfork` child (`procrfork.c`)
+    Child(i32, i32),
 }
 
 /// One argument word, as the process passed it: a 32-bit value as its bits,
@@ -380,16 +428,19 @@ thread_local! {
     static UMEM: Cell<Option<(Pid, *mut u8, usize)>> = const { Cell::new(None) };
 }
 
-/// **A process `procrfork` made**, waiting for the machine to keep its
-/// fiber: its image, a copy of its parent's memory, and where it starts —
-/// the parent's stack pointer, and the function it was given.
+/// **A process `fork` or `procrfork` made**, waiting for the machine to keep
+/// its fiber: its image, a copy of its parent's memory, and where it starts —
+/// the parent's stack pointer, and the function it was given or the
+/// parent's stack to wind back.
 struct Fork {
     pid: Pid,
     module: Module,
     mem: Vec<u8>,
     sp: i32,
-    f: i32,
-    arg: i32,
+    /// What the child runs: `f(arg)` for `procrfork`; for `fork`, its
+    /// parent's stack, wound back from the copy of memory it was given.
+    from: Entry,
+    rewound: bool,
 }
 
 thread_local! {
@@ -590,11 +641,6 @@ impl Wasm {
         config.async_support(true);
         // **The interrupt line** — see [`Clock`].
         config.epoch_interruption(true);
-        // **`setjmp` and `longjmp`** are wasm exceptions on this machine
-        // (`userspace/sys/src/libc/wasm/setjmp.c`): Plan 9's are two instructions
-        // each on the 386 (`libc/386/setjmp.s`), saving and restoring a
-        // stack pointer this machine does not let a program see.
-        config.wasm_exceptions(true);
         let engine = Engine::new(&config).map_err(|e| e.to_string())?;
         let mut linker: Linker<Guest> = Linker::new(&engine);
         imports(&mut linker).map_err(|e| e.to_string())?;
@@ -703,10 +749,10 @@ impl Machine for Wasm {
             let _entered = enter(sys);
             run.as_mut().poll(&mut Context::from_waker(&waker))
         };
-        // The processes `procrfork` made during the poll: fibers of their own
+        // The processes `fork` and `procrfork` made during the poll: fibers of their own
         // now, before the scheduler can choose one.
         for k in FORKED.with(|q| std::mem::take(&mut *q.borrow_mut())) {
-            let run = self.child(k.pid, k.module.clone(), k.mem, k.sp, k.f, k.arg)?;
+            let run = self.child(k.pid, k.module.clone(), k.mem, k.sp, k.from, k.rewound)?;
             self.procs.borrow_mut().insert(k.pid, Fiber { run: Some(run), image: None });
         }
         // Whatever `exec` left in the table wins; otherwise the fiber goes
@@ -753,7 +799,7 @@ impl Wasm {
         module: Module,
         args: Vec<String>,
     ) -> Result<Pin<Box<dyn Future<Output = Result<(), wasmtime::Error>> + Send>>, String> {
-        let mut store = Store::new(&self.engine, Guest { pid, module: Some(module.clone()), s: [0; MAXSYSARG] });
+        let mut store = Store::new(&self.engine, Guest::new(pid, Some(module.clone())));
         // Interrupts on: the next epoch calls `clockintr`.
         store.set_epoch_deadline(1);
         store.epoch_deadline_callback(clockintr);
@@ -761,16 +807,15 @@ impl Wasm {
         Ok(Box::pin(async move {
             let instance = linker.instantiate_async(&mut store, &module).await?;
             let (argc, argv, heap) = place(&mut store, &instance, &args)?;
-            let start: TypedFunc<(i32, i32, i32), ()> =
-                instance.get_typed_func(&mut store, "_start")?;
-            start.call_async(&mut store, (argc, argv, heap)).await
+            run(&mut store, &instance, Entry::Start(argc, argv, heap)).await
         }))
     }
 
-    /// Build a `procrfork` child's fiber: a new instance of the parent's
-    /// image, the parent's memory copied into it, its stack pointer where
-    /// the parent's was — so whatever the parent's frames hold, the child
-    /// has too — and a call to `__childstart(f, arg)`.
+    /// Build a child's fiber: a new instance of the parent's image, the
+    /// parent's memory copied into it, its stack pointer where the parent's
+    /// was — so whatever the parent's frames hold, the child has too — and
+    /// a call to `__childstart(f, arg)` for `procrfork`, or for `fork` the
+    /// parent's entry again with its stack wound back.
     ///
     /// A module's data and stack are its memory, and the one other thing
     /// the compiler keeps outside it is the stack pointer, which is set
@@ -782,10 +827,10 @@ impl Wasm {
         module: Module,
         mem: Vec<u8>,
         sp: i32,
-        f: i32,
-        arg: i32,
+        from: Entry,
+        rewound: bool,
     ) -> Result<Pin<Box<dyn Future<Output = Result<(), wasmtime::Error>> + Send>>, String> {
-        let mut store = Store::new(&self.engine, Guest { pid, module: Some(module.clone()), s: [0; MAXSYSARG] });
+        let mut store = Store::new(&self.engine, Guest::new(pid, Some(module.clone())));
         store.set_epoch_deadline(1);
         store.epoch_deadline_callback(clockintr);
         let linker = self.linker.clone();
@@ -804,10 +849,135 @@ impl Wasm {
                 .get_global(&mut store, "__stack_pointer")
                 .ok_or_else(|| wasmtime::Error::msg("the module exports no stack pointer"))?
                 .set(&mut store, Val::I32(sp))?;
-            let start: TypedFunc<(i32, i32), ()> = instance.get_typed_func(&mut store, "__childstart")?;
-            start.call_async(&mut store, (f, arg)).await
+            // A `fork` child is its parent's stack, wound back: the frames
+            // are in the memory it was given, as unwinding left them, and
+            // its `rfork` answers 0.
+            if rewound {
+                let buf = asyncbuf(&mut store, &instance).await?.0;
+                store.data_mut().rewind = Some(0);
+                instance
+                    .get_typed_func::<i32, ()>(&mut store, "asyncify_start_rewind")?
+                    .call_async(&mut store, buf)
+                    .await?;
+            }
+            run(&mut store, &instance, from).await
         }))
     }
+}
+
+/// **The process runs from its entry until its code is done — or until its
+/// stack unwinds** for one of the machine's own operations (RESEARCH
+/// §16.12). Then the machine does what the stack was unwound for and winds
+/// back the stack that should run next: the same one for `setjmp` and in a
+/// `fork` parent, the one kept by the `setjmp` for `longjmp`. The call that
+/// began it answers what [`Guest::rewind`] says.
+async fn run(store: &mut Store<Guest>, inst: &Instance, mut entry: Entry) -> wasmtime::Result<()> {
+    loop {
+        store.data_mut().entry = entry;
+        let r = match entry {
+            Entry::Start(argc, argv, heap) => {
+                inst.get_typed_func::<(i32, i32, i32), ()>(&mut *store, "_start")?
+                    .call_async(&mut *store, (argc, argv, heap))
+                    .await
+            }
+            Entry::Child(f, arg) => {
+                inst.get_typed_func::<(i32, i32), ()>(&mut *store, "__childstart")?
+                    .call_async(&mut *store, (f, arg))
+                    .await
+            }
+            Entry::None => return Err(wasmtime::Error::msg("no entry")),
+        };
+        let Some((op, sp)) = store.data_mut().op.take() else { return r };
+        r?;
+        inst.get_typed_func::<(), ()>(&mut *store, "asyncify_stop_unwind")?.call_async(&mut *store, ()).await?;
+        let (buf, size) = asyncbuf(store, inst).await?;
+        let mem = inst.get_memory(&mut *store, "memory").ok_or_else(|| wasmtime::Error::msg("no memory"))?;
+        let cur = {
+            let d = mem.data(&*store);
+            u32::from_le_bytes(d[buf as usize..buf as usize + 4].try_into().unwrap()) as usize
+        };
+        let frames = mem.data(&*store)[buf as usize + 8..cur].to_vec();
+        let (frames, sp, val, next) = match op {
+            Op::Setjmp { env } => {
+                store.data_mut().jmps.insert(env, Saved { frames: frames.clone(), sp, entry });
+                (frames, sp, 0, entry)
+            }
+            Op::Longjmp { env, val } => {
+                let s = store
+                    .data()
+                    .jmps
+                    .get(&env)
+                    .cloned()
+                    .ok_or_else(|| wasmtime::Error::msg("longjmp to a jmp_buf no setjmp made"))?;
+                (s.frames, s.sp, val, s.entry)
+            }
+            Op::Fork { child } => {
+                // the child's copy: all of memory, the frames within it
+                let module = store.data().module.clone().ok_or_else(|| wasmtime::Error::msg("no module"))?;
+                let copy = mem.data(&*store).to_vec();
+                FORKED.with(|q| {
+                    q.borrow_mut().push(Fork { pid: child, module, mem: copy, sp, from: entry, rewound: true })
+                });
+                (frames, sp, child as i32, entry)
+            }
+        };
+        if frames.len() + 8 > size as usize {
+            return Err(wasmtime::Error::msg("sys: trap: stack too deep to unwind"));
+        }
+        let b = buf as usize;
+        // Rewinding reads the frames back from the end, outermost first,
+        // so the next free byte is past them, as unwinding left it.
+        mem.write(&mut *store, b + 8, &frames)?;
+        mem.write(&mut *store, b, &((buf + 8 + frames.len() as i32) as u32).to_le_bytes())?;
+        mem.write(&mut *store, b + 4, &((buf + size) as u32).to_le_bytes())?;
+        inst.get_global(&mut *store, "__stack_pointer")
+            .ok_or_else(|| wasmtime::Error::msg("the module exports no stack pointer"))?
+            .set(&mut *store, Val::I32(sp))?;
+        store.data_mut().rewind = Some(val);
+        inst.get_typed_func::<i32, ()>(&mut *store, "asyncify_start_rewind")?.call_async(&mut *store, buf).await?;
+        entry = next;
+    }
+}
+
+/// Where the process's stack unwinds to (`libc/wasm/setjmp.c`), and how big.
+async fn asyncbuf(store: &mut Store<Guest>, inst: &Instance) -> wasmtime::Result<(i32, i32)> {
+    let b = inst.get_typed_func::<(), i32>(&mut *store, "__asyncbuf")?.call_async(&mut *store, ()).await?;
+    let n = inst.get_typed_func::<(), i32>(&mut *store, "__asyncbufsize")?.call_async(&mut *store, ()).await?;
+    Ok((b, n))
+}
+
+/// Begin unwinding the calling process's stack, for `op`. The import
+/// returns, and the process's code returns frame by frame to [`run`].
+async fn unwind(c: &mut Caller<'_, Guest>, op: Op) -> wasmtime::Result<()> {
+    let sp = c
+        .get_export("__stack_pointer")
+        .and_then(|e| e.into_global())
+        .and_then(|g| g.get(&mut *c).i32())
+        .ok_or_else(|| wasmtime::Error::msg("the module exports no stack pointer"))?;
+    let func = |c: &mut Caller<'_, Guest>, n: &str| {
+        c.get_export(n).and_then(|e| e.into_func()).ok_or_else(|| wasmtime::Error::msg(format!("the module exports no {n}: not asyncified")))
+    };
+    let b = func(c, "__asyncbuf")?.typed::<(), i32>(&*c)?.call_async(&mut *c, ()).await?;
+    let n = func(c, "__asyncbufsize")?.typed::<(), i32>(&*c)?.call_async(&mut *c, ()).await?;
+    let mem = memory(c)?;
+    mem.write(&mut *c, b as usize, &((b + 8) as u32).to_le_bytes())?;
+    mem.write(&mut *c, b as usize + 4, &((b + n) as u32).to_le_bytes())?;
+    c.data_mut().op = Some((op, sp));
+    func(c, "asyncify_start_unwind")?.typed::<i32, ()>(&*c)?.call_async(&mut *c, b).await?;
+    Ok(())
+}
+
+/// If the calling import is the one a stack was wound back into, finish the
+/// winding and answer what it answers.
+async fn rewound(c: &mut Caller<'_, Guest>) -> wasmtime::Result<Option<i32>> {
+    let Some(v) = c.data_mut().rewind.take() else { return Ok(None) };
+    c.get_export("asyncify_stop_rewind")
+        .and_then(|e| e.into_func())
+        .ok_or_else(|| wasmtime::Error::msg("not asyncified"))?
+        .typed::<(), ()>(&*c)?
+        .call_async(&mut *c, ())
+        .await?;
+    Ok(Some(v))
 }
 
 /// Place the argument block, the way `sysexec` places one on the new stack
@@ -1125,19 +1295,38 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
     l.func_wrap_async("sys", "rfork", |mut c: Caller<'_, Guest>, (flags,): (i32,)| Box::new(async move {
         c.data_mut().s = [flags.word(), 0, 0, 0, 0];
         let r = async {
-        // **A bare `rfork(RFPROC)` cannot be answered on this machine**, and
-        // saying so is better than pretending. It returns twice — once into
-        // the parent and once into the child — and a wasm call returns into
-        // the engine's own stack, which nothing outside the engine can
-        // duplicate (RESEARCH §5.2; the stack-switching proposal excludes
-        // process duplication by name). Everything else `rfork` does is table
-        // work in the kernel and is answered here.
+        // **`rfork(RFPROC)` returns twice** — 0 in the child, the child's
+        // pid in the parent — and on this machine that is asyncify's
+        // (RESEARCH §16.12): the stack unwinds, the child is a new instance
+        // with a copy of memory and the stack wound back in it, and the
+        // parent's is wound back here. This is the second time through, in
+        // either: the answer, and `sysrfork`'s *"ready(p); sched();"*.
+        match rewound(&mut c).await {
+            Ok(Some(v)) => {
+                if v != 0 {
+                    Sched::new().await;
+                }
+                return v;
+            }
+            Ok(None) => {}
+            Err(_) => return -1,
+        }
         if flags & rf::PROC != 0 {
-            let _ = call(
-                &mut c,
-                Call::Errstr { buf: "rfork: this machine cannot return twice; use procrfork".into() },
-            );
-            return -1;
+            if flags & rf::MEM != 0 {
+                let _ = call(
+                    &mut c,
+                    Call::Errstr { buf: "rfork: RFMEM is not given yet on this machine".into() },
+                );
+                return -1;
+            }
+            let child = match kcall(&mut c, Call::Rfork { flags }).await {
+                Ok(Ret::Pid(p)) => p,
+                _ => return -1,
+            };
+            if unwind(&mut c, Op::Fork { child }).await.is_err() {
+                return -1;
+            }
+            return 0;
         }
         or_fail(kcall(&mut c, Call::Rfork { flags }).await, |v| match v {
             Ret::Pid(p) => p as i32,
@@ -1145,8 +1334,30 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         })
     }
         .await;
-        deliver(&mut c).await?;
+        // A stack unwinding runs no code of the process's until it is
+        // wound back — a note waits for the second time through.
+        if c.data().op.is_none() {
+            deliver(&mut c).await?;
+        }
         Ok::<_, wasmtime::Error>(r)
+    }))?;
+
+    // `setjmp` and `longjmp` (`libc/wasm/setjmp.c`): the machine keeps the
+    // stack (RESEARCH §16.12). Each is called twice: once to unwind, and —
+    // setjmp's own call, found again — once as the stack is wound back.
+    l.func_wrap_async("sys", "setjmp", |mut c: Caller<'_, Guest>, (env,): (i32,)| Box::new(async move {
+        if let Some(v) = rewound(&mut c).await? {
+            return Ok(v);
+        }
+        unwind(&mut c, Op::Setjmp { env }).await?;
+        Ok::<_, wasmtime::Error>(0)
+    }))?;
+    l.func_wrap_async("sys", "longjmp", |mut c: Caller<'_, Guest>, (env, val): (i32, i32)| Box::new(async move {
+        if !c.data().jmps.contains_key(&env) {
+            return Err(wasmtime::Error::msg("sys: trap: longjmp to a jmp_buf no setjmp made"));
+        }
+        unwind(&mut c, Op::Longjmp { env, val }).await?;
+        Ok::<_, wasmtime::Error>(())
     }))?;
 
     // `procrfork(f, arg, stacksize, rforkflag)` — Plan 9's own shape for
@@ -1194,7 +1405,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
                     .and_then(|e| e.into_global())
                     .and_then(|g| g.get(&mut c).i32())
                     .ok_or_else(|| wasmtime::Error::msg("the module exports no stack pointer"))?;
-                FORKED.with(|q| q.borrow_mut().push(Fork { pid: child, module, mem, sp, f, arg }));
+                FORKED.with(|q| q.borrow_mut().push(Fork { pid: child, module, mem, sp, from: Entry::Child(f, arg), rewound: false }));
                 // **`ready(p); sched();`** — `sysrfork`'s last two lines
                 // (`sysproc.c`). The kernel did the `ready`; this is the
                 // `sched`, and it is not an optimisation. Without it the
@@ -1448,7 +1659,7 @@ mod tests {
         use wasmtime::ValType;
         let src = include_str!("../../../userspace/sys/src/libc/wasm/sys.c");
         let w = Wasm::new().unwrap();
-        let mut store = Store::new(&w.engine, Guest { pid: 0, module: None, s: [0; MAXSYSARG] });
+        let mut store = Store::new(&w.engine, Guest::new(0, None));
         let ty = |t: &str| if t.trim() == "vlong" { "i64" } else { "i32" };
         let mut n = 0;
         for line in src.lines().filter(|l| l.starts_with("SYS(")) {

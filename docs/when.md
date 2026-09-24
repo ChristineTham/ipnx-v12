@@ -276,9 +276,13 @@ reaches the kernel through globals. Here the machine goes out of the kernel
 for the call and comes back before anything else can ask.
 
 `hosts/ipnx` serves the whole call list as imports — the counterpart of
-`libc/9syscall/mkfile`'s generated assembly — plus **`procrfork`**, which is
-how a process makes a process on a machine that cannot return twice from one
-call (RESEARCH §5.2, §11). A failed call answers −1 and leaves its reason for
+`libc/9syscall/mkfile`'s generated assembly — plus **`procrfork`**, which was
+how a process made a process before this machine could return twice from one
+call (RESEARCH §5.2, §11). **`rfork(RFPROC)` returns twice** (2026-09-24,
+RESEARCH §16.12): every image is asyncified, the stack unwinds to the
+machine, and the child is a new instance with a copy of memory and the stack
+wound back in it. `setjmp` and `longjmp` are the same mechanism. `RFMEM`
+is refused until shared memory is built. A failed call answers −1 and leaves its reason for
 `errstr`, which is Plan 9's convention rather than an error type crossing the
 boundary.
 
@@ -304,17 +308,18 @@ until 2026-09-23 because clang promotes `uchar` to `int` and kencc to
 **Plan 9's tree, vendored whole** (2026-09-24): `sys/include`, `sys/src` —
 all 36 libraries, all of `cmd`, `ape`, `games` — and every architecture's
 `include`, 80 MB, committed as they are in `plan9/`. Built from Plan 9's own
-mkfiles.
+mkfiles, and every linked image run through `wasm-opt --asyncify` (RESEARCH
+§16.12).
 
 | | |
 |---|---|
 | `mk.sh` | the build: libc, then `mkfile.py libs` and `mkfile.py cmds`, then `boot`, `args` and rc; then **a second pass**, in which `ipnx` is built and what failed is built again — because some sources are made by Plan 9 programs (libsec's curves by `mpc`), and the recipe runs on this system, as Plan 9 builds itself with itself. What does not build is written to `build/failed` with its reason, and the build goes on, as `mk -k` does |
 | `mkfile.py` | reads each mkfile as mk does — continuation, comments per physical line, `<` includes, `${VAR:a%b=c%d}`, backquotes (rc's `reduce` done natively), `DIRS` below first, `cc` first in `cmd` — and builds what it declares: `mksyslib`/`mklib` libraries (members added, `ar vu`), `mkone`, `mkmany`, the one-file programs of `cmd/mkfile`, explicit `$O.x:` links and `%.$O: ../cc/%.c` metarules; `init` to `/$objtype/init` (`cmd/mkfile:116`) |
-| `kencc.py` | **Plan 9's C as clang compiles it**, a derivation into `build/kencc/` (RESEARCH §16.10): `-Dconst=`; every unnamed member written `union { T; T T; }` — or only named where kencc's lookup would find another member first; the conversions kencc promotes, written `&(E)->T` from clang's own diagnostics; absolute includes; old designators; block-scope `static`; prototypes that disagree with their definitions |
-| `wasm/include/u.h`, `wasm/mkfile` | the **wasm32 architecture**: 386's `u.h` with clang's `va_list`, a four-long `jmp_buf`, and 386's FP constants |
-| `sys/src/libc/wasm/` | the machine-dependent half of libc, what `libc/386` is for the 386: the call stubs (`sys.c`, which also makes a `notejmp` jump on the way back), `_start` (`main9.c`), `sbrk`, `procrfork`, `setjmp` (wasm exceptions), `tas` and the atomics, `execl`, `notejmp`, `cycles` (0: no counter), the FP control words, and the profiling pair. **libc is all of `port`, `9sys` and `fmt`**, less what this directory replaces — nothing of Plan 9's left out (the cut-down `lock.c` and `mem.c` are gone) |
+| `kencc.py` | **Plan 9's C as clang compiles it**, a derivation into `build/kencc/` (RESEARCH §16.10): `-Dconst=`; every unnamed member written `union { T; T T; }` — or only named where kencc's lookup would find another member first; the conversions kencc promotes, written `&(E)->T` from clang's own diagnostics; absolute includes; old designators; block-scope `static`; prototypes that disagree with their definitions; and string literals as writable data, as kencc's are (`8c/swt.c:106`) — IR with the optimiser off, `@.str` made `internal global`, then optimised |
+| `wasm/include/u.h`, `wasm/mkfile` | the **wasm32 architecture**: 386's `u.h` with clang's `va_list`, a `jmp_buf` whose address the machine keys its saved stack by, and 386's FP constants |
+| `sys/src/libc/wasm/` | the machine-dependent half of libc, what `libc/386` is for the 386: the call stubs (`sys.c`, which also makes a `notejmp` jump on the way back), `_start` (`main9.c`), `sbrk`, `procrfork`, `setjmp` (calls to the machine that unwind the stack, and the buffer it unwinds into), `tas` and the atomics, `execl`, `notejmp`, `cycles` (0: no counter), the FP control words, and the profiling pair. **libc is all of `port`, `9sys` and `fmt`**, less what this directory replaces — nothing of Plan 9's left out (the cut-down `lock.c` and `mem.c` are gone) |
 | **built** | **34 of the 36 libraries** — libsec among them, its curve tables made by the system's own `mpc` — and **277 programs** in `/pkg/system/2026.09.24/wasm/bin` |
-| **not built** | `libthread` (its `wasm.c`: threads are coroutines on stacks of their own, and procs share memory — neither of which this machine has yet) and `libdynld` (`dynld-wasm.c`); and so 234 programs, about 70 of them for want of libthread. `build/failed` is the list |
+| **not built** | `libthread` (its `wasm.c`: threads are coroutines on stacks of their own, by the same unwinding, and procs share memory — `RFMEM`, shared memory; neither built yet) and `libdynld` (`dynld-wasm.c`); and so 234 programs, about 70 of them for want of libthread. `build/failed` is the list |
 | changed from Plan 9 | `sys/include/libc.h` (`procrfork`), `libc/9sys/nsec.c` (one cast), `libauth/newns.c` (`/profile/start.ns`), rc's `code.c`, `exec.c`, `haventfork.c` (fixes to Plan 9's own no-fork file) and `rcmain`, `cmd/init.c` (the profiles), and `ipnx.c`, rc's platform file |
 | `profile/`, `usr/kitty/profile/`, `etc/motd`, `pkg/system/pkg.cfg` | the system's configuration and kitty's (P7 step 1; docs/packages.md), and the `system` package's description |
 

@@ -33,6 +33,14 @@ touched: each file is written into build/kencc/ with
   3. the smaller differences as clang reports them: a prototype that names
      two parameters the same (kencc ignores the names), and a member reached
      through a structure that is only named.
+  4. **a string literal is writable data.** kencc puts every literal into
+     `.string`, an ordinary static (`cc/lex.c:1263`), a byte at a time as
+     `ADATA` (`8c/swt.c:106`, `outstring`) — nothing read-only, and each
+     literal its own bytes — and Plan 9's code writes into them: `ed.c:159`
+     passes `"/tmp/eXXXXX"` to its own `mktemp`, which fills in the Xs.
+     clang makes a literal a `constant` and, having inlined `mktemp`,
+     deletes the stores. So a file is compiled to IR unoptimised, its
+     literals made plain globals, and only then optimised ([`cc`]).
 
 Steps 2 and 3 are driven by clang's own diagnostics, which give the exact
 place and both types, and repeat until clang has nothing more to say.
@@ -556,13 +564,35 @@ def apply(edits):
             fh.write(text)
     return changed
 
-def compile(cc, flags, src, out, rounds=8):
+STRLIT = re.compile(r"^(@\.str[.\w]*) = private unnamed_addr constant ", re.M)
+
+
+def cc(cc, flags, src, out, extra=()):
+    """Compile as kencc would, literals writable (step 4). Answers the
+    front end's CompletedProcess, whose diagnostics are clang's own."""
+    ll = out + ".ll"
+    r = subprocess.run([cc] + flags + list(extra) + ["-Xclang", "-disable-llvm-passes", "-S", "-emit-llvm",
+                       src, "-o", ll], capture_output=True, text=True)
+    if r.returncode == 0:
+        with open(ll) as f:
+            t = f.read()
+        with open(ll, "w") as f:
+            f.write(STRLIT.sub(r"\1 = internal global ", t))
+        o = [x for x in flags if x.startswith(("--target", "-O", "-m"))]
+        b = subprocess.run([cc] + o + ["-c", ll, "-o", out], capture_output=True, text=True)
+        if b.returncode != 0:
+            r = b
+        os.remove(ll)
+    return r
+
+
+def compile(cc_, flags, src, out, rounds=8):
     """Compile a derived file, fixing what kencc would have accepted, until
     clang has nothing more to say. Answers clang's errors, or None."""
     diagflags = ["-fno-caret-diagnostics", "-fdiagnostics-print-source-range-info",
                  "-fno-color-diagnostics", "-Wincompatible-pointer-types"]
     for _ in range(rounds):
-        r = subprocess.run([cc] + flags + diagflags + ["-c", src, "-o", out], capture_output=True, text=True)
+        r = cc(cc_, flags, src, out, diagflags)
         diags = []
         for m in DIAG.finditer(r.stderr):
             rs = [tuple(map(int, re.split(r"[:\-]", x))) for x in re.findall(r"\{([^}]*)\}", m.group("ranges"))]
@@ -578,3 +608,14 @@ def compile(cc, flags, src, out, rounds=8):
         errs = [d for d in diags if d["kind"] == "error"]
         return errs[0]["msg"] if errs else r.stderr.strip().split("\n")[0]
     return "kencc: did not settle"
+
+
+if __name__ == "__main__":
+    # `kencc.py cc <src> <obj> [flag...]`, for mk.sh: $CC and $CFLAGS from
+    # the environment
+    import sys
+    if len(sys.argv) < 4 or sys.argv[1] != "cc":
+        sys.exit("usage: kencc.py cc src obj [flag...]")
+    r = cc(os.environ["CC"], os.environ["CFLAGS"].split() + sys.argv[4:], sys.argv[2], sys.argv[3])
+    sys.stderr.write(r.stderr)
+    sys.exit(r.returncode)

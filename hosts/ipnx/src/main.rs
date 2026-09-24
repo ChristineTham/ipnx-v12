@@ -490,8 +490,9 @@ mod userspace {
 
     /// **`sed`, and `setjmp` under it.** Plan 9's `libregexp` recovers from
     /// a malformed expression with `longjmp` (`regcomp.c`), which this
-    /// machine does with wasm exceptions (`libc/wasm/setjmp.c`): the bad
-    /// expression unwinds to sed's own complaint, and the shell goes on.
+    /// machine does by unwinding the stack (`libc/wasm/setjmp.c`, RESEARCH
+    /// §16.12): the bad expression unwinds to sed's own complaint, and the
+    /// shell goes on.
     #[test]
     fn sed_edits_and_a_bad_expression_unwinds() {
         let out = typing("echo hello world | sed s/world/kitty/\necho x | sed 's/[/y/'\nseq 5 | sed -n '2,3p'\necho still here\n");
@@ -499,6 +500,30 @@ mod userspace {
         assert!(out.contains("sed: r.e.-using command garbled"), "{out}");
         assert!(out.contains("2\n3\n"), "{out}");
         assert!(out.contains("still here"), "{out}");
+    }
+
+    /// **`longjmp`, more than once to one `setjmp`.** `ed` answers every
+    /// error by `longjmp(savej, 1)` back to its command loop (`ed.c`,
+    /// `error`), so two bad commands unwind to the same place twice and the
+    /// third still runs. Its temporary file is named by its own `mktemp`
+    /// writing into a string literal (`ed.c:159`), which is kencc's meaning
+    /// and must be this compiler's too (`kencc.py`, step 4).
+    #[test]
+    fn ed_recovers_from_errors_by_longjmp() {
+        let f = format!("/tmp/ed{}", std::process::id());
+        let out = typing(&format!("echo a >{f}; {{echo zz; echo zz; echo 1p; echo q}} | ed {f}; rm {f}\n"));
+        assert!(out.contains("2\n?\n?\na\n"), "{out:?}");
+    }
+
+    /// **`fork` returns twice** (`fork(2)`): `time` forks, the child `exec`s
+    /// the command and the parent waits for it and reports its times
+    /// (`time.c`). The stack unwinds, the child is wound back in a copy of
+    /// memory and the parent where it was (RESEARCH §16.12).
+    #[test]
+    fn fork_returns_twice() {
+        let out = typing("time echo forked\n");
+        assert!(out.contains("forked\n"), "{out:?}");
+        assert!(out.contains("r \t echo forked"), "{out:?}");
     }
 
     /// **An rc script runs by name** (`sysproc.c:340`): its `#!` line names

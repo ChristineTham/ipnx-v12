@@ -26,3 +26,4 @@ demo/index.html
 #   git clone --depth 1 https://github.com/plan9foundation/plan9 plan9-stock
 /plan9/
 /plan9-stock/
+__pycache__/

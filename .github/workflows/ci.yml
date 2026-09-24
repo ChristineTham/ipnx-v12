@@ -17,6 +17,9 @@ env:
   # alone — nothing links against wasi — so a move is a toolchain
   # measurement, never a convenience.
   WASI_SDK_RELEASE: "34.0"
+  # Binaryen, for `wasm-opt --asyncify` over every image: how this machine
+  # gives a program setjmp, longjmp and fork (RESEARCH §16.12).
+  BINARYEN_RELEASE: "132"
 
 jobs:
   ci:
@@ -33,12 +36,13 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/opt
-          key: wasi-sdk-${{ env.WASI_SDK_RELEASE }}
-      - name: install wasi-sdk
+          key: wasi-sdk-${{ env.WASI_SDK_RELEASE }}-binaryen-${{ env.BINARYEN_RELEASE }}
+      - name: install wasi-sdk and binaryen
         if: steps.toolcache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/opt && cd ~/opt
           curl -sL "https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-${WASI_SDK_RELEASE%%.*}/wasi-sdk-${WASI_SDK_RELEASE}-x86_64-linux.tar.gz" | tar xz
+          curl -sL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_RELEASE}/binaryen-version_${BINARYEN_RELEASE}-x86_64-linux.tar.gz" | tar xz
 
       - uses: Swatinem/rust-cache@v2
 
@@ -47,6 +51,7 @@ jobs:
       - name: build the guest world
         run: |
           export WASI_SDK=$HOME/opt/wasi-sdk-${WASI_SDK_RELEASE}-x86_64-linux
+          export BINARYEN=$HOME/opt/binaryen-version_${BINARYEN_RELEASE}
           bash userspace/mk.sh
 
       # The kernel alone: no wasm, no host, no machine.

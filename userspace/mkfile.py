@@ -357,6 +357,11 @@ def link(out, objs, locallibs):
     if r.returncode != 0:
         und = sorted(set(re.findall(r"undefined symbol: (\S+)", r.stderr)))
         return "undefined " + " ".join(und[:12]) if und else (r.stderr.strip().split("\n")[0][:200])
+    # asyncify: `setjmp`, `longjmp` and `fork` are the machine's (mk.sh)
+    r = subprocess.run([os.environ["WASMOPT"]] + os.environ["ASYNCIFY"].split() + [out, "-o", out],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return "asyncify: " + r.stderr.strip().split("\n")[0][:200]
     return None
 
 def libpath(mk, lib):

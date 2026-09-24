@@ -84,14 +84,16 @@ Build the guest binaries — the libc, the commands and `rc` — into
 `userspace/root/bin` (requires wasi-sdk at `~/.local/opt/wasi-sdk`, overridable
 with `WASI_SDK`, for its wasm backend alone: nothing here links against wasi,
 and a built binary imports exactly the calls in `userspace/libc/wasm/sys.c`;
-plus `bison` for rc's grammar and Python 3 for `weaken.py`). Apple's clang has
-no wasm backend, which is why the SDK is a prerequisite:
+plus **Binaryen** at `~/.local/opt/binaryen`, overridable with `BINARYEN`, for
+`wasm-opt --asyncify`; `bison` for rc's grammar and Python 3 for `kencc.py`,
+`mkfile.py` and `weaken.py`). Apple's clang has no wasm backend, which is why
+the SDK is a prerequisite:
 
 ```bash
 bash userspace/mk.sh
 ```
 
-Four flags are load-bearing, each measured (RESEARCH §9.4, §11, §16.9):
+Four flags are load-bearing, each measured (RESEARCH §9.4, §11, §16.9, §16.12):
 `-fno-builtin`, because clang's libcall recogniser rewrites strlen's own body
 into a self-call; `-fms-extensions`, because `port/pool.c` is written in
 kencc's anonymous struct members; and `weaken.py`, because **the wasm backend
@@ -101,11 +103,13 @@ for every variable rc declares. It sets the weak bit in the `linking` section,
 keeping strong the one definition that carries an initialiser; `wasm-ld
 --allow-multiple-definition` cannot do the job, because it keeps the FIRST
 definition even over a later initialised one and two different files here
-initialise something. And `-mllvm -wasm-enable-sjlj` (with
-`-mexception-handling` and `-wasm-use-legacy-eh=false`), because this machine
-has no stack a program can save: `setjmp`/`longjmp` are wasm exceptions, and
-`libc/wasm/setjmp.c` is the library's half — so the host enables wasmtime's
-exceptions (`gc`, `gc-null`).
+initialise something. And **`wasm-opt --asyncify`** over every linked image,
+because this machine has no stack a program can save (RESEARCH §16.12):
+`setjmp`, `longjmp` and `rfork(RFPROC)` are calls to the machine that unwind
+the stack into memory and wind back the one that should run — so a program
+forks as Plan 9's does. Christine chose it, 2026-09-24. `kencc.py` also makes
+string literals writable data, as kencc's are (`8c/swt.c:106`): `ed`'s own
+`mktemp` writes into one.
 
 `userspace/build/` and `userspace/root/` are generated and gitignored. Guest
 binaries carry no `.wasm` extension: exec walks the namespace for `/bin/cat`,
