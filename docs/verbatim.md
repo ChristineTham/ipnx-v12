@@ -375,3 +375,5 @@ On `/store`:
   <br>— cited in `docs/proposals.md`
 - *"user can install packages, services etc by using su or sudo"*
   <br>— cited in `docs/proposals.md`
+- *"user defined pkg services are in /home/pkg etc"*
+  <br>— cited in `docs/proposals.md`
