@@ -29,6 +29,10 @@ template, profile or project carries says what it is by its extension:
 | **`.env`** | environment variables for the script of the same name — `/profile/start.env` for `/profile/start.rc` | the script's starter, before the script |
 | **`.cfg`** | the configuration — `pkg.cfg`, `service.cfg`, `template.cfg`, `profile.cfg`, `project.cfg`: *"name of template, version, date other properties"* | `libndb`; `ndb/query` from rc |
 
+**A command written in rc is named by what is typed** — `lc`, `9fs`,
+`dircp` — with no `.rc`, as Plan 9 names them (decided 2026-09-24). The rule
+is for scripts run by role or by kind.
+
 **A `.cfg` is written in `ndb(6)`** (*"if plan 9 has ndb let's use that
 consistently"*) — Plan 9's one configuration format: *"multi-line tuples
 made up of attribute/value pairs of the form attr=value … Each line
@@ -254,7 +258,9 @@ and a name in both resolves to the system's unless the user binds theirs
 before it. This is the union `platforms.md` proposed for every root
 (unreviewed). **What is installed is configuration, so it is in the
 profiles**; `/pkg`, `/service` and `/template` hold only the things
-themselves.
+themselves. **The lists are files of their own** — `/profile/pkg`,
+`/profile/service`, `/profile/template` — and not entries in
+`profile.cfg` (decided 2026-09-24).
 
 `/store` added nothing `/pkg/<name>/<version>/` does not have: it is named
 uniquely because a repository publishes one set of bytes per name and

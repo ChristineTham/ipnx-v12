@@ -19,6 +19,13 @@ So a project is a directory in which something is made, and which may be
 made into one or more of the four — promoted. Promoting does not end the
 project: it goes on being where the thing is worked on.
 
+**Promotion is to the user by default, and to the system with `su`**
+(*"promotion to user by default, to system with su"*): what `pkg.rc` makes
+goes into `/home/pkg/<name>/<version>/`, and so `/home/service`,
+`/home/template` and `/home/profile` for the others; with `su`, into
+`/pkg`, `/service`, `/template` and `/profile` — as any install to the
+system is (packages.md, *Where things are*).
+
 ## Its files
 
 Named by the symmetry in [packages.md](packages.md), *Files are named by
@@ -67,9 +74,9 @@ binding is user/process speccific."*
    packages bound and its services started; closing the window hangs them
    up.
 2. **`project.cfg` is the manifest** — Cargo's `Cargo.toml` (RESEARCH
-   §16.2): the packages and services it wants. *Open:* where the lock goes —
-   the exact versions and SHA-256 of what was installed, Cargo's
-   `Cargo.lock` — which the design before this one kept in the same file
+   §16.2): the packages and services it wants. **The lock is not in it**
+   (decided 2026-09-24) — the exact versions and SHA-256 of what was
+   installed, Cargo's `Cargo.lock`. *Open:* where it goes instead
    ([proposals.md](proposals.md)).
 3. **`/project/<x>` is a binding, per user or process**: the files live
    under their owner's `/usr/<name>` as everything a Plan 9 user owns does,
