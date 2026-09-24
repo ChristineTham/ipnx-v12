@@ -39,14 +39,14 @@ CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-ex
 LDFLAGS="--no-entry --export=_start --export-memory --export=__stack_pointer --stack-first -z stack-size=65536 --allow-multiple-definition"
 
 # The rootfs: the binaries under `/$objtype`, bound onto `/bin` by
-# `/profile/namespace`; the system's configuration in `/profile`; each
+# `/profile/start.ns`; the system's configuration in `/profile`; each
 # user's under `/usr/<name>`, bound at `/home` (docs/packages.md). Plan 9's
 # `/rc` is retired, and a tree built before it was is cleared of it.
 OBJTYPE=wasm
-rm -rf "$root/rc" "$root/lib/namespace" "$root/profile" "$root/usr/glenda/profile"
+rm -rf "$root/rc" "$root/lib/namespace" "$root/profile" "$root/usr/kitty/profile"
 mkdir -p "$build" "$build/boot" \
 	"$root/$OBJTYPE/bin" "$root/lib" "$root/profile" "$root/home" \
-	"$root/usr/glenda/profile" "$root/etc" "$root/tmp"
+	"$root/usr/kitty/profile" "$root/etc" "$root/tmp"
 
 cc() {	# cc <src> <obj>
 	$CC $CFLAGS -c "$1" -o "$2"
@@ -129,7 +129,7 @@ done
 
 # ---- the rest of the rootfs -----------------------------------------------
 cp -f "$here"/profile/* "$root/profile/"
-cp -f "$here"/usr/glenda/profile/* "$root/usr/glenda/profile/"
+cp -f "$here"/usr/kitty/profile/* "$root/usr/kitty/profile/"
 cp -f "$here/etc/motd" "$root/etc/motd"
 
 # ---- rc -------------------------------------------------------------------

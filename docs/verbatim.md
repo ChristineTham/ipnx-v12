@@ -405,3 +405,7 @@ On building P7, and on names:
   <br>— cited in `RESEARCH.md` §16.7
 - *"yes, .env is rc format, as for namespace extension, what do you suggest"*
   <br>— cited in `docs/packages.md`, `docs/proposals.md`
+- *"yes, start.ns"*
+  <br>— cited in `docs/packages.md`
+- *"our default user is called kitty, not glenda"*
+  <br>— cited in `docs/when.md`, `hosts/ipnx/src/lib.rs`

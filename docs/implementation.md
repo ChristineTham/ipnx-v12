@@ -244,7 +244,7 @@ one before:
 
 | | |
 |---|---|
-| **1. `/profile`** | the system's configuration — the namespace file (was `/lib/namespace`), `start.rc` (was `/rc/bin/termrc`), `shell.rc`, `stop.rc` — and the user's in `/home/profile`, `/home` being `/usr/$user`. `/rc` retired. `test` vendored, which rc's startup already calls |
+| **1. `/profile`** | the system's configuration — `start.ns` (was `/lib/namespace`), `start.rc` (was `/rc/bin/termrc`), `shell.rc`, `stop.rc`, and a `.env` before each — and the user's in `/home/profile`, `/home` being `/usr/$user`. `/rc` retired. `test` vendored, which rc's startup already calls |
 | **2. `/pkg`** | the system's programs as packages in `/pkg/<name>/<version>/`, bound onto `/bin` from the profile, listed in `/profile/pkg`; `rcmain` in rc's. `libndb` and `ndb/query` vendored, which every `.cfg` needs |
 | **3. `pkg`** | `install` and `remove`, to the system, the user or the namespace; `pkg.cfg`, `install.rc`, `remove.rc`; a repository mounted as a file server; a SHA-256 per package checked against its index — which needs a hash command |
 | **4. services** | `/service/<name>/` with `service.cfg`, `start.rc`/`stop.rc`, started with their scope and ended by *"hangup"* to its note group |

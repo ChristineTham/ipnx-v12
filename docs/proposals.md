@@ -14,7 +14,7 @@ was in this register on 2026-09-18 turned out to be answered at file and line.
 **What should `boot` ask, and what answers it?** — proposed 2026-09-20,
 revised the same day (RESEARCH §13.2).
 
-`#ec` exists and is empty. plan9.ini is **the stored answers to the questions
+`#ec` holds `user=kitty`, and `init=` when `ipnx` is given a command. plan9.ini is **the stored answers to the questions
 `boot` would otherwise ask**: `bootargs` is the default shown in the `root is
 from (...)` prompt (`boot/boot.c:354`, *"create default reply"*), and
 `nobootprompt` skips the question — *"Suppress the `root from` prompt and use
@@ -23,18 +23,15 @@ user prompt.
 
 **This `boot` asks nothing.** One method — `#9/0`, `bootvirtio9p.c` entire —
 no authentication, `rootdir` a `char*` in the file. So there is nothing for a
-configuration to answer, and that, rather than any missing mechanism, is why
-`#ec` is empty.
+configuration to answer beyond the user, and that, rather than any missing
+mechanism, is why `#ec` holds so little.
 
 The open questions, in order:
 
 1. **Does `boot` get a second method?** A host directory over `#9` is one.
    A different store, a read-only image, a namespace handed over whole — each
    would make `root is from` a real question.
-2. **Is there a user to choose?** `eve` is a compile-time constant here where
-   Plan 9 starts it empty and has `boot` write `#c/hostowner` from `$user`,
-   defaulting to `"glenda"` (`bootauth.c:56`, `pc/main.c:285`).
-3. **If there is something to answer, how does it arrive?** Plan 9's own
+2. **If there is something to answer, how does it arrive?** Plan 9's own
    second way in is the multiboot branch (`pc/main.c:49`): **the bootloader's
    command line, spaces turned into newlines, IS plan9.ini** — and `ipnx`'s
    argv is that command line. It is an alternative to the FAT file, not an
@@ -42,28 +39,14 @@ The open questions, in order:
    `ipnx` also takes a command to run, so the two would have to share the
    line.
 
-**Nothing here is built.** The mechanism is: `#ec` attaches, binds under `#e`,
-and takes writes from eve.
-
-**P7's names — what the symmetry leaves open** — proposed 2026-09-24,
-after *"rc files must always end in extension .rc"*, the `.env` and `.cfg`
-files, and `ndb` for every `.cfg` ([packages.md](packages.md), *Files are
-named by what they are*; [projects.md](projects.md)).
-
-1. **What does the namespace file take?** It is neither rc nor `ndb` but
-   its own format (`namespace(6)`). Plan 9 puts the *variant* where the
-   extension goes — `/lib/namespace.httpd`, `namespace.ftp`,
-   `namespace.noworld` (`ip/httpd/httpd.c:103`, `ip/ftpd.c:120`, `:606`).
-   *Proposed:* **`.ns`**, named by role like the rest — **`start.ns`** —
-   after Plan 9's own `ns(1)` and `/proc/<pid>/ns`, which print in exactly
-   this format. Then `start.ns`, `start.env`, `start.rc` are one trio, run
-   in that order, which is `init`'s order: `newns`, the environment, rc.
-   `/profile/start.ns` is the system's (`newns`); `/home/profile/start.ns`
-   the user's, added at login (`addns`, `auth/newns -a`,
-   `cmd/auth/newns.c:36`); `/service/<name>/start.ns` is what
-   `/lib/namespace.httpd` is, built for `none` (`aux/listen.c:375`). Saving
-   the namespace is `ns` into one, as saving the environment is `whatis`
-   into a `.env`.
+**Built:** the mechanism — `#ec` attaches, binds under `#e`, takes writes
+from eve — and one answer: **the default user is `kitty`** (Christine,
+2026-09-24: *"our default user is called kitty, not glenda"*), given as
+`plan9.ini`'s `user=kitty` by the host (`plan9ini`,
+`hosts/ipnx/src/lib.rs`). `eve` starts empty and `boot` writes
+`#c/hostowner` from `$user`, as Plan 9's does (`bootauth.c:56`,
+`pc/main.c:285`); Plan 9's fallback, `"glenda"`, is kept for a
+configuration that names none.
 
 ## Decided, and moved into the specs
 
@@ -75,7 +58,7 @@ the names were made symmetric — `start.rc`, `start.env`, `pkg.cfg` — and
 every `.cfg` made `ndb`. Of what that left open, decided the same day: a command
 written in rc keeps its bare name; the installed lists stay files of their
 own, not entries in `profile.cfg`; the lock is not in `project.cfg`; and
-promotion is to the user by default, to the system with `su`. And `rcmain` ships in rc's package, keeping its name. A project's lock is `project.lock`. A `.env` is rc's own form, what `whatis` prints.
+promotion is to the user by default, to the system with `su`. And `rcmain` ships in rc's package, keeping its name. A project's lock is `project.lock`. A `.env` is rc's own form, what `whatis` prints. The namespace file is `start.ns`.
 
 **The scheduler** — proposed and decided 2026-09-21, and it is now
 [implementation.md](implementation.md)'s **P6**, before the registries,

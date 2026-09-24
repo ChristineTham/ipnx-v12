@@ -88,9 +88,12 @@ setenv(char *name, char *val)
  *
  * — the system's startup, then the user's — and its `manual` case is a bare
  * `rc`. Both are here for the reason Plan 9 has both: the FIRST rc runs the
- * startup and exits, and the one after it is the shell you type at. The two
- * startup scripts are the profiles' `start.rc`s (docs/packages.md), and
- * `$home` is already set, by `newns`.
+ * startup and exits, and the one after it is the shell you type at. The
+ * startup is the profiles' (docs/packages.md): each `start.env`, read with
+ * `.`, then its `start.rc` — the system's, then the user's. Their
+ * `start.ns` files are already applied, by `newns` and `addns` in `main`,
+ * and `$home` is already set, by `newns`. A user need not have any of
+ * theirs.
  */
 static void
 rcexec(void *v)
@@ -101,20 +104,26 @@ rcexec(void *v)
 	else if(manual)
 		exec("/bin/rc", (char*[]){ "rc", nil });
 	else
-		exec("/bin/rc", (char*[]){ "rc", "-c", ". /profile/start.rc; cd; . /home/profile/start.rc", nil });
+		exec("/bin/rc", (char*[]){ "rc", "-c",
+			". /profile/start.env; . /profile/start.rc; cd; "
+			"if(/bin/test -r /home/profile/start.env) . /home/profile/start.env; "
+			"if(/bin/test -r /home/profile/start.rc) . /home/profile/start.rc", nil });
 	print("init: can't exec /bin/rc: %r\n");
 }
 
 /*
- * The end of the session: the user's `stop.rc`, at logout, and then the
- * system's, at shutdown (docs/packages.md). Plan 9 has no counterpart — its
+ * The end of the session: the user's `stop.env` and `stop.rc`, at logout,
+ * and then the system's, at shutdown (docs/packages.md). Plan 9 has no counterpart — its
  * terminal is switched off and its user never logs out.
  */
 static void
 stopexec(void *v)
 {
 	USED(v);
-	exec("/bin/rc", (char*[]){ "rc", "-c", ". /home/profile/stop.rc; . /profile/stop.rc", nil });
+	exec("/bin/rc", (char*[]){ "rc", "-c",
+		"if(/bin/test -r /home/profile/stop.env) . /home/profile/stop.env; "
+		"if(/bin/test -r /home/profile/stop.rc) . /home/profile/stop.rc; "
+		". /profile/stop.env; . /profile/stop.rc", nil });
 	print("init: can't exec /bin/rc: %r\n");
 }
 
@@ -154,7 +163,7 @@ main(int argc, char *argv[])
 	cmd = *argv;
 
 	/* `init.c:56` — the name of the machine, and therefore of the
-	 * directory its binaries are in. `/profile/namespace` reads it as
+	 * directory its binaries are in. `/profile/start.ns` reads it as
 	 * `$objtype`, and the machine set `cputype` (`pc/main.c:252`). */
 	cpu = readenv("#e/cputype");
 	setenv("#e/objtype", cpu);
@@ -165,9 +174,19 @@ main(int argc, char *argv[])
 	setenv("#e/sysname", systemname);
 
 	/* `newns(user, 0)` — the namespace this instance is configured to
-	 * have, from `/profile/namespace`. */
+	 * have, from `/profile/start.ns`. */
 	if(newns(user, 0) < 0)
 		print("init: can't build namespace: %r\n");
+
+	/* The user's namespace, added to the system's at login:
+	 * `/home/profile/start.ns` (docs/packages.md), so the user's binds come
+	 * after the system's. `addns` is libauth's (`newns.c:120`), what Plan
+	 * 9's `auth/newns -a` calls (`cmd/auth/newns.c:52`) — without its
+	 * `rfork(RFNAMEG)`, because this namespace is the one every shell after
+	 * it shares. Plan 9's init has no such step: its users bind in
+	 * `$home/lib/profile`, as rc commands. */
+	if(access("/home/profile/start.ns", AREAD) == 0 && addns(user, "/home/profile/start.ns") < 0)
+		print("init: can't add /home/profile/start.ns: %r\n");
 
 	/*
 	 * Plan 9 goes round forever (`init.c:66`): the startup rc — or the

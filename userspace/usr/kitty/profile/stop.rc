@@ -1,0 +1,4 @@
+#!/bin/rc
+# /home/profile/stop.rc — kitty's, run when they log out, before the
+# system's /profile/stop.rc (docs/packages.md). Theirs to change. Plan 9 has
+# no counterpart: it has no logout.

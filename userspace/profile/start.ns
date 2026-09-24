@@ -1,7 +1,7 @@
-# /profile/namespace — the system's namespace bindings, part of its
-# configuration (docs/packages.md, "A profile"). It was /lib/namespace, as
-# Plan 9 keeps it: `plan9/lib/namespace`, read by `newns()` which init
-# calls. Every line is a bind, a mount, a cd or a `.` — and the file is the
+# /profile/start.ns — the system's namespace, in `namespace(6)`'s format:
+# the first of the system's start.ns, start.env, start.rc (docs/packages.md).
+# It was /lib/namespace, as Plan 9 keeps it: `plan9/lib/namespace`, read by
+# `newns()` which init calls. Every line is a bind, a mount, a cd or a `.` — and the file is the
 # reason a boot is configuration rather than code.
 #
 # The lines boot has already run are here too, because `newns` starts from an

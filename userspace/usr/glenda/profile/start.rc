@@ -1,5 +1,0 @@
-#!/bin/rc
-# /home/profile/start.rc — glenda's, run when she logs in, after the
-# system's /profile/start.rc (docs/packages.md). Hers to change. Plan 9's
-# counterpart is `$home/lib/profile`, which init runs the same way
-# (`plan9/sys/src/cmd/init.c:178`).

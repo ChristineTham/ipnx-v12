@@ -26,9 +26,17 @@ template, profile or project carries says what it is by its extension:
 | extension | what it is | read by |
 |---|---|---|
 | **`.rc`** | an rc script, named by its role — `start.rc`, `shell.rc`, `stop.rc`, `install.rc`, `remove.rc` — or by the kind it makes a project into (projects.md) | rc |
+| **`.ns`** | a namespace, in `namespace(6)`'s format — `start.ns` (decided 2026-09-24, *"yes, start.ns"*), after Plan 9's `ns(1)` and `/proc/<pid>/ns`, which print this format. Saving the namespace is `ns` into one | `newns` for the system's; `addns` for the user's, at login |
 | **`.env`** | environment variables for the script of the same name — `/profile/start.env` for `/profile/start.rc` — **in rc's own form**, what `whatis` prints: `name=value`, `list=(a b)`, `'…'` for spaces (decided 2026-09-24; RESEARCH §16.7). Saving the environment is `whatis` into one | whatever runs the `.rc`, with `.`, before it |
 | **`.lock`** | what was installed — exact versions and SHA-256, in `ndb` — written by `pkg`, never by hand: `project.lock` | `pkg` |
 | **`.cfg`** | the configuration — `pkg.cfg`, `service.cfg`, `template.cfg`, `profile.cfg`, `project.cfg`: *"name of template, version, date other properties"* | `libndb`; `ndb/query` from rc |
+
+****At each scope the three run in one order: `start.ns`, `start.env`,
+`start.rc`** — `init`'s own: the namespace, the environment, rc. The
+system's `start.ns` is read by `newns`; the user's is added to it at login
+by `addns` (libauth's, `newns.c:120`, what `auth/newns -a` calls); a
+service's is built for `none`, as `/lib/namespace.httpd` is
+(`aux/listen.c:375`).
 
 **A command written in rc is named by what is typed** — `lc`, `9fs`,
 `dircp` — with no `.rc`, as Plan 9 names them (decided 2026-09-24). The rule
@@ -169,7 +177,7 @@ is (projects.md).
 
 | | `/profile` | `/home/profile` |
 |---|---|---|
-| namespace bindings | what `/lib/namespace` is on Plan 9 | the binds Plan 9 users make in `$home/lib/profile` |
+| namespace bindings — `start.ns` | what `/lib/namespace` is on Plan 9 | the binds Plan 9 users make in `$home/lib/profile` |
 | init scripts | what `/rc/bin/termrc`, `cpurc` and `/cfg/$sysname/*` are on Plan 9 (§16.3) | what `$home/lib/profile` is (`init.c:178`) |
 | network configuration | what `/lib/ndb` is on Plan 9 | — |
 | environment | every user's | the user's own |

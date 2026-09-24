@@ -7,7 +7,7 @@
 # None of those exist here yet. What is left is what termrc is FOR: the
 # devices a terminal wants, bound by the system rather than by the embedding.
 
-# bind all likely devices (`termrc:14`). `/profile/namespace` has already bound
+# bind all likely devices (`termrc:14`). `/profile/start.ns` has already bound
 # the ones a namespace must have; these are the ones a TERMINAL wants to see
 # under /dev, which is what Plan 9's loop is for.
 for(i in p d)

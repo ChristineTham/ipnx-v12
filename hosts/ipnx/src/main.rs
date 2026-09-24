@@ -1,6 +1,6 @@
 //! `ipnx` — Saranos on a terminal. The binary; the system is [`ipnx`] itself.
 
-use ipnx::{initcmd, startboot, store, Host, BOOT};
+use ipnx::{plan9ini, startboot, store, Host, BOOT};
 use ipnx_kernel::devvirtio9p::Nineserver;
 
 #[cfg(test)]
@@ -20,7 +20,7 @@ fn main() {
     // With arguments, the system boots as always and init is given the
     // command, as `init=` in `plan9.ini` gives it one (`initcmd`). What runs
     // it is the system's own rc, in the namespace init built.
-    let conf: Vec<(String, String)> = if args.len() > 1 { vec![initcmd(&args[1..])] } else { Vec::new() };
+    let conf = plan9ini(&args[1..]);
     let argv = vec![BOOT.to_string()];
 
     // The machine's filesystem. `-fsdev local` names a host directory; this
@@ -275,7 +275,7 @@ mod tests {
 /// **The demo, run against the real thing.**
 ///
 /// Not a model of anything: these boot the kernel, run `boot`, `init`,
-/// `/profile/namespace` and `/profile/start.rc`, and then TYPE at the console —
+/// `/profile/start.ns` and `/profile/start.rc`, and then TYPE at the console —
 /// which is the whole of what `ipnx` does.
 ///
 /// They need `userspace/mk.sh` to have run. `cargo test` cannot do it (it
@@ -284,6 +284,7 @@ mod tests {
 #[cfg(test)]
 mod userspace {
     use super::*;
+    use ipnx::initcmd;
 
     /// The rootfs `mk.sh` built — the machine's filesystem, as `ipnx` serves
     /// it by default.
@@ -303,7 +304,7 @@ mod userspace {
         match startboot(
             &[BOOT.to_string()],
             &[],
-            &[],
+            &plan9ini(&[]),
             Box::new(term.clone()),
             Some(Box::new(store)),
         ) {
@@ -318,7 +319,7 @@ mod userspace {
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let term = Term::typing(keys);
         let store = store::Store::new(&rootfs()).expect("a store");
-        match startboot(&[BOOT.to_string()], &[], &[initcmd(&args)], Box::new(term.clone()), Some(Box::new(store))) {
+        match startboot(&[BOOT.to_string()], &[], &plan9ini(&args), Box::new(term.clone()), Some(Box::new(store))) {
             Ok(_) => term.screen(),
             Err(e) => panic!("{e}"),
         }
@@ -328,7 +329,7 @@ mod userspace {
     /// echo hello`). `boot` reads `$init` and hands it to `init`
     /// (`boot.c:208`), which runs it with `rc -c` (`init.c:171`) in the
     /// namespace it built — `$objtype` is init's own, and `/bin` is
-    /// `/profile/namespace`'s — and a word with a quote and a space in it
+    /// `/profile/start.ns`'s — and a word with a quote and a space in it
     /// arrives whole. Then the interactive shell, as Plan 9's `init` goes
     /// on to; with no input it ends at once.
     #[test]
@@ -378,7 +379,7 @@ mod userspace {
         assert!(!out.contains("\nrc\n"), "/rc is retired (docs/packages.md): {out:?}");
     }
 
-    /// `/bin` is what `/profile/namespace` makes it: `bind /$objtype/bin
+    /// `/bin` is what `/profile/start.ns` makes it: `bind /$objtype/bin
     /// /bin`. Plan 9's next line, `bind -a /rc/bin /bin`, went with `/rc`.
     #[test]
     fn bin_is_what_the_namespace_file_makes() {
@@ -388,7 +389,7 @@ mod userspace {
         assert!(!out.contains("termrc\n"), "/rc/bin is retired: {out:?}");
     }
 
-    /// The devices are where `/profile/namespace` and `/profile/start.rc` put them,
+    /// The devices are where `/profile/start.ns` and `/profile/start.rc` put them,
     /// and `/dev` is `#c` with the terminal's own bound after it.
     #[test]
     fn the_devices_are_bound_where_the_files_say() {
@@ -402,11 +403,12 @@ mod userspace {
     /// (`pc/main.c:252`), `$user` from `#c/user`, `$sysname` from start.rc.
     #[test]
     fn the_environment_is_what_the_boot_put_there() {
-        // `glenda`, not `eve`: `eve` is the empty string until `boot` writes
+        // `kitty`, not `eve`: `eve` is the empty string until `boot` writes
         // `#c/hostowner` (`bootauth.c:56`), and the name it writes is
-        // `$user` from the configuration or Plan 9's own fallback. `eve` is
-        // the role, not a person.
-        assert!(typing("echo $objtype $user $sysname\n").contains("wasm glenda gnot"));
+        // `$user` from the configuration — this system's `plan9.ini` says
+        // `user=kitty` — or Plan 9's own fallback, `glenda`. `eve` is the
+        // role, not a person.
+        assert!(typing("echo $objtype $user $sysname\n").contains("wasm kitty gnot"));
     }
 
     /// **`/dev/config` is the KERNEL configuration file** — `$CONF`, the one
@@ -424,7 +426,7 @@ mod userspace {
         assert!(typing("echo $terminal\n").contains(&format!("wasm {CONFFILE}")));
     }
 
-    /// **`#p/1/ns` is the namespace as `/profile/namespace` would write it.**
+    /// **`#p/1/ns` is the namespace as `/profile/start.ns` would write it.**
     /// It was device letters and qid numbers on both sides, which is the
     /// kernel's bookkeeping and not a namespace.
     #[test]
@@ -434,7 +436,7 @@ mod userspace {
             "bind -a /root /\n",
             "mount -aC #s/boot /root \n",
             "bind  /wasm/bin /bin\n",
-            "bind -c /usr/glenda /home\n",
+            "bind -c /usr/kitty /home\n",
             "bind  #c /dev\n",
             "bind -c #e /env\n",
             "cd /\n",
@@ -766,13 +768,13 @@ mod profiles {
         // Plan 9's would prefix them (`ls.c:115`).
         let out = typing("ls /profile\necho --\nls /home/profile\nls /rc\n");
         let (system, user) = out.split_once("--\n").expect(&out);
-        for name in ["namespace", "start.rc", "shell.rc", "stop.rc"] {
+        for name in ["start.ns", "start.env", "start.rc", "shell.env", "shell.rc", "stop.env", "stop.rc"] {
             assert!(system.contains(&format!("{name}\n")), "no /profile/{name}: {out:?}");
         }
-        for name in ["start.rc", "shell.rc", "stop.rc"] {
+        for name in ["start.ns", "start.env", "start.rc", "shell.env", "shell.rc", "stop.env", "stop.rc"] {
             assert!(user.contains(&format!("{name}\n")), "no /home/profile/{name}: {out:?}");
         }
-        assert!(out.contains("'rc' does not exist"), "/rc is retired: {out:?}");
+        assert!(out.contains("can't stat /rc:"), "/rc is retired: {out:?}");
         assert!(!out.contains("unknown fid"), "{out:?}");
     }
 
@@ -789,8 +791,8 @@ mod profiles {
             std::fs::write(&p, s).unwrap();
         };
         add("profile/start.rc", "echo system start\n");
-        add("usr/glenda/profile/start.rc", "test -r profile/start.rc && echo user start at home\n");
-        add("usr/glenda/profile/stop.rc", "echo user stop\n");
+        add("usr/kitty/profile/start.rc", "test -r profile/start.rc && echo user start at home\n");
+        add("usr/kitty/profile/stop.rc", "echo user stop\n");
         add("profile/stop.rc", "echo system stop\n");
         let out = typing_at("echo typed\n", root.path());
         let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("no `{s}` in {out:?}"));
@@ -798,6 +800,31 @@ mod profiles {
         assert!(at("user start") < at("typed"), "{out:?}");
         assert!(at("typed") < at("user stop"), "{out:?}");
         assert!(at("user stop") < at("system stop"), "{out:?}");
+    }
+
+    /// **At each scope, `start.ns`, then `start.env`, then `start.rc`** —
+    /// `init`'s own order: the namespace, the environment, rc
+    /// (docs/packages.md). The user's `start.ns` is added to the system's at
+    /// login (`addns`), so the user's `start.rc` sees it; each `start.env`
+    /// is read just before its `start.rc`, the system's before the user's.
+    #[test]
+    fn start_ns_then_start_env_then_start_rc() {
+        let root = Scratch::new("profile-trio");
+        let add = |path: &str, line: &str| {
+            let p = root.path().join(path);
+            let mut s = std::fs::read_to_string(&p).unwrap();
+            s.push_str(line);
+            std::fs::write(&p, s).unwrap();
+        };
+        add("profile/start.env", "sysenv=system\n");
+        add("profile/start.rc", "echo system rc sees $sysenv\n");
+        add("usr/kitty/profile/start.ns", "bind -a /etc /home\n");
+        add("usr/kitty/profile/start.env", "userenv=($sysenv 'and user')\n");
+        add("usr/kitty/profile/start.rc", "test -r /home/motd && echo user rc sees $userenv and the motd\n");
+        let out = typing_at("echo typed $userenv\n", root.path());
+        assert!(out.contains("system rc sees system\n"), "{out:?}");
+        assert!(out.contains("user rc sees system and user and the motd\n"), "{out:?}");
+        assert!(out.contains("typed system and user\n"), "the environment outlives the startup: {out:?}");
     }
 
     /// **`shell.rc` runs in every new shell**, the system's and then the
@@ -814,13 +841,15 @@ mod profiles {
             s.push_str(line);
             std::fs::write(&p, s).unwrap();
         };
+        add("profile/shell.env", "envorder=system\n");
+        add("usr/kitty/profile/shell.env", "envorder=$envorder^user\n");
         add("profile/shell.rc", "order=system\n");
-        add("usr/glenda/profile/shell.rc", "order=$order^user; shellpid=$pid\n");
+        add("usr/kitty/profile/shell.rc", "order=$order^user; shellpid=$pid\n");
         let out = typing_at(
-            "echo order $order\nrc -c 'echo child $shellpid $pid'\n{echo fork $shellpid $pid} | cat\n",
+            "echo order $order $envorder\nrc -c 'echo child $shellpid $pid'\n{echo fork $shellpid $pid} | cat\n",
             root.path(),
         );
-        assert!(out.contains("order systemuser\n"), "{out:?}");
+        assert!(out.contains("order systemuser systemuser\n"), "each .env before its .rc: {out:?}");
         let line = out.lines().find_map(|l| l.split("child ").nth(1)).expect(&out);
         let pids: Vec<&str> = line.split_whitespace().collect();
         assert_eq!(pids.len(), 2, "{out:?}");

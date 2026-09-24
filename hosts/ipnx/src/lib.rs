@@ -245,7 +245,7 @@ pub const LETTERS: [DevId; 10] = [
 /// ```
 ///
 /// **Nothing else.** Everything the system needs beyond this is the system's
-/// own business now: `boot` mounts the root, `/profile/namespace` says what the
+/// own business now: `boot` mounts the root, `/profile/start.ns` says what the
 /// namespace is, and `/profile/start.rc` binds the rest. This list used to carry
 /// three more, and each of them is now a line in one of those files.
 ///
@@ -311,6 +311,21 @@ pub fn ksetenv(k: &mut Kernel, name: &str, val: &str, conf: bool) -> Result<(), 
 pub fn initcmd(args: &[String]) -> (String, String) {
     let line: Vec<String> = args.iter().map(|a| rcquote(a)).collect();
     ("init".to_string(), format!("/{OBJTYPE}/init -t {}", rcquote(&line.join(" "))))
+}
+
+/// **This system's `plan9.ini`** — the lines `pc/main.c:257` puts into the
+/// environment and `#ec`. `user=` names the host owner: `boot` writes it to
+/// `#c/hostowner` and falls back to Plan 9's `"glenda"` only when there is
+/// none (`bootauth.c:56`, `userspace/cmd/boot.c`). This system's default
+/// user is `kitty`. A command, when there is one, is `init=`.
+pub const USER: &str = "kitty";
+
+pub fn plan9ini(cmd: &[String]) -> Vec<(String, String)> {
+    let mut conf = vec![("user".to_string(), USER.to_string())];
+    if !cmd.is_empty() {
+        conf.push(initcmd(cmd));
+    }
+    conf
 }
 
 /// A word as rc and `tokenize` read one: bare if nothing in it is special,
@@ -438,7 +453,7 @@ pub fn startboot(
     //
     // `ksetenv` is `namec("#e/<name>", Acreate, OWRITE, 0600)` and a write
     // (`devenv.c:386`). These three are the whole of what a Plan 9 kernel
-    // puts in the environment, and `$objtype` — which `/profile/namespace` uses
+    // puts in the environment, and `$objtype` — which `/profile/start.ns` uses
     // to find the binaries — is init's copy of `cputype`.
     for (name, val) in [
         ("terminal", format!("{OBJTYPE} {CONFFILE}")),

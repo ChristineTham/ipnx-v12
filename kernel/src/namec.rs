@@ -364,9 +364,17 @@ pub fn walk(
             c = first;
             union = rest;
         }
-        match tab.dwalk(&c, name)? {
-            Some(next) => c = next,
-            None => {
+        // **`ewalk`** (`chan.c:948`): *"if(waserror()) return nil"* — a
+        // device's walk that FAILS is a miss like one that finds nothing, so
+        // the union is still tried. A 9P server answers a missing first name
+        // with `Rerror`, not an empty `Rwalk`; propagating that error here
+        // meant a union whose first element was a mounted directory never
+        // reached its second (`/home` over `/usr/kitty`, with `bind -a /etc
+        // /home` after it, listed `motd` and could not open it).
+        match tab.dwalk(&c, name) {
+            Ok(Some(next)) => c = next,
+            miss => {
+                let mut err = miss.err();
                 // **"try a union mount, if any"** (`chan.c:1027`). The first
                 // element is the one just walked, so this starts at the next
                 // — `for(f = (f? f->next: f); f; f = f->next)` (`:1034`).
@@ -374,14 +382,20 @@ pub fn walk(
                 // ever reaches, and a union is a word rather than a thing.
                 let mut found = None;
                 for alt in union.into_iter().skip(1) {
-                    if let Ok(Some(next)) = tab.dwalk(&alt.chan, name) {
-                        found = Some(next);
-                        break;
+                    match tab.dwalk(&alt.chan, name) {
+                        Ok(Some(next)) => {
+                            found = Some(next);
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(e) => err = Some(e),
                     }
                 }
                 match found {
                     Some(next) => c = next,
-                    None => return Err(format!("'{}' does not exist", name)),
+                    // Every element missed: the error is the last device's,
+                    // as `walk` returns -1 with it still set (`:1041`).
+                    None => return Err(err.unwrap_or_else(|| format!("'{}' does not exist", name))),
                 }
             }
         }
@@ -735,6 +749,69 @@ mod tests {
             Err("no".into())
         }
         fn close(&mut self, _c: &mut Chan) {}
+    }
+
+    /// A device whose walk FAILS for every name — as a 9P server answers a
+    /// missing first name with `Rerror` rather than an empty `Rwalk`.
+    struct Refuses;
+    impl crate::dev::Dev for Refuses {
+        fn id(&self) -> DevId {
+            DevId::Env
+        }
+        fn as_any(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+        fn attach(&mut self, _s: &str) -> Result<Chan, String> {
+            let mut c = Chan::attach(DevId::Env, 0);
+            c.qid.qtype = crate::ninep::QTDIR;
+            Ok(c)
+        }
+        fn walk(&mut self, _c: &Chan, _n: &str) -> Result<Option<Chan>, String> {
+            Err("file does not exist".into())
+        }
+        fn open(&mut self, c: Chan, _m: u16) -> Result<Chan, String> {
+            Ok(c)
+        }
+        fn create(&mut self, _c: &mut Chan, _n: &str, _m: u16, _p: u32) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn read(&mut self, _c: &mut Chan, _n: usize, _o: u64) -> Result<Vec<u8>, String> {
+            Ok(Vec::new())
+        }
+        fn write(&mut self, _c: &mut Chan, _d: &[u8], _o: u64) -> Result<usize, String> {
+            Err("no".into())
+        }
+        fn stat(&mut self, _c: &Chan) -> Result<Vec<u8>, String> {
+            Ok(Vec::new())
+        }
+        fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn remove(&mut self, _c: &mut Chan) -> Result<(), String> {
+            Err("no".into())
+        }
+        fn close(&mut self, _c: &mut Chan) {}
+    }
+
+    /// **A walk that fails is a miss, and the union is still tried** —
+    /// `ewalk`'s *"if(waserror()) return nil"* (`chan.c:948`), then *"try a
+    /// union mount, if any"* (`:1027`). When the first element errs the
+    /// walk goes on to the next; when every element misses, the error is
+    /// the last device's.
+    #[test]
+    fn a_union_is_tried_when_its_first_element_errs() {
+        let (mut tab, slash) = tab_with_root();
+        let first = Refuses.attach("").unwrap();
+        tab.add(Box::new(Refuses));
+        let mut ns = Ns::new();
+        ns.mount(&slash, Element::new(first), Bind::Replace);
+        ns.mount(&slash, Element::new(slash.clone()), Bind::After);
+
+        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0)
+            .expect("the second element has /boot/init");
+        assert_eq!(c.dev, DevId::Root);
+        let e = namec(&mut tab, &ns, &slash, &slash, "/nothing", A::Access, 0).unwrap_err();
+        assert!(e.contains("does not exist"), "{e}");
     }
 
     #[test]

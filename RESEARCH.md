@@ -4603,3 +4603,29 @@ true and misleading: it has three ways, none of them a command.
 
 Also found: `/lib/namespace` ends by including a per-machine namespace file,
 `. /cfg/$sysname/namespace` (`lib/namespace:47`).
+
+### 16.8 A union walk must survive a device that errs (2026-09-24)
+
+Found by the first user `start.ns`: `bind -a /etc /home`, over `/home`
+bound from `/usr/kitty`, made `ls /home` list `motd` and `cat /home/motd`
+fail. The union's first element is a directory on the 9P file server, and a
+9P server answers a missing first name with `Rerror`, not an empty `Rwalk`.
+The kernel's walk propagated that error before trying the union's other
+elements. Plan 9 cannot: each element is walked through `ewalk` —
+
+> ```c
+> if(waserror())
+> 	return nil;
+> wq = devtab[c->type]->walk(c, nc, name, nname);
+> ```
+> — `plan9/sys/src/9/port/chan.c:948`
+
+— so an error is a miss, the loop at `:1027` (*"try a union mount, if
+any"*) goes on to the next element, and only when every one misses does
+`walk` fail, with the last device's error still set. Measured before the
+fix: a union whose first element was a kernel directory worked (`bind -a
+/etc /mnt; cat /mnt/motd`), one whose first element was on the server did
+not (`bind -a /etc /tmp; cat /tmp/motd`). `kernel/src/namec.rs` now does
+what `ewalk` does, and `a_union_is_tried_when_its_first_element_errs` fails
+without it. The same session's other kernel finding, one fid space per
+wire, is §16.5.

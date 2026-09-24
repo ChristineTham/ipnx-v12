@@ -43,7 +43,7 @@ fatal(char *s)
 /*
  * `srvcreate` (`boot/aux.c:125`) — post the root channel at `#s/boot`, so
  * anything that wants its own namespace can mount the root again without
- * knowing where it came from. That is what `/profile/namespace`'s first line
+ * knowing where it came from. That is what `/profile/start.ns`'s first line
  * does: `mount -aC #s/boot /root`.
  */
 static void
@@ -77,8 +77,10 @@ srvcreate(char *name, int fd)
  * nobody, and `hostownerwrite` permits the write because `iseve()` is
  * comparing two empty strings (`auth.c:128`).
  *
- * `$user` comes from `plan9.ini` by way of `#ec`, which exists here and is
- * empty, so the name is the one Plan 9 falls back to.
+ * `$user` comes from `plan9.ini` by way of `#ec`: the host's says
+ * `user=kitty`, this system's default user (`hosts/ipnx/src/lib.rs`,
+ * `plan9ini`). Plan 9's fallback, below, is for a configuration that names
+ * none.
  */
 static void
 authentication(void)
@@ -105,7 +107,7 @@ authentication(void)
  * `argv[0]`. With none, it is Plan 9's default, `"/%s/init -%s%s"`: `$cputype`,
  * `t` for a terminal or `c` for a cpu server (`#e/service`, `:256`), and `m`
  * for `boot -m`, which nothing passes here. NOT `/bin/init`, because `/bin` is
- * a union `/profile/namespace` makes and nothing has read that file yet.
+ * a union `/profile/start.ns` makes and nothing has read that file yet.
  */
 static void
 execinit(void)

@@ -1,0 +1,4 @@
+# /home/profile/start.ns — kitty's namespace, in `namespace(6)`'s format,
+# added to the system's at login (`addns`, docs/packages.md) — so their binds
+# come after, and win over, /profile/start.ns. Plan 9's users make theirs in
+# `$home/lib/profile`, as rc commands. Theirs to change.

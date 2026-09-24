@@ -22,9 +22,9 @@ Measured 2026-09-20.
 | `devvirtio9p.rs` | `#9` — a channel to a 9P server the MACHINE provides. It marshals nothing: `#M` writes a T-message down it and reads the R-message back, as it would down a TCP connection |
 | `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` returns the channel fd 3 holds, so a dup IS an open |
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares; and `#ec`, the kernel configuration group, which nothing fills yet |
-| `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. `boot` names the host owner by writing `#c/hostowner` (`bootauth.c:56`), so `$user` is `glenda` and not the role's own name |
+| `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. `boot` names the host owner by writing `#c/hostowner` (`bootauth.c:56`), so `$user` is `kitty` — the host's `plan9.ini` says `user=kitty` (`plan9ini`, `hosts/ipnx/src/lib.rs`); Plan 9's fallback, `glenda`, is for one that names none — and not the role's own name |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators |
-| `namec.rs` | name → channel, with the mount check at every component; all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk |
+| `namec.rs` | name → channel, with the mount check at every component; all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk, where a device's walk that errs is a miss, as `ewalk`'s is (`chan.c:948`; 2026-09-24) |
 | `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s. **And the clock** (2026-09-22): `Mach` (`pc/dat.h:206`, the fields `port/` reads), `timersinit`, `hzclock`, `accounttime`, `hzsched`, `rebalance`, `anyhigher`, and `sched`'s tail with `m->schedticks`. `exits` does `closefgrp` (`proc.c:1160`), queuing what reaches a device on `clunkq` (`chan.c:517`) |
 | `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
@@ -309,7 +309,7 @@ until 2026-09-23 because clang promotes `uchar` to `int` and kencc to
 | `libbio/`, `libauth/` | vendored: buffered i/o, and `newns` — which is all of libauth that is left once there is no factotum to talk to |
 | `rc/` | Plan 9's rc, with `ipnx.c` as its platform file — it ships three of those and the mkfile picks one — and `haventfork.c`, Plan 9's own file for a system that cannot fork. `rcmain` beside it, installed at `/lib/rcmain` (Plan 9's is `/rc/lib/rcmain`), and running `/profile/shell.rc` then `$home/profile/shell.rc` in every shell |
 | `cmd/` | `boot` and `init`; `bind`, `cat`, `echo`, `ls`, `mkdir`, `rm`, `unmount`, a cut-down `tr` and `args`; and **`cp`, `date`, `mount`, `mv`, `ps`, `sleep`, `test`, `wc`** — vendored verbatim from `plan9/sys/src/cmd/` except `mount`, whose `amount0` is `fauth` plus `auth_proxy` there and `mount(fd, -1, …)` here, for the reason `newns.c` already carries. **Eighteen, against the demo's "twenty-four real Plan 9 commands"**, and that list of twenty-four is written down nowhere. `pwd` is not among them: `getwd` is `fd2path`, one of the nine calls this kernel omits |
-| `profile/`, `usr/glenda/profile/`, `etc/motd` | the system's configuration — `namespace`, `start.rc`, `shell.rc`, `stop.rc` — and glenda's, bound at `/home` (P7 step 1, 2026-09-24; docs/packages.md); and something to read. `/rc` is retired |
+| `profile/`, `usr/kitty/profile/`, `etc/motd` | the system's configuration — `start.ns`, and `start`, `shell` and `stop` each as a `.env` and a `.rc` — and kitty's, the same seven, bound at `/home` (P7 step 1, 2026-09-24; docs/packages.md); and something to read. `/rc` is retired |
 | `mk.sh` | the build. `weaken.py` beside it restores common-symbol semantics for rc.h's tentative definitions, which the wasm backend has none of |
 
 **The system boots itself.** `cargo run -p ipnx` is `initcode.c:21` and nothing
@@ -320,7 +320,7 @@ Everything after that line is the system's own:
 |---|---|
 | `boot` | mounts `#9/0` at `/root` and binds it onto `/`, so **the root is a file server** (`boot.c:151`) |
 | `init` | reads `#c/user`, calls `newns` — and starts `rc` (`init.c:23`), whose first job is `/profile/start.rc` then `/home/profile/start.rc`; when the last shell ends, `/home/profile/stop.rc` then `/profile/stop.rc` |
-| `/profile/namespace` | what the namespace IS: every mount and bind, as a file (`newns`, `libauth/newns.c:35`; Plan 9's `/lib/namespace`) |
+| `/profile/start.ns` | what the namespace IS: every mount and bind, as a file (`newns`, `libauth/newns.c:35`; Plan 9's `/lib/namespace`) |
 | `/profile/start.rc` | what a terminal wants on top of it (Plan 9's `rc/bin/termrc`) |
 
 rc works out that it is interactive by asking what fd 0 is:
@@ -343,7 +343,7 @@ exactly as `boot.c:171` does. `ls /` shows both halves because `unionread`
 reads every element. A file written under `/tmp` is a file on the host, so it
 is still there after the next boot.
 
-Forty-six tests in `hosts/ipnx` (counted 2026-09-24: forty-one in the binary — most typing at a scripted console after a full boot, some booting into a filesystem of their own — and five in the library), and 219 in `kernel/`. They need
+Forty-seven tests in `hosts/ipnx` (counted 2026-09-24: forty-two in the binary — most typing at a scripted console after a full boot, some booting into a filesystem of their own — and five in the library), and 220 in `kernel/`. They need
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
 and say so rather than passing quietly.
 
@@ -369,9 +369,9 @@ fixtures, because a behaviour is reached when a person can do it.
 
 **P5 is done — the CLI.** Typing `ipnx` boots to `rc` on the terminal; `ls`,
 `cat /etc/motd` and the demo's commands run. The boot is the system's own:
-`boot`, `init`, `/profile/namespace` and `/profile/start.rc`, with the embedding
+`boot`, `init`, `/profile/start.ns` and `/profile/start.rc`, with the embedding
 reduced to `initcode.c`'s nine lines.
 
 **P6 is the scheduler** — added 2026-09-21, before the registries, because the browser host is a worker per process and that IS P6's machine boundary. P7 is packages, services, templates, projects and profiles; P8 is emca and the browser.
 
-**P7 is begun** (2026-09-24). Step 1, the profiles, is built: `/profile` and `/home/profile` with `start.rc`, `shell.rc` and `stop.rc`, run in the order docs/packages.md gives, `/home` bound to `/usr/$user`, and `/rc` gone. Not built: the `.env` files (their format is open, docs/proposals.md), every `.cfg` and the `libndb` that reads them, `/pkg`, `pkg`, services, templates, projects and identity — steps 2 to 6.
+**P7 is begun** (2026-09-24). Step 1, the profiles, is built: `/profile` and `/home/profile` with `start.ns`, and `start`, `shell` and `stop` each as a `.env` and a `.rc`, run in the order docs/packages.md gives — the user's `start.ns` added at login by `addns` — `/home` bound to `/usr/$user`, and `/rc` gone. Not built: every `.cfg` and the `libndb` that reads them, `/pkg`, `pkg`, services, templates, projects and identity — steps 2 to 6.
