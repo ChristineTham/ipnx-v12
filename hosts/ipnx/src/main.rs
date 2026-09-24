@@ -80,6 +80,27 @@ mod tests {
         Ok(status.unwrap_or_default())
     }
 
+    /// **A call given a bad address ends the process**, as Plan 9's
+    /// `validaddr` does (`fault.c:310`): *"sys: bad address in syscall"*,
+    /// `NDebug`, taken on the way out of the call. The module passes `open`
+    /// an address far past the end of its memory — which the host once
+    /// refused itself, answering -1 with no note; if the call only failed,
+    /// the module would go on to exit with "survived".
+    #[test]
+    fn a_bad_address_to_open_ends_the_process_with_the_note() {
+        const BAD: &str = r#"
+(module
+  (import "sys" "open"  (func $open  (param i32 i32) (result i32)))
+  (import "sys" "exits" (func $exits (param i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 8) "survived\00")
+  (func (export "_start") (param i32 i32 i32)
+    (drop (call $open (i32.const 0x7fff0000) (i32.const 0)))
+    (call $exits (i32.const 8))))
+"#;
+        assert_eq!(run(BAD, &[]).unwrap(), "init 1: sys: bad address in syscall");
+    }
+
     /// The path the demo takes: a guest resolves a name through its namespace,
     /// reads what it finds, and closes it.
     ///

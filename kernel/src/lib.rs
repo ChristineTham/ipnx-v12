@@ -1027,7 +1027,7 @@ impl machine::Syscalls for Kernel {
         if let Some(p) = self.procs.borrow_mut().get_mut(up) {
             p.s = ureg.s;
         }
-        self.syscall_(up, call, ureg.pc)
+        self.syscall_(up, call, ureg.pc, true)
     }
 
     fn resume(&mut self, up: Pid) -> Result<Ret, String> {
@@ -1085,11 +1085,16 @@ impl Kernel {
     /// **`up` is the calling process.** Plan 9 keeps it in a per-machine
     /// global; here it is the argument, because a Rust kernel cannot hand a
     /// device an ambient mutable global — the same information, made explicit.
+    ///
+    /// A call made here, rather than trapped from a process, carries no
+    /// argument words — the kernel's own calls at boot pass their names
+    /// from the kernel's memory — so it is not checked as a process's is
+    /// ([`Kernel::validargs`]).
     pub fn syscall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
-        self.syscall_(up, call, &|| 0)
+        self.syscall_(up, call, &|| 0, false)
     }
 
-    fn syscall_(&mut self, up: Pid, call: Call, pc: &dyn Fn() -> u64) -> Result<Ret, String> {
+    fn syscall_(&mut self, up: Pid, call: Call, pc: &dyn Fn() -> u64, trapped: bool) -> Result<Ret, String> {
         // *"m->syscall++; up->insyscall = 1;"* and *"up->scallnr =
         // scallnr"* (`pc/trap.c:673`–`:680`).
         let traced = {
@@ -1114,6 +1119,8 @@ impl Kernel {
         // in `devsrv`, `up->fgrp` in `devdup`, `up->egrp` in `devenv` — and if
         // it is not set, every one of them answers for whoever ran last.
         self.up.borrow_mut().pid = up;
+        // Each call's own checks of the addresses it was given, before it
+        // does anything — see `validargs` for where they are and why here.
         // *"if(up->procctl == Proc_tracesyscall){ syscallfmt(…); up->procctl
         // = Proc_stopme; procctl(up); … startns = todget(nil, nil); }"*
         // (`pc/trap.c:682`) — stop before the call, with what it is about
@@ -1137,25 +1144,44 @@ impl Kernel {
             }
             self.procctl(up);
             self.procs.borrow_mut().take_setlabel(up);
+            // The call runs after the stop, and a check of its addresses
+            // there wants the pc it was made from.
+            let pcv = pc();
             self.labels.insert(up, Box::new(move |k, up| {
                 let now = k.machine.todget().nsec;
                 if let Some(p) = k.procs.borrow_mut().get_mut(up) {
                     p.syscalltrace = None;
                     p.startns = now;
                 }
-                k.dispatch_(up, call)
+                k.dispatch_(up, call, &|| pcv, trapped)
             }));
             return Ok(Ret::Sched);
         }
-        let r = self.dispatch_(up, call);
+        let r = self.dispatch_(up, call, pc, trapped);
         self.syscall_tail(up, r)
     }
 
     /// *"up->psstate = sysctab[scallnr]; ret = systab[scallnr](up->s.args);"*
     /// (`pc/trap.c:727`) — what `ps` shows while the call lasts, and the call.
-    fn dispatch_(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
+    ///
+    /// A trapped call first checks the addresses it was given, as each of
+    /// Plan 9's does at its top ([`Kernel::validargs`]) — after the tracer's
+    /// stop, as there.
+    fn dispatch_(&mut self, up: Pid, call: Call, pc: &dyn Fn() -> u64, trapped: bool) -> Result<Ret, String> {
         if let Some(p) = self.procs.borrow_mut().get_mut(up) {
             p.psstate = Some(sysctab(&call).to_string());
+        }
+        let mut call = call;
+        if trapped {
+            self.validargs(up, &call, pc)?;
+            // `sysexits` (`sysproc.c:671`–`:675`): *"if(waserror()) status =
+            // inval; else { validaddr((uintptr)status, 1, 0); …"* — a bad
+            // status is not an error but *"invalid exit string"*, and
+            // `validaddr` has posted its note on the way.
+            let status = self.procs.borrow().get(up).map_or(0, |p| p.s[0] as u32);
+            if matches!(call, Call::Exits { .. }) && status != 0 && self.validaddr(up, status, 1, pc).is_err() {
+                call = Call::Exits { status: "invalid exit string".into() };
+            }
         }
         self.dispatch(up, call)
     }
@@ -1908,7 +1934,6 @@ impl Kernel {
             }
             // `syssemacquire` (`sysproc.c:1187`).
             Call::Semacquire { addr, block } => {
-                self.validlong(up, addr)?;
                 if self.machine.load(up, addr)? < 0 {
                     return Err(proc::Procs::EBADARG.into());
                 }
@@ -1916,7 +1941,6 @@ impl Kernel {
             }
             // `systsemacquire` (`sysproc.c:1206`).
             Call::Tsemacquire { addr, ms } => {
-                self.validlong(up, addr)?;
                 if self.machine.load(up, addr)? < 0 {
                     return Err(proc::Procs::EBADARG.into());
                 }
@@ -1925,7 +1949,6 @@ impl Kernel {
             // `syssemrelease` (`sysproc.c:1225`): *"delta == 0 is a no-op,
             // not a release"*.
             Call::Semrelease { addr, delta } => {
-                self.validlong(up, addr)?;
                 if delta < 0 || self.machine.load(up, addr)? < 0 {
                     return Err(proc::Procs::EBADARG.into());
                 }
@@ -1936,18 +1959,155 @@ impl Kernel {
 
     // ---- syscall tracing (`port/syscallfmt.c`) -----------------------------
 
-    /// `validaddr` (`fault.c:310`) for a read the kernel makes of the
-    /// process's memory: `okaddr`'s *"suicide: invalid address"*, then
-    /// *"sys: bad address in syscall"* and `Ebadarg`.
-    fn validaddr(&mut self, up: Pid, addr: u32, len: u32) -> Result<(), String> {
-        let last = addr.checked_add(len.max(1) - 1);
-        let ok = last.is_some_and(|l| self.machine.load(up, addr & !3).is_ok() && self.machine.load(up, l & !3).is_ok());
-        if !ok {
-            self.pprint(up, &format!("suicide: invalid address {addr:#x}/{len} in sys call\n"));
+    /// `okaddr` (`fault.c:291`): whether `len` bytes from `addr` are all in
+    /// the process's memory. *"(long)len >= 0 && addr+len >= addr"*, then the
+    /// segment it is in — here the one memory, whose first and last words
+    /// the machine can load or not.
+    fn okaddr(&self, up: Pid, addr: u32, len: u32) -> bool {
+        if (len as i32) < 0 {
+            return false;
+        }
+        let Some(last) = addr.checked_add(len.max(1) - 1) else { return false };
+        self.machine.load(up, addr & !3).is_ok() && self.machine.load(up, last & !3).is_ok()
+    }
+
+    /// `validaddr` (`fault.c:310`): `okaddr`, which says *"suicide: invalid
+    /// address %#lux/%lud in sys call pc=%#lux"* on the process's console
+    /// when it is not, then *"sys: bad address in syscall"*, `NDebug`, and
+    /// `Ebadarg` — so the call fails and the process dies of the note on
+    /// its way out of it. `pc` is `userpc()`.
+    ///
+    /// The address is reported as given: `okaddr` reports where it stopped
+    /// walking segments, and there is one segment here.
+    fn validaddr(&mut self, up: Pid, addr: u32, len: u32, pc: &dyn Fn() -> u64) -> Result<(), String> {
+        if !self.okaddr(up, addr, len) {
+            self.pprint(up, &format!("suicide: invalid address {addr:#x}/{len} in sys call pc={:#x}\n", pc()));
             self.procs.borrow_mut().postnote(up, "sys: bad address in syscall", proc::NoteFlag::NDebug);
             return Err(proc::Procs::EBADARG.into());
         }
         Ok(())
+    }
+
+    /// `validname` of a user pointer (`chan.c:1703`): the name's bytes up to
+    /// its NUL, looked for with `vmemchr`, which `validaddr`s each page it
+    /// reaches (`fault.c:322`) — so a name that runs off the process's
+    /// memory is a bad address where it runs off. *"name too long"* at
+    /// `1<<16` without a NUL.
+    fn validname(&mut self, up: Pid, a: u32, pc: &dyn Fn() -> u64) -> Result<(), String> {
+        self.validaddr(up, a, 1, pc)?;
+        for i in 0..(1u32 << 16) {
+            let at = a.wrapping_add(i);
+            match self.userbyte(up, at) {
+                Ok(0) => return Ok(()),
+                Ok(_) => {}
+                Err(_) => return self.validaddr(up, at, 1, pc),
+            }
+        }
+        Err("name too long".into())
+    }
+
+    /// **The addresses a call was given, checked as the call checks them**
+    /// — each of Plan 9's calls does its own at its top, with `validaddr`
+    /// on each pointer and `validname` on each name as `namec` reaches it.
+    /// They are gathered here because here is where the words are
+    /// (`up->s`); the checks and their order are each call's:
+    ///
+    /// | call | checks |
+    /// |---|---|
+    /// | `open` `create` `remove` `chdir` | the name (`sysfile.c:271`, `:1127`, `:1145`, `:980`), then `namec`'s `validnamedup` (`chan.c:1330`) |
+    /// | `stat` / `wstat` | the buffer, then the name (`:958`–`:959`, `:1203`–`:1205`) |
+    /// | `fstat` / `fwstat` | the buffer (`:938`, `:1217`) |
+    /// | `pread` / `pwrite` | the buffer, `n` long (`:635`, `:726`) |
+    /// | `bind` | both names (`:1038`, `:1047`) |
+    /// | `mount` | the spec, then the name mounted on (`:1004`–`:1005`, `:1047`) |
+    /// | `unmount` | the name, then the mounted one if not nil (`:1093`, `:1109`) |
+    /// | `pipe` | two `int`s, aligned (`:193`–`:194`) |
+    /// | `exec` | the name (`sysproc.c:286`–`:287`), then `argv`: aligned, each pointer, each string (`:401`–`:408`) |
+    /// | `exits` | the status — which, bad, is *"invalid exit string"* and not an error (`:671`–`:675`) |
+    /// | `await` | the buffer (`:723`) |
+    /// | `errstr` | `nbuf` not 0, then the buffer (`:754`–`:755`) |
+    /// | `fversion` | the version buffer, holding a NUL (`auth.c:32`–`:35`) |
+    /// | `semacquire` `tsemacquire` `semrelease` | the `long`, aligned (`sysproc.c:1193`, `:1212`, `:1230`) |
+    ///
+    /// `exec` checks its `argv` after reading the image's header, so a
+    /// missing file with a bad `argv` answers the bad address here where
+    /// Plan 9 would say the file does not exist.
+    ///
+    /// **`notify`'s argument is not checked** (*"if(arg[0] != 0)
+    /// validaddr(arg[0], sizeof(ulong), 0)"*, `sysproc.c:784`): on the PC
+    /// it is the handler's address in the process's memory, and on this
+    /// machine a function is an index into the module's table, not an
+    /// address at all.
+    ///
+    /// **Address 0 is in the process's memory here**, where Plan 9 leaves
+    /// the page at 0 unmapped, so a nil pointer is not a bad address unless
+    /// what it points at is.
+    fn validargs(&mut self, up: Pid, call: &Call, pc: &dyn Fn() -> u64) -> Result<(), String> {
+        let sa = self.procs.borrow().get(up).ok_or("no such process")?.s;
+        let a = |i: usize| sa[i] as u32;
+        match call {
+            Call::Open { .. } | Call::Create { .. } | Call::Remove { .. } | Call::Chdir { .. } => {
+                self.validname(up, a(0), pc)
+            }
+            Call::Stat { .. } | Call::Wstat { .. } => {
+                self.validaddr(up, a(1), a(2), pc)?;
+                self.validname(up, a(0), pc)
+            }
+            Call::Fstat { .. } | Call::Fwstat { .. } => self.validaddr(up, a(1), a(2), pc),
+            Call::Pread { .. } | Call::Pwrite { .. } => self.validaddr(up, a(1), a(2), pc),
+            Call::Bind { .. } => {
+                self.validname(up, a(0), pc)?;
+                self.validname(up, a(1), pc)
+            }
+            Call::Mount { .. } => {
+                self.validname(up, a(4), pc)?;
+                self.validname(up, a(2), pc)
+            }
+            Call::Unmount { .. } => {
+                self.validname(up, a(1), pc)?;
+                if a(0) != 0 {
+                    self.validname(up, a(0), pc)?;
+                }
+                Ok(())
+            }
+            Call::Pipe => {
+                self.validaddr(up, a(0), 8, pc)?;
+                self.validalign(up, a(0), 4)
+            }
+            Call::Exec { .. } => {
+                self.validname(up, a(0), pc)?;
+                let mut argp = a(1);
+                self.validalign(up, argp, 4)?;
+                loop {
+                    self.validaddr(up, argp, 4, pc)?;
+                    let s = self.machine.load(up, argp)? as u32;
+                    if s == 0 {
+                        return Ok(());
+                    }
+                    self.validname(up, s, pc)?;
+                    argp = argp.wrapping_add(4);
+                }
+            }
+            Call::Await => self.validaddr(up, a(0), a(1), pc),
+            Call::Errstr { .. } => {
+                if a(1) == 0 {
+                    return Err(proc::Procs::EBADARG.into());
+                }
+                self.validaddr(up, a(0), a(1), pc)
+            }
+            Call::Fversion { .. } => {
+                self.validaddr(up, a(2), a(3), pc)?;
+                let has_nul = (0..a(3)).any(|i| self.userbyte(up, a(2).wrapping_add(i)) == Ok(0));
+                if !has_nul {
+                    return Err(proc::Procs::EBADARG.into());
+                }
+                Ok(())
+            }
+            Call::Semacquire { .. } | Call::Tsemacquire { .. } | Call::Semrelease { .. } => {
+                self.validlong(up, a(0), pc)
+            }
+            _ => Ok(()),
+        }
     }
 
     /// `validalign` (`pc/trap.c:964`): *"sys: odd address"* and `Ebadarg`.
@@ -1969,18 +2129,18 @@ impl Kernel {
     /// `fmtuserstring` (`syscallfmt.c:37`): *"%#p/\"%s\"%s"*, or *"0/\"\""*
     /// for nil — the string read out of the process up to its NUL
     /// (`vmemchr`).
-    fn fmtuserstring(&mut self, up: Pid, f: &mut String, a: u32, suffix: &str) -> Result<(), String> {
+    fn fmtuserstring(&mut self, up: Pid, f: &mut String, a: u32, suffix: &str, pc: &dyn Fn() -> u64) -> Result<(), String> {
         if a == 0 {
             f.push_str(&format!("0/\"\"{suffix}"));
             return Ok(());
         }
-        self.validaddr(up, a, 1)?;
+        self.validaddr(up, a, 1, pc)?;
         let mut t = Vec::new();
         let mut at = a;
         loop {
             let b = match self.userbyte(up, at) {
                 Ok(b) => b,
-                Err(_) => return self.validaddr(up, at, 1),
+                Err(_) => return self.validaddr(up, at, 1, pc),
             };
             if b == 0 {
                 break;
@@ -2021,49 +2181,49 @@ impl Kernel {
         let mut f = format!("{up} {text} {} {:x} ", sysctab(call), pc());
         match call {
             Call::Chdir { .. } | Call::Exits { .. } | Call::Remove { .. } => {
-                self.fmtuserstring(up, &mut f, a(0), "")?;
+                self.fmtuserstring(up, &mut f, a(0), "", pc)?;
             }
             Call::Bind { .. } => {
-                self.fmtuserstring(up, &mut f, a(0), " ")?;
-                self.fmtuserstring(up, &mut f, a(1), " ")?;
+                self.fmtuserstring(up, &mut f, a(0), " ", pc)?;
+                self.fmtuserstring(up, &mut f, a(1), " ", pc)?;
                 f.push_str(&format!("{:#x}", a(2)));
             }
             Call::Close { .. } | Call::Noted { .. } => f.push_str(&format!("{}", d(0))),
             Call::Dup { .. } => f.push_str(&format!("{} {}", d(0), d(1))),
             Call::Alarm { .. } => f.push_str(&format!("{} ", a(0))),
             Call::Exec { .. } => {
-                self.fmtuserstring(up, &mut f, a(0), "")?;
+                self.fmtuserstring(up, &mut f, a(0), "", pc)?;
                 let mut argv = a(1);
                 self.validalign(up, argv, 4)?;
                 loop {
-                    self.validaddr(up, argv, 4)?;
+                    self.validaddr(up, argv, 4, pc)?;
                     let s = self.machine.load(up, argv)? as u32;
                     if s == 0 {
                         break;
                     }
                     f.push(' ');
-                    self.fmtuserstring(up, &mut f, s, "")?;
+                    self.fmtuserstring(up, &mut f, s, "", pc)?;
                     argv = argv.wrapping_add(4);
                 }
             }
             Call::Rendezvous { .. } => f.push_str(&format!("{:#x} {:#x}", a(0), a(1))),
             Call::Open { .. } => {
-                self.fmtuserstring(up, &mut f, a(0), " ")?;
+                self.fmtuserstring(up, &mut f, a(0), " ", pc)?;
                 f.push_str(&format!("{:#x}", a(1)));
             }
             Call::Sleep { .. } => f.push_str(&format!("{}", d(0))),
             Call::Rfork { .. } => f.push_str(&format!("{:#x}", a(0))),
             Call::Pipe | Call::Notify { .. } => f.push_str(&format!("{:#x}", a(0))),
             Call::Create { .. } => {
-                self.fmtuserstring(up, &mut f, a(0), " ")?;
+                self.fmtuserstring(up, &mut f, a(0), " ", pc)?;
                 f.push_str(&format!("{:#x} {:#x}", a(1), a(2)));
             }
             Call::Fstat { .. } | Call::Fwstat { .. } => {
                 f.push_str(&format!("{} {:#x} {}", d(0), a(1), a(2)));
             }
             Call::Unmount { .. } => {
-                self.fmtuserstring(up, &mut f, a(0), " ")?;
-                self.fmtuserstring(up, &mut f, a(1), "")?;
+                self.fmtuserstring(up, &mut f, a(0), " ", pc)?;
+                self.fmtuserstring(up, &mut f, a(1), "", pc)?;
             }
             Call::Semacquire { .. } | Call::Semrelease { .. } | Call::Tsemacquire { .. } => {
                 f.push_str(&format!("{:#x} {}", a(0), d(1)));
@@ -2076,19 +2236,19 @@ impl Kernel {
             }
             Call::Fversion { .. } => {
                 f.push_str(&format!("{} {} ", d(0), d(1)));
-                self.fmtuserstring(up, &mut f, a(2), " ")?;
+                self.fmtuserstring(up, &mut f, a(2), " ", pc)?;
                 f.push_str(&format!("{}", a(3)));
             }
             Call::Wstat { .. } | Call::Stat { .. } => {
-                self.fmtuserstring(up, &mut f, a(0), " ")?;
+                self.fmtuserstring(up, &mut f, a(0), " ", pc)?;
                 f.push_str(&format!("{:#x} {}", a(1), a(2)));
             }
             Call::Errstr { .. } | Call::Await => f.push_str(&format!("{:#x} {}", a(0), a(1))),
             Call::Mount { .. } => {
                 f.push_str(&format!("{} {} ", d(0), d(1)));
-                self.fmtuserstring(up, &mut f, a(2), " ")?;
+                self.fmtuserstring(up, &mut f, a(2), " ", pc)?;
                 f.push_str(&format!("{:#x} ", a(3)));
-                self.fmtuserstring(up, &mut f, a(4), "")?;
+                self.fmtuserstring(up, &mut f, a(4), "", pc)?;
             }
             Call::Pread { .. } => {
                 f.push_str(&format!("{} {:#x} {} {}", d(0), a(1), d(2), sa[3] as i64));
@@ -2173,8 +2333,8 @@ impl Kernel {
     /// address in syscall"*; `validalign` (`pc/trap.c:964`) posts *"sys: odd
     /// address"*. Both notes are `NDebug`, so the process dies of them on
     /// its way out of the call, and both calls fail with `Ebadarg`.
-    fn validlong(&mut self, up: Pid, addr: u32) -> Result<(), String> {
-        self.validaddr(up, addr, 4)?;
+    fn validlong(&mut self, up: Pid, addr: u32, pc: &dyn Fn() -> u64) -> Result<(), String> {
+        self.validaddr(up, addr, 4, pc)?;
         self.validalign(up, addr, 4)
     }
 
@@ -2957,9 +3117,90 @@ mod syscalls {
             let (mut k, log) = tests::watched();
             k.exec(1, "/boot/init", &[]).unwrap();
             log.borrow_mut().mem.insert(16, -1);
-            assert_eq!(k.syscall(1, call.clone()), bad, "{call:?}");
+            let s = match call {
+                Call::Semacquire { addr, block } => [addr as u64, block as u64, 0, 0, 0],
+                Call::Semrelease { addr, delta } => [addr as u64, delta as u32 as u64, 0, 0, 0],
+                _ => unreachable!(),
+            };
+            assert_eq!(trap(&mut k, 1, call.clone(), s), bad, "{call:?}");
             assert_eq!(notes(&k), note.into_iter().map(String::from).collect::<Vec<_>>(), "{call:?}");
         }
+    }
+
+    fn notes_of(k: &Kernel, pid: Pid) -> Vec<String> {
+        k.procs.borrow().get(pid).unwrap().note.iter().map(|n| n.msg.clone()).collect()
+    }
+
+    /// **A call given a bad address fails and posts `validaddr`'s note**
+    /// (`fault.c:310`), which ends the process on its way out: a name that
+    /// starts outside the process's memory, a buffer that runs past its
+    /// end, a name that reaches its end without a NUL (`validname`'s
+    /// `vmemchr`), a string in `exec`'s `argv`. The call does not run.
+    #[test]
+    fn a_bad_address_fails_the_call_with_validaddrs_note() {
+        let bad = Err(proc::Procs::EBADARG.to_string());
+        let cases: Vec<(Call, [u64; 5], fn(&std::rc::Rc<std::cell::RefCell<tests::Log>>))> = vec![
+            (Call::Open { path: String::new(), mode: 0 }, [0x20000, 0, 0, 0, 0], |_| {}),
+            (Call::Pread { fd: 0, n: 0x100, off: 0 }, [0, 0xfff0, 0x100, 0, 0], |_| {}),
+            (Call::Pwrite { fd: 1, data: vec![], off: 0 }, [1, 0x40, (-1i32) as u32 as u64, 0, 0], |_| {}),
+            (Call::Chdir { path: String::new() }, [0xfff8, 0, 0, 0, 0], |l| {
+                // the last two words of memory, and no NUL in either
+                l.borrow_mut().mem.insert(0xfff8, 0x6161_6161);
+                l.borrow_mut().mem.insert(0xfffc, 0x6161_6161);
+            }),
+            (Call::Exec { path: "/boot/init".into(), args: vec![] }, [0x40, 0x80, 0, 0, 0], |l| {
+                poke(l, 0x40, "/boot/init");
+                l.borrow_mut().mem.insert(0x80, 0x30000);
+            }),
+            (Call::Pipe, [0xfffc, 0, 0, 0, 0], |_| {}),
+        ];
+        for (call, s, setup) in cases {
+            let (mut k, log) = tests::watched();
+            k.exec(1, "/boot/init", &[]).unwrap();
+            setup(&log);
+            let ran = log.borrow().args.len();
+            assert_eq!(trap(&mut k, 1, call.clone(), s), bad, "{call:?}");
+            assert_eq!(notes_of(&k, 1), vec!["sys: bad address in syscall"], "{call:?}");
+            assert_eq!(k.procs.borrow().state(1), proc::State::Broken, "{call:?}: ended by the note");
+            assert_eq!(log.borrow().args.len(), ran, "{call:?}: exec did not run");
+        }
+    }
+
+    /// `pipe`'s pair and a semaphore must be aligned: *"sys: odd address"*
+    /// (`validalign`); `errstr` with no buffer is `Ebadarg` and no note.
+    #[test]
+    fn misaligned_and_empty_arguments() {
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        assert_eq!(trap(&mut k, 1, Call::Pipe, [0x42, 0, 0, 0, 0]), Err(proc::Procs::EBADARG.into()));
+        assert_eq!(notes_of(&k, 1), vec!["sys: odd address"]);
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        assert_eq!(trap(&mut k, 1, Call::Errstr { buf: String::new() }, [0x40, 0, 0, 0, 0]), Err(proc::Procs::EBADARG.into()));
+        assert!(notes_of(&k, 1).is_empty());
+    }
+
+    /// `exits` with a bad status is not an error: the process exits with
+    /// *"invalid exit string"* (`sysproc.c:671`–`:675`).
+    #[test]
+    fn exits_with_a_bad_status_is_an_invalid_exit_string() {
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        let _ = trap(&mut k, 1, Call::Exits { status: String::new() }, [0x20000, 0, 0, 0, 0]);
+        assert_eq!(k.procs.borrow().status(1).as_deref(), Some("init 1: invalid exit string"));
+    }
+
+    /// The kernel's own calls — made at boot with names from the kernel's
+    /// memory, not a process's — carry no argument words and are not
+    /// checked as a process's are; and `notify`'s argument, a function and
+    /// not an address here, is not checked either.
+    #[test]
+    fn what_is_not_checked() {
+        let (mut k, _log) = tests::watched();
+        k.exec(1, "/boot/init", &[]).unwrap();
+        assert!(k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).is_ok());
+        assert_eq!(trap(&mut k, 1, Call::Notify { f: 0x7fff_0000 }, [0x7fff_0000, 0, 0, 0, 0]), Ok(Ret::Ok));
+        assert!(notes_of(&k, 1).is_empty());
     }
 
     /// A note pulls a process out of a rendezvous with `~0` (`proc.c:1039`).

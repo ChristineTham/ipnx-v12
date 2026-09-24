@@ -4295,3 +4295,59 @@ element.
 Found in passing: four comments cited `sysexec` at `sysproc.c:302`, which in
 this tree is inside its header loop; they now cite `:259` (the function),
 `:310` (the read) and `:436` (placing the arguments).
+
+### §15.14 — `validaddr` for every call (2026-09-24)
+
+Plan 9 validates every user pointer a call is given. `validaddr`
+(`fault.c:310`) asks `okaddr` (`:291`), which prints *"suicide: invalid
+address %#lux/%lud in sys call pc=%#lux"*, then posts *"sys: bad address in
+syscall"* as `NDebug` and raises `Ebadarg`; the process dies of the note on
+its way out of the call. Here the host decoded the pointers itself and an
+address it could not read made the import answer -1 — no note, the process
+carrying on — for every call but the semaphores and tracing.
+
+**Read before writing:** each call's own checks — `sysfile.c:193`–`:194`
+(`pipe`), `:271` (`open`), `:635` (`read`), `:726` (`write`), `:938`,
+`:958`–`:959` (`fstat`, `stat`), `:980` (`chdir`), `:1004`–`:1005`,
+`:1038`, `:1047` (`bindmount`), `:1093`, `:1109` (`unmount`), `:1127`,
+`:1145` (`create`, `remove`), `:1203`–`:1205`, `:1217` (`wstat`, `fwstat`);
+`sysproc.c:286`–`:287`, `:401`–`:408` (`exec` and its `argv`), `:671`–`:675`
+(`exits`), `:723` (`await`), `:753`–`:755` (`errstr`), `:784`–`:785`
+(`notify`), `:1193`, `:1212`, `:1230` (the semaphores); `auth.c:32`–`:35`
+(`fversion`); `chan.c:1330` and `:1703`–`:1716` (`namec`'s `validnamedup`,
+which scans a user name with `vmemchr`); `fault.c:322` (`vmemchr`, which
+`validaddr`s each page it reaches).
+
+**Where the checks are:** in the kernel, at the top of each call that came
+from a process, from the argument words the machine hands over (`up->s`) —
+each call's checks in its own order. They run after a tracer's entry stop,
+as there. The host no longer refuses: an import that cannot read a name or
+a buffer passes an empty one, and the kernel refuses the call before it is
+used, because every address the host cannot read is one the kernel's check
+fails. Nothing in this names the machine: the kernel reads the process's
+memory through `Machine::load`, as the semaphores already did.
+
+**What is Plan 9's, as it is:** the message, the note, `Ebadarg`, the death
+on the way out; a name checked to its NUL and *"name too long"* at `1<<16`;
+a buffer's `n` negative is a bad address (*"(long)len >= 0"*); `exits` with
+a bad status exits with *"invalid exit string"* instead of failing;
+`errstr` with no buffer is `Ebadarg` with no note; `pipe`'s pair and a
+semaphore misaligned are *"sys: odd address"*.
+
+**Differences, stated in the code:**
+
+* `notify`'s argument is not checked: on the PC it is the handler's address
+  in the process's memory; here it is an index into the module's table.
+* Address 0 is in the process's memory, where Plan 9 leaves page 0
+  unmapped — a nil pointer is bad only if what it points at is.
+* `okaddr` reports where its walk of the segments stopped; with one segment
+  the address is reported as given.
+* `exec` checks its `argv` after reading the header; here with the name,
+  first — so a missing file with a bad `argv` answers the bad address.
+* The kernel's own calls, made at boot with names from the kernel's memory,
+  carry no words and are not checked.
+
+A test found one more thing: the old host did not refuse a name starting
+exactly at the end of memory — it read it as empty — so that case already
+reached the kernel. The host test uses an address far past the end, which
+fails with the old host and passes with this one.

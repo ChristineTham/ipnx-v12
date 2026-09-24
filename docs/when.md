@@ -130,6 +130,14 @@ machine cannot run fails `exec` with *"exec header invalid"*, leaving the
 process in its old image; it used to end the whole system from inside the
 scheduler.
 
+**A bad address ends the process** (2026-09-24; RESEARCH §15.14). Every
+call from a process checks the addresses it was given as Plan 9's calls
+do — `validaddr` on each pointer, `validname` on each name — and a bad one
+fails the call with `Ebadarg`, prints *"suicide: invalid address …"* and
+posts *"sys: bad address in syscall"*, of which the process dies on its way
+out. The host used to refuse such a call itself with -1 and no note. Not
+checked: `notify`'s argument, a function index here rather than an address.
+
 **`#!` scripts run** (2026-09-24; RESEARCH §15.13), as `sysexec` runs them
 (`sysproc.c:340`–`:360`): an image that begins `#!` names its interpreter,
 which is given the script's last element as `argv[0]`, the line's
