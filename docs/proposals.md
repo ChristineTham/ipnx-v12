@@ -256,12 +256,19 @@ repository's index (§16.1, §16.3). The user's are at `/home/pkg`,
 
 ### Open — what the research cannot decide
 
-1. **Whose signature** the repository index carries, and where its keys
-   live (apt's are keyrings on the machine; `/credentials` is proposed in
-   `platforms.md`, unreviewed).
-2. **Identity**: login, logout, `su`, a daemon's own user — none built, and
-   the user scope and a service's user need them. Plan 9's terminal has one
-   user, the host owner, and no `su`.
+1. **Whether an index is signed.** Plan 9 does not sign: stock Plan 9
+   mounts its distribution without authentication, and 9legacy adds a hash
+   per file against corruption; where Plan 9 authenticates, trust is the
+   connection, and keys live in `factotum` (RESEARCH §16.4). apt signs its
+   index (§16.1). Plan 9's way — a hash per package, fetched over an
+   authenticated connection — needs no keyring; apt's needs one.
+
+**Identity is Plan 9's** (RESEARCH §16.4), and the kernel already has the
+capability device it runs on: a terminal's user is the host owner, named at
+boot; **login** is `auth/login` — a new namespace, a `factotum`, and a login
+shell under the new id — and **logout** is that shell ending; **`su`** is
+`auth/as`, for the host owner; **a daemon's own user** is `none`, as
+`auth/none` and `listen` run services. What remains is to build them.
 
 ## Decided, and moved into the specs
 

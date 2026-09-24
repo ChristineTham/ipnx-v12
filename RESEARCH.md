@@ -4476,3 +4476,55 @@ window[i]->pid, "hangup")"*.
 
 **A user's profile** is `$home/lib/profile`, sourced by `init` at login
 (`init.c:178`).
+
+### §16.4 — What Plan 9 does for trust and for identity
+
+Christine, of the two questions left open: *"for both questions, what does
+plan 9 do?"*
+
+**Trust in what is fetched.**
+
+* **Stock Plan 9 trusts nothing it checks.** `9fs sources` is *"srv -nq
+  tcp!9p.io sources /n/sources"* (`rc/bin/9fs:24`), and `srv`'s `-n` is
+  *"doauth = 0"* (`cmd/srv.c:109`): the distribution server is mounted
+  without authentication. Stock `replica` records no hash of a file
+  (`plan9-stock/sys/src/cmd/replica/util.c` has no `hashfd`).
+* **9legacy adds a hash per file, not a signature.** Its `replica` writes
+  each file's SHA-1 into the log and checks it before installing — *"verify
+  the source bytes against the log hash before touching the local file, so a
+  corrupt copy is never installed"* (`replica/applylog.c:1055`, `hashfd` at
+  `util.c:145`). The log comes over the same unauthenticated connection, so
+  this guards against corruption, not against the server.
+* **Where Plan 9 does authenticate, trust is the connection**: `srv`
+  without `-n` authenticates the 9P session through `factotum`, and what the
+  server says is then believed.
+* **Keys live in `factotum`**, an agent holding them in memory and answering
+  challenges (`factotum(4)`), started for each login (`auth/login.c:117`,
+  `startfactotum`), with `secstore` keeping them between sessions. There is
+  no keyring file on disk for a program to read.
+
+So Plan 9 has **no signed index**: apt's chain (§16.1) is the only signed
+scheme in the research. What Plan 9 offers is 9legacy's hash per file, and an
+authenticated connection to the server that supplies them.
+
+**Identity** (`auth(8)`):
+
+* **A terminal has one user, the host owner**, named at boot (`$user`,
+  written to `#c/hostowner`, `boot/bootauth.c:56`).
+* **`auth/login user`** — *"allows a user to change his authenticated id to
+  user. Login sets up a new namespace from /lib/namespace, starts a
+  factotum(4) under the new id and execs rc(1) under the new id"* — as a
+  login shell, `rc -li` (`auth/login.c:214`). The change of id is the
+  capability device: a write to `#¤/capuse` (`login.c:88`). **Logout is that
+  shell ending**; there is no logout command.
+* **`auth/as user command`** — Plan 9's `su`: *"executes command as user…
+  This only works for the hostowner and only if #¤/caphash still exists"*;
+  it writes a hash to `#¤/caphash` and uses it at `#¤/capuse` (`as.c:112`,
+  `:147`, `:160`).
+* **`auth/none`** — *"sets up a new namespace from namespace (default
+  /lib/namespace) as the user none and execs its arguments"*: how daemons
+  run, and what `listen` does for every service (§16.3).
+
+**The kernel already has what these need**: `#¤`, with `caphash` and
+`capuse` (`kernel/src/devcap.rs`). `login`, `as` and `none` are userspace
+programs over it.

@@ -360,3 +360,8 @@ On servers, and on what a project is:
   <br>— cited in `docs/proposals.md`
 - *"emca is a service"* — answering where `emcarc` goes
   <br>— cited in `docs/proposals.md`
+
+Of the two questions left open — whose signature an index carries, and identity:
+
+- *"for both questions, what does plan 9 do?"*
+  <br>— cited in `RESEARCH.md`
