@@ -798,7 +798,7 @@ impl Wasm {
 }
 
 /// Place the argument block, the way `sysexec` places one on the new stack
-/// (`sysproc.c:302`): the strings, then the `char*` array that points at them,
+/// (`sysproc.c:436`): the strings, then the `char*` array that points at them,
 /// then a nil.
 ///
 /// It goes ABOVE everything the module itself uses. `memory.grow` answers the
@@ -1182,7 +1182,7 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
             return Ok(-1);
         };
         match kcall(&mut c, Call::Exec { path, args }).await {
-            // **`exec` does not return** (`sysproc.c:302`): the process IS
+            // **`exec` does not return** (`sysproc.c:259`): the process IS
             // the new image now, and the frames of the old one are nobody's.
             // Unwinding them is what a machine with no address space to
             // discard does instead; the new image is a fiber the scheduler

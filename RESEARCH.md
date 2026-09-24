@@ -4256,3 +4256,42 @@ refused with `Ebadexec` as before and not kept.
 
 **Not done:** keeping compiled modules across boots (wasmtime can
 serialise a module to disk), which would remove most of the remaining 8s.
+
+### §15.13 — `#!` scripts (2026-09-24)
+
+§15.9 recorded, seen and not done, that `sysexec` runs `#!` scripts and
+this kernel refused them as a bad header — a kernel smaller than Plan 9's.
+Built now.
+
+**Read before writing:** `sysproc.c:259`–`:360` (`sysexec` to the end of
+its header loop) and `:601`–`:628` (`shargs`); `chan.c:1652`–`:1656` (the
+final element `namec` leaves in `up->genbuf`); `a.out.h:2` (`Exec`, eight
+`long`s, 32 bytes).
+
+**What is Plan 9's, as it is:** fewer than two bytes is `Ebadexec`
+(`:311`); a `#!` line is split by `shargs` at blanks and tabs up to its
+newline, and a line with no newline or no words is `Ebadexec`; the
+interpreter is found by the first word and given, as `argv`, the script's
+last element (`progelem`, refused at 64 bytes or more), the line's other
+words, the script's name as the caller gave it, and the caller's arguments
+after its `argv[0]` (*"arg[1] += oBY2WD"*); `indir` makes an interpreter
+that is itself a script `Ebadexec`; and `up->text` stays the script's
+element.
+
+**Two differences, both stated in the code:**
+
+* Plan 9 tests its binary magic first and a `#!` line second. The kernel
+  cannot recognise the machine's binaries, so it tests the other way round:
+  an image that begins `#!` is a script and anything else goes to the
+  machine, which refuses what it cannot run with the same `Ebadexec`. No
+  binary begins `#!` — a wasm module begins `\0asm` — so the outcome is the
+  same for every image.
+* `shargs` is passed `n`, the bytes read, which can be 40 (`sizeof(exec)`
+  with the 64-bit entry), while `line` holds `sizeof(Exec)`, 32; a newline
+  past the 32nd byte is looked for past the end of `line`, which is not
+  defined. Here the line is what `line` holds, so it must end within 32
+  bytes.
+
+Found in passing: four comments cited `sysexec` at `sysproc.c:302`, which in
+this tree is inside its header loop; they now cite `:259` (the function),
+`:310` (the read) and `:436` (placing the arguments).

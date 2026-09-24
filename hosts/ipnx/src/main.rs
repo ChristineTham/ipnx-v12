@@ -462,6 +462,22 @@ mod userspace {
         assert!(out.contains("after\n"), "{out}");
     }
 
+    /// **An rc script runs by name** (`sysproc.c:340`): its `#!` line names
+    /// the interpreter, which is given the script's name and the caller's
+    /// arguments — so rc's `$0` is the script and `$*` what it was called
+    /// with.
+    #[test]
+    fn an_rc_script_runs_by_name() {
+        use std::os::unix::fs::PermissionsExt;
+        let name = format!("script{}.rc", std::process::id());
+        let path = rootfs().join("tmp").join(&name);
+        std::fs::write(&path, "#!/bin/rc\necho script $0 $*\n").unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let out = typing(&format!("/tmp/{name} a 'b c'\n"));
+        let _ = std::fs::remove_file(&path);
+        assert!(out.contains(&format!("script /tmp/{name} a b c\n")), "{out:?}");
+    }
+
     /// An image the machine cannot run fails `exec` — `Ebadexec`, as
     /// `sysexec` refuses a bad header — and the shell goes on. It used to
     /// end the system from inside the scheduler.

@@ -130,6 +130,13 @@ machine cannot run fails `exec` with *"exec header invalid"*, leaving the
 process in its old image; it used to end the whole system from inside the
 scheduler.
 
+**`#!` scripts run** (2026-09-24; RESEARCH §15.13), as `sysexec` runs them
+(`sysproc.c:340`–`:360`): an image that begins `#!` names its interpreter,
+which is given the script's last element as `argv[0]`, the line's
+arguments, the script's name, and the caller's arguments — so an rc script
+runs by name. One level only; the line must end within 32 bytes,
+`sizeof(Exec)`.
+
 **A call that leaves the processor carries on where it stopped.** `sleep`,
 `qlock` and `sched` mark the process (`setlabel`), whatever it was doing
 keeps the rest of the call (`p->sched`), and when the process is entered

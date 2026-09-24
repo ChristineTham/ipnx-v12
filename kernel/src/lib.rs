@@ -209,7 +209,7 @@ impl Kernel {
         })
     }
 
-    /// `exec`, in the order `sysexec` does it (`sysproc.c:302`).
+    /// `exec`, in the order `sysexec` does it (`sysproc.c:259`).
     ///
     /// 1. `namec(file, Aopen, OEXEC, 0)` — resolve through the calling
     ///    process's namespace and open for execution.
@@ -225,7 +225,11 @@ impl Kernel {
     /// `Ready`.
     pub fn exec(&mut self, pid: Pid, path: &str, args: &[String]) -> Result<(), String> {
         let c = self.exec_open(pid, path)?;
-        self.exec_read(pid, c, Vec::new(), path.to_string(), args.to_vec())
+        // *"if(!indir) kstrdup(&elem, up->genbuf)"* (`sysproc.c:308`) — the
+        // name's last element, which `namec` leaves in `up->genbuf`
+        // (`chan.c:1652`), or `.` if it has none.
+        let elem = path.split('/').filter(|e| !e.is_empty()).last().unwrap_or(".").to_string();
+        self.exec_read(pid, c, Vec::new(), path.to_string(), args.to_vec(), false, elem)
     }
 
     /// Step 2, **as far as there is to read, however long that takes**: a
@@ -233,7 +237,21 @@ impl Kernel {
     /// `sysexec`'s reads sleep there as any read does. The rest of the
     /// `exec` is kept for when the process is entered again, as `pread`
     /// keeps its own.
-    fn exec_read(&mut self, pid: Pid, mut c: Chan, mut image: Vec<u8>, path: String, args: Vec<String>) -> Result<(), String> {
+    ///
+    /// `indir` and `elem` are `sysexec`'s: whether this is a `#!` script's
+    /// interpreter, and the last element of the name first given, which
+    /// stays the process's `text` either way.
+    #[allow(clippy::too_many_arguments)]
+    fn exec_read(
+        &mut self,
+        pid: Pid,
+        mut c: Chan,
+        mut image: Vec<u8>,
+        path: String,
+        args: Vec<String>,
+        indir: bool,
+        elem: String,
+    ) -> Result<(), String> {
         loop {
             let got = match self.tab.dread(&mut c, 8192, image.len() as u64) {
                 Ok(got) => got,
@@ -243,7 +261,10 @@ impl Kernel {
                 }
             };
             if self.procs.borrow().get(pid).is_some_and(|p| p.setlabel) {
-                self.setlabel(pid, Box::new(move |k, up| k.exec_read(up, c, image, path, args).map(|()| Ret::Ok)));
+                self.setlabel(
+                    pid,
+                    Box::new(move |k, up| k.exec_read(up, c, image, path, args, indir, elem).map(|()| Ret::Ok)),
+                );
                 return Ok(());
             }
             if got.is_empty() {
@@ -251,7 +272,47 @@ impl Kernel {
             }
             image.extend_from_slice(&got);
         }
-        let r = self.exec_commit(pid, &c, &image, &path, &args);
+        // *"n = devtab[tc->type]->read(tc, &exec, sizeof(exec), 0); if(n <
+        // 2) error(Ebadexec);"* (`sysproc.c:310`–`:312`).
+        if image.len() < 2 {
+            self.tab.dclose(&mut c);
+            return Err(EBADEXEC.into());
+        }
+        // **Not a binary: perhaps `#!`** (`sysproc.c:340`). Plan 9 tests for
+        // its own binary's magic first; this kernel cannot — only the
+        // machine knows what it runs — so the test is the other way round,
+        // and exact: an image that begins `#!` is a script, and anything else
+        // goes to the machine, which refuses what it cannot run with the
+        // same `Ebadexec`. No machine's binary begins `#!`: a wasm module
+        // begins `\0asm`, and Plan 9's own `Exec` begins with its magic.
+        if image.starts_with(b"#!") {
+            self.tab.dclose(&mut c);
+            // *"if(indir || line[0]!='#' || line[1]!='!') error(Ebadexec)"*
+            // — one level: an interpreter that is a script is refused.
+            if indir {
+                return Err(EBADEXEC.into());
+            }
+            // *"n = shargs(line, n, progarg); if(n == 0) error(Ebadexec);"*
+            let mut progarg = shargs(&image).ok_or(EBADEXEC)?;
+            // *"First arg becomes complete file name"*: the script, as it
+            // was named, after the interpreter's own arguments; and the
+            // caller's `argv[0]` is dropped — *"arg[1] += oBY2WD"* — for
+            // the rest of its arguments to follow.
+            progarg.push(path.clone());
+            // *"file = progarg[0]; if(strlen(elem) >= sizeof progelem)
+            // error(Ebadexec); strcpy(progelem, elem); progarg[0] =
+            // progelem;"* — the interpreter is found by the name the line
+            // gives, and is told the script's own last element as its
+            // `argv[0]`.
+            let file = std::mem::replace(&mut progarg[0], elem.clone());
+            if elem.len() >= PROGELEM {
+                return Err(EBADEXEC.into());
+            }
+            progarg.extend(args.into_iter().skip(1));
+            let c = self.exec_open(pid, &file)?;
+            return self.exec_read(pid, c, Vec::new(), file, progarg, true, elem);
+        }
+        let r = self.exec_commit(pid, &c, &image, &elem, &args);
         self.tab.dclose(&mut c);
         r
     }
@@ -263,7 +324,7 @@ impl Kernel {
     /// error(Ebadexec)"* (`sysproc.c:343`). Only a machine can tell whether
     /// an image is one it can run, and `touser` is where it says so. Nothing
     /// of the process has changed if it refuses.
-    fn exec_commit(&mut self, pid: Pid, c: &Chan, image: &[u8], path: &str, args: &[String]) -> Result<(), String> {
+    fn exec_commit(&mut self, pid: Pid, c: &Chan, image: &[u8], elem: &str, args: &[String]) -> Result<(), String> {
         self.machine.procsetup(pid)?;
         self.machine.touser(pid, image, args)?;
         // *"img = attachimage(SG_TEXT|SG_RONLY, tc, UTZERO, …)"*
@@ -272,8 +333,8 @@ impl Kernel {
         let tseg = self.attachimage(c, image.len() as u64);
         if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
             // *"up->text = elem"* (`sysproc.c:483`) — the last element of
-            // the name, as `namec` left it in `up->genbuf`.
-            p.text = path.rsplit('/').next().unwrap_or(path).to_string();
+            // the name first given: a script's, not its interpreter's.
+            p.text = elem.to_string();
             p.tseg = Some(tseg);
             // *"putseg(up->seg[i])"* and *"up->seg[DSEG] = newseg(SG_DATA,
             // …)"* (`sysproc.c:513`, `:539`): the new image is a new memory,
@@ -481,7 +542,7 @@ impl Kernel {
     /// can be tested without a machine.
     ///
     /// **Through the dispatcher, not at the device.** `sysexec` reads the
-    /// image with `c->dev->read` reached from `devtab` (`sysproc.c:302`),
+    /// image with `c->dev->read` reached from `devtab` (`sysproc.c:310`),
     /// which for a mounted file is the mount driver. Reaching the device
     /// directly worked for as long as every binary was in `#/boot`, and
     /// stopped the moment the commands moved onto a file server — which is
@@ -535,6 +596,8 @@ mod tests {
     #[derive(Default)]
     pub(crate) struct Log {
         ran: Vec<(Pid, Vec<u8>)>,
+        /// The arguments each image was given, in the same order.
+        pub(crate) args: Vec<Vec<String>>,
         pub(crate) order: Vec<&'static str>,
         /// What `delay` was asked to wait for, so a test can see that a
         /// sleep reached the machine without one actually happening.
@@ -578,10 +641,11 @@ mod tests {
             self.0.borrow_mut().mem.insert(addr, new);
             Ok(true)
         }
-        fn touser(&self, pid: Pid, image: &[u8], _a: &[String]) -> Result<(), String> {
+        fn touser(&self, pid: Pid, image: &[u8], a: &[String]) -> Result<(), String> {
             let mut l = self.0.borrow_mut();
             l.order.push("touser");
             l.ran.push((pid, image.to_vec()));
+            l.args.push(a.to_vec());
             Ok(())
         }
         /// A test machine has no process to enter, so every one it is given
@@ -599,11 +663,57 @@ mod tests {
 
     /// A kernel with one boot file, and the log its machine writes to.
     pub(crate) fn watched() -> (Kernel, Rc<RefCell<Log>>) {
+        watched_with(&[])
+    }
+
+    /// The same, with more boot files.
+    pub(crate) fn watched_with(files: &[(&str, &[u8])]) -> (Kernel, Rc<RefCell<Log>>) {
         let log = Rc::new(RefCell::new(Log::default()));
         let mut root = devroot::Root::new();
         root.addbootfile("init", b"an image".to_vec());
+        for (name, b) in files {
+            root.addbootfile(name, b.to_vec());
+        }
         let k = Kernel::new(root, Rc::new(Recorder(log.clone()))).unwrap();
         (k, log)
+    }
+
+    /// **A `#!` script runs its interpreter** (`sysproc.c:340`–`:360`): the
+    /// interpreter named on the line, given the script's last element as
+    /// `argv[0]`, the line's own arguments, the script's name as it was
+    /// given, and the caller's arguments after its `argv[0]`. The process
+    /// is called by the script's name, not the interpreter's.
+    #[test]
+    fn a_script_runs_its_interpreter_with_the_script_as_an_argument() {
+        let (mut k, log) = watched_with(&[("s", b"#!/boot/init -x\tyz\necho body\n")]);
+        k.exec(1, "/boot/s", &["called".into(), "a".into(), "b".into()]).unwrap();
+        let l = log.borrow();
+        assert_eq!(l.ran, vec![(1, b"an image".to_vec())], "the interpreter's image");
+        assert_eq!(l.args, vec![vec!["s", "-x", "yz", "/boot/s", "a", "b"]]);
+        assert_eq!(k.procs.borrow().get(1).unwrap().text, "s");
+    }
+
+    /// What `sysexec` refuses with `Ebadexec`: fewer than two bytes; a `#!`
+    /// line with no newline within `sizeof(Exec)`, or with nothing on it
+    /// (`shargs`, `sysproc.c:601`); and an interpreter that is itself a
+    /// script — one level only (`:343`). A missing interpreter is the walk's
+    /// own error. The machine is never asked.
+    #[test]
+    fn what_a_script_cannot_be() {
+        let long = format!("#!/boot/init {}\n", "x".repeat(40));
+        let (mut k, log) = watched_with(&[
+            ("one", b"#"),
+            ("long", long.as_bytes()),
+            ("blank", b"#!  \t\n"),
+            ("inner", b"#!/boot/blank\n"),
+            ("outer", b"#!/boot/inner\n"),
+            ("nowhere", b"#!/boot/nothing\n"),
+        ]);
+        for name in ["one", "long", "blank", "outer"] {
+            assert_eq!(k.exec(1, &format!("/boot/{name}"), &[name.into()]), Err(EBADEXEC.into()), "{name}");
+        }
+        assert!(k.exec(1, "/boot/nowhere", &["nowhere".into()]).unwrap_err().contains("does not exist"));
+        assert!(log.borrow().ran.is_empty());
     }
 
     fn booted() -> Kernel {
@@ -775,6 +885,38 @@ fn retval(nr: u32, s: &[u64; machine::MAXSYSARG], r: &Result<Ret, String>) -> i6
         Ret::Str(m) if nr == sysno::AWAIT => m.len().min(s[1] as u32 as usize) as i64,
         Ret::Str(_) | Ret::Wait(..) => 0,
     }
+}
+
+/// `Ebadexec` (`port/error.h:34`).
+pub const EBADEXEC: &str = "exec header invalid";
+
+/// `sizeof(Exec)` (`a.out.h:2`): eight `long`s. `sysexec` reads the header
+/// and copies this much of it into `line`, the buffer `shargs` reads a `#!`
+/// line from (`sysproc.c:342`), so the line must end within it.
+const SIZEOF_EXEC: usize = 32;
+
+/// `sizeof progelem` (`sysproc.c:271`, *"char progelem[64]"*).
+const PROGELEM: usize = 64;
+
+/// `shargs` (`sysproc.c:601`): the words of a `#!` line, split at blanks
+/// and tabs — the interpreter and its arguments. `None` is *"return 0"*: no
+/// newline within the line, or no words on it.
+///
+/// Plan 9 passes it `n`, the bytes read, which can be `sizeof(exec)` — 40,
+/// with the 64-bit entry — while `line` holds `sizeof(Exec)`, 32; a newline
+/// past the 32nd byte is looked for beyond the end of `line`. Here the line
+/// is what `line` holds, so it must end within its 32 bytes.
+fn shargs(image: &[u8]) -> Option<Vec<String>> {
+    let line = &image[..image.len().min(SIZEOF_EXEC)];
+    // *"s += 2; n -= 2; for(i=0; s[i]!='\n'; i++) if(i == n-1) return 0;"*
+    let s = &line[2..];
+    let end = s.iter().position(|&b| b == b'\n')?;
+    let words: Vec<String> = s[..end]
+        .split(|&b| b == b' ' || b == b'\t')
+        .filter(|w| !w.is_empty())
+        .map(|w| String::from_utf8_lossy(w).into_owned())
+        .collect();
+    (!words.is_empty()).then_some(words)
 }
 
 /// `sysctab[]` (`port/systab.h:114`) — each call's name as `ps` shows it
@@ -1399,7 +1541,7 @@ impl Kernel {
                     }
                 }
             }
-            // **`exec` does not return** (`sysproc.c:302`). It gives the
+            // **`exec` does not return** (`sysproc.c:259`). It gives the
             // process a new image and the process IS that image now; the
             // machine's answer is to leave, and `sched` enters what it
             // left behind.
