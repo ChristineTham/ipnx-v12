@@ -206,21 +206,31 @@ concept of /rc."* Plan 9's `/rc` holds three kinds of thing (`plan9/rc`):
    package?"*);
 3. **`/rc/lib/rcmain`** — rc's startup file.
 
-**rc has two startup files, the system's in `/profile` and the user's in
-`/home/profile`** (*"rc should have two startup files - a system one (which
-is in /profile) and a user one (in /home/profile)"*). Plan 9's rc already
-reads exactly two, and in this order (`plan9/rc/lib/rcmain`):
+**The scripts are named in Saranos's terms, not Plan 9's** (*"I am not
+liking the plan 9 names (termrc, cpurc) so why not name them after saranos
+terms (systemrc, userrc, servicerc, pkgrc, emcarc) in appropriate
+folders?"*):
 
-* **the system's, by every rc** — `rcmain`, whose path is compiled into rc
-  (`userspace/rc/ipnx.c:47`, *"char \*Rcmain = "/rc/lib/rcmain""*): it sets
-  `$home`, `$prompt`, `$path`;
-* **the user's, by a login shell** — *"if(flag l && /bin/test -r
-  $home/lib/profile) . $home/lib/profile"* (`rcmain:19`, `:24`).
+| script | where | when it runs | Plan 9's |
+|---|---|---|---|
+| **`systemrc`** | `/profile/systemrc` | once, at boot | `termrc`, `cpurc`, `/cfg/$sysname/*` (§16.3) |
+| **`userrc`** | `/home/profile/userrc` | at login, by the login shell | `$home/lib/profile` (`rcmain:19`, `:24`; `init.c:178`) |
+| **`emcarc`** | `/profile/emcarc`, and the user's own at `/home/profile/emcarc` | when emca starts | `rio -i`'s startup script — *"which typically contains several window commands"* (`rio(1)`) |
+| **`servicerc`** | `/service/<name>/servicerc` | when the service's scope starts | an init script (§16.1), a `cpurc` line (§16.3) |
+| **`pkgrc`** | `/pkg/<name>/pkgrc` | at install and removal, told which — as dpkg's scripts are told `configure`, `remove`, `purge` (`redis-server.postinst`, §16.1) | dpkg's `preinst` … `postrm` (§16.1) |
 
-So the change is two paths and nothing else: **`/profile/rcmain`** for the
-system's (the path compiled into rc) and **`/home/profile/rcmain`** for the
-user's (the path `rcmain` sources). The names keep Plan 9's word for rc's
-startup file, for both — yours to change.
+These are **rc's two startup files**, the system's and the user's
+(*"rc should have two startup files - a system one (which is in /profile)
+and a user one (in /home/profile)"*): `systemrc` sets up the system once,
+and what it puts in the environment every shell inherits; `userrc` is read
+by a login shell.
+
+**`rcmain` is not one of them.** It is Plan 9 rc's own code, run by every
+rc (`plan9/rc/lib/rcmain`): it chooses a default prompt and `$path`, and
+decides whether rc reads `-c`, a file or the terminal. That is the program's
+machinery, not configuration, so it stays with rc — in rc's package, in
+`/store` — and its one line naming the user's file changes from
+`$home/lib/profile` to `$home/profile/userrc`.
 
 ### What is installed — `/pkg`, `/service`, `/template`
 
@@ -239,8 +249,8 @@ repository's index (§16.1, §16.3). The user's are at `/home/pkg`,
 1. **Whose signature** the repository index carries, and where its keys
    live (apt's are keyrings on the machine; `/credentials` is proposed in
    `platforms.md`, unreviewed).
-2. **The names of rc's two startup files** — proposed above as
-   `/profile/rcmain` and `/home/profile/rcmain`.
+2. **`rcmain`** — proposed above as rc's own code, kept in rc's package
+   rather than in `/profile`, since it is the program's machinery.
 3. **Identity**: login, logout, `su`, a daemon's own user — none built, and
    the user scope and a service's user need them. Plan 9's terminal has one
    user, the host owner, and no `su`.

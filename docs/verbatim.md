@@ -350,3 +350,5 @@ On servers, and on what a project is:
   <br>— cited in `docs/proposals.md`
 - *"I don't understand /rc/bin? Why are these not stored in /store and bound to /bin like a package? rc should have two startup files - a system one (which is in /profile) and a user one (in /home/profile)"*
   <br>— cited in `docs/proposals.md`
+- *"should not call them rcmain since that is confusing. I am not liking the plan 9 names (termrc, cpurc) so why not name them after saranos terms (systemrc, userrc, servicerc, pkgrc, emcarc) in appropriate folders?"*
+  <br>— cited in `docs/proposals.md`
