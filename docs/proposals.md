@@ -83,8 +83,8 @@ library"*; installed *"to the system… to the namespace… or to the user"*.
    and after removal. Configuration it writes is listed as such and **left
    on removal, taken only on purge**, as `conffiles` are.
 6. **The three scopes** are where the bind lines go: the calling process's
-   namespace now; the user's profile (every login); or the system's
-   (`/lib/namespace`, every user).
+   namespace now; the user's profile, `/home/profile` (every login); or the
+   system's, `/profile` (every user).
 7. **Pruning** — apt's marking (§16.1): a package installed only because
    another needed it is marked so; a store entry that no profile, project or
    system configuration names — directly or as a dependency — may be
@@ -171,23 +171,45 @@ variables, login scripts etc."*; built *"from a template, or user hand
 editing config files"*; the user *"can save current namespace config as a
 template"*.
 
-**Plan 9's `$home/lib/profile`** (§16.3) — an rc script, the user's to
-edit, sourced at login by `init` — with a namespace file beside it for the
-binds and a lock for the packages installed to the user. Built from a
-template is instantiating one; by hand is editing it. Saving the current
-configuration as a template writes `/proc/<pid>/ns` and `/env` into a new
-template. The **system's** profile is Plan 9's: `/lib/namespace`,
-`/rc/bin/termrc` and `/cfg/$sysname/termrc`.
+**Two of them, where Christine put them**: the system's at **`/profile`**
+and the user's at **`/home/profile`** (*"if there is a system /profile, then
+the user profile should genuinely be /home/profile"*; a package can *"alter
+the system's environment (/rc, /profile)"*).
+
+Each is a directory holding what Plan 9 keeps in scattered files (§16.3):
+
+| | the system's `/profile` | the user's `/home/profile` |
+|---|---|---|
+| **the namespace** — a namespace file, as `newns` reads | what `/lib/namespace` is today | what Plan 9 users bind in `$home/lib/profile` |
+| **the login script** — rc, sourced | what `/rc/bin/termrc` and `/cfg/$sysname/termrc` are today | what `$home/lib/profile` is on Plan 9 (`init.c:178`) |
+| **the environment** | variables every user gets | the user's own |
+| **the lock** — packages installed to this scope, with versions and SHA-256 | the system's | the user's |
+| **services** to start with it | the system's daemons | the user's |
+
+At boot the system's is applied; at login, the user's after it, so the
+user's binds come later and win — Plan 9's order, where `newns` runs
+`/lib/namespace` and then `$home/lib/profile` runs. Built from a template is
+instantiating one into `/home/profile`; by hand is editing it; either way it
+is the user's. Saving the current configuration as a template writes
+`/proc/<pid>/ns` and `/env` into a new template.
+
+An earlier version of this section, 2026-09-24, replaced `/profile` with
+Plan 9's files — `/lib/namespace`, `termrc`, `$home/lib/profile` — as if they
+were the design. They are what `/profile` and `/home/profile` hold; the
+names are Christine's.
 
 ### Open — what the research cannot decide
 
 1. **Whose signature** the repository index carries, and where its keys
    live (apt's are keyrings on the machine; `/credentials` is proposed in
    `platforms.md`, unreviewed).
-2. **The names of the three service directories** — Plan 9's `/bin/service`
+2. **What becomes of `/lib/namespace` and `/rc/bin/termrc`** once `/profile`
+   holds them — moved, or left where Plan 9 has them and read from
+   `/profile`.
+3. **The names of the three service directories** — Plan 9's `/bin/service`
    is `listen`'s, for network calls by port, so daemons need their own; and
    whether the system's are a directory or lines in `/cfg/$sysname/termrc`.
-3. **Identity**: login, logout, `su`, a daemon's own user — none built, and
+4. **Identity**: login, logout, `su`, a daemon's own user — none built, and
    the user scope and a service's user need them. Plan 9's terminal has one
    user, the host owner, and no `su`.
 ## Decided, and moved into the specs
