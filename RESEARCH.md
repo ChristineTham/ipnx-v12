@@ -4189,3 +4189,48 @@ it does not display; the prompt now begins its line after a command is
 interrupted, as in a `rio` window. The terminal cannot be told not to echo
 the key at all without turning echo off for everything, which the host's
 cooked-mode line editing depends on.
+
+### §15.11 — One command from the host's command line (2026-09-24)
+
+`cargo run -p ipnx -- echo hello`, as CLAUDE.md documents it, failed with
+*"'echo' does not exist"*: the host exec'd `/bin/echo` as pid 1 straight
+after the kernel's own binds, and nothing had mounted the store — `boot`
+does that — so once the commands moved from `#/boot` onto the store there
+was nothing at that name.
+
+**How Plan 9 runs one command at boot**, read before choosing:
+
+* `pc/main.c:257` — every line of `plan9.ini` goes into `#e` (unless its
+  name begins `*`) and into `#ec`, by `ksetenv`.
+* `boot.c:202`–`:228`, `execinit` — *"cmd = getenv("init")"*; with none,
+  *"/%s/init -%s%s"* with `$cputype`, `t` or `c` from `#e/service`
+  (`:255`–`:260`) and `m` from `boot -m`. The line is `tokenize`d (quotes
+  honoured, `qtoken`) and `argv[0]` is its first word's last element.
+* `init.c:34`–`:44` — `-c`, `-m`, `-t`, then *"cmd = *argv"*; `rcexec`
+  (`:171`) runs *"execl("/bin/rc", "rc", "-c", cmd, nil)"* in place of the
+  terminal's `termrc` start, and the loop (`:66`) then clears `cmd` and
+  starts the interactive shell.
+
+**So nothing was invented**: the host's command line becomes the `init=`
+configuration line, which the host applies as `pc/main.c` applies
+`plan9.ini`; `boot`'s `execinit` is now Plan 9's instead of a fixed
+`exec("/wasm/init")`; `init` takes `-m`, `-t` and a command. `-c` and
+`cpustart` are not here: there is no cpu service and no `cpurc`. `init`'s
+exit test, which ends the session when input has ended, is now *"the shell
+that exited was the bare interactive one"* rather than *"`manual` was
+set"*, so a command given with `-m` still gets its shell.
+
+**Found on the way: `seek` had no `whence` 2.** `getenv` sizes a variable
+with `seek(f, 0, 2)` (`9sys/getenv.c`, verbatim), and `sysseek` answered
+*"bad whence"*, so `getenv` of a variable that existed malloc'd a garbage
+size and read into it — `boot`'s `$init` came back as noise. It had never
+shown because the only `getenv` in the system, `boot`'s `$user`, names a
+variable nobody sets. `sseek` is now Plan 9's (`sysfile.c:793`): from the
+end is the length `stat` gives, a pipe is `Eisstream`, any other whence is
+`Ebadarg`.
+
+**Differences:** the host's exit status is init's (empty), not the
+command's, because pid 1 is `boot` and then `init`, as on Plan 9. And a
+bare interactive shell ending at end of input makes `init` print *"rc exit
+status: rc N: false"*; that predates this change and is not yet compared
+with Plan 9.

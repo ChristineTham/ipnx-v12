@@ -35,6 +35,7 @@ fn typing(keys: &str) -> String {
     ipnx::startboot(
         &[ipnx::BOOT.to_string()],
         &[],
+        &[],
         Box::new(term.clone()),
         Some(Box::new(fs)),
     )

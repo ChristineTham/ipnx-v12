@@ -1527,18 +1527,45 @@ impl Kernel {
                 let p = procs.get(up).ok_or("no such process")?;
                 let fds = p.fds.clone();
                 let cell = fds.borrow().get(fd).cloned().ok_or(EBADFD)?;
-                let mut c = cell.borrow_mut();
-                if c.is_dir() && !(whence == 0 && off == 0) {
-                    return Err(EISDIR.into());
+                drop(procs);
+                // *"if(devtab[c->type]->dc == '|') error(Eisstream)"*
+                // (`sysfile.c:810`).
+                if cell.borrow().dev == dev::DevId::Pipe {
+                    return Err("seek on a stream".into());
                 }
-                let new = match whence {
-                    0 => off as u64,
-                    1 => (c.offset as i64 + off) as u64,
-                    _ => return Err("bad whence".into()),
+                let is_dir = cell.borrow().is_dir();
+                let new: i64 = match whence {
+                    0 => {
+                        if is_dir && off != 0 {
+                            return Err(EISDIR.into());
+                        }
+                        off
+                    }
+                    1 => {
+                        if is_dir {
+                            return Err(EISDIR.into());
+                        }
+                        cell.borrow().offset as i64 + off
+                    }
+                    // *"n = devtab[c->type]->stat(c, buf, sizeof buf); …
+                    // off = dir.length + o.v"* (`:839`) — the end is the
+                    // length the file's server gives it.
+                    2 => {
+                        if is_dir {
+                            return Err(EISDIR.into());
+                        }
+                        let c = cell.borrow().clone();
+                        let b = self.tab.dstat(&c)?;
+                        let d = ninep::Dir::conv_m2d(&b).ok_or("internal error: stat error in seek")?;
+                        d.length as i64 + off
+                    }
+                    _ => return Err(proc::Procs::EBADARG.into()),
                 };
-                if (new as i64) < 0 {
+                if new < 0 {
                     return Err("negative i/o offset".into());
                 }
+                let new = new as u64;
+                let mut c = cell.borrow_mut();
                 c.offset = new;
                 c.dri = 0;
                 // `unionrewind` (`sysfile.c:367`) — a rewind starts the union
@@ -2965,6 +2992,26 @@ mod syscalls {
             first,
             "and the rewind starts it over"
         );
+    }
+
+    /// `sseek` (`sysfile.c:793`): whence 2 is from the end, which is the
+    /// length the file's server states — how `getenv` sizes a variable
+    /// before reading it (`9sys/getenv.c`); a pipe is `Eisstream`; any other
+    /// whence is `Ebadarg`.
+    #[test]
+    fn seek_from_the_end_is_the_length_stat_gives() {
+        let mut k = booted();
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap() else {
+            panic!()
+        };
+        assert_eq!(k.syscall(1, Call::Seek { fd, off: 0, whence: 2 }), Ok(Ret::N(b"an image".len())));
+        assert_eq!(k.syscall(1, Call::Seek { fd, off: -2, whence: 2 }), Ok(Ret::N(6)));
+        assert_eq!(k.syscall(1, Call::Seek { fd, off: -20, whence: 2 }), Err("negative i/o offset".into()));
+        assert_eq!(k.syscall(1, Call::Seek { fd, off: 0, whence: 3 }), Err(proc::Procs::EBADARG.into()));
+        let Ret::Fd(d) = k.syscall(1, Call::Open { path: "/boot".into(), mode: 0 }).unwrap() else { panic!() };
+        assert_eq!(k.syscall(1, Call::Seek { fd: d, off: 0, whence: 2 }), Err(EISDIR.into()));
+        let Ret::Two(p, _) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
+        assert_eq!(k.syscall(1, Call::Seek { fd: p, off: 0, whence: 0 }), Err("seek on a stream".into()));
     }
 
     /// A device that is a 9P server: write it a request, read back the reply.

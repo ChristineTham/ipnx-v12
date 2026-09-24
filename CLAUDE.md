@@ -113,9 +113,15 @@ table. It runs the userspace built above:
 
 ```bash
 cargo test                                  # the kernel, the host, conformance
-cargo run -p ipnx -- echo hello
+cargo run -p ipnx                           # boot to rc on this terminal
+cargo run -p ipnx -- echo hello             # boot; init runs it with rc -c
 cargo run -p ipnx -- rc /bin/<script>.rc
 ```
+
+A command boots the whole system: it is given to `init` as Plan 9's
+`plan9.ini` line `init=/wasm/init -t 'cmd'` would give it, and `init` runs
+it with `rc -c` in the namespace it built, then starts the interactive
+shell, which ends at once when there is no input.
 
 **Build the userspace first**: the host's tests run the real binaries, and
 `cargo` cannot build a wasm userspace.

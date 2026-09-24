@@ -1,6 +1,6 @@
 //! `ipnx` — Saranos on a terminal. The binary; the system is [`ipnx`] itself.
 
-use ipnx::{startboot, store, Host, BOOT};
+use ipnx::{initcmd, startboot, store, Host, BOOT};
 use ipnx_kernel::devvirtio9p::Nineserver;
 
 #[cfg(test)]
@@ -13,18 +13,15 @@ fn main() {
     let args: Vec<String> = std::env::args().collect();
     if args.iter().any(|a| a == "-h" || a == "--help") {
         eprintln!("usage: ipnx [<command> [<arg> ...]]");
-        eprintln!("  boots Saranos on this terminal and runs one command");
+        eprintln!("  boots Saranos on this terminal; with a command, init runs it");
+        eprintln!("  with rc -c before the interactive shell, as Plan 9's init does");
         return;
     }
-    // With arguments, run that command instead of booting — which is how a
-    // single command is tried without a shell. Without, boot.
-    let argv: Vec<String> = if args.len() > 1 {
-        let mut v = vec![format!("/bin/{}", args[1])];
-        v.extend(args[2..].iter().cloned());
-        v
-    } else {
-        vec![BOOT.to_string()]
-    };
+    // With arguments, the system boots as always and init is given the
+    // command, as `init=` in `plan9.ini` gives it one (`initcmd`). What runs
+    // it is the system's own rc, in the namespace init built.
+    let conf: Vec<(String, String)> = if args.len() > 1 { vec![initcmd(&args[1..])] } else { Vec::new() };
+    let argv = vec![BOOT.to_string()];
 
     // The machine's filesystem. `-fsdev local` names a host directory; this
     // one is `$HOME/lib/ipnx`, and what a program writes under `/root`
@@ -44,7 +41,7 @@ fn main() {
     };
 
     Host::catch_interrupt();
-    let r = startboot(&argv, &[], Box::new(Host), store);
+    let r = startboot(&argv, &[], &conf, Box::new(Host), store);
     Host::restore_terminal();
     match r {
         Ok(status) if status.is_empty() => {}
@@ -285,12 +282,49 @@ mod userspace {
         match startboot(
             &[BOOT.to_string()],
             &[],
+            &[],
             Box::new(term.clone()),
             Some(Box::new(store)),
         ) {
             Ok(_) => term.screen(),
             Err(e) => panic!("{e}"),
         }
+    }
+
+    /// `ipnx <command> <arg>…`: the system boots as always, with the
+    /// command as `init=` in its configuration, as `plan9.ini` would give it.
+    pub(super) fn commanding(args: &[&str], keys: &str) -> String {
+        let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
+        let term = Term::typing(keys);
+        let store = store::Store::new(&rootfs()).expect("a store");
+        match startboot(&[BOOT.to_string()], &[], &[initcmd(&args)], Box::new(term.clone()), Some(Box::new(store))) {
+            Ok(_) => term.screen(),
+            Err(e) => panic!("{e}"),
+        }
+    }
+
+    /// **One command from the host's command line** (`cargo run -p ipnx --
+    /// echo hello`). `boot` reads `$init` and hands it to `init`
+    /// (`boot.c:208`), which runs it with `rc -c` (`init.c:171`) in the
+    /// namespace it built — `$objtype` is init's own, and `/bin` is
+    /// `/lib/namespace`'s — and a word with a quote and a space in it
+    /// arrives whole. Then the interactive shell, as Plan 9's `init` goes
+    /// on to; with no input it ends at once.
+    #[test]
+    fn a_command_on_the_host_command_line_runs_through_boot_and_init() {
+        let out = commanding(&["echo", "hello", "it's here"], "");
+        assert!(out.contains("hello it's here\n"), "{out:?}");
+        let out = commanding(&["cat", "/env/objtype"], "");
+        assert!(out.starts_with("wasm"), "{out:?}");
+    }
+
+    /// The `init=` line: one token for `tokenize`, holding the command's
+    /// words each quoted for rc.
+    #[test]
+    fn initcmd_quotes_the_command_for_tokenize_and_rc() {
+        let (name, val) = initcmd(&["echo".into(), "it's".into(), "a b".into()]);
+        assert_eq!(name, "init");
+        assert_eq!(val, "/wasm/init -t 'echo ''it''''s'' ''a b'''");
     }
 
     /// **P5's acceptance: typing `ipnx` boots to `rc` on the terminal.** The

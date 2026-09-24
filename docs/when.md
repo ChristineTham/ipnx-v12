@@ -43,12 +43,25 @@ turning a `dev` list into `devtab[]` — three opens of `#c/cons`, the binds,
 the mount, and `exec`.
 
 ```
-% cargo run -p ipnx -- echo hello
+% cargo run -p ipnx -- echo hello </dev/null
 hello
 ```
 
-Nothing in `echo` knows where anything is: the kernel resolved `/bin/echo`
-through pid 1's namespace, where `#/boot` is bound at `/bin`.
+**A command on the host's command line boots the whole system** (2026-09-24;
+RESEARCH §15.11). The host puts it in its configuration as `plan9.ini`'s
+`init=` line would — `init=/wasm/init -t 'echo hello'`, into `#e` and `#ec`
+as `pc/main.c:257` does — `boot` reads `$init` and tokenizes it into init's
+arguments (`boot.c:208`), and `init` runs the command with `rc -c`
+(`init.c:171`) in the namespace it built, then the interactive shell as
+Plan 9's `init` does. Before, the host exec'd `/bin/<command>` as pid 1
+before anything had mounted the store, and since the commands moved onto
+it the mode had failed with *"'echo' does not exist"*. The exit status is
+init's, not the command's.
+
+`seek` from the end (`whence` 2) is built (`sysfile.c:839`): the offset is
+the length the file's server states. Without it `getenv` — which sizes a
+variable with `seek(f, 0, 2)` — could not read any variable that existed.
+A pipe is *"seek on a stream"* and any other `whence` `Ebadarg`, as there.
 
 ## What is not built
 

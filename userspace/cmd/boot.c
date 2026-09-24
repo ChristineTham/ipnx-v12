@@ -98,6 +98,45 @@ authentication(void)
 	}
 }
 
+/*
+ * `execinit` (`boot.c:202`), Plan 9's whole: `$init` — a line of
+ * `plan9.ini` on a Plan 9 machine, the host's configuration here — is
+ * init's command line, tokenized, with its first word's last element as
+ * `argv[0]`. With none, it is Plan 9's default, `"/%s/init -%s%s"`: `$cputype`,
+ * `t` for a terminal or `c` for a cpu server (`#e/service`, `:256`), and `m`
+ * for `boot -m`, which nothing passes here. NOT `/bin/init`, because `/bin` is
+ * a union `/lib/namespace` makes and nothing has read that file yet.
+ */
+static void
+execinit(void)
+{
+	int iargc, cpuflag;
+	char *cmd, cmdbuf[64], *iargv[16], *cputype, *service;
+
+	cmd = getenv("init");
+	if(cmd == nil){
+		cputype = getenv("cputype");
+		service = getenv("service");
+		cpuflag = service != nil && strcmp(service, "cpu") == 0;
+		snprint(cmdbuf, sizeof cmdbuf, "/%s/init -%s%s",
+			cputype != nil ? cputype : "", cpuflag ? "c" : "t", "");
+		cmd = cmdbuf;
+	}
+	iargc = tokenize(cmd, iargv, nelem(iargv)-1);
+	cmd = iargv[0];
+
+	/* make iargv[0] basename(iargv[0]) */
+	if(iargv[0] = strrchr(iargv[0], '/'))
+		iargv[0]++;
+	else
+		iargv[0] = cmd;
+
+	iargv[iargc] = nil;
+
+	exec(cmd, iargv);
+	fatal(cmd);
+}
+
 void
 main(int argc, char *argv[])
 {
@@ -140,13 +179,5 @@ main(int argc, char *argv[])
 
 	authentication();
 
-	/*
-	 * `execinit` (`boot.c:201`). With no `$init` to read, the name is the
-	 * one Plan 9 falls back to: `"/%s/init"` with `$cputype` — NOT
-	 * `/bin/init`, because `/bin` is a union `/lib/namespace` makes and
-	 * nothing has read that file yet. `#/` carries an empty `bin` for
-	 * something to bind onto, and a walk that finds it there stops.
-	 */
-	exec("/wasm/init", (char*[]){ "init", nil });
-	fatal("/wasm/init");
+	execinit();
 }

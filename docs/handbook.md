@@ -26,10 +26,10 @@ difference between 9legacy and the final Labs release can be *attributed*.
 cannot build a wasm userspace:
 
 ```bash
-bash userspace/mk.sh     # libc, the commands, rc  ->  userspace/root/bin
+bash userspace/mk.sh     # libc, the commands, rc  ->  userspace/root/wasm/bin
 cargo test               # the kernel, the host, and the conformance suite
 cargo run -p ipnx -- rc /bin/<script>.rc
-cargo run -p ipnx -- echo hello
+cargo run -p ipnx -- echo hello   # boot; init runs it with rc -c, then the shell
 ```
 
 `userspace/build/` and `userspace/root/` are generated and gitignored. Guest

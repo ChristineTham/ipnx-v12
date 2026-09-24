@@ -302,6 +302,28 @@ pub fn ksetenv(k: &mut Kernel, name: &str, val: &str, conf: bool) -> Result<(), 
     Ok(())
 }
 
+/// **One command, as Plan 9 runs one at boot**: the `plan9.ini` line
+/// `init=/$cputype/init -t cmd`. `boot` reads `$init` and tokenizes it into
+/// init's arguments (`boot.c:208`), and `init` runs its first argument with
+/// `rc -c` (`init.c:44`, `:171`) — so the command is one quoted token, and
+/// each of its words is quoted within it, both as `tokenize` and rc unquote
+/// (`''` for a quote inside quotes).
+pub fn initcmd(args: &[String]) -> (String, String) {
+    let line: Vec<String> = args.iter().map(|a| rcquote(a)).collect();
+    ("init".to_string(), format!("/{OBJTYPE}/init -t {}", rcquote(&line.join(" "))))
+}
+
+/// A word as rc and `tokenize` read one: bare if nothing in it is special,
+/// otherwise in single quotes with each quote doubled.
+fn rcquote(w: &str) -> String {
+    let plain = !w.is_empty()
+        && w.chars().all(|c| c.is_alphanumeric() || "-_./+,:=@%".contains(c));
+    if plain {
+        return w.to_string();
+    }
+    format!("'{}'", w.replace('\'', "''"))
+}
+
 /// The first process, and the only file `#/boot` carries — as a Plan 9
 /// kernel carries `/boot/boot` and nothing else (`initcode.c:11`).
 pub const BOOT: &str = "/boot/boot";
@@ -376,6 +398,7 @@ pub fn loadbin(root: &mut Root, dir: &std::path::Path) -> usize {
 pub fn startboot(
     argv: &[String],
     extra: &[(&str, &[u8])],
+    conf: &[(String, String)],
     host: Box<dyn Console>,
     store: Option<Box<dyn Nineserver>>,
 ) -> Result<String, String> {
@@ -423,6 +446,17 @@ pub fn startboot(
         ("service", "terminal".to_string()),
     ] {
         ksetenv(&mut k, name, &val, false)?;
+    }
+    // *"for(i = 0; i < nconf; i++){ if(confname[i][0] != '*')
+    // ksetenv(confname[i], confval[i], 0); ksetenv(confname[i], confval[i],
+    // 1); }"* (`pc/main.c:257`) — each line of `plan9.ini`, into the
+    // environment and into `#ec`. The host's configuration is its
+    // `plan9.ini`.
+    for (name, val) in conf {
+        if !name.starts_with('*') {
+            ksetenv(&mut k, name, val, false)?;
+        }
+        ksetenv(&mut k, name, val, true)?;
     }
 
     // `exec(boot, argv)` — `initcode`'s last line. It no longer runs

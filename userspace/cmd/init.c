@@ -10,16 +10,18 @@
  *	for(;;){ print("\ninit: starting /bin/rc\n"); fexec(rcexec); manual = 1;
  *		cmd = 0; sleep(1000); }
  *
- * WHAT IS NOT HERE: `-c`/`-t`/`-m` and the cpu/terminal split (there is one
- * service), the priority write to `#p/n/ctl` (no scheduler to prioritise
- * against), `$timezone`, the password prompt and `pinhead` (no notes), and
+ * WHAT IS NOT HERE: `-c` and the cpu server's startup (`cpustart`, which
+ * runs `/rc/bin/cpurc`; there is one service, a terminal, and no cpurc), the
+ * priority write to `#p/n/ctl`, `$timezone`, the password prompt, and
  * `closefds` (this process's three are the console and are meant to be
- * inherited).
+ * inherited). `-m`, `-t` and a command are here: `init [-mt] [cmd]`, the
+ * command given by `boot` from `$init` (`boot.c:208`).
  */
 #include <u.h>
 #include <libc.h>
 
 char	*service = "terminal";
+char	*cmd;
 char	*cpu;
 char	*user;
 char	*systemname;
@@ -93,7 +95,9 @@ static void
 rcexec(void *v)
 {
 	USED(v);
-	if(manual)
+	if(cmd)
+		exec("/bin/rc", (char*[]){ "rc", "-c", cmd, nil });
+	else if(manual)
 		exec("/bin/rc", (char*[]){ "rc", nil });
 	else
 		exec("/bin/rc", (char*[]){ "rc", "-c", ". /rc/bin/termrc", nil });
@@ -104,9 +108,18 @@ void
 main(int argc, char *argv[])
 {
 	Waitmsg *w;
-	int pid;
+	int pid, bare;
 
-	USED(argc, argv);
+	/* `init.c:34` — without `-c`, whose cpu service is not here */
+	ARGBEGIN{
+	case 'm':
+		manual = 1;
+		break;
+	case 't':
+		service = "terminal";
+		break;
+	}ARGEND
+	cmd = *argv;
 
 	/* `init.c:56` — the name of the machine, and therefore of the
 	 * directory its binaries are in. `/lib/namespace` reads it as
@@ -125,23 +138,25 @@ main(int argc, char *argv[])
 		print("init: can't build namespace: %r\n");
 
 	/*
-	 * Plan 9 goes round forever (`init.c:66`): the startup rc exits,
-	 * `manual` becomes 1, and every rc after it is the bare interactive
-	 * one — because a terminal does not end, so a shell that exited is a
-	 * shell that must be started again.
+	 * Plan 9 goes round forever (`init.c:66`): the startup rc — or the
+	 * one running the command init was given — exits, `manual` becomes 1
+	 * and `cmd` 0, and every rc after it is the bare interactive one,
+	 * because a terminal does not end, so a shell that exited is a shell
+	 * that must be started again.
 	 *
 	 * **Input CAN end here**, and that is the one difference. A host
 	 * terminal closes, `#c`'s `consread` answers that as the `^D` its
 	 * user would have typed, and every shell after it reads the same
-	 * nothing — so the second exit is the end of the session rather than
-	 * a reason to start a third. Plan 9's terminal does not end, so its
-	 * loop does not need the test.
+	 * nothing — so a bare shell's exit is the end of the session rather
+	 * than a reason to start another. Plan 9's terminal does not end, so
+	 * its loop does not need the test.
 	 *
 	 * `sleep(1000)` is Plan 9's own last line of the loop and is here for
 	 * the reason it is there: a shell that dies at once must not be
 	 * restarted at once.
 	 */
 	for(;;){
+		bare = cmd == nil && manual;
 		/* `fexec` (`init.c:127`): the child is put in a note group of its
 		 * own — *"rfork(RFNOTEG)"* — so an interrupt reaches the shell and
 		 * what it runs, and not init. */
@@ -163,9 +178,10 @@ main(int argc, char *argv[])
 		if(w->msg[0])
 			print("init: rc exit status: %s\n", w->msg);
 		free(w);
-		if(manual)
+		if(bare)
 			exits(nil);
 		manual = 1;
+		cmd = nil;
 		sleep(1000);
 	}
 }
