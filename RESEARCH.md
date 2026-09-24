@@ -4351,3 +4351,128 @@ A test found one more thing: the old host did not refuse a name starting
 exactly at the end of memory — it read it as empty — so that case already
 reached the kernel. The host test uses an address far past the end, which
 fails with the old host and passes with this one.
+
+## §16 — Packages and services: what apt, Cargo and Plan 9 do (2026-09-24)
+
+Christine: *"Use existing package managers as an inspiration for packages
+primitives"*; *"i've already said use plan 9 or existing package managers as
+inspiration"*; *"This requires you to do research"*. The manuals could not
+be fetched — this environment's proxy refuses `man.freebsd.org`,
+`docs.brew.sh` and `www.debian.org` — so what follows is measured on the
+**installed systems in this container**: Ubuntu 24.04's apt and dpkg with
+real `postgresql` and `redis-server` packages, the Cargo registry this
+project builds from, and `plan9/`. Each claim names the file it was read
+from.
+
+### §16.1 — apt and dpkg
+
+**The chain of verification.** `/var/lib/apt/lists/*_noble-updates_InRelease`
+is a PGP-signed message (*"-----BEGIN PGP SIGNED MESSAGE----- Hash:
+SHA512"*, signature at its line 1259) listing a checksum and size for every
+index it covers. The `Packages` index lists each package with its file and
+hash — `apt-cache show postgresql-16`:
+
+> `Filename: pool/main/p/postgresql-16/postgresql-16_16.13-0ubuntu0.24.04.1_amd64.deb`
+> `Size: 15584148`
+> `SHA256: 457531fa724387210589e071f471abd0287840a68f3874a68bb211ec00970d46`
+
+So **one signature covers the index, and the index's hashes cover every
+package file.** Nothing is signed per package.
+
+**A package's metadata** (`dpkg -s postgresql-16`): `Package`, `Version`,
+`Architecture`, `Installed-Size`, `Depends` (with version bounds, and `|`
+for alternatives), `Recommends`, `Provides`, `Breaks`, `Description`.
+
+**What dpkg keeps per installed package** (`/var/lib/dpkg/info/`): `.list`
+(every file it installed), `.md5sums`, `.conffiles`, and the maintainer
+scripts `preinst`, `postinst`, `prerm`, `postrm` — for `redis-server`, all
+four.
+
+**Configuration files survive removal.** `redis-server.conffiles` lists
+`/etc/default/redis-server`, `/etc/init.d/redis-server`,
+`/etc/logrotate.d/redis-server`, `/etc/redis/redis.conf`; `redis-server.postrm`
+undoes them only on `purge` (*"if [ "${1}" = "purge" ]"*).
+
+**Pruning is by marking.** `/var/lib/apt/extended_states` records
+`Auto-Installed: 1` for packages installed only as dependencies (13 here);
+`apt-mark showmanual` lists the rest. What `autoremove` may take is what is
+auto-installed and no longer depended on.
+
+**A daemon is a package of its own.** `redis-server` (`Depends: redis-tools
+(= 5:7.0.15-…)`) carries the daemon's start script and configuration;
+`redis-tools` carries the programs and their libraries. PostgreSQL splits
+the same way: `postgresql-16` is the server's programs, and
+`postgresql-common.conffiles` holds `/etc/init.d/postgresql`. **The service
+and the software are different packages** — the distinction Christine drew
+(*"a package should be like installing a toolchain or a library, services
+installs daemons"*) is the one Debian already makes.
+
+**What installing a daemon does** (`redis-server.postinst`):
+
+> `update-rc.d redis-server defaults` — enable it at boot
+> `invoke-rc.d --skip-systemd-native redis-server $_dh_action` — start it (or restart on upgrade)
+
+`redis-server.prerm` stops it on removal (*"invoke-rc.d … redis-server
+stop"*); `postrm` on purge disables it (*"update-rc.d redis-server
+remove"*). **Enabling, starting, stopping and disabling are four separate
+acts.**
+
+**How a daemon is described** (`/etc/init.d/redis-server`): an `INIT INFO`
+header (`Provides`, `Required-Start`, `Default-Start: 2 3 4 5`), the program
+(`DAEMON=/usr/bin/redis-server`), its arguments (the config file), a pid
+file under `/run/redis`, and **its settings in a separate file sourced at
+start** — *"if [ -r /etc/default/$NAME ] then . /etc/default/$NAME"* —
+`/etc/default/redis-server` being `ULIMIT=65536`.
+
+**A daemon runs as its own user**: `/etc/passwd` has `redis` (home
+`/var/lib/redis`) and `postgres` (*"PostgreSQL administrator"*, home
+`/var/lib/postgresql`), and `redis-server.postinst` sets its config file's
+owner to `redis`.
+
+### §16.2 — Cargo
+
+**The registry is named by a file**, `~/.cargo/registry/index/*/config.json`:
+*`"dl": "https://static.crates.io/crates"`* — where the packages are.
+
+**A lock file records each dependency's exact version and hash.**
+`Cargo.lock`:
+
+> `name = "wasmtime"` `version = "39.0.2"` `checksum = "a667153732c6cfba625cf5adc5db60ea2849f9a027b012a48cdd81e691e7b70a"`
+
+and `sha256sum ~/.cargo/registry/cache/*/wasmtime-39.0.2.crate` is
+`a667153732c6…70a` — **the lock's checksum is the SHA-256 of the package
+file.** The downloaded files are kept in a cache (`registry/cache`) and
+unpacked once (`registry/src`, 265 here), shared by every project that
+names them.
+
+### §16.3 — Plan 9
+
+**A distribution is a file server you mount.** `rc/bin/9fs:24`: *"srv -nq
+tcp!9p.io sources /n/sources"*; `dist/replica/network`'s `servermount` is
+*"9fs sources; bind /n/sources/plan9 /n/dist"*; `rc/bin/replica/pull`
+mounts it (*"must servermount"*), fetches the server's log and applies it.
+There is no download protocol: fetching is reading files over 9P, and
+trust is the server's authentication.
+
+**A service is a file in a directory.** `listen(8)`: *"The services available
+are executable, non-empty files in … `/bin/service`"*, named by network and
+port (`tcp565`); `rc/bin/service` has 30, and **a disabled one is renamed
+with a leading `!`** (`!tcp515`, `!il17008`). **A service runs in a namespace
+of its own**: *"When changing user to `none`, a new namespace is created,
+usually by executing `/lib/namespace`, but `-n` selects an alternate
+namespace"* — and Plan 9 ships such files, `lib/namespace.httpd` (used at
+`ip/httpd/httpd.c:103`) and `lib/namespace.ftp` (`ip/ftpd.c:120`, with a
+per-user `/usr/%s/lib/namespace.ftp` at `:626`).
+
+**Daemons that are not network listeners are started from the machine's
+startup scripts**: `rc/bin/cpurc:9` `ndb/cs`, `:60` `aux/listen -q tcp`,
+`:66` `aux/timesync`; and **per machine** from `/cfg/$sysname/termrc`
+(`termrc:39`), `/cfg/$sysname/cpurc` (`cpurc:26`) and
+`/cfg/$sysname/cpustart` (`cpurc:74`).
+
+**Services end with their window.** `rio/wind.c:1111`, on delete: *"write(w->notefd,
+"hangup", 6)"*; `rio/rio.c:329`, when rio exits: *"postnote(PNGROUP,
+window[i]->pid, "hangup")"*.
+
+**A user's profile** is `$home/lib/profile`, sourced by `init` at login
+(`init.c:178`).
