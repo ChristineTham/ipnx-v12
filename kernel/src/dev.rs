@@ -217,6 +217,14 @@ pub trait Dev {
     fn remove(&mut self, c: &mut Chan) -> Result<(), String>;
     fn close(&mut self, c: &mut Chan);
 
+    /// **`incref(c)`** on an open channel this kernel has copied rather
+    /// than shared. Plan 9 counts references on the `Chan`, and the device
+    /// is closed once, at the last; here a channel is a value, and each
+    /// copy is closed on its own — so a device that counts its opens counts
+    /// the copy. `srvopen` is where it happens: *"incref(sp->chan); return
+    /// sp->chan"* (`devsrv.c:135`). Most devices count nothing.
+    fn incref(&mut self, _c: &Chan) {}
+
     // `bread` and `bwrite` are absent, and this is the one kind of difference
     // that needs no approval: **Plan 9's counterpart cannot exist here.**
     //

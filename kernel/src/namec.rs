@@ -50,6 +50,19 @@ pub enum A {
 #[derive(Default)]
 pub struct Devtab {
     devs: HashMap<DevId, Box<dyn Dev>>,
+    /// `up`, for the mount driver's RPCs, which sleep as a pipe read does.
+    pub up: Option<std::rc::Rc<std::cell::RefCell<crate::proc::Up>>>,
+    /// Each wire's reader and outstanding RPCs — the half of Plan 9's `Mnt`
+    /// that `mountio` and `mountmux` keep (`devmnt.c:774`, `:930`), by the
+    /// wire's identity, as `c->mux` is the wire's own.
+    muxes: HashMap<(DevId, u32, u64), Mux>,
+    /// What each process's call has done on the wires so far: see [`Record`].
+    records: HashMap<crate::proc::Pid, Record>,
+    /// **Each mounted wire, held** — the `Mnt`'s `m->c`, a reference of its
+    /// own (`devmnt.c:355`, *"incref(m->c)"*), so that the process which
+    /// mounted it may close its descriptor — `plumber` does, `fsys.c:221` —
+    /// without hanging the server up.
+    wires: HashMap<(DevId, u32, u64), std::rc::Rc<std::cell::RefCell<Chan>>>,
     /// `char *eve` (`auth.c:10`) — kernel-wide, and handed to every device
     /// as it joins. It starts EMPTY, as `userinit` leaves it
     /// (`pc/main.c:285`); `boot` names the host owner by writing
@@ -141,6 +154,17 @@ impl Devtab {
     }
 
     pub fn dopen(&mut self, c: Chan, mode: u16) -> Result<Chan, String> {
+        // `srvopen` answers the posted channel, *"incref(sp->chan)"*
+        // (`devsrv.c:135`): a copy here, which its own device counts.
+        if c.dev == DevId::Srv && !c.qid.is_dir() {
+            let posted = self.get(c.dev).ok_or("no such device")?.open(c, mode)?;
+            if posted.dev != DevId::Srv {
+                if let Some(d) = self.get(posted.dev) {
+                    d.incref(&posted);
+                }
+            }
+            return Ok(posted);
+        }
         if c.dev == DevId::Mnt {
             return self.with_mnt(|m, tab| {
                 let mut w = Wire::new(&c, m, tab)?;
@@ -373,6 +397,7 @@ pub fn walk(
         // /home` after it, listed `motd` and could not open it).
         match tab.dwalk(&c, name) {
             Ok(Some(next)) => c = next,
+            Err(e) if e == crate::devmnt::SLEPT => return Err(e),
             miss => {
                 let mut err = miss.err();
                 // **"try a union mount, if any"** (`chan.c:1027`). The first
@@ -388,6 +413,7 @@ pub fn walk(
                             break;
                         }
                         Ok(None) => {}
+                        Err(e) if e == crate::devmnt::SLEPT => return Err(e),
                         Err(e) => err = Some(e),
                     }
                 }
@@ -533,8 +559,12 @@ pub fn create(
     // it was not even a race — one rc, writing `/env/status` twice, told it
     // could not create what it had just created.
     if omode & crate::chan::mode::OEXCL == 0 {
-        if let Ok(existing) = walk(tab, ns, parent.clone(), &[last.to_string()], false) {
-            return tab.dopen(existing, (omode & !crate::chan::mode::OEXCL) | crate::chan::mode::OTRUNC);
+        match walk(tab, ns, parent.clone(), &[last.to_string()], false) {
+            Ok(existing) => {
+                return tab.dopen(existing, (omode & !crate::chan::mode::OEXCL) | crate::chan::mode::OTRUNC);
+            }
+            Err(e) if e == crate::devmnt::SLEPT => return Err(e),
+            Err(_) => {}
         }
     }
 
@@ -876,26 +906,301 @@ impl<'a> Wire<'a> {
     }
 }
 
-impl crate::devmnt::Transport for Wire<'_> {
-    fn rpc(&mut self, request: &[u8]) -> Result<Vec<u8>, String> {
-        let d = self.tab.get(self.wire.dev).ok_or("no such device")?;
-        d.write(&mut self.wire, request, 0)?;
-        // A reply is framed, so its first four bytes say how long it is.
-        let d = self.tab.get(self.wire.dev).ok_or("no such device")?;
-        let mut out = d.read(&mut self.wire, 4, 0)?;
-        if out.len() < 4 {
-            return Err("short reply".into());
+/// **What a call has done on the wires, kept while it sleeps.** Plan 9's
+/// `mountio` sleeps in the middle of a call on the process's own kernel
+/// stack (`devmnt.c:811`) and carries on from there. This kernel has no
+/// stack per process: a call that sleeps leaves, and runs again from the
+/// top when it is woken — as `qread` does. So what it did the first time is
+/// kept, in order — the fids it was given and the replies it had — and
+/// given back the same way when it runs again, so nothing is sent twice and
+/// the server sees one conversation. The record ends with the call.
+#[derive(Default)]
+pub struct Record {
+    steps: Vec<Step>,
+    at: usize,
+}
+
+enum Step {
+    /// `++chanalloc.fid`'s answer.
+    Fid(u32),
+    /// One RPC: the tag it went with, whether it has gone, and its reply
+    /// once it came.
+    Rpc { tag: u16, sent: bool, reply: Option<Vec<u8>> },
+}
+
+/// A wire's reader and its outstanding RPCs — `m->rip`, `m->queue` and the
+/// replies `mountmux` has taken for others (`devmnt.c:930`).
+#[derive(Default)]
+struct Mux {
+    /// `m->rip` — the one process reading the wire.
+    rip: Option<crate::proc::Pid>,
+    /// `m->queue` — each outstanding RPC by its tag, and who waits for it.
+    /// A clunk waits for nobody.
+    queue: Vec<(u16, Option<crate::proc::Pid>)>,
+    /// Replies read by another process, waiting for their owner.
+    done: HashMap<u16, Vec<u8>>,
+    /// A message read in part — `m->q`.
+    inbuf: Vec<u8>,
+    /// The next tag to try.
+    tag: u16,
+}
+
+impl Devtab {
+    /// The process in the call.
+    fn uppid(&self) -> crate::proc::Pid {
+        self.up.as_ref().map_or(0, |u| u.borrow().pid)
+    }
+
+    /// Whether the process has left the processor in this call.
+    fn asleep(&self, pid: crate::proc::Pid) -> bool {
+        // A caller holding the table for writing is on a path where nothing
+        // sleeps — a server the machine answers at once.
+        self.up.as_ref().is_some_and(|u| {
+            u.borrow().procs.try_borrow().is_ok_and(|procs| procs.get(pid).is_some_and(|p| p.setlabel))
+        })
+    }
+
+    /// Hold a mounted wire (see [`Devtab::wires`]).
+    pub fn keepwire(&mut self, cell: std::rc::Rc<std::cell::RefCell<Chan>>) {
+        let key = {
+            let w = cell.borrow();
+            (w.dev, w.devno, w.qid.path)
+        };
+        self.wires.entry(key).or_insert(cell);
+    }
+
+    /// A call entered again: its record is given back from the start.
+    pub fn rewind(&mut self, pid: crate::proc::Pid) {
+        if let Some(r) = self.records.get_mut(&pid) {
+            r.at = 0;
         }
-        let size = u32::from_le_bytes([out[0], out[1], out[2], out[3]]) as usize;
-        while out.len() < size {
-            let d = self.tab.get(self.wire.dev).ok_or("no such device")?;
-            let more = d.read(&mut self.wire, size - out.len(), 0)?;
-            if more.is_empty() {
-                return Err("truncated reply".into());
+    }
+
+    /// The call is over.
+    pub fn endcall(&mut self, pid: crate::proc::Pid) {
+        self.records.remove(&pid);
+    }
+
+    /// The process is gone: nothing waits for its replies, and if it was
+    /// reading a wire, the next may (`mntgate`).
+    pub fn forget(&mut self, pid: crate::proc::Pid) {
+        self.records.remove(&pid);
+        let keys: Vec<_> = self.muxes.keys().copied().collect();
+        for k in keys {
+            let m = self.muxes.get_mut(&k).expect("key");
+            for e in m.queue.iter_mut() {
+                if e.1 == Some(pid) {
+                    e.1 = None;
+                }
             }
-            out.extend_from_slice(&more);
+            if m.rip == Some(pid) {
+                self.gate(k);
+            }
         }
-        Ok(out)
+    }
+
+    /// `mntgate` (`devmnt.c:918`): the reader leaves, and the first RPC
+    /// still waiting is woken to read in its place.
+    fn gate(&mut self, key: (DevId, u32, u64)) {
+        let Some(m) = self.muxes.get_mut(&key) else { return };
+        m.rip = None;
+        let waiting: Vec<_> = m.queue.iter().filter_map(|e| e.1).collect();
+        if waiting.is_empty() {
+            return;
+        }
+        if let Some(u) = &self.up {
+            let u = u.borrow();
+            let mut procs = u.procs.borrow_mut();
+            for p in waiting {
+                if procs.wakeup(crate::proc::Rid::Mntrpc(p)).is_some() {
+                    break;
+                }
+            }
+        }
+    }
+}
+
+impl crate::devmnt::Transport for Wire<'_> {
+    fn fid(&mut self, next: u32) -> u32 {
+        let pid = self.tab.uppid();
+        let r = self.tab.records.entry(pid).or_default();
+        if let Some(Step::Fid(f)) = r.steps.get(r.at) {
+            let f = *f;
+            r.at += 1;
+            return f;
+        }
+        r.steps.truncate(r.at);
+        r.steps.push(Step::Fid(next));
+        r.at += 1;
+        next
+    }
+
+    /// `mountio` (`devmnt.c:774`): send, then take the wire's reader's
+    /// place if it is free and read until this RPC's reply has come —
+    /// handing each other reply to its owner (`mountmux`) — or, if another
+    /// process is reading, sleep until it has handed this one over or left
+    /// the wire free (`mntgate`).
+    fn rpc(&mut self, request: &[u8]) -> Result<Vec<u8>, String> {
+        use crate::devmnt::SLEPT;
+        let pid = self.tab.uppid();
+        // A call that has already left does nothing more before it runs
+        // again: everything after the sleep is done then.
+        if self.tab.asleep(pid) {
+            return Err(SLEPT.into());
+        }
+        let key = (self.wire.dev, self.wire.devno, self.wire.qid.path);
+        let clunk = request.get(4) == Some(&(crate::ninep::T::Clunk as u8));
+
+        // The record: a reply had already, or an RPC under way.
+        let rec = self.tab.records.entry(pid).or_default();
+        let at = rec.at;
+        let (tag, sent) = match rec.steps.get(at) {
+            Some(Step::Rpc { reply: Some(r), .. }) => {
+                let r = r.clone();
+                rec.at += 1;
+                return Ok(r);
+            }
+            Some(Step::Rpc { tag, sent, reply: None }) => (*tag, *sent),
+            _ => {
+                rec.steps.truncate(at);
+                // `mntralloc`'s tag: unique among the wire's outstanding
+                // RPCs, whichever mount of the wire made them. `Tversion`
+                // keeps its NOTAG.
+                let asked = u16::from_le_bytes([request.get(5).copied().unwrap_or(0), request.get(6).copied().unwrap_or(0)]);
+                let tag = if asked == !0 {
+                    asked
+                } else {
+                    let m = self.tab.muxes.entry(key).or_default();
+                    loop {
+                        m.tag = m.tag.wrapping_add(1);
+                        if m.tag != !0 && !m.queue.iter().any(|e| e.0 == m.tag) {
+                            break m.tag;
+                        }
+                    }
+                };
+                let rec = self.tab.records.entry(pid).or_default();
+                rec.steps.push(Step::Rpc { tag, sent: false, reply: None });
+                (tag, false)
+            }
+        };
+        let finish = |tab: &mut Devtab, reply: Vec<u8>| {
+            let rec = tab.records.entry(pid).or_default();
+            rec.steps[at] = Step::Rpc { tag, sent: true, reply: Some(reply.clone()) };
+            rec.at = at + 1;
+            reply
+        };
+
+        if !sent {
+            let mut req = request.to_vec();
+            if req.len() >= 7 {
+                req[5..7].copy_from_slice(&tag.to_le_bytes());
+            }
+            let d = self.tab.get(self.wire.dev).ok_or("no such device")?;
+            d.write(&mut self.wire, &req, 0)?;
+            if self.tab.asleep(pid) {
+                return Err(SLEPT.into());
+            }
+            let m = self.tab.muxes.entry(key).or_default();
+            m.queue.push((tag, if clunk { None } else { Some(pid) }));
+            if let Some(Step::Rpc { sent, .. }) = self.tab.records.entry(pid).or_default().steps.get_mut(at) {
+                *sent = true;
+            }
+            // **A clunk waits for nobody.** Plan 9's `mntclunk` waits for
+            // `Rclunk`; a clunk here is made where a call cannot be run
+            // again — a channel's last close — so its reply is left for
+            // whoever reads the wire next, and dropped (RESEARCH §16.14).
+            if clunk {
+                return Ok(finish(self.tab, crate::ninep::W::new().frame(crate::ninep::T::Clunk.reply(), tag)));
+            }
+        }
+
+        loop {
+            // `mountmux` gave it to us while we slept.
+            if let Some(r) = self.tab.muxes.entry(key).or_default().done.remove(&tag) {
+                return Ok(finish(self.tab, r));
+            }
+            // `m->rip`: one reader at a time.
+            let m = self.tab.muxes.entry(key).or_default();
+            match m.rip {
+                Some(p) if p != pid => {
+                    let slept = match &self.tab.up {
+                        Some(u) => u.borrow().procs.borrow_mut().sleep(pid, crate::proc::Rid::Mntrpc(pid), false),
+                        None => false,
+                    };
+                    if !slept {
+                        self.drop_rpc(key, tag);
+                        return Err(crate::proc::EINTR.into());
+                    }
+                    return Err(SLEPT.into());
+                }
+                _ => m.rip = Some(pid),
+            }
+            // `mntrpcread`: the size, then the rest.
+            let msg = loop {
+                let m = self.tab.muxes.entry(key).or_default();
+                let have = m.inbuf.len();
+                let size = if have >= 4 {
+                    u32::from_le_bytes([m.inbuf[0], m.inbuf[1], m.inbuf[2], m.inbuf[3]]) as usize
+                } else {
+                    4
+                };
+                if have >= 4 && size < 7 {
+                    self.drop_rpc(key, tag);
+                    return Err("short reply".into());
+                }
+                if have >= size && have >= 4 {
+                    break m.inbuf.drain(..size).collect::<Vec<u8>>();
+                }
+                let d = self.tab.get(self.wire.dev).ok_or("no such device")?;
+                let got = match d.read(&mut self.wire, size - have, 0) {
+                    Ok(b) => b,
+                    Err(e) => {
+                        self.drop_rpc(key, tag);
+                        return Err(e);
+                    }
+                };
+                if self.tab.asleep(pid) {
+                    return Err(SLEPT.into());
+                }
+                if got.is_empty() {
+                    // `Emountrpc` (`devmnt.c:822`): the wire is hung up.
+                    self.drop_rpc(key, tag);
+                    return Err("mount rpc error".into());
+                }
+                self.tab.muxes.entry(key).or_default().inbuf.extend_from_slice(&got);
+            };
+            // `mountmux` (`devmnt.c:930`): the reply goes to its RPC.
+            let rtag = u16::from_le_bytes([msg[5], msg[6]]);
+            let m = self.tab.muxes.entry(key).or_default();
+            let owner = m.queue.iter().position(|e| e.0 == rtag).map(|i| m.queue.remove(i));
+            if rtag == tag {
+                self.tab.gate(key);
+                return Ok(finish(self.tab, msg));
+            }
+            // Someone else's, or nobody's — a clunk's, or one whose
+            // process is gone, which Plan 9 prints as *"unexpected reply
+            // tag"* and drops.
+            if let Some((_, Some(p))) = owner {
+                self.tab.muxes.entry(key).or_default().done.insert(rtag, msg);
+                if let Some(u) = &self.tab.up {
+                    u.borrow().procs.borrow_mut().wakeup(crate::proc::Rid::Mntrpc(p));
+                }
+            }
+        }
+    }
+}
+
+impl Wire<'_> {
+    /// An RPC that will not be waited for any more: out of the queue, and
+    /// the wire's reader leaves if it was us (`mntflushfree`, `mntgate`).
+    fn drop_rpc(&mut self, key: (DevId, u32, u64), tag: u16) {
+        let pid = self.tab.uppid();
+        if let Some(m) = self.tab.muxes.get_mut(&key) {
+            m.queue.retain(|e| e.0 != tag);
+            if m.rip == Some(pid) {
+                self.tab.gate(key);
+            }
+        }
     }
 }
 

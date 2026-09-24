@@ -36,8 +36,11 @@ const ESHUTDOWN: &str = "channel shut down";
 /// Plan 9's `Srv`.
 pub struct Srv {
     name: String,
-    /// `sp->chan` — nil until something posts one.
-    chan: Option<Chan>,
+    /// `sp->chan` — nil until something posts one. The poster's own
+    /// reference, taken from its descriptor: *"c1 = fdtochan(fd, -1, 0, 1);
+    /// /* error check and inc ref */"* (`devsrv.c:315`), so the poster may
+    /// close its descriptor and the channel stays open.
+    chan: Option<std::rc::Rc<std::cell::RefCell<Chan>>>,
     owner: String,
     perm: u32,
     path: u64,
@@ -47,7 +50,13 @@ impl Srv {
     /// An entry as `srvcreate` plus `srvwrite` leave it: named, and with a
     /// channel behind it.
     pub fn posted(name: &str, chan: Chan) -> Srv {
-        Srv { name: name.into(), chan: Some(chan), owner: "eve".into(), perm: 0o600, path: 0 }
+        Srv {
+            name: name.into(),
+            chan: Some(std::rc::Rc::new(std::cell::RefCell::new(chan))),
+            owner: "eve".into(),
+            perm: 0o600,
+            path: 0,
+        }
     }
 }
 
@@ -75,6 +84,7 @@ pub fn srvname(tab: &Srvtab, c: &Chan) -> Option<String> {
         .iter()
         .find(|s| {
             s.chan.as_ref().is_some_and(|p| {
+                let p = p.borrow();
                 (p.dev, p.devno, p.qid) == (c.dev, c.devno, c.qid)
             })
         })
@@ -149,7 +159,8 @@ impl Dev for SrvDev {
         let (posted, owner, perm) = {
             let tab = self.srv.borrow();
             let sp = tab.iter().find(|s| s.path == c.qid.path).ok_or(ENONEXIST)?;
-            (sp.chan.clone().ok_or(ESHUTDOWN)?, sp.owner.clone(), sp.perm)
+            let posted = sp.chan.as_ref().ok_or(ESHUTDOWN)?.borrow().clone();
+            (posted, sp.owner.clone(), sp.perm)
         };
         self.permcheck(&owner, perm, mode)?;
         Ok(posted)
@@ -220,6 +231,7 @@ impl Dev for SrvDev {
         let fgrp = self.up.borrow().fgrp().ok_or("no such process")?;
         let cell = fgrp.borrow().get(fd).cloned().ok_or("fd out of range or not open")?;
         let posted = cell.borrow().clone();
+        let posted_cell = cell.clone();
         // `srvwrite` (`devsrv.c:323`). A channel that goes away on exec or on
         // close cannot be left behind a name: whoever opens the name later
         // would get a channel its poster no longer holds.
@@ -232,7 +244,7 @@ impl Dev for SrvDev {
         if sp.chan.is_some() {
             return Err(EEXIST.into());
         }
-        sp.chan = Some(posted);
+        sp.chan = Some(posted_cell);
         Ok(data.len())
     }
 

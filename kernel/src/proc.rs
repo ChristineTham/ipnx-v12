@@ -333,6 +333,10 @@ pub enum Rid {
     /// process's own kernel stack (`sysproc.c:1111`), so it is named by that
     /// process: it has at most one.
     Sema(Pid),
+    /// `&r->r`, the `Rendez` in a `Mntrpc` (`devmnt.c:811`) — where a
+    /// process waits for its reply while another reads the wire. It has at
+    /// most one outstanding, so it is named by the process.
+    Mntrpc(Pid),
 }
 
 /// `struct Sema` (`portdat.h:438`) — one process waiting in `semacquire`,

@@ -462,6 +462,19 @@ impl Dev for PipeDev {
     /// stream"*. The last close of one end hangs up the queue the OTHER end
     /// reads, so its reader sees end of file once what is queued is gone,
     /// and closes its own; when both ends are closed, both reopen.
+    /// Another reference to an open end: one more for `qref` to count down
+    /// (`pipeclose`, `devpipe.c:247`).
+    fn incref(&mut self, c: &Chan) {
+        if c.flag & COPEN == 0 {
+            return;
+        }
+        if let Some((end, _)) = Self::ends(c.qid.path) {
+            if let Ok(p) = self.pipe(c) {
+                p.qref[end] += 1;
+            }
+        }
+    }
+
     fn close(&mut self, c: &mut Chan) {
         if c.flag & COPEN == 0 {
             return;

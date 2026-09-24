@@ -200,6 +200,7 @@ impl Kernel {
         tab.add(Box::new(root));
         let procs = std::rc::Rc::new(std::cell::RefCell::new(proc::Procs::new(slash)));
         let up = std::rc::Rc::new(std::cell::RefCell::new(proc::Up { pid: 1, procs: procs.clone() }));
+        tab.up = Some(up.clone());
         Ok(Kernel {
             procs,
             up,
@@ -1101,6 +1102,13 @@ impl Kernel {
     }
 
     fn syscall_(&mut self, up: Pid, call: Call, pc: &dyn Fn() -> u64, trapped: bool) -> Result<Ret, String> {
+        // **A new call has nothing to go back to.** What a call leaves in
+        // `labels` is for its own `resume`; one left now belonged to a call
+        // that will never be resumed — an `exec`, whose answer was kept for
+        // a delayed `sched` while the machine started the new image — and
+        // the new image's first call that slept was answered with it.
+        self.labels.remove(&up);
+        self.tab.endcall(up);
         // *"m->syscall++; up->insyscall = 1;"* and *"up->scallnr =
         // scallnr"* (`pc/trap.c:673`–`:680`).
         let traced = {
@@ -1189,7 +1197,22 @@ impl Kernel {
                 call = Call::Exits { status: "invalid exit string".into() };
             }
         }
-        self.dispatch(up, call)
+        // **A call the mount driver left asleep runs again** when it is
+        // woken — `mountio`'s sleep, on a stack this kernel does not keep
+        // (`devmnt.c:811`; [`namec::Record`]). A call that kept the rest of
+        // itself already (a read of a pipe) is not touched.
+        self.rerun(up, call)
+    }
+
+    /// The call, and if the mount driver leaves it asleep, the same call
+    /// again when the process is entered again — as often as it sleeps.
+    fn rerun(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
+        let again = call.clone();
+        let r = self.dispatch(up, call);
+        if self.procs.borrow().get(up).is_some_and(|p| p.setlabel) && !self.labels.contains_key(&up) {
+            self.setlabel(up, Box::new(move |k, up| k.rerun(up, again)));
+        }
+        r
     }
 
     /// **The process is entered again in the middle of a call it left** —
@@ -1198,6 +1221,7 @@ impl Kernel {
     pub fn resume(&mut self, up: Pid) -> Result<Ret, String> {
         self.up.borrow_mut().pid = up;
         let label = self.labels.remove(&up).ok_or("the process left no call to go back to")?;
+        self.tab.rewind(up);
         let r = label(self, up);
         self.syscall_tail(up, r)
     }
@@ -1229,6 +1253,8 @@ impl Kernel {
         if self.procs.borrow_mut().take_setlabel(up) {
             return Ok(Ret::Sched);
         }
+        // The call is over, and what it did on the wires is forgotten.
+        self.tab.endcall(up);
         // **A clock interrupt that fell due during the call.** This kernel
         // runs a call to its end with nothing able to interrupt it — the
         // machine's interrupt is only taken in guest code — which is Plan
@@ -1395,6 +1421,7 @@ impl Kernel {
         for mut c in last {
             self.tab.dclose(&mut c);
         }
+        self.tab.forget(pid);
         if !freemem {
             self.procs.borrow_mut().addbroken(pid);
         }
@@ -1432,9 +1459,12 @@ impl Kernel {
     /// yields, or exits.
     fn runkproc(&mut self, pid: Pid) -> machine::Left {
         if let Some(body) = self.labels.remove(&pid) {
+            self.tab.rewind(pid);
             let _ = body(self, pid);
         }
-        self.procs.borrow_mut().take_setlabel(pid);
+        if !self.procs.borrow_mut().take_setlabel(pid) {
+            self.tab.endcall(pid);
+        }
         match self.procs.borrow().state(pid) {
             proc::State::Moribund | proc::State::Dead => machine::Left::Exited,
             _ => machine::Left::Sched,
@@ -1801,10 +1831,12 @@ impl Kernel {
             // `#M` speaks 9P down it. Every other device presents files as
             // function calls; this is the one crossing.
             Call::Mount { fd, afd: _, old, flag, aname } => {
-                let wire = self.chan(up, fd)?;
+                let cell = self.chancell(up, fd)?;
+                let wire = cell.borrow().clone();
                 let on = self.walk(up, &old, namec::A::Todir, 0)?;
                 let user = self.procs.borrow().user(up).unwrap_or_default();
                 let to = self.tab.dmount(wire, &user, &aname)?;
+                self.tab.keepwire(cell);
                 let procs = self.procs.borrow();
                 let p = procs.get(up).ok_or("no such process")?;
                 p.ns.borrow_mut().mount(&on, element_of(to, flag, &aname), bind_of(flag));
@@ -2500,17 +2532,23 @@ impl Kernel {
 
     /// `namec` for the calling process: its namespace, its `slash`, its `dot`.
     fn walk(&mut self, up: Pid, path: &str, a: namec::A, mode: u16) -> Result<Chan, String> {
-        let procs = self.procs.borrow();
-                let p = procs.get(up).ok_or("no such process")?;
-        let (slash, dot, ns) = (p.slash.clone(), p.dot.clone(), p.ns.clone());
+        // The process table is let go before the walk: a walk through a
+        // server a process runs sleeps, and sleeping is the table's.
+        let (slash, dot, ns) = {
+            let procs = self.procs.borrow();
+            let p = procs.get(up).ok_or("no such process")?;
+            (p.slash.clone(), p.dot.clone(), p.ns.clone())
+        };
         let ns = ns.borrow();
         namec::namec(&mut self.tab, &ns, &slash, &dot, path, a, mode)
     }
 
     fn walk_create(&mut self, up: Pid, path: &str, mode: u16, perm: u32) -> Result<Chan, String> {
-        let procs = self.procs.borrow();
-                let p = procs.get(up).ok_or("no such process")?;
-        let (slash, dot, ns) = (p.slash.clone(), p.dot.clone(), p.ns.clone());
+        let (slash, dot, ns) = {
+            let procs = self.procs.borrow();
+            let p = procs.get(up).ok_or("no such process")?;
+            (p.slash.clone(), p.dot.clone(), p.ns.clone())
+        };
         let ns = ns.borrow();
         namec::create(&mut self.tab, &ns, &slash, &dot, path, mode, perm)
     }
@@ -3505,6 +3543,36 @@ mod syscalls {
             x if x == T::Clunk as u8 => W::new().frame(T::Clunk.reply(), m.tag),
             _ => W::new().s("not implemented").frame(T::Error.reply(), m.tag),
         }
+    }
+
+    /// **A posted channel is held by `/srv`, and an open of its name is a
+    /// reference, not a new open** — *"fdtochan(fd, -1, 0, 1); /* error
+    /// check and inc ref */"* (`devsrv.c:315`) and *"incref(sp->chan)"*
+    /// (`:135`). The poster closes its descriptor, as `plumber` does, and a
+    /// client opens the name and closes it, as `plumb` does: the pipe's other
+    /// end is still there to be written to, and not hung up.
+    #[test]
+    fn a_posted_pipe_outlives_its_poster_and_its_openers() {
+        let mut k = booted();
+        k.tab.add(Box::new(devsrv::SrvDev::new(k.up.clone())));
+        let Ret::Two(a, b) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
+        let Ret::Fd(post) = k
+            .syscall(1, Call::Create { path: "#s/p".into(), mode: 1, perm: 0o600 })
+            .unwrap()
+        else {
+            panic!()
+        };
+        k.syscall(1, Call::Pwrite { fd: post, data: b.to_string().into_bytes(), off: -1 }).unwrap();
+        k.syscall(1, Call::Close { fd: b }).unwrap();
+        let Ret::Fd(got) = k.syscall(1, Call::Open { path: "#s/p".into(), mode: 2 }).unwrap() else {
+            panic!()
+        };
+        k.syscall(1, Call::Close { fd: got }).unwrap();
+        assert_eq!(
+            k.syscall(1, Call::Pwrite { fd: a, data: b"still".to_vec(), off: -1 }),
+            Ok(Ret::N(5)),
+            "the end /srv holds was closed under it"
+        );
     }
 
     /// **P2's acceptance, whole.** A channel is posted at `/srv`; it is opened

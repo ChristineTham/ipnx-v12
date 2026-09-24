@@ -48,6 +48,24 @@ from eve — and one answer: **the default user is `kitty`** (Christine,
 `pc/main.c:285`); Plan 9's fallback, `"glenda"`, is kept for a
 configuration that names none.
 
+**Two differences in how the mount driver sleeps** — proposed 2026-09-24
+(RESEARCH §16.14). Built, and awaiting review, because each departs from
+Plan 9's mechanism though not from what a program sees:
+
+1. **A clunk waits for nobody.** `mntclunk` waits for `Rclunk`. Here the
+   `Tclunk` is sent and the reply left for whoever reads the wire next,
+   which drops it. The reason: this kernel has no stack per process, so a
+   call that sleeps runs again from the top, and a clunk is made where a
+   call cannot run again — a descriptor's last close, a process's exit.
+   The alternative is a continuation for each such close.
+2. **`Dev::incref`.** Plan 9 counts references on the `Chan`, and closes the
+   device at the last; a channel here is a value, and each copy is closed
+   on its own. `srvopen`'s *"incref(sp->chan)"* (`devsrv.c:135`) is
+   therefore a call telling the device serving the posted channel that
+   there is another reference — devpipe counts it in `qref`. `struct Dev`
+   has no such function; the alternative is reference-counted channels
+   throughout the kernel.
+
 ## Decided, and moved into the specs
 
 **P7 — a package, a service, a template, a project, a profile** — proposed

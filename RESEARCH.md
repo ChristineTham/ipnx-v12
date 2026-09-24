@@ -4850,3 +4850,44 @@ frames rather than finding them in the buffer.
 Measured: `tprimes -p` (`libthread/tprimes.c`, `proccreate` for each
 prime) prints the primes below 30 as ten processes sharing one memory, each
 on its own stack. The whole suite passes unchanged.
+
+### 16.14 A file server that is a process: the mount driver sleeps (2026-09-24)
+
+**Nothing a process served could be mounted.** `mount` over a pipe writes
+`Tversion` and reads the reply; a server that is a process has not answered
+yet, so the read sleeps — and this kernel's mount driver could not: its
+transport wrote and read synchronously, which only a server the machine
+answers at once (`#9`) satisfies. Plumber (`cmd/plumb`), ramfs, exportfs,
+rio and acme were all built and none could be mounted. Found by trying
+`plumber` once `RFMEM` let its procs run.
+
+**Plan 9 sleeps on the process's kernel stack**: `mountio` sends, takes the
+wire's reader's place if it is free (`m->rip`), reads until its own reply
+has come — `mountmux` handing each other reply to the RPC with its tag and
+waking its owner — and otherwise sleeps on its RPC's `Rendez` until another
+reader has handed it over or left (`devmnt.c:774`–`:960`, `mntgate`).
+This kernel has no stack per process (RESEARCH §14: the browser host
+cannot switch one); a call that sleeps leaves, and runs again from the top
+when woken, as `qread` does. So the kernel's transport (`namec.rs`, `Wire`)
+now does `mountio`'s and `mountmux`'s work over each wire, and **keeps what
+the call did** — the fids `++chanalloc.fid` gave it, the tags and replies
+of its RPCs — and gives it back in order when the call runs again, so the
+server sees one conversation. The record ends with the call. Two
+differences from Plan 9's mechanism are in `docs/proposals.md` for review:
+a clunk does not wait for its reply, and `Dev::incref`.
+
+**What finding it turned up, each against Plan 9's source:**
+
+| | Plan 9 | was here |
+|---|---|---|
+| a short read | *"if(nr != nreq …) break"* (`devmnt.c:733`) — a short reply ends the read | read on until an empty reply: a plumb port's second `Tread` waited for the next message |
+| the mounted wire | `incref(m->c)` (`devmnt.c:355`): the mount holds it | a copy: `plumber` closing its descriptor (`fsys.c:221`) hung the server up |
+| a posted channel | *"fdtochan(fd, -1, 0, 1); /* … inc ref */"* (`devsrv.c:315`), *"incref(sp->chan)"* (`:135`) | a copy; an opener's close hung the pipe up |
+| a leftover continuation | none: a call's rest is on its stack | `exec`'s answer, kept for a delayed `sched` the new image never resumed, answered that image's first sleeping call |
+| `walk`'s process table | not held | held across `namec`, so a walk that slept could not reach the scheduler |
+
+Measured: `plumber -p /dev/null` mounts at `/mnt/plumb`; a rule written to
+`rules` is read back; a port appears; `plumb -d edit -s me hello` delivers
+`me edit / text 5 hello` to a reader of `/mnt/plumb/edit`, five runs in five.
+Its procs share one memory (§16.13) and its clients are separate processes
+reading one wire, so the gate and the mux are both exercised.

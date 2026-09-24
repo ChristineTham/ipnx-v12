@@ -458,6 +458,28 @@ mod userspace {
         assert!(out.contains("r \t echo forked"), "{out:?}");
     }
 
+    /// **A file server that is a process, mounted and used by others** —
+    /// `plumber` (`cmd/plumb`): libthread procs sharing one memory serve 9P
+    /// down a pipe, `mount` sleeps in the mount driver for the replies
+    /// (`devmnt.c:811`), one process at a time reads the wire and each
+    /// reply goes to the RPC with its tag (`mountmux`). A rule is written, a
+    /// port is read, and `plumb` delivers a message to it.
+    #[test]
+    fn plumber_serves_and_plumb_delivers() {
+        let out = typing(
+            "plumber -p /dev/null\n\
+             {echo 'type is text'; echo 'data matches hello'; echo 'plumb to edit'} >/mnt/plumb/rules\n\
+             ls /mnt/plumb\n\
+             cat /mnt/plumb/edit >/tmp/plumbed &\n\
+             sleep 1\n\
+             plumb -d edit -s me hello\n\
+             sleep 1\n\
+             cat /tmp/plumbed\n",
+        );
+        assert!(out.contains("/mnt/plumb/edit\n/mnt/plumb/rules\n/mnt/plumb/send\n"), "{out:?}");
+        assert!(out.contains("me\nedit\n/\ntext\n\n5\nhello"), "{out:?}");
+    }
+
     /// **An rc script runs by name** (`sysproc.c:340`): its `#!` line names
     /// the interpreter, which is given the script's name and the caller's
     /// arguments — so rc's `$0` is the script and `$*` what it was called

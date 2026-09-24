@@ -285,7 +285,13 @@ stood in for `fork` until then, is gone, and rc and init are Plan 9's own
 fork-based code. **`RFMEM` shares the memory** (RESEARCH §16.13): every
 image imports a shared memory the machine makes, and a sharing process's
 stack region — the one segment `RFMEM` does not share — is kept by the
-machine and put in place when that process runs. A failed call answers −1 and leaves its reason for
+machine and put in place when that process runs. **A file server that is a process can be
+mounted** (RESEARCH §16.14): the mount driver sleeps for its replies, one
+process at a time reads a wire and hands each reply to the RPC with its tag
+(`mountio`, `mountmux`), and a call that slept runs again with what it had
+already done on the wires given back to it. `plumber` serves `/mnt/plumb`
+and `plumb` delivers through it. Not yet: `Tflush` for an RPC a note
+interrupts (`mntflushalloc`). A failed call answers −1 and leaves its reason for
 `errstr`, which is Plan 9's convention rather than an error type crossing the
 boundary.
 

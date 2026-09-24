@@ -33,7 +33,20 @@ pub const VERSION: &str = "9P2000";
 /// holds no device table and there is no cycle.
 pub trait Transport {
     fn rpc(&mut self, request: &[u8]) -> Result<Vec<u8>, String>;
+    /// `++chanalloc.fid`, which the transport sees so that a call run again
+    /// after a sleep is given the fids it was given the first time
+    /// ([`crate::namec::Devtab`]'s record). `next` is the counter's next.
+    fn fid(&mut self, next: u32) -> u32 {
+        next
+    }
 }
+
+/// **The process is asleep waiting for a server's reply** — `mountio`'s
+/// *"sleep(&r->r, rpcattn, r)"* (`devmnt.c:811`). Not an error: a call that
+/// meets it leaves the processor, and runs again when the reply has come,
+/// with the RPCs it already made answered from the record rather than sent
+/// again. Nothing reports it to a process.
+pub const SLEPT: &str = "asleep for a reply";
 
 /// One mounted server — Plan 9's `Mnt`.
 ///
@@ -165,13 +178,17 @@ impl Mnt {
             let body = self.rpc(t, T::Read, W::new().u32(fid).u64(off).u32(want as u32))?;
             let mut r = R::new(&body);
             let count = r.u32().ok_or("short Rread")? as usize;
-            let data = &r.rest()[..count.min(r.rest().len())];
-            if data.is_empty() {
-                break;
-            }
+            let data = &r.rest()[..count.min(r.rest().len()).min(want)];
             out.extend_from_slice(data);
             off += data.len() as u64;
             left -= data.len();
+            // *"if(nr != nreq || n == 0 || up->nnote) break"*
+            // (`devmnt.c:733`): **a short reply ends the read.** A server
+            // answers a read with what it has — a plumb port with one
+            // message — and asking again waits for the next.
+            if data.len() != want {
+                break;
+            }
         }
         Ok(out)
     }
@@ -185,12 +202,13 @@ impl Mnt {
         while done < data.len() {
             let chunk = &data[done..(done + cap).min(data.len())];
             let body = self.rpc(t, T::Write, W::new().u32(fid).u64(off).u32(chunk.len() as u32).raw(chunk))?;
-            let count = R::new(&body).u32().ok_or("short Rwrite")? as usize;
-            if count == 0 {
-                break;
-            }
+            let count = (R::new(&body).u32().ok_or("short Rwrite")? as usize).min(chunk.len());
             done += count;
             off += count as u64;
+            // `devmnt.c:733`, as for a read
+            if count != chunk.len() {
+                break;
+            }
         }
         Ok(done)
     }
@@ -250,9 +268,10 @@ impl MntDev {
     }
 
     /// `++chanalloc.fid`.
-    fn newfid(&mut self) -> u32 {
-        self.fid += 1;
-        self.fid
+    fn newfid(&mut self, t: &mut dyn Transport) -> u32 {
+        let f = t.fid(self.fid + 1);
+        self.fid = self.fid.max(f);
+        f
     }
 
     /// `mntattach` (`devmnt.c:303`). The channel handed in **is the wire**.
@@ -273,7 +292,7 @@ impl MntDev {
         };
         let joined = wire.mux;
         wire.mux = Some(self.mounts.len() as u32);
-        let fid = self.newfid();
+        let fid = self.newfid(t);
         let (m, mut c) = Mnt::attach(wire, msize, t, uname, aname, fid)?;
         self.mounts.push(m);
         c.devno = (self.mounts.len() - 1) as u32;
@@ -302,7 +321,7 @@ impl MntDev {
         c: &Chan,
         name: &str,
     ) -> Result<Option<Chan>, String> {
-        let newfid = self.newfid();
+        let newfid = self.newfid(t);
         let m = self.mnt(c)?;
         let (fid, qids) = m.walk(t, c.fid, newfid, &[name])?;
         if qids.is_empty() {
@@ -320,7 +339,7 @@ impl MntDev {
     /// name for this same file"* (`cclone`, `chan.c:842`:
     /// `devtab[c->type]->walk(c, nil, nil, 0)`).
     pub fn cclone(&mut self, t: &mut dyn Transport, c: &Chan) -> Result<Chan, String> {
-        let newfid = self.newfid();
+        let newfid = self.newfid(t);
         let m = self.mnt(c)?;
         let (fid, _) = m.walk(t, c.fid, newfid, &[])?;
         let mut nc = c.clone();
@@ -452,6 +471,7 @@ mod tests {
         /// How many times each was asked for, so joining a session is visible.
         versions: usize,
         attaches: usize,
+        reads: usize,
     }
 
     impl Server {
@@ -459,7 +479,7 @@ mod tests {
             let mut files = HashMap::new();
             files.insert("hello".into(), b"from a server".to_vec());
             files.insert("big".into(), vec![b'x'; 5000]);
-            Server { files, fids: HashMap::new(), msize, handed: 0, versions: 0, attaches: 0 }
+            Server { files, fids: HashMap::new(), msize, handed: 0, versions: 0, attaches: 0, reads: 0 }
         }
 
         fn reply(&mut self, req: &[u8]) -> Vec<u8> {
@@ -521,6 +541,7 @@ mod tests {
                     W::new().raw(&q.write(W::new()).into_body()).u32(0).frame(T::Open.reply(), tag)
                 }
                 x if x == T::Read as u8 => {
+                    self.reads += 1;
                     let fid = r.u32().unwrap();
                     let off = r.u64().unwrap() as usize;
                     let count = r.u32().unwrap() as usize;
@@ -619,6 +640,19 @@ mod tests {
         let got = d.read(&mut t, &mut c, 5000, 0).unwrap();
         assert_eq!(got.len(), 5000, "the loop must keep going past one message");
         assert!(got.iter().all(|b| *b == b'x'));
+    }
+
+    /// **A short reply ends the read** — *"if(nr != nreq …) break"*
+    /// (`devmnt.c:733`). Asking again after one would wait on a server
+    /// that answers a read with what it has, as a plumb port does, until
+    /// its next message.
+    #[test]
+    fn a_short_reply_ends_the_read() {
+        let (mut d, mut t, root, s) = mounted(MAXRPC);
+        let c = d.walk(&mut t, &root, "hello").unwrap().unwrap();
+        let mut c = d.open(&mut t, c, 0).unwrap();
+        assert_eq!(d.read(&mut t, &mut c, 64, 0).unwrap(), b"from a server");
+        assert_eq!(s.borrow().reads, 1, "one Tread, answered short, and no second");
     }
 
     /// A failed walk must clunk the fid it asked for. A server keeps every
