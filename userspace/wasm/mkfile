@@ -1,0 +1,10 @@
+# The wasm architecture's mkfile — what `/386/mkfile` is for the 386: the
+# common parameters, then this machine's compiler, loader and object letter.
+# `userspace/mkfile.py` reads it where a Plan 9 mkfile says `</$objtype/mkfile`.
+</sys/src/mkfile.proto
+
+CC=clang
+LD=wasm-ld
+O=o
+AS=none
+AFLAGS=

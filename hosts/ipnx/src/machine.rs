@@ -10,7 +10,7 @@
 //!   * **the calls.** Plan 9's arch half turns a trap into a `Call`; this one
 //!     turns an import into one. The import list here is the counterpart of
 //!     `libc/9syscall/mkfile`'s generated assembly, and the guest's half of
-//!     it is `userspace/libc/wasm/sys.c`.
+//!     it is `userspace/sys/src/libc/wasm/sys.c`.
 //!   * **the arguments.** `sysexec` copies argv onto the new process's stack
 //!     and `touser` jumps with SP pointing at it. A module has no stack to
 //!     copy onto, so the block is written into the module's own memory and
@@ -591,7 +591,7 @@ impl Wasm {
         // **The interrupt line** — see [`Clock`].
         config.epoch_interruption(true);
         // **`setjmp` and `longjmp`** are wasm exceptions on this machine
-        // (`userspace/libc/wasm/setjmp.c`): Plan 9's are two instructions
+        // (`userspace/sys/src/libc/wasm/setjmp.c`): Plan 9's are two instructions
         // each on the 386 (`libc/386/setjmp.s`), saving and restoring a
         // stack pointer this machine does not let a program see.
         config.wasm_exceptions(true);
@@ -1082,6 +1082,31 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         Ok::<_, wasmtime::Error>(r)
     }))?;
 
+    // `fd2path` (`sysfile.c:173`): the kernel answers the name, and it is
+    // written into the caller's buffer as `snprint` would, cut to fit.
+    l.func_wrap_async("sys", "fd2path", |mut c: Caller<'_, Guest>, (fd, p, n): (i32, i32, i32)| Box::new(async move {
+        c.data_mut().s = [fd.word(), p.word(), n.word(), 0, 0];
+        let r = async {
+        let path = match kcall(&mut c, Call::Fd2path { fd }).await {
+            Ok(Ret::Str(s)) => s,
+            _ => return -1,
+        };
+        if n <= 0 {
+            return 0;
+        }
+        let mut b = path.into_bytes();
+        b.truncate(n as usize - 1);
+        b.push(0);
+        match write(&mut c, p, &b) {
+            Ok(()) => 0,
+            Err(_) => -1,
+        }
+    }
+        .await;
+        deliver(&mut c).await?;
+        Ok::<_, wasmtime::Error>(r)
+    }))?;
+
     l.func_wrap_async("sys", "fversion", |mut c: Caller<'_, Guest>, (fd, m, v, n): (i32, i32, i32, i32)| Box::new(async move {
         c.data_mut().s = [fd.word(), m.word(), v.word(), n.word(), 0];
         let r = async {
@@ -1421,7 +1446,7 @@ mod tests {
     #[test]
     fn every_stub_in_sys_c_matches_its_import() {
         use wasmtime::ValType;
-        let src = include_str!("../../../userspace/libc/wasm/sys.c");
+        let src = include_str!("../../../userspace/sys/src/libc/wasm/sys.c");
         let w = Wasm::new().unwrap();
         let mut store = Store::new(&w.engine, Guest { pid: 0, module: None, s: [0; MAXSYSARG] });
         let ty = |t: &str| if t.trim() == "vlong" { "i64" } else { "i32" };

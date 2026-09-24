@@ -111,6 +111,9 @@ pub enum Call {
     Wstat { path: String, edir: Vec<u8> },
     Fwstat { fd: Fd, edir: Vec<u8> },
     Fversion { fd: Fd, msize: u32, version: String },
+    /// `fd2path(2)` — the name the channel was reached by (`sysfd2path`,
+    /// `sysfile.c:173`).
+    Fd2path { fd: Fd },
     /// `errstr(2)` EXCHANGES: what the caller's buffer holds becomes the
     /// process's error string, and the old one is answered (`generrstr`,
     /// `sysproc.c:748`). That is what makes `werrstr` a library function and
@@ -818,6 +821,7 @@ pub mod sysno {
     pub const SEMACQUIRE: u32 = 37;
     pub const SEMRELEASE: u32 = 38;
     pub const SEEK: u32 = 39;
+    pub const FD2PATH: u32 = 23;
     pub const FVERSION: u32 = 40;
     pub const ERRSTR: u32 = 41;
     pub const STAT: u32 = 42;
@@ -865,6 +869,7 @@ fn scallnr(c: &Call) -> u32 {
         Call::Wstat { .. } => WSTAT,
         Call::Fwstat { .. } => FWSTAT,
         Call::Fversion { .. } => FVERSION,
+        Call::Fd2path { .. } => FD2PATH,
         Call::Errstr { .. } => ERRSTR,
     }
 }
@@ -954,6 +959,7 @@ fn sysctab(c: &Call) -> &'static str {
         Call::Fwstat { .. } => "Fwstat",
         Call::Errstr { .. } => "Errstr",
         Call::Fversion { .. } => "Fversion",
+        Call::Fd2path { .. } => "Fd2path",
     }
 }
 
@@ -1806,6 +1812,13 @@ impl Kernel {
                 Ok(Ret::Ok)
             }
             Call::Fversion { .. } => Err("fversion is mntversion's, done at mount".into()),
+            // `sysfd2path` (`sysfile.c:173`): *"snprint((char*)arg[1],
+            // arg[2], "%s", chanpath(c))"* — the machine writes it into the
+            // caller's buffer, as it does `errstr`'s.
+            Call::Fd2path { fd } => {
+                let c = self.chan(up, fd)?;
+                Ok(Ret::Str(c.path.clone()))
+            }
 
             // `syssleep` (`sysproc.c`), and both of its branches are here:
             //
@@ -2089,6 +2102,8 @@ impl Kernel {
                 }
             }
             Call::Await => self.validaddr(up, a(0), a(1), pc),
+            // *"validaddr(arg[1], arg[2], 1)"* (`sysfile.c:177`)
+            Call::Fd2path { .. } => self.validaddr(up, a(1), a(2), pc),
             Call::Errstr { .. } => {
                 if a(1) == 0 {
                     return Err(proc::Procs::EBADARG.into());
@@ -2244,6 +2259,7 @@ impl Kernel {
                 f.push_str(&format!("{:#x} {}", a(1), a(2)));
             }
             Call::Errstr { .. } | Call::Await => f.push_str(&format!("{:#x} {}", a(0), a(1))),
+            Call::Fd2path { .. } => f.push_str(&format!("{} {:#x} {}", d(0), a(1), a(2))),
             Call::Mount { .. } => {
                 f.push_str(&format!("{} {} ", d(0), d(1)));
                 self.fmtuserstring(up, &mut f, a(2), " ", pc)?;

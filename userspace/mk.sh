@@ -25,6 +25,8 @@ AR=$WASI_SDK/bin/ar
 
 here=$(cd "$(dirname "$0")" && pwd)
 build=$here/build
+# Plan 9's tree, vendored: `sys/include` and `sys/src` as they are there
+sys=$here/sys
 # The ROOTFS — what the machine serves over 9P, and what `/` becomes once
 # boot has mounted it. `#/boot` is a different thing and holds one file.
 root=$here/root
@@ -34,7 +36,7 @@ root=$here/root
 CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-extensions -std=gnu89 -O2
 	-mbulk-memory -mnontrapping-fptoint -msign-ext
 	-mexception-handling -mllvm -wasm-enable-sjlj -mllvm -wasm-use-legacy-eh=false
-	-I$here/include -I$here/libc/fmt
+	-I$here/wasm/include -I$sys/include -I$sys/src/libc/fmt
 	-Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-missing-braces
 	-Wno-unused-value -Wno-unused-but-set-variable -Wno-incompatible-pointer-types
 	-Wno-dangling-else -Wno-empty-body -Wno-implicit-int-float-conversion -Wno-unused-variable -Wno-unused-parameter -Wno-unused-label -Wno-implicit-int -Wno-implicit-function-declaration -Wno-incompatible-library-redeclaration -Wno-builtin-requires-header"
@@ -66,13 +68,20 @@ cc() {	# cc <src> <obj>
 }
 
 # ---- libc -----------------------------------------------------------------
+# Plan 9's own arrangement (`libc/mkfile`): the portable directories `port`,
+# `9sys` and `fmt`, and the machine's own — here `wasm` — which supplies what
+# the architecture must (`setjmp`, `tas`, the atomics, the call stubs) and
+# replaces a portable file of the same name, as `reduce` does for 386's.
+# Nothing of Plan 9's is left out.
 libc() {
-	local objs=() src obj
+	local objs=() src obj name
 	mkdir -p "$build/libc"
-	for src in "$here"/libc/wasm/*.c "$here"/libc/fmt/*.c \
-	           "$here"/libc/port/*.c "$here"/libc/9sys/*.c; do
-		case "$(basename "$(dirname "$src")")/$(basename "$src")" in
-		$LIBCSKIP) continue;;
+	for src in "$sys"/src/libc/wasm/*.c "$sys"/src/libc/fmt/*.c \
+	           "$sys"/src/libc/port/*.c "$sys"/src/libc/9sys/*.c; do
+		name=$(basename "$src")
+		case "$src" in
+		*/wasm/*) ;;
+		*) [ -e "$sys/src/libc/wasm/$name" ] && continue;;
 		esac
 		obj=$build/libc/$(basename "$(dirname "$src")")-$(basename "$src" .c).o
 		if [ ! -f "$obj" ] || [ "$src" -nt "$obj" ]; then
@@ -84,75 +93,31 @@ libc() {
 	$AR rcs "$build/libc.a" "${objs[@]}"
 }
 
-# Portable sources that do not belong to this machine: they reach for calls
-# this kernel does not have (segments, notes, semaphores, the network) or for
-# tables no command here needs.
-LIBCSKIP='@(port|9sys)/@(atnotify|hangup|lock|profile|netcrypt|crypt|truerand|ntruerand|notify|postnote|announce|dial|pushssl|pushtls|getnetconninfo|setnetmtpt|syslog|qlock|privalloc|sbrk|read9pmsg|procsetname|fork|execl|readv|writev|byteserial|encodefmt|netmkaddr|mktemp).c'
-shopt -s extglob
-
-# ---- the other libraries --------------------------------------------------
-# Plan 9 keeps these apart and so does this: `libbio.a` is buffered i/o,
-# `libauth.a` is `newns` — which is all of libauth that is left once there is
-# no factotum to talk to — and `libregexp.a` is Plan 9's regular expressions,
-# vendored whole, for `sed`, `ed` and the rest.
-lib() {	# lib <name> <dir>
-	local name=$1 dir=$2 objs=() src obj
-	mkdir -p "$build/$name"
-	for src in "$here/$dir"/*.c; do
-		obj=$build/$name/$(basename "$src" .c).o
-		if [ ! -f "$obj" ] || [ "$src" -nt "$obj" ]; then
-			cc "$src" "$obj"
-		fi
-		objs+=("$obj")
-	done
-	rm -f "$build/$name.a"
-	$AR rcs "$build/$name.a" "${objs[@]}"
-}
-
-# ---- a command ------------------------------------------------------------
+# ---- the other libraries, and the commands --------------------------------
+# From Plan 9's own mkfiles, every one: `mkfile.py` reads what each declares
+# and builds it with this machine's compiler and loader. The objects and
+# libraries are build/'s; a program lands where its mkfile's BIN says, under
+# the system package, and `init` at /$objtype/init, as `cmd/mkfile:116` puts
+# it. What does not build goes into build/failed with its reason.
 link() {	# link <into> <obj>...
 	local into=$1; shift
-	$LD $LDFLAGS -o "$into" "$@" \
-		"$build/libauth.a" "$build/libregexp.a" "$build/libbio.a" "$build/libc.a"
-}
-
-cmd() {	# cmd <name> [<into>]
-	local name=$1 obj=$build/$1.o
-	cc "$here/cmd/$name.c" "$obj"
-	link "${2:-$pkg/$OBJTYPE/bin/$name}" "$obj"
-}
-
-# A command that does not build is recorded and the build goes on — `mk -k`
-# — so one missing piece does not hide every other. What is recorded is the
-# work that is left, with the reason, in build/failed.
-failed=$build/failed
-: >"$failed"
-try() {	# try <name>
-	local log=$build/$1.log
-	if ! cmd "$1" >"$log" 2>&1; then
-		echo "$1: $(grep -m1 -oE "fatal error: '[^']*'|undefined symbol: [A-Za-z0-9_]+" "$log" | sort -u | tr '\n' ' ')" >>"$failed"
-	fi
+	$LD $LDFLAGS -o "$into" "$@" "$build"/lib/*.a "$build/libc.a"
 }
 
 libc
-lib libbio libbio
-lib libauth libauth
-lib libregexp libregexp
+failed=$build/failed
+: >"$failed"
+export CC LD AR CFLAGS LDFLAGS build pkg root OBJTYPE
+python3 "$here/mkfile.py" libs libc
+python3 "$here/mkfile.py" cmds
 
-for c in "$here"/cmd/*.c; do
-	[ -e "$c" ] || continue
-	name=$(basename "$c" .c)
-	case $name in
-	# `boot` is the one file `#/boot` carries, as Plan 9's kernel carries
-	# `/boot/boot` and nothing else. Everything else is the file server's.
-	boot)	cmd boot "$build/boot/boot";;
-	# and `init` sits beside the bin directory, not in it, because boot
-	# execs it by a name that must resolve before `/bin` exists
-	# (`execinit`, `boot.c:205`: `"/%s/init"` with `$cputype`).
-	init)	cmd init "$root/$OBJTYPE/init";;
-	*)	try "$name";;
-	esac
-done
+# `boot` is the one file `#/boot` carries, as Plan 9's kernel carries
+# `/boot/boot` and nothing else; this machine's, not Plan 9's (`boot/`).
+$CC $CFLAGS -c "$here/cmd/boot.c" -o "$build/boot.o"
+link "$build/boot/boot" "$build/boot.o"
+# `args`, a test's: what a program is given
+$CC $CFLAGS -c "$here/cmd/args.c" -o "$build/args.o"
+link "$pkg/$OBJTYPE/bin/args" "$build/args.o"
 
 # ---- the rest of the rootfs -----------------------------------------------
 cp -f "$here"/profile/* "$root/profile/"
@@ -163,25 +128,29 @@ cp -f "$here/pkg/system/pkg.cfg" "$pkg/pkg.cfg"
 echo "pkg=system version=$VERSION" >"$root/profile/pkg"
 
 # ---- rc -------------------------------------------------------------------
-# rc is Plan 9's, taken entire. `ipnx.c` is its platform file — Plan 9 ships
-# three of those and the mkfile picks one — and `haventfork.c` is Plan 9's own
-# answer for a system that cannot fork, which this machine cannot.
-if [ -f "$here/rc/rc.h" ]; then
-	mkdir -p "$build/rc"
-	(cd "$build/rc" && bison -y -d "$here/rc/syn.y" >/dev/null 2>&1)
-	cp -f "$build/rc/y.tab.h" "$build/rc/x.tab.h"
-	objs=()
-	for src in "$here"/rc/*.c "$build/rc/y.tab.c"; do
-		obj=$build/rc/$(basename "$src" .c).o
-		$CC $CFLAGS -I"$here/rc" -I"$build/rc" -c "$src" -o "$obj"
-		objs+=("$obj")
-	done
-	cp -f "$here/rc/rcmain" "$pkg/lib/rcmain"
-	# rc.h's tentative definitions are common symbols everywhere but here;
-	# weaken.py explains the whole of it.
-	python3 "$here/weaken.py" "$WASI_SDK/bin/llvm-nm" "${objs[@]}"
-	link "$pkg/$OBJTYPE/bin/rc" "${objs[@]}"
-fi
+# rc is Plan 9's, built from its own mkfile's COMMONOFILES and y.tab, with two
+# substitutions both of which Plan 9 provides for: `haventfork.c` for
+# `havefork.c`, its own file for a system that cannot fork, which this
+# machine cannot; and `ipnx.c` for `plan9.c`, the platform file — Plan 9
+# ships three (`plan9.c`, `unix.c`, `win32.c`) and the mkfile picks one.
+rcdir=$sys/src/cmd/rc
+rcfiles=$(sed -n '/^COMMONOFILES=/,/^$/p' "$rcdir/mkfile" | grep -o '[a-z]*\.\$O' | sed 's/\.\$O$//; s/^havefork$/haventfork/')
+mkdir -p "$build/rc"
+(cd "$build/rc" && bison -y -d "$rcdir/syn.y" >/dev/null 2>&1)
+cp -f "$build/rc/y.tab.h" "$build/rc/x.tab.h"
+objs=()
+for f in $rcfiles ipnx; do
+	obj=$build/rc/$f.o
+	$CC $CFLAGS -I"$rcdir" -I"$build/rc" -c "$rcdir/$f.c" -o "$obj"
+	objs+=("$obj")
+done
+$CC $CFLAGS -I"$rcdir" -I"$build/rc" -c "$build/rc/y.tab.c" -o "$build/rc/y.tab.o"
+objs+=("$build/rc/y.tab.o")
+cp -f "$rcdir/rcmain" "$pkg/lib/rcmain"
+# rc.h's tentative definitions are common symbols everywhere but here;
+# weaken.py explains the whole of it.
+python3 "$here/weaken.py" "$WASI_SDK/bin/llvm-nm" "${objs[@]}"
+link "$pkg/$OBJTYPE/bin/rc" "${objs[@]}"
 
 echo "mk.sh: #/boot: $(ls "$build/boot" | tr '\n' ' ')"
 echo "mk.sh: /pkg/system/$VERSION/$OBJTYPE/bin: $(ls "$pkg/$OBJTYPE/bin" | wc -l) programs"

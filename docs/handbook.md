@@ -7,7 +7,7 @@ after. The *plan* is [implementation.md](implementation.md).
 
 A Rust toolchain; **wasi-sdk** at `~/.local/opt/wasi-sdk` (override with
 `WASI_SDK`), for its wasm backend and nothing else — no wasi is linked, and a
-built binary imports exactly the calls in `userspace/libc/wasm/sys.c`;
+built binary imports exactly the calls in `userspace/sys/src/libc/wasm/sys.c`;
 **bison**, for rc's grammar; and **Python 3**, for `userspace/weaken.py`.
 
 And the two Plan 9 trees, which are gitignored and never built or edited:
@@ -26,7 +26,7 @@ difference between 9legacy and the final Labs release can be *attributed*.
 cannot build a wasm userspace:
 
 ```bash
-bash userspace/mk.sh     # libc, the commands, rc  ->  userspace/root/wasm/bin
+bash userspace/mk.sh     # libc, the commands, rc  ->  userspace/root/pkg/system/<version>/wasm/bin
 cargo test               # the kernel, the host, and the conformance suite
 cargo run -p ipnx -- rc /bin/<script>.rc
 cargo run -p ipnx -- echo hello   # boot; init runs it with rc -c, then the shell

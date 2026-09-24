@@ -4667,3 +4667,48 @@ permission with the directory's (`usercreate`, `:1605`), and reads and writes
 with `pread`/`pwrite`. The store now does each. One consequence, as in
 `u9fs`: a directory's length is the host's (4096), where Plan 9's own file
 servers report 0.
+
+### 16.10 kencc's language, and building all of Plan 9 with clang (2026-09-24)
+
+Plan 9's C is kencc's, defined in *How to Use the Plan 9 C Compiler*
+(`plan9/sys/doc/comp.ms`): `const` and `volatile` *"are also ignored"*
+(:256); an unnamed member's members *"are addressable without prefix in the
+outer structure"*, it *"may be accessed by type name if (and only if)"*
+declared with a typedef name, and *"the address of a struct Node may be used
+without a cast anywhere that the address of a struct Lock is used … The
+compiler automatically promotes the type and adjusts the address"* (:1111
+on); designators may omit the `=` (:1206). clang has only the flattening
+(`-fms-extensions`), and takes the promotion as an incompatible-pointer
+diagnostic — **passing the unadjusted address, right only when the member
+comes first**. `mk.sh` had silenced that diagnostic.
+
+Measured over the whole tree with `-Dconst=`, before the derivation: 1,547
+errors — 145 *"no member named 'T'"* (a member reached by type name:
+`Mouse` 18, `Store` 15, `Frame` 12 …), 130 *"duplicate member"* (an outer
+member, or an earlier unnamed one, has the same name: `9p.h`'s `File` has
+its own `readers` and an unnamed `RWLock` with another), 232 *"redefinition
+of parameter"* (prototypes naming two parameters alike, `aquarela`), and 136
+promotions in files that did compile (most to `Lock*` or `QLock*` from an
+unnamed-struct global).
+
+`userspace/kencc.py` derives each file into `build/kencc/`: an unnamed
+member `T;` becomes `union { T; T T; };` — clang then finds `x->f` through
+the anonymous half and `x->T` through the named one — unless a name in T is
+already found (the outer structure's own members first, then earlier unnamed
+members in order), in which case it is only named, `T T;`, and a use of its
+members is written through it. The promotions are found from clang's own
+diagnostics, which carry both types and the expression's exact range (the
+range end is one past), and written `(&(E)->T)`, or through the chain of
+unnamed members to it. The rest are clang's reports too: a redefined
+parameter renamed, `.fd 0` given its `=`, a block-scope `static` dropped,
+and a prototype that disagrees with its definition (an enum parameter
+declared `int`, `stringbgop`) written as the definition.
+
+What building everything turned up in the build itself: a comment inside a
+continued assignment (`libmach/mkfile`'s `#\t0\`) ends at the physical line
+and the list continues; `mksyslib` adds members (`ar vu`), and libsec, libmp
+and libc are each built from `port` then the machine's directory into one
+library; `reduce` is an rc script, `rc ./reduce $O $objtype $ALLOFILES`, and
+without rc the list came back empty; the compilers take `pgen.c` from
+`../cc` by metarule and link `../cc/cc.a$O`, which `cmd/mkfile` builds first
+(`for(i in cc $DIRS)`). Result: 34 of 36 libraries and 246 programs.

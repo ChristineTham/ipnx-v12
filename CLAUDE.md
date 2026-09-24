@@ -301,13 +301,20 @@ dependencies) and `hosts/ipnx/` (the machine — wasmtime — and the boot; the
 workspace root is `Cargo.toml`). The other hosts named in
 `docs/implementation.md` are not built yet.
 
-The guest world lives at `userspace/`: `include/` (the wasm32 architecture
-header, and the vendored Plan 9 headers), `libc/wasm/` (the machine-dependent
-half — this architecture's `9syscall`), `libc/{port,fmt,9sys}/` and `rc/`
-(vendored verbatim, except rc's own platform file `ipnx.c`), `cmd/`, and
-`mk.sh` with `weaken.py`. `userspace/build/` and `userspace/root/` are
-generated. Work is sequenced by `docs/implementation.md`; what is built is
-`docs/when.md`. The target is **functional equivalence to the demo**.
+The guest world lives at `userspace/`, and **mirrors Plan 9's tree**:
+`sys/include` and `sys/src` (every library, every command, `ape` and `games`,
+vendored whole from `plan9/` and committed, 2026-09-24), each architecture's
+`include` (`386/include`, … — libmach and the debuggers read them all), and
+this machine's own beside them: `wasm/include/u.h`, `wasm/mkfile`, and
+`sys/src/libc/wasm/` (the machine-dependent half of libc, as `libc/386` is
+386's). Where a vendored file had to change, the change is in place and
+listed in `docs/when.md`. `cmd/` holds the two programs that are not Plan
+9's — `boot` and a test's `args`. The build is `mk.sh`, which runs
+`mkfile.py` (Plan 9's own mkfiles, read and built) over `kencc.py` (Plan 9's
+C, derived into what clang compiles with the same meaning); `weaken.py`
+beside them. `userspace/build/` and `userspace/root/` are generated. Work is
+sequenced by `docs/implementation.md`; what is built is `docs/when.md`. The
+target is **functional equivalence to the demo**.
 
 ## Conventions
 

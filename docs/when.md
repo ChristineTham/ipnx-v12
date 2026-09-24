@@ -301,16 +301,22 @@ until 2026-09-23 because clang promotes `uchar` to `int` and kencc to
 
 ## The userspace — `userspace/`
 
+**Plan 9's tree, vendored whole** (2026-09-24): `sys/include`, `sys/src` —
+all 36 libraries, all of `cmd`, `ape`, `games` — and every architecture's
+`include`, 80 MB, committed as they are in `plan9/`. Built from Plan 9's own
+mkfiles.
+
 | | |
 |---|---|
-| `include/u.h` | the **wasm32 architecture header**. Plan 9 keeps one per architecture; this is 386's, with clang's `va_list`, because wasm passes arguments in the engine's value stack and only the compiler knows where a variadic one is |
-| `libc/wasm/` | the machine-dependent half. Plan 9 generates it from `9syscall/sys.h`; this machine's trap instruction is an import (`sys.c`), its `brk_` is `memory.grow` (`sbrk.c`), its `main9.s` is called with the argument block's address (`main9.c`), `procrfork.c` is how a process makes a process, and **`setjmp.c`** is `setjmp`/`longjmp` as wasm exceptions, where 386's are `setjmp.s` (2026-09-24; RESEARCH §16.9) |
-| `libc/{port,fmt,9sys}/` | vendored verbatim from `plan9/sys/src/libc/`, but for one cast in `nsec.c` — kencc's `uchar` promotes to unsigned int, clang's to int (RESEARCH §15.6) |
-| `libbio/`, `libauth/`, `libregexp/` | vendored: buffered i/o; `newns` and `addns` — which is all of libauth that is left once there is no factotum to talk to; and **`libregexp` whole** (2026-09-24) |
-| `rc/` | Plan 9's rc, with `ipnx.c` as its platform file — it ships three of those and the mkfile picks one — and `haventfork.c`, Plan 9's own file for a system that cannot fork. `rcmain` beside it, installed at `/lib/rcmain` (Plan 9's is `/rc/lib/rcmain`), and running `/profile/shell.rc` then `$home/profile/shell.rc` in every shell |
-| `cmd/` | **Plan 9's single-file commands, vendored verbatim** — 55 of `plan9/sys/src/cmd/*.c`'s 128 build as they are (2026-09-24), `sed`, `ed`, `ls`, `cat`, `echo` and `tr` among them; the cut-down `cat`, `echo`, `ls` and `tr` are gone. Not verbatim: `boot` and `init`, this system's, `args`, a test's, and `mount`, whose `amount0` is `fauth` plus `auth_proxy` there and `mount(fd, -1, …)` here until factotum exists. **`ed` does not build yet** (`notejmp`), and the other 73 are the rest of step 2: `userspace/build/failed` lists what `mk.sh` could not build and why |
-| `profile/`, `usr/kitty/profile/`, `etc/motd`, `pkg/system/pkg.cfg` | the system's configuration — `start.ns`, and `start`, `shell` and `stop` each as a `.env` and a `.rc` — and kitty's, the same seven, bound at `/home` (P7 step 1, 2026-09-24; docs/packages.md); something to read; and the **`system` package**'s description. Everything the build makes goes into `/pkg/system/2026.09.24/` — `wasm/bin` and `lib/rcmain` — bound onto `/bin` and `/lib` by `/profile/start.ns` and listed in `/profile/pkg`. `/rc` and `/wasm/bin` are gone |
-| `mk.sh` | the build. `weaken.py` beside it restores common-symbol semantics for rc.h's tentative definitions, which the wasm backend has none of. A command that does not build is recorded in `build/failed` with its reason and the build goes on, as `mk -k` does |
+| `mk.sh` | the build: libc, then `mkfile.py libs` and `mkfile.py cmds`, then `boot`, `args` and rc. What does not build is written to `build/failed` with its reason, and the build goes on, as `mk -k` does |
+| `mkfile.py` | reads each mkfile as mk does — continuation, comments per physical line, `<` includes, `${VAR:a%b=c%d}`, backquotes (rc's `reduce` done natively), `DIRS` below first, `cc` first in `cmd` — and builds what it declares: `mksyslib`/`mklib` libraries (members added, `ar vu`), `mkone`, `mkmany`, the one-file programs of `cmd/mkfile`, explicit `$O.x:` links and `%.$O: ../cc/%.c` metarules; `init` to `/$objtype/init` (`cmd/mkfile:116`) |
+| `kencc.py` | **Plan 9's C as clang compiles it**, a derivation into `build/kencc/` (RESEARCH §16.10): `-Dconst=`; every unnamed member written `union { T; T T; }` — or only named where kencc's lookup would find another member first; the conversions kencc promotes, written `&(E)->T` from clang's own diagnostics; absolute includes; old designators; block-scope `static`; prototypes that disagree with their definitions |
+| `wasm/include/u.h`, `wasm/mkfile` | the **wasm32 architecture**: 386's `u.h` with clang's `va_list`, a four-long `jmp_buf`, and 386's FP constants |
+| `sys/src/libc/wasm/` | the machine-dependent half of libc, what `libc/386` is for the 386: the call stubs (`sys.c`, which also makes a `notejmp` jump on the way back), `_start` (`main9.c`), `sbrk`, `procrfork`, `setjmp` (wasm exceptions), `tas` and the atomics, `execl`, `notejmp`, `cycles` (0: no counter), the FP control words, and the profiling pair. **libc is all of `port`, `9sys` and `fmt`**, less what this directory replaces — nothing of Plan 9's left out (the cut-down `lock.c` and `mem.c` are gone) |
+| **built** | **34 of the 36 libraries**, and **246 programs** in `/pkg/system/2026.09.24/wasm/bin` |
+| **not built** | `libthread` (its `wasm.c`: threads are coroutines on stacks of their own, and procs share memory — neither of which this machine has yet) and `libdynld` (`dynld-wasm.c`); `libsec` (three sources `mpc` generates at build time); and so about 280 programs, most for want of those three. `build/failed` is the list |
+| changed from Plan 9 | `sys/include/libc.h` (`procrfork`), `libc/9sys/nsec.c` (one cast), `libauth/newns.c` (`/profile/start.ns`), rc's `code.c`, `exec.c`, `haventfork.c` (fixes to Plan 9's own no-fork file) and `rcmain`, `cmd/init.c` (the profiles), and `ipnx.c`, rc's platform file |
+| `profile/`, `usr/kitty/profile/`, `etc/motd`, `pkg/system/pkg.cfg` | the system's configuration and kitty's (P7 step 1; docs/packages.md), and the `system` package's description |
 
 **The system boots itself.** `cargo run -p ipnx` is `initcode.c:21` and nothing
 more — three opens of `#c/cons`, four binds, and `exec("/boot/boot")`.

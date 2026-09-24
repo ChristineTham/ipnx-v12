@@ -420,3 +420,4 @@ On building P7, and on names:
   <br>— cited in `CLAUDE.md`
 - *"Why are you not building all commands. You need to build all the libraries as well. a missing library is not an excuse"*
   <br>— cited in `CLAUDE.md`
+- *"I hit my usage limit while you were working, but it has reset now. Please continue from where you left off."*
