@@ -45,12 +45,49 @@ The open questions, in order:
 **Nothing here is built.** The mechanism is: `#ec` attaches, binds under `#e`,
 and takes writes from eve.
 
+**P7's names — what the symmetry leaves open** — proposed 2026-09-24,
+after *"rc files must always end in extension .rc"*, the `.env` and `.cfg`
+files, and `ndb` for every `.cfg` ([packages.md](packages.md), *Files are
+named by what they are*; [projects.md](projects.md)).
+
+1. **What is in a `.env`, and who reads it?** *Proposed:* `ndb`, for the
+   consistency asked for — one tuple, `name=value` pairs — read by whatever
+   starts the `.rc` of the same name, which sets each pair in `/env` first.
+   rc cannot `.` it: `ndb` quotes with `"`, rc with `'`. The alternative is
+   rc assignments, which rc reads with `.` and no new code, at the price of
+   a second format. A service's settings would be its `start.env` — what
+   Debian's `/etc/default/redis-server` is (RESEARCH §16.1).
+2. **Does `/profile/namespace` take an extension?** It is neither rc nor
+   `ndb`: `newns`'s own language (`plan9/sys/src/libauth/newns.c`). Plan 9
+   gives it none. *Proposed:* none.
+3. **Do commands written in rc end in `.rc`?** The old `/rc/bin`'s 118 —
+   `9fs`, `Kill` — are called by name, and Plan 9 names them without one.
+   *Proposed:* the rule covers scripts run by role and by kind; a command is
+   named by what is typed.
+4. **Is rc's `/lib/rcmain` renamed?** It is rc's own machinery, found by the
+   name compiled into rc. *Proposed:* unchanged.
+5. **Do the installed lists move into `profile.cfg`?** `/profile/pkg`,
+   `/profile/service`, `/profile/template` are lists of names; `ndb` would
+   hold them as `pkg=hello version=1.0` tuples in one file. *Proposed:* yes —
+   one configuration file per thing, as the symmetry has everywhere else.
+6. **Where is a project's lock?** The earlier design made the project file
+   *"a manifest and a lock"*; `project.cfg` is now the manifest.
+   *Proposed:* the lock is tuples in `project.cfg` itself, written by `pkg`
+   and not by hand — as `ndb/cs` reads, and `ndb/mkhash` writes beside, the
+   same database.
+7. **Where does a promotion put what it makes?** *Proposed:* the user's own
+   — `/home/pkg/<name>/<version>/`, `/home/service/<name>/`,
+   `/home/template/<name>/`, `/home/profile` — and into the system's with
+   `su`, as any install is.
+
 ## Decided, and moved into the specs
 
 **P7 — a package, a service, a template, a project, a profile** — proposed
 and answered piece by piece on 2026-09-24, and endorsed the same day
 (*"yet that's look very symmetrical, let's build"*). It is now
-[packages.md](packages.md).
+[packages.md](packages.md) and, since the same day, [projects.md](projects.md);
+the names were made symmetric — `start.rc`, `start.env`, `pkg.cfg` — and
+every `.cfg` made `ndb`.
 
 **The scheduler** — proposed and decided 2026-09-21, and it is now
 [implementation.md](implementation.md)'s **P6**, before the registries,

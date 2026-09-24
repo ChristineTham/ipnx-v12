@@ -1,0 +1,7 @@
+#!/bin/rc
+# /profile/shell.rc — run by every new shell (docs/packages.md), before the
+# user's /home/profile/shell.rc. What every shell of every user should have
+# goes here: it is the configuration Plan 9 keeps in rc's own rcmain
+# (`plan9/rc/lib/rcmain`), whose defaults remain there only for a shell that
+# finds no profile.
+prompt=('% ' '	')

@@ -4528,3 +4528,36 @@ authenticated connection to the server that supplies them.
 **The kernel already has what these need**: `#¤`, with `caphash` and
 `capuse` (`kernel/src/devcap.rs`). `login`, `as` and `none` are userspace
 programs over it.
+
+### 16.5 Configuration, packaging and fids — what building P7's first step measured (2026-09-24)
+
+**Plan 9's one configuration format is `ndb(6)`**, and it is the format every
+`.cfg` takes (Christine: *"if plan 9 has ndb let's use that consistently"*):
+
+> *"The files comprise multi-line tuples made up of attribute/value pairs of
+> the form attr=value or sometimes just attr. Each line starting without
+> white space starts a new tuple. Lines starting with # are comments."*
+> — `plan9/sys/man/6/ndb`
+
+A value with spaces is double-quoted (`libndb/ndbaux.c:41`). `libndb` is
+1,787 lines over `libbio` (`plan9/sys/src/libndb`, 22 files); from rc,
+`ndb/query -f file attr value rattr` answers one value
+(`plan9/sys/src/cmd/ndb/query.c`, 114 lines). **Plan 9 has no YAML** — no
+file under `plan9/sys/src` mentions it.
+
+**Plan 9's nearest thing to promoting a directory into a package is a proto
+file and `disk/mkfs`**: a proto names which files of a tree go into a
+distribution (`plan9/sys/lib/sysconfig/proto/`, eight of them), and `mkfs`
+*"copies files from the file tree"*, under `-a` writing *"an archive file to
+standard output"* (`plan9/sys/man/8/mkfs`).
+
+**A fid is unique across the whole kernel, not per mount.** Plan 9
+allocates it with the channel — *"c->fid = ++chanalloc.fid"* (`chan.c:250`)
+— and sends the channel's own as the 9P fid (`devmnt.c:344`, `:425`). The
+mount driver here counted per `Mnt`, from 1. Two mounts of one wire — `boot`'s
+`#s/boot` and `newns`'s `mount -aC #s/boot /root` — share one 9P session and
+so one fid space, and each handed out fids 1, 2, 3…: a clunk through one took
+the other's file. It surfaced as `/home`, the first bind `newns` makes of a
+directory under the server, answering *"unknown fid"*; `/$objtype/bin` had
+been lucky. The counter is now the driver's (`kernel/src/devmnt.rs`), and
+`two_mounts_of_one_wire_never_share_a_fid` fails without it.

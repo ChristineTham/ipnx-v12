@@ -43,7 +43,7 @@ fatal(char *s)
 /*
  * `srvcreate` (`boot/aux.c:125`) — post the root channel at `#s/boot`, so
  * anything that wants its own namespace can mount the root again without
- * knowing where it came from. That is what `/lib/namespace`'s first line
+ * knowing where it came from. That is what `/profile/namespace`'s first line
  * does: `mount -aC #s/boot /root`.
  */
 static void
@@ -105,7 +105,7 @@ authentication(void)
  * `argv[0]`. With none, it is Plan 9's default, `"/%s/init -%s%s"`: `$cputype`,
  * `t` for a terminal or `c` for a cpu server (`#e/service`, `:256`), and `m`
  * for `boot -m`, which nothing passes here. NOT `/bin/init`, because `/bin` is
- * a union `/lib/namespace` makes and nothing has read that file yet.
+ * a union `/profile/namespace` makes and nothing has read that file yet.
  */
 static void
 execinit(void)
@@ -153,7 +153,7 @@ main(int argc, char *argv[])
 	 *
 	 * That last line is what makes **the root a file server**: after it,
 	 * `/` answers from `#/` first and from the server after, so `/etc`,
-	 * `/rc` and `/lib` are the server's while `/boot` stays the kernel's.
+	 * `/profile` and `/lib` are the server's while `/boot` stays the kernel's.
 	 */
 	if(bind("/", "/", MREPL) < 0)
 		fatal("bind /");

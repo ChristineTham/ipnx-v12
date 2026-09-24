@@ -207,9 +207,10 @@ main(int argc, char *argv[])
 	 * So haventfork.c as shipped cannot work with this exec.c — every
 	 * stage it starts dies on the usage message, silently, because its
 	 * output is the pipe. It is a file kept for a port that was not this
-	 * edition. The flag is accepted here and read by nobody, which is
-	 * exactly what it was on whatever rc that port had: `flag` is 256
-	 * entries and an accepted letter that nothing reads costs nothing.
+	 * edition. The flag is accepted here, and `rcmain` reads it (`flag
+	 * S`) to tell a fork from a new shell: only a new shell runs the
+	 * profiles' `shell.rc` (docs/packages.md), as a forked Plan 9 rc never
+	 * runs its startup again.
 	 */
 	case 'd': case 'e': case 'i': case 'l':
 	case 'p': case 'r': case 's': case 'v':

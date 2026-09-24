@@ -1,12 +1,13 @@
 #!/bin/rc
-# terminal startup — `plan9/rc/bin/termrc`, cut to what this system has.
+# /profile/start.rc — run once, when the system boots (docs/packages.md). It
+# was /rc/bin/termrc: `plan9/rc/bin/termrc`, cut to what this system has.
 #
 # Plan 9's binds the devices it did not bind at boot, reads the partition
 # tables, starts swap, cs, dns and timesync, and sources /cfg/$sysname/termrc.
 # None of those exist here yet. What is left is what termrc is FOR: the
 # devices a terminal wants, bound by the system rather than by the embedding.
 
-# bind all likely devices (`termrc:14`). `/lib/namespace` has already bound
+# bind all likely devices (`termrc:14`). `/profile/namespace` has already bound
 # the ones a namespace must have; these are the ones a TERMINAL wants to see
 # under /dev, which is what Plan 9's loop is for.
 for(i in p d)

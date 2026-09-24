@@ -1,4 +1,4 @@
-# Packages, services, templates, projects and profiles
+# Packages, services, templates and profiles
 
 **Role: a *what* — the design of P7.** Endorsed by Christine on 2026-09-24
 (*"yet that's look very symmetrical, let's build"*), after a day of
@@ -14,7 +14,37 @@ What each IS is hers, quoted (`verbatim.md`). **How** each works is taken
 from Plan 9 and from existing package managers, as she asked — the research
 is RESEARCH §16, measured on apt/dpkg, Cargo and `plan9/`, and every answer
 below cites it. What is left open at the end is what the research cannot
-decide.
+decide. **A project has its own document, [projects.md](projects.md)** —
+the working folder any of the others is made from.
+
+## Files are named by what they are
+
+*"maybe we need to be very symmetrics. so rc files must always end in
+extension .rc"* (Christine, 2026-09-24). Every file a package, service,
+template, profile or project carries says what it is by its extension:
+
+| extension | what it is | read by |
+|---|---|---|
+| **`.rc`** | an rc script, named by its role — `start.rc`, `shell.rc`, `stop.rc`, `install.rc`, `remove.rc` — or by the kind it makes a project into (projects.md) | rc |
+| **`.env`** | environment variables for the script of the same name — `/profile/start.env` for `/profile/start.rc` | the script's starter, before the script |
+| **`.cfg`** | the configuration — `pkg.cfg`, `service.cfg`, `template.cfg`, `profile.cfg`, `project.cfg`: *"name of template, version, date other properties"* | `libndb`; `ndb/query` from rc |
+
+**A `.cfg` is written in `ndb(6)`** (*"if plan 9 has ndb let's use that
+consistently"*) — Plan 9's one configuration format: *"multi-line tuples
+made up of attribute/value pairs of the form attr=value … Each line
+starting without white space starts a new tuple. Lines starting with # are
+comments"* (`plan9/sys/man/6/ndb`); a value with spaces is double-quoted
+(`libndb/ndbaux.c:41`). A program reads one with `libndb` (1,787 lines,
+`plan9/sys/src/libndb`, on `libbio`); a script with `ndb/query -f pkg.cfg
+pkg hello version` (`plan9/sys/src/cmd/ndb/query.c`, 114 lines). For
+example, a package's:
+
+```
+# pkg.cfg
+pkg=hello version=1.0 date=2026-09-24
+	description="says hello"
+	depend=libbio
+```
 
 ## A package
 
@@ -28,8 +58,9 @@ library"*; installed *"to the system… to the namespace… or to the user"*.
    repository is named by the file server that holds it, mounted like any
    other — a host directory, or a network server once `/net` exists. Nothing
    downloads: `pkg` reads the repository's files over 9P.
-2. **Its description** — apt's fields (§16.1): name, version, description,
-   dependencies with version bounds, the packages it breaks; and the file.
+2. **Its description is `pkg.cfg`** — apt's fields (§16.1): name,
+   version, description, dependencies with version bounds, the packages it
+   breaks; and the file.
    The repository's **index** lists every package so, with **the file's
    SHA-256**, as apt's `Packages` does.
 3. **Verification is Plan 9's** — decided 2026-09-24 (*"plan 9 way"*;
@@ -44,7 +75,7 @@ library"*; installed *"to the system… to the namespace… or to the user"*.
    SHA-256, as apt's and Cargo's are (§16.1, §16.2); 9legacy's is SHA-1.
 4. **Its files appear by `bind`** — lines in a namespace file, as
    `/lib/namespace` is written, which `newns` reads.
-5. **Its scripts** — `installrc` and `removerc` (below, *the scripts*);
+5. **Its scripts** — `install.rc` and `remove.rc` (below, *the scripts*);
    dpkg has four (§16.1): before and after install, before and after
    removal. Configuration it writes is listed as such and **left
    on removal, taken only on purge**, as `conffiles` are.
@@ -72,12 +103,12 @@ opened, terminates when project is closed."* *"services installs daemons."*
    `redis-tools` the programs; `postgresql-common` holds PostgreSQL's start
    script, `postgresql-16` its programs. A service names the packages it
    needs and they are installed into the same scope.
-2. **A service is one rc script** that starts its server and posts it in
-   `/srv` — what `cpurc` does for `ndb/cs` (§16.3) and what an init script
+2. **A service is `start.rc`**, which starts its server and posts it in
+   `/srv`, **and `stop.rc`**, described by `service.cfg` — what `cpurc` does for `ndb/cs` (§16.3) and what an init script
    does for `redis-server` (§16.1).
 3. **Its settings are a separate file the script reads** — Debian's
    `/etc/default/redis-server`, sourced at start (§16.1) — kept on removal
-   as configuration.
+   as configuration. *Proposed:* that file is its `start.env`.
 4. **It runs in a namespace of its own, as its own user** — Plan 9's
    `listen` runs a service as `none` in a namespace made from a namespace
    file (`/lib/namespace.httpd`, §16.3); Debian runs `redis` as user
@@ -103,7 +134,7 @@ opened, terminates when project is closed."* *"services installs daemons."*
 scaffolding"*; it *"instantiates new versions of files (scaffolding), not
 just binds of files shared across namespaces"*.
 
-A directory under `/template/<name>`: the scaffolding (`package.json`,
+A directory under `/template/<name>`, described by `template.cfg`: the scaffolding (`package.json`,
 `.gitignore`, editor settings, sample code) and the packages and services
 the project needs. **Instantiating copies the scaffolding** into a new
 project and writes the lists into its project file — the project's from
@@ -112,25 +143,8 @@ another with `.`.
 
 ## A project
 
-*"a template install packages into the current project, so is persistent.
-opening a project ensures all packages are available."* *"a project is a
-type that is instantiated when user opens project file in a new emca window.
-Projects live in /project/x but the binding is user/process speccific."*
-
-1. **A project is a window type** ([type.md](type.md)): opening its project
-   file opens a new emca window whose namespace has the project's packages
-   bound and its services started; closing the window hangs them up.
-2. **The project file is a manifest and a lock** — Cargo's `Cargo.toml` and
-   `Cargo.lock` (§16.2): the packages and services it wants, and the exact
-   versions and SHA-256 of what was installed.
-3. **`/project/<x>` is a binding, per user or process**: the files live
-   under their owner's `/usr/<name>` as everything a Plan 9 user owns does,
-   and each user binds the projects they have at `/project/<x>`. Two users
-   binding different directories there have two projects; binding the same
-   one, they share it.
-4. **Each opening runs its own services**, in its window's note group — the
-   only arrangement in which closing a window stops exactly what it
-   started.
+In its own document, [projects.md](projects.md): the working folder a
+template, a package, a service or a profile is made from, and a window type.
 
 ## A profile
 
@@ -142,7 +156,10 @@ template, but… once it is instantiated it belongs to the user"*, and the
 user *"can save current namespace config as a template"*.
 
 **`/profile` is the system's configuration** — Unix's `/etc` — and
-**`/home/profile` the user's**, `/home` being `/usr/<username>`.
+**`/home/profile` the user's**, `/home` being `/usr/<username>`. A user's
+profile *"is just really a template, but may contain other things as
+well"*, described by `profile.cfg`, and made from a project as a template
+is (projects.md).
 
 | | `/profile` | `/home/profile` |
 |---|---|---|
@@ -179,31 +196,33 @@ system and user"*):
 
 | script | the system's — `/profile/…` | the user's — `/home/profile/…` | a service's — `/service/<name>/…` | Plan 9's |
 |---|---|---|---|---|
-| **`startrc`** | *"executes when system boots"* | at login | when its scope starts | `termrc`, `cpurc`, `/cfg/$sysname/*`; `$home/lib/profile`; a `cpurc` line (§16.3) |
-| **`shellrc`** | *"executes with every new shell"* | with every new shell of the user's | — | `rcmain`'s settings — prompt, `$path` (`plan9/rc/lib/rcmain`) |
-| **`stoprc`** | *"execute when system shuts down"* | at logout | when its scope ends | none: Plan 9 ends a window's processes with *"hangup"* (`rio/wind.c:1111`) |
+| **`start.rc`** | *"executes when system boots"* | at login | when its scope starts | `termrc`, `cpurc`, `/cfg/$sysname/*`; `$home/lib/profile`; a `cpurc` line (§16.3) |
+| **`shell.rc`** | *"executes with every new shell"* | with every new shell of the user's | — | `rcmain`'s settings — prompt, `$path` (`plan9/rc/lib/rcmain`) |
+| **`stop.rc`** | *"execute when system shuts down"* | at logout | when its scope ends | none: Plan 9 ends a window's processes with *"hangup"* (`rio/wind.c:1111`) |
 
-**`shellrc` is `rcmain`'s configuration, taken out of it.** Plan 9's rc runs
+**`shell.rc` is `rcmain`'s configuration, taken out of it.** Plan 9's rc runs
 `rcmain` in every shell (`plan9/rc/lib/rcmain`); part of it is settings —
 the default prompt and `$path` — and part is rc's own machinery, choosing
 whether to read `-c`, a file or the terminal. The machinery stays rc's code,
-in rc's package; it runs `/profile/shellrc` and then
-`/home/profile/shellrc`, so the user's settings come last.
+in rc's package; it runs `/profile/shell.rc` and then
+`/home/profile/shell.rc`, so the user's settings come last. A fork is not a
+new shell: a subshell or a pipeline stage inherits what `shell.rc` set, as
+a forked Plan 9 rc never runs its startup again.
 
-**Packages and templates have `installrc` and `removerc`** (*"Packages and
+**Packages and templates have `install.rc` and `remove.rc`** (*"Packages and
 templates have configrc instead"*, then *"or maybe installrc and
 removerc"*) — they are not started or stopped, they are installed and
 removed:
 
 | script | a package's — `/pkg/<name>/<version>/…` | a template's — `/template/<name>/…` | dpkg's (§16.1) |
 |---|---|---|---|
-| **`installrc`** | at install, in the scope installed to | when a project is instantiated from it, in the new project | `postinst configure` |
-| **`removerc`** | at removal — undoing what `installrc` set up, leaving configuration unless purged | when the template is removed from `/template` | `prerm`, `postrm` |
+| **`install.rc`** | at install, in the scope installed to | when a project is instantiated from it, in the new project | `postinst configure` |
+| **`remove.rc`** | at removal — undoing what `install.rc` set up, leaving configuration unless purged | when the template is removed from `/template` | `prerm`, `postrm` |
 
 These replace `pkgrc` and, a message later, `configrc`.
 
 **emca is a service** (*"emca is a service"*): its scripts are
-`/service/emca/startrc` and `/service/emca/stoprc`, and `emcarc` is not
+`/service/emca/start.rc` and `/service/emca/stop.rc`, and `emcarc` is not
 needed. Plan 9 starts its window system from the user's profile — a new
 user's is written to end in *"exec rio"* (`sys/lib/newuser:32`) — which is
 the user scope: emca starting at login and ending at logout.

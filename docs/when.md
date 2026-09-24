@@ -16,7 +16,7 @@ Measured 2026-09-20.
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed. Each end is a `Queue` of blocks (`qio.c`): a read of an empty pipe **sleeps** on `q->rr` until a write wakes it, and the last close of an end hangs up the other (`pipeclose`, `devpipe.c:247`), which is end of file once what was queued is read |
 | `devproc.rs` | `#p` — the process table as files: **nine of `procdir[]`'s eighteen** (`devproc.c:79`), and the table says why each of the other nine is absent. `ns` prints the bind lines that rebuild the namespace — paths, `int2flag`'s letters, and `mount <flag> <server> <on> <spec>` with `srvname` |
 | `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user |
-| `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, clunk. Reached through the table's dispatcher, which takes it out while it runs |
+| `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, clunk. Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
 | `devsrv.rs` | `#s` — post a file descriptor's NUMBER, and an open of the name answers with the channel behind it |
 | `devvirtio9p.rs` | `#9` — a channel to a 9P server the MACHINE provides. It marshals nothing: `#M` writes a T-message down it and reads the R-message back, as it would down a TCP connection |
@@ -307,9 +307,9 @@ until 2026-09-23 because clang promotes `uchar` to `int` and kencc to
 | `libc/wasm/` | the machine-dependent half. Plan 9 generates it from `9syscall/sys.h`; this machine's trap instruction is an import (`sys.c`), its `brk_` is `memory.grow` (`sbrk.c`), its `main9.s` is called with the argument block's address (`main9.c`), and `procrfork.c` is how a process makes a process |
 | `libc/{port,fmt,9sys}/` | vendored verbatim from `plan9/sys/src/libc/`, but for one cast in `nsec.c` — kencc's `uchar` promotes to unsigned int, clang's to int (RESEARCH §15.6) |
 | `libbio/`, `libauth/` | vendored: buffered i/o, and `newns` — which is all of libauth that is left once there is no factotum to talk to |
-| `rc/` | Plan 9's rc, with `ipnx.c` as its platform file — it ships three of those and the mkfile picks one — and `haventfork.c`, Plan 9's own file for a system that cannot fork. `termrc` and `rcmain` beside it |
-| `cmd/` | `boot` and `init`; `bind`, `cat`, `echo`, `ls`, `mkdir`, `rm`, `unmount`, a cut-down `tr` and `args`; and **`cp`, `date`, `mount`, `mv`, `ps`, `sleep`, `wc`** — vendored verbatim from `plan9/sys/src/cmd/` except `mount`, whose `amount0` is `fauth` plus `auth_proxy` there and `mount(fd, -1, …)` here, for the reason `newns.c` already carries. **Seventeen, against the demo's "twenty-four real Plan 9 commands"**, and that list of twenty-four is written down nowhere. `pwd` is not among them: `getwd` is `fd2path`, one of the nine calls this kernel omits |
-| `lib/namespace`, `etc/motd` | the instance's configuration, and something to read |
+| `rc/` | Plan 9's rc, with `ipnx.c` as its platform file — it ships three of those and the mkfile picks one — and `haventfork.c`, Plan 9's own file for a system that cannot fork. `rcmain` beside it, installed at `/lib/rcmain` (Plan 9's is `/rc/lib/rcmain`), and running `/profile/shell.rc` then `$home/profile/shell.rc` in every shell |
+| `cmd/` | `boot` and `init`; `bind`, `cat`, `echo`, `ls`, `mkdir`, `rm`, `unmount`, a cut-down `tr` and `args`; and **`cp`, `date`, `mount`, `mv`, `ps`, `sleep`, `test`, `wc`** — vendored verbatim from `plan9/sys/src/cmd/` except `mount`, whose `amount0` is `fauth` plus `auth_proxy` there and `mount(fd, -1, …)` here, for the reason `newns.c` already carries. **Eighteen, against the demo's "twenty-four real Plan 9 commands"**, and that list of twenty-four is written down nowhere. `pwd` is not among them: `getwd` is `fd2path`, one of the nine calls this kernel omits |
+| `profile/`, `usr/glenda/profile/`, `etc/motd` | the system's configuration — `namespace`, `start.rc`, `shell.rc`, `stop.rc` — and glenda's, bound at `/home` (P7 step 1, 2026-09-24; docs/packages.md); and something to read. `/rc` is retired |
 | `mk.sh` | the build. `weaken.py` beside it restores common-symbol semantics for rc.h's tentative definitions, which the wasm backend has none of |
 
 **The system boots itself.** `cargo run -p ipnx` is `initcode.c:21` and nothing
@@ -319,9 +319,9 @@ Everything after that line is the system's own:
 | | |
 |---|---|
 | `boot` | mounts `#9/0` at `/root` and binds it onto `/`, so **the root is a file server** (`boot.c:151`) |
-| `init` | reads `#c/user`, calls `newns` — and starts `rc` (`init.c:23`) |
-| `/lib/namespace` | what the namespace IS: every mount and bind, as a file (`newns`, `libauth/newns.c:35`) |
-| `/rc/bin/termrc` | what a terminal wants on top of it (`rc/bin/termrc`) |
+| `init` | reads `#c/user`, calls `newns` — and starts `rc` (`init.c:23`), whose first job is `/profile/start.rc` then `/home/profile/start.rc`; when the last shell ends, `/home/profile/stop.rc` then `/profile/stop.rc` |
+| `/profile/namespace` | what the namespace IS: every mount and bind, as a file (`newns`, `libauth/newns.c:35`; Plan 9's `/lib/namespace`) |
+| `/profile/start.rc` | what a terminal wants on top of it (Plan 9's `rc/bin/termrc`) |
 
 rc works out that it is interactive by asking what fd 0 is:
 
@@ -343,10 +343,7 @@ exactly as `boot.c:171` does. `ls /` shows both halves because `unionread`
 reads every element. A file written under `/tmp` is a file on the host, so it
 is still there after the next boot.
 
-Thirty-two tests in `hosts/ipnx` — twenty-two typing at a scripted console
-after a full boot, three booting twice into a filesystem of their own, five
-driving a guest module directly, and two on the machine: that `Guest` is
-`Send` with no `unsafe impl`, and that a thread nobody entered has no kernel. They need
+Forty-six tests in `hosts/ipnx` (counted 2026-09-24: forty-one in the binary — most typing at a scripted console after a full boot, some booting into a filesystem of their own — and five in the library), and 219 in `kernel/`. They need
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
 and say so rather than passing quietly.
 
@@ -372,7 +369,9 @@ fixtures, because a behaviour is reached when a person can do it.
 
 **P5 is done — the CLI.** Typing `ipnx` boots to `rc` on the terminal; `ls`,
 `cat /etc/motd` and the demo's commands run. The boot is the system's own:
-`boot`, `init`, `/lib/namespace` and `/rc/bin/termrc`, with the embedding
+`boot`, `init`, `/profile/namespace` and `/profile/start.rc`, with the embedding
 reduced to `initcode.c`'s nine lines.
 
-**P6 is the scheduler** — added 2026-09-21, before the registries, because the browser host is a worker per process and that IS P6's machine boundary. P7 is the registries; P8 is emca and the browser.
+**P6 is the scheduler** — added 2026-09-21, before the registries, because the browser host is a worker per process and that IS P6's machine boundary. P7 is packages, services, templates, projects and profiles; P8 is emca and the browser.
+
+**P7 is begun** (2026-09-24). Step 1, the profiles, is built: `/profile` and `/home/profile` with `start.rc`, `shell.rc` and `stop.rc`, run in the order docs/packages.md gives, `/home` bound to `/usr/$user`, and `/rc` gone. Not built: the `.env` files (their format is open, docs/proposals.md), every `.cfg` and the `libndb` that reads them, `/pkg`, `pkg`, services, templates, projects and identity — steps 2 to 6.

@@ -1,0 +1,4 @@
+#!/bin/rc
+# /home/profile/stop.rc — glenda's, run when she logs out, before the
+# system's /profile/stop.rc (docs/packages.md). Hers to change. Plan 9 has
+# no counterpart: it has no logout.

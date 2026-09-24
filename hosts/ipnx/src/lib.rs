@@ -245,8 +245,8 @@ pub const LETTERS: [DevId; 10] = [
 /// ```
 ///
 /// **Nothing else.** Everything the system needs beyond this is the system's
-/// own business now: `boot` mounts the root, `/lib/namespace` says what the
-/// namespace is, and `/rc/bin/termrc` binds the rest. This list used to carry
+/// own business now: `boot` mounts the root, `/profile/namespace` says what the
+/// namespace is, and `/profile/start.rc` binds the rest. This list used to carry
 /// three more, and each of them is now a line in one of those files.
 ///
 /// `#ec` is the configuration environment (`devenv.c:16`), bound under `#e`
@@ -438,7 +438,7 @@ pub fn startboot(
     //
     // `ksetenv` is `namec("#e/<name>", Acreate, OWRITE, 0600)` and a write
     // (`devenv.c:386`). These three are the whole of what a Plan 9 kernel
-    // puts in the environment, and `$objtype` — which `/lib/namespace` uses
+    // puts in the environment, and `$objtype` — which `/profile/namespace` uses
     // to find the binaries — is init's copy of `cputype`.
     for (name, val) in [
         ("terminal", format!("{OBJTYPE} {CONFFILE}")),

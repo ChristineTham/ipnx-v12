@@ -1,6 +1,6 @@
-# The namespace this instance is configured to have.
-#
-# `plan9/lib/namespace`, read by `newns()` (`libauth/newns.c:35`) which init
+# /profile/namespace — the system's namespace bindings, part of its
+# configuration (docs/packages.md, "A profile"). It was /lib/namespace, as
+# Plan 9 keeps it: `plan9/lib/namespace`, read by `newns()` which init
 # calls. Every line is a bind, a mount, a cd or a `.` — and the file is the
 # reason a boot is configuration rather than code.
 #
@@ -21,6 +21,11 @@ bind #p /proc
 bind -c #s /srv
 bind -a #¤ /dev
 
-# standard bin (`plan9/lib/namespace`: `bind /$cputype/bin /bin`)
+# standard bin (`plan9/lib/namespace`: `bind /$cputype/bin /bin`). Plan 9's
+# next line, `bind -a /rc/bin /bin`, is gone with /rc: rc scripts are
+# programs, and programs come in packages.
 bind /$objtype/bin /bin
-bind -a /rc/bin /bin
+
+# the user's home: /home is /usr/$user (docs/packages.md), where the user's
+# profile is, at /home/profile
+bind -c /usr/$user /home

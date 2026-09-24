@@ -15,6 +15,16 @@ if not{
 	if(~ $#path 0) path=(. /bin)
 }
 fn sigexit
+# The shell's configuration is the profiles' (docs/packages.md): the
+# system's /profile/shell.rc and then the user's, run by every new shell —
+# what is above is only for a shell that finds neither. NOT by a fork:
+# haventfork.c starts each subshell and pipeline stage as `rc -S -c`, and a
+# forked Plan 9 rc never runs its startup again; what shell.rc set is in
+# /env already.
+if(! flag S){
+	if(/bin/test -r /profile/shell.rc) . /profile/shell.rc
+	if(/bin/test -r $home/profile/shell.rc) . $home/profile/shell.rc
+}
 if(! ~ $#cflag 0){
 	if(flag l && /bin/test -r $home/lib/profile) . $home/lib/profile
 	status=''

@@ -167,7 +167,8 @@ goes stale there — that is how four different test counts came to exist.
 | `docs/userland.md` | the userland's shape; the heritage exhibit's scope |
 | `docs/syscalls.md` | the derived call list — Plan 9's 40 live calls dispositioned |
 | `docs/identity.md` | the identity model — what a user *is* inside the system (not who it is *for*) |
-| `docs/packages.md` | P7's design — a package, a service, a template, a project, a profile, and where each lives |
+| `docs/packages.md` | P7's design — a package, a service, a template, a profile, and where each lives |
+| `docs/projects.md` | a project — the working folder a template, package, service or profile is made from; a window type |
 
 ### where — surfaces and targets
 

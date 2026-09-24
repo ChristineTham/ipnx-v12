@@ -86,10 +86,11 @@ setenv(char *name, char *val)
  *
  *	rc -c ". /rc/bin/termrc; home=/usr/$user; cd; . lib/profile"
  *
- * and its `manual` case is a bare `rc`. Both are here for the reason Plan 9
- * has both: the FIRST rc runs the startup and exits, and the one after it is
- * the shell you type at. There is no `$home` yet and no profile to read, so
- * what is left of the first line is the part that matters.
+ * — the system's startup, then the user's — and its `manual` case is a bare
+ * `rc`. Both are here for the reason Plan 9 has both: the FIRST rc runs the
+ * startup and exits, and the one after it is the shell you type at. The two
+ * startup scripts are the profiles' `start.rc`s (docs/packages.md), and
+ * `$home` is already set, by `newns`.
  */
 static void
 rcexec(void *v)
@@ -100,8 +101,39 @@ rcexec(void *v)
 	else if(manual)
 		exec("/bin/rc", (char*[]){ "rc", nil });
 	else
-		exec("/bin/rc", (char*[]){ "rc", "-c", ". /rc/bin/termrc", nil });
+		exec("/bin/rc", (char*[]){ "rc", "-c", ". /profile/start.rc; cd; . /home/profile/start.rc", nil });
 	print("init: can't exec /bin/rc: %r\n");
+}
+
+/*
+ * The end of the session: the user's `stop.rc`, at logout, and then the
+ * system's, at shutdown (docs/packages.md). Plan 9 has no counterpart — its
+ * terminal is switched off and its user never logs out.
+ */
+static void
+stopexec(void *v)
+{
+	USED(v);
+	exec("/bin/rc", (char*[]){ "rc", "-c", ". /home/profile/stop.rc; . /profile/stop.rc", nil });
+	print("init: can't exec /bin/rc: %r\n");
+}
+
+static void
+stop(void)
+{
+	Waitmsg *w;
+	int pid;
+
+	pid = procrfork(stopexec, nil, 0, RFFDG|RFREND|RFNOTEG);
+	if(pid < 0)
+		return;
+	while((w = wait()) != nil){
+		if(w->pid == pid){
+			free(w);
+			return;
+		}
+		free(w);
+	}
 }
 
 void
@@ -122,7 +154,7 @@ main(int argc, char *argv[])
 	cmd = *argv;
 
 	/* `init.c:56` — the name of the machine, and therefore of the
-	 * directory its binaries are in. `/lib/namespace` reads it as
+	 * directory its binaries are in. `/profile/namespace` reads it as
 	 * `$objtype`, and the machine set `cputype` (`pc/main.c:252`). */
 	cpu = readenv("#e/cputype");
 	setenv("#e/objtype", cpu);
@@ -133,7 +165,7 @@ main(int argc, char *argv[])
 	setenv("#e/sysname", systemname);
 
 	/* `newns(user, 0)` — the namespace this instance is configured to
-	 * have, from `/lib/namespace`. */
+	 * have, from `/profile/namespace`. */
 	if(newns(user, 0) < 0)
 		print("init: can't build namespace: %r\n");
 
@@ -178,8 +210,10 @@ main(int argc, char *argv[])
 		if(w->msg[0])
 			print("init: rc exit status: %s\n", w->msg);
 		free(w);
-		if(bare)
+		if(bare){
+			stop();
 			exits(nil);
+		}
 		manual = 1;
 		cmd = nil;
 		sleep(1000);

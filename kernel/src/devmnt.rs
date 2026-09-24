@@ -46,9 +46,6 @@ pub struct Mnt {
     pub msize: u32,
     pub wire: Chan,
     tag: u16,
-    /// `NFID`-style allocation. A fid is the server's name for a file, and
-    /// this side chooses them.
-    nextfid: u32,
 }
 
 impl Mnt {
@@ -88,10 +85,9 @@ impl Mnt {
         t: &mut dyn Transport,
         uname: &str,
         aname: &str,
+        fid: u32,
     ) -> Result<(Mnt, Chan), String> {
-
-        let mut mnt = Mnt { msize, wire, tag: 0, nextfid: 1 };
-        let fid = mnt.newfid();
+        let mut mnt = Mnt { msize, wire, tag: 0 };
         // Tattach: fid, afid (NOFID — no authentication), uname, aname
         let req = W::new()
             .u32(fid)
@@ -124,12 +120,6 @@ impl Mnt {
         self.tag
     }
 
-    fn newfid(&mut self) -> u32 {
-        let f = self.nextfid;
-        self.nextfid += 1;
-        f
-    }
-
     fn rpc(&mut self, t: &mut dyn Transport, ty: T, body: W) -> Result<Vec<u8>, String> {
         let tag = self.newtag();
         let reply = t.rpc(&body.frame(ty as u8, tag))?;
@@ -143,8 +133,7 @@ impl Mnt {
     /// `Twalk`. One message carries the whole path, and the reply says how
     /// many elements the server managed — fewer than asked is not an error,
     /// it is how "no such file" is reported partway along.
-    pub fn walk(&mut self, t: &mut dyn Transport, from: u32, names: &[&str]) -> Result<(u32, Vec<Qid>), String> {
-        let newfid = self.newfid();
+    pub fn walk(&mut self, t: &mut dyn Transport, from: u32, newfid: u32, names: &[&str]) -> Result<(u32, Vec<Qid>), String> {
         let mut w = W::new().u32(from).u32(newfid).u16(names.len() as u16);
         for n in names {
             w = w.s(n);
@@ -244,11 +233,26 @@ fn rerror(body: &[u8]) -> Option<String> {
 #[derive(Default)]
 pub struct MntDev {
     mounts: Vec<Mnt>,
+    /// `chanalloc.fid` (`chan.c:20`). **A fid is unique across the whole
+    /// kernel, not per mount**: Plan 9 gives every channel its own when it
+    /// is allocated — *"c->fid = ++chanalloc.fid"* (`chan.c:250`) — and
+    /// sends that as the fid (`devmnt.c:344`, `:425`). Two mounts of one
+    /// wire share one 9P session, and so one fid space: with a counter per
+    /// mount, each began at 1, and a clunk through one mount took a file
+    /// from under the other. Plan 9 recycles channels and with them fids;
+    /// this counts up, which a u32 affords.
+    fid: u32,
 }
 
 impl MntDev {
     pub fn new() -> MntDev {
         MntDev::default()
+    }
+
+    /// `++chanalloc.fid`.
+    fn newfid(&mut self) -> u32 {
+        self.fid += 1;
+        self.fid
     }
 
     /// `mntattach` (`devmnt.c:303`). The channel handed in **is the wire**.
@@ -269,7 +273,8 @@ impl MntDev {
         };
         let joined = wire.mux;
         wire.mux = Some(self.mounts.len() as u32);
-        let (m, mut c) = Mnt::attach(wire, msize, t, uname, aname)?;
+        let fid = self.newfid();
+        let (m, mut c) = Mnt::attach(wire, msize, t, uname, aname, fid)?;
         self.mounts.push(m);
         c.devno = (self.mounts.len() - 1) as u32;
         c.mux = joined.or(Some(c.devno));
@@ -297,8 +302,9 @@ impl MntDev {
         c: &Chan,
         name: &str,
     ) -> Result<Option<Chan>, String> {
+        let newfid = self.newfid();
         let m = self.mnt(c)?;
-        let (fid, qids) = m.walk(t, c.fid, &[name])?;
+        let (fid, qids) = m.walk(t, c.fid, newfid, &[name])?;
         if qids.is_empty() {
             // The server managed none: no such file. Clunk the fid we asked
             // for, or the server keeps it.
@@ -314,8 +320,9 @@ impl MntDev {
     /// name for this same file"* (`cclone`, `chan.c:842`:
     /// `devtab[c->type]->walk(c, nil, nil, 0)`).
     pub fn cclone(&mut self, t: &mut dyn Transport, c: &Chan) -> Result<Chan, String> {
+        let newfid = self.newfid();
         let m = self.mnt(c)?;
-        let (fid, _) = m.walk(t, c.fid, &[])?;
+        let (fid, _) = m.walk(t, c.fid, newfid, &[])?;
         let mut nc = c.clone();
         nc.fid = fid;
         Ok(nc)
@@ -561,6 +568,27 @@ mod tests {
         c.fid = 2;
         let mut c = d.open(&mut t, c, 0).unwrap();
         assert_eq!(d.read(&mut t, &mut c, 64, 0).unwrap(), b"from a server");
+    }
+
+    /// **Two mounts of one wire share one fid space**, so no fid may be
+    /// handed out twice across them (`chan.c:250`, *"c->fid =
+    /// ++chanalloc.fid"*). With a counter per mount both began at 1: a clunk
+    /// through the first took the second's file away, and `newns`'s `/home`
+    /// answered *"unknown fid"* because `boot`'s mount of the same wire had
+    /// closed a channel.
+    #[test]
+    fn two_mounts_of_one_wire_never_share_a_fid() {
+        let (mut d, mut t, a, _) = mounted(MAXRPC);
+        let mut wire = Chan::attach(DevId::Pipe, 0);
+        wire.mux = a.mux;
+        let b = d.mount(wire, &mut t, "kitty", "").unwrap();
+        assert_ne!(a.fid, b.fid, "two attaches, one session");
+        let mut x = d.walk(&mut t, &a, "hello").unwrap().unwrap();
+        let y = d.walk(&mut t, &b, "hello").unwrap().unwrap();
+        assert_ne!(x.fid, y.fid);
+        d.close(&mut t, &mut x);
+        let mut y = d.open(&mut t, y, 0).unwrap();
+        assert_eq!(d.read(&mut t, &mut y, 64, 0).unwrap(), b"from a server");
     }
 
     /// `Tversion` first, or there is no session. The negotiated msize is the

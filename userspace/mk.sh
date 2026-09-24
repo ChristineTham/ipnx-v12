@@ -38,13 +38,15 @@ CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-ex
 # machine the stack pointer is that global.
 LDFLAGS="--no-entry --export=_start --export-memory --export=__stack_pointer --stack-first -z stack-size=65536 --allow-multiple-definition"
 
-# The rootfs is laid out as Plan 9 lays one out: the binaries under
-# `/$objtype`, the scripts under `/rc`, and `/bin` a UNION of the two made by
-# `/lib/namespace` — never a directory of its own.
+# The rootfs: the binaries under `/$objtype`, bound onto `/bin` by
+# `/profile/namespace`; the system's configuration in `/profile`; each
+# user's under `/usr/<name>`, bound at `/home` (docs/packages.md). Plan 9's
+# `/rc` is retired, and a tree built before it was is cleared of it.
 OBJTYPE=wasm
+rm -rf "$root/rc" "$root/lib/namespace" "$root/profile" "$root/usr/glenda/profile"
 mkdir -p "$build" "$build/boot" \
-	"$root/$OBJTYPE/bin" "$root/rc/bin" "$root/rc/lib" "$root/lib" \
-	"$root/etc" "$root/tmp"
+	"$root/$OBJTYPE/bin" "$root/lib" "$root/profile" "$root/home" \
+	"$root/usr/glenda/profile" "$root/etc" "$root/tmp"
 
 cc() {	# cc <src> <obj>
 	$CC $CFLAGS -c "$1" -o "$2"
@@ -126,8 +128,8 @@ for c in "$here"/cmd/*.c; do
 done
 
 # ---- the rest of the rootfs -----------------------------------------------
-cp -f "$here/rc/termrc" "$root/rc/bin/termrc"
-cp -f "$here/lib/namespace" "$root/lib/namespace"
+cp -f "$here"/profile/* "$root/profile/"
+cp -f "$here"/usr/glenda/profile/* "$root/usr/glenda/profile/"
 cp -f "$here/etc/motd" "$root/etc/motd"
 
 # ---- rc -------------------------------------------------------------------
@@ -144,7 +146,7 @@ if [ -f "$here/rc/rc.h" ]; then
 		$CC $CFLAGS -I"$here/rc" -I"$build/rc" -c "$src" -o "$obj"
 		objs+=("$obj")
 	done
-	cp -f "$here/rc/rcmain" "$root/rc/lib/rcmain"
+	cp -f "$here/rc/rcmain" "$root/lib/rcmain"
 	# rc.h's tentative definitions are common symbols everywhere but here;
 	# weaken.py explains the whole of it.
 	python3 "$here/weaken.py" "$WASI_SDK/bin/llvm-nm" "${objs[@]}"

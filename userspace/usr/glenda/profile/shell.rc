@@ -1,0 +1,5 @@
+#!/bin/rc
+# /home/profile/shell.rc — glenda's, run by every new shell of hers, after
+# the system's /profile/shell.rc (docs/packages.md). Hers to change. Plan 9
+# has no counterpart: its user settings are in `$home/lib/profile`, which
+# only a login shell reads.

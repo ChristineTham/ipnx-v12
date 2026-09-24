@@ -12,7 +12,7 @@
  * yet, so nothing can arrive.
  *
  * What it is FOR is the whole point of P5: a boot that is configuration
- * rather than code. `init` calls it, it reads `/lib/namespace`, and every
+ * rather than code. `init` calls it, it reads `/profile/namespace`, and every
  * line there is a `bind`, a `mount`, a `cd` or a `.`.
  */
 #include <u.h>
@@ -47,7 +47,7 @@ buildns(int newns, char *user, char *file)
 			werrstr("no namespace file specified");
 			return -1;
 		}
-		file = "/lib/namespace";
+		file = "/profile/namespace";	/* Plan 9: /lib/namespace (docs/packages.md) */
 	}
 	b = Bopen(file, OREAD);
 	if(b == nil){

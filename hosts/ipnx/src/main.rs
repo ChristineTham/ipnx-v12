@@ -275,7 +275,7 @@ mod tests {
 /// **The demo, run against the real thing.**
 ///
 /// Not a model of anything: these boot the kernel, run `boot`, `init`,
-/// `/lib/namespace` and `/rc/bin/termrc`, and then TYPE at the console —
+/// `/profile/namespace` and `/profile/start.rc`, and then TYPE at the console —
 /// which is the whole of what `ipnx` does.
 ///
 /// They need `userspace/mk.sh` to have run. `cargo test` cannot do it (it
@@ -328,7 +328,7 @@ mod userspace {
     /// echo hello`). `boot` reads `$init` and hands it to `init`
     /// (`boot.c:208`), which runs it with `rc -c` (`init.c:171`) in the
     /// namespace it built — `$objtype` is init's own, and `/bin` is
-    /// `/lib/namespace`'s — and a word with a quote and a space in it
+    /// `/profile/namespace`'s — and a word with a quote and a space in it
     /// arrives whole. Then the interactive shell, as Plan 9's `init` goes
     /// on to; with no input it ends at once.
     #[test]
@@ -372,32 +372,34 @@ mod userspace {
         for name in ["boot", "dev", "proc", "srv"] {
             assert!(out.contains(&format!("{name}\n")), "no {name} from #/: {out:?}");
         }
-        for name in ["etc", "lib", "rc", "wasm"] {
+        for name in ["etc", "home", "lib", "profile", "usr", "wasm"] {
             assert!(out.contains(&format!("{name}\n")), "no {name} from the server");
         }
+        assert!(!out.contains("\nrc\n"), "/rc is retired (docs/packages.md): {out:?}");
     }
 
-    /// `/bin` is a union too, and it is the one `/lib/namespace` makes:
-    /// `bind /$objtype/bin /bin` then `bind -a /rc/bin /bin`.
+    /// `/bin` is what `/profile/namespace` makes it: `bind /$objtype/bin
+    /// /bin`. Plan 9's next line, `bind -a /rc/bin /bin`, went with `/rc`.
     #[test]
-    fn bin_is_the_union_the_namespace_file_makes() {
+    fn bin_is_what_the_namespace_file_makes() {
         let out = typing("ls /bin\n");
         assert!(out.contains("echo\n"), "no commands: {out:?}");
-        assert!(out.contains("termrc\n"), "no /rc/bin: {out:?}");
+        assert!(out.contains("test\n"), "no test, which rcmain calls: {out:?}");
+        assert!(!out.contains("termrc\n"), "/rc/bin is retired: {out:?}");
     }
 
-    /// The devices are where `/lib/namespace` and `/rc/bin/termrc` put them,
+    /// The devices are where `/profile/namespace` and `/profile/start.rc` put them,
     /// and `/dev` is `#c` with the terminal's own bound after it.
     #[test]
     fn the_devices_are_bound_where_the_files_say() {
         let out = typing("ls /dev\n");
         assert!(out.contains("cons\n"), "no #c: {out:?}");
         assert!(out.contains("random\n"), "no #c: {out:?}");
-        assert!(out.contains("0ctl\n"), "no #d, which termrc binds: {out:?}");
+        assert!(out.contains("0ctl\n"), "no #d, which start.rc binds: {out:?}");
     }
 
     /// The environment the boot set: `$objtype` from the machine
-    /// (`pc/main.c:252`), `$user` from `#c/user`, `$sysname` from termrc.
+    /// (`pc/main.c:252`), `$user` from `#c/user`, `$sysname` from start.rc.
     #[test]
     fn the_environment_is_what_the_boot_put_there() {
         // `glenda`, not `eve`: `eve` is the empty string until `boot` writes
@@ -422,7 +424,7 @@ mod userspace {
         assert!(typing("echo $terminal\n").contains(&format!("wasm {CONFFILE}")));
     }
 
-    /// **`#p/1/ns` is the namespace as `/lib/namespace` would write it.**
+    /// **`#p/1/ns` is the namespace as `/profile/namespace` would write it.**
     /// It was device letters and qid numbers on both sides, which is the
     /// kernel's bookkeeping and not a namespace.
     #[test]
@@ -432,7 +434,7 @@ mod userspace {
             "bind -a /root /\n",
             "mount -aC #s/boot /root \n",
             "bind  /wasm/bin /bin\n",
-            "bind -a /rc/bin /bin\n",
+            "bind -c /usr/glenda /home\n",
             "bind  #c /dev\n",
             "bind -c #e /env\n",
             "cd /\n",
@@ -683,10 +685,10 @@ mod storage {
 
     /// A rootfs of this test's own, copied so two boots can share it and
     /// nothing else can.
-    struct Scratch(std::path::PathBuf);
+    pub(super) struct Scratch(std::path::PathBuf);
 
     impl Scratch {
-        fn new(name: &str) -> Scratch {
+        pub(super) fn new(name: &str) -> Scratch {
             let d = std::env::temp_dir().join(format!("ipnx-test-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&d);
             let from =
@@ -694,7 +696,7 @@ mod storage {
             copy(&from, &d).expect("a rootfs to boot from");
             Scratch(d)
         }
-        fn path(&self) -> &std::path::Path {
+        pub(super) fn path(&self) -> &std::path::Path {
             &self.0
         }
     }
@@ -748,3 +750,84 @@ mod storage {
     }
 }
 
+/// **P7's first step: the profiles** (docs/packages.md). `/profile` is the
+/// system's configuration and `/home/profile` the user's; each has a
+/// `start.rc`, a `shell.rc` and a `stop.rc`, run by role.
+#[cfg(test)]
+mod profiles {
+    use super::storage::Scratch;
+    use super::userspace::{typing, typing_at};
+
+    /// `/profile` holds the namespace file and the three scripts, `/home` is
+    /// `/usr/$user` with the user's in it, and `/rc` is gone.
+    #[test]
+    fn the_profiles_are_where_the_design_puts_them() {
+        // Each directory on its own: this `ls` prints bare names, where
+        // Plan 9's would prefix them (`ls.c:115`).
+        let out = typing("ls /profile\necho --\nls /home/profile\nls /rc\n");
+        let (system, user) = out.split_once("--\n").expect(&out);
+        for name in ["namespace", "start.rc", "shell.rc", "stop.rc"] {
+            assert!(system.contains(&format!("{name}\n")), "no /profile/{name}: {out:?}");
+        }
+        for name in ["start.rc", "shell.rc", "stop.rc"] {
+            assert!(user.contains(&format!("{name}\n")), "no /home/profile/{name}: {out:?}");
+        }
+        assert!(out.contains("'rc' does not exist"), "/rc is retired: {out:?}");
+        assert!(!out.contains("unknown fid"), "{out:?}");
+    }
+
+    /// **The order**: the system starts before the user logs in (Plan 9's
+    /// `termrc` then `$home/lib/profile`, `init.c:178`), and at the end the
+    /// user logs out before the system stops.
+    #[test]
+    fn start_and_stop_run_system_then_user_then_user_then_system() {
+        let root = Scratch::new("profile-order");
+        let add = |path: &str, line: &str| {
+            let p = root.path().join(path);
+            let mut s = std::fs::read_to_string(&p).unwrap();
+            s.push_str(line);
+            std::fs::write(&p, s).unwrap();
+        };
+        add("profile/start.rc", "echo system start\n");
+        add("usr/glenda/profile/start.rc", "test -r profile/start.rc && echo user start at home\n");
+        add("usr/glenda/profile/stop.rc", "echo user stop\n");
+        add("profile/stop.rc", "echo system stop\n");
+        let out = typing_at("echo typed\n", root.path());
+        let at = |s: &str| out.find(s).unwrap_or_else(|| panic!("no `{s}` in {out:?}"));
+        assert!(at("system start") < at("user start at home"), "after `cd`: {out:?}");
+        assert!(at("user start") < at("typed"), "{out:?}");
+        assert!(at("typed") < at("user stop"), "{out:?}");
+        assert!(at("user stop") < at("system stop"), "{out:?}");
+    }
+
+    /// **`shell.rc` runs in every new shell**, the system's and then the
+    /// user's — not only the login one, which is all Plan 9's
+    /// `$home/lib/profile` gets. A child shell sets its own `$shellpid`; a
+    /// fork — a subshell, `rc -S` under `haventfork.c` — does not, as a
+    /// forked Plan 9 rc does not run its startup again.
+    #[test]
+    fn shell_rc_runs_in_every_shell_system_then_user() {
+        let root = Scratch::new("profile-shell");
+        let add = |path: &str, line: &str| {
+            let p = root.path().join(path);
+            let mut s = std::fs::read_to_string(&p).unwrap();
+            s.push_str(line);
+            std::fs::write(&p, s).unwrap();
+        };
+        add("profile/shell.rc", "order=system\n");
+        add("usr/glenda/profile/shell.rc", "order=$order^user; shellpid=$pid\n");
+        let out = typing_at(
+            "echo order $order\nrc -c 'echo child $shellpid $pid'\n{echo fork $shellpid $pid} | cat\n",
+            root.path(),
+        );
+        assert!(out.contains("order systemuser\n"), "{out:?}");
+        let line = out.lines().find_map(|l| l.split("child ").nth(1)).expect(&out);
+        let pids: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(pids.len(), 2, "{out:?}");
+        assert_eq!(pids[0], pids[1], "the child ran shell.rc itself: {out:?}");
+        let line = out.lines().find_map(|l| l.split("fork ").nth(1)).expect(&out);
+        let pids: Vec<&str> = line.split_whitespace().collect();
+        assert_eq!(pids.len(), 2, "{out:?}");
+        assert_ne!(pids[0], pids[1], "a fork is not a new shell: {out:?}");
+    }
+}

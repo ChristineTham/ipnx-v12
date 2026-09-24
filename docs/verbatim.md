@@ -379,3 +379,13 @@ On `/store`:
   <br>— cited in `docs/proposals.md`
 - *"yet that's look very symmetrical, let's build"* — endorsing P7's design
   <br>— cited in `docs/packages.md`
+
+On building P7, and on names:
+
+- *"Why are we not including all plan9 commands?"*
+- *"I am just thinking through. maybe we need to be very symmetrics. so rc files must always end in extension .rc /profile/start.rc etc. while allows us to specify environment variables as .env /profile/start.env also worth noting and including in docs. a "project" is the working folder for what may become a template, a pkg or service. a project can be "promoted into template, pkg, service, user profile (which is just really a template, but may contain other things as well.) Which also allows us to have a standard way of naming configuration files for template, pkg, service etc. so template.cfg is the configuration file for a template (it's in YAML format) it specifies name of template, version, date other properties etc. template.rc is the set of commands to convert a project into a template etc. same for pkg, service etc. A project can be many things: template, pkg, service etc. in which case the the various configuration files are distinct. a project.cfg file tells us what is in the project -name, version, etc."*
+  <br>— cited in `docs/packages.md`, `docs/projects.md`
+- *"if plan 9 has ndb let's use that consistently"* — replacing YAML with `ndb(6)` for every `.cfg`
+  <br>— cited in `docs/packages.md`, `docs/projects.md`
+- *"also you need docs/projects.md"*
+  <br>— cited in `docs/projects.md`

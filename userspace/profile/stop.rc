@@ -1,0 +1,4 @@
+#!/bin/rc
+# /profile/stop.rc — run when the system shuts down (docs/packages.md), after
+# the user's /home/profile/stop.rc. Plan 9 has no counterpart: its terminal is
+# switched off. Nothing needs stopping yet.
