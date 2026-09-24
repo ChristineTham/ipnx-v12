@@ -17,8 +17,11 @@
 //! at once) this is what it would replace.
 
 use ipnx_kernel::devvirtio9p::Nineserver;
-use ipnx_kernel::ninep::{unframe, Dir, Qid, R, T, W, DMDIR, QTDIR};
+use ipnx_kernel::ninep::{unframe, Dir, Qid, R, T, W, DMDIR, QTDIR, QTEXCL};
 use std::collections::HashMap;
+use std::fs::Metadata;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 /// `Emaxmsg` — what this server will accept. `mntversion` asks for `MAXRPC`
@@ -77,34 +80,60 @@ impl Store {
         Some(out)
     }
 
-    /// A qid for a path. The path's own bytes decide it, hashed, so the same
-    /// file answers the same qid across a boot — which is what a qid promises.
-    fn qid(&self, p: &Path, dir: bool) -> Qid {
-        let mut h: u64 = 0xcbf29ce484222325;
-        for b in p.as_os_str().as_encoded_bytes() {
-            h ^= *b as u64;
-            h = h.wrapping_mul(0x100000001b3);
-        }
-        Qid { qtype: if dir { QTDIR } else { 0 }, vers: 0, path: h }
+    /// A qid and a directory entry for a path, from the host's own `stat` —
+    /// or nothing, when there is no such file.
+    fn stat(&self, rel: &Path) -> Option<Metadata> {
+        std::fs::metadata(self.real(rel)?).ok()
     }
 
+    /// `stat2dir` (`plan9/sys/src/cmd/unix/u9fs/u9fs.c:694`): the times,
+    /// the length and the permission bits are the host file's own.
     fn dirof(&self, rel: &Path, name: &str) -> Option<Dir> {
-        let real = self.real(rel)?;
-        let md = std::fs::metadata(&real).ok()?;
-        let dir = md.is_dir();
+        let md = self.stat(rel)?;
         Some(Dir {
             dtype: '9' as u16,
             dev: 0,
-            qid: self.qid(rel, dir),
-            mode: if dir { DMDIR | 0o755 } else { 0o644 },
-            atime: 0,
-            mtime: 0,
-            length: if dir { 0 } else { md.len() },
+            qid: stat2qid(&md),
+            mode: plan9mode(&md),
+            atime: md.atime() as u32,
+            mtime: md.mtime() as u32,
+            length: md.len(),
             name: name.to_string(),
             uid: self.uname.clone(),
             gid: self.uname.clone(),
             muid: self.uname.clone(),
         })
+    }
+}
+
+/// `modebyte` (`u9fs.c:591`): a directory is `QTDIR`, and a device —
+/// there is no testing exclusive use — is marked `QTEXCL`.
+fn modebyte(md: &Metadata) -> u8 {
+    let ft = md.file_type();
+    let mut b = 0;
+    if ft.is_dir() {
+        b |= QTDIR;
+    }
+    if ft.is_block_device() || ft.is_char_device() || ft.is_fifo() || ft.is_socket() {
+        b |= QTEXCL;
+    }
+    b
+}
+
+/// `plan9mode` (`u9fs.c:609`): *"((ulong)modebyte(st)<<24) | (st->st_mode
+/// & 0777)"*.
+fn plan9mode(md: &Metadata) -> u32 {
+    ((modebyte(md) as u32) << 24) | (md.mode() & 0o777)
+}
+
+/// `stat2qid` (`u9fs.c:624`): the path is the inode, the device number
+/// folded into its top; the version is *"st->st_mtime ^ (st->st_size <<
+/// 8)"*, so a file that changes is a new version of itself.
+fn stat2qid(md: &Metadata) -> Qid {
+    Qid {
+        qtype: modebyte(md),
+        vers: (md.mtime() as u32) ^ ((md.size() as u32) << 8),
+        path: md.ino() ^ (md.dev() << 48),
     }
 }
 
@@ -143,7 +172,10 @@ impl Nineserver for Store {
                     fid,
                     Fid { path: PathBuf::new(), mode: 0, open: false },
                 );
-                let q = self.qid(Path::new(""), true);
+                let Some(md) = self.stat(Path::new("")) else {
+                    return Ok(err("no root", tag));
+                };
+                let q = stat2qid(&md);
                 W::new().raw(&q.write(W::new()).into_body()).frame(T::Attach.reply(), tag)
             }
 
@@ -164,7 +196,7 @@ impl Nineserver for Store {
                     };
                     let Ok(md) = std::fs::metadata(&real) else { break };
                     at = next;
-                    qids.push(self.qid(&at, md.is_dir()));
+                    qids.push(stat2qid(&md));
                 }
                 // `walk(5)`: a walk that got nowhere at all is an error only
                 // when it was asked for more than nothing.
@@ -201,7 +233,7 @@ impl Nineserver for Store {
                     // `OTRUNC`
                     let _ = std::fs::write(&real, b"");
                 }
-                let q = self.qid(&path, md.is_dir());
+                let q = stat2qid(&md);
                 W::new()
                     .raw(&q.write(W::new()).into_body())
                     .u32(MSIZE - 24)
@@ -221,16 +253,30 @@ impl Nineserver for Store {
                 let Some(real) = self.real(&next) else {
                     return Ok(err("bad name", tag));
                 };
+                // `usercreate` (`u9fs.c:1605`): the permission asked for,
+                // masked by the directory's — *"m = (perm & DMDIR) ? 0777 :
+                // 0666; perm = perm & (~m | (fid->st.st_mode & m))"* — and a
+                // directory is made at least readable by its owner.
                 let isdir = perm & DMDIR != 0;
+                let parent = self.stat(&f.path).map(|md| md.mode()).unwrap_or(0o777);
+                let m = if isdir { 0o777 } else { 0o666 };
+                let perm = perm & (!m | (parent & m));
                 let made = if isdir {
-                    std::fs::create_dir(&real)
+                    std::fs::create_dir(&real).and_then(|_| {
+                        std::fs::set_permissions(&real, std::fs::Permissions::from_mode((perm | 0o400) & 0o777))
+                    })
                 } else {
-                    std::fs::write(&real, b"")
+                    std::fs::OpenOptions::new().write(true).create_new(true).open(&real).and_then(|_| {
+                        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(perm & 0o777))
+                    })
                 };
                 if let Err(e) = made {
                     return Ok(err(&e.to_string(), tag));
                 }
-                let q = self.qid(&next, isdir);
+                let Ok(md) = std::fs::metadata(&real) else {
+                    return Ok(err("file does not exist", tag));
+                };
+                let q = stat2qid(&md);
                 if let Some(f) = self.fids.get_mut(&fid) {
                     f.path = next;
                     f.mode = mode;
@@ -277,11 +323,24 @@ impl Nineserver for Store {
                     let end = (at + count as usize).min(all.len());
                     all[at..end].to_vec()
                 } else {
-                    match std::fs::read(&real) {
-                        Ok(b) => {
-                            let at = (off as usize).min(b.len());
-                            let end = (at + count as usize).min(b.len());
-                            b[at..end].to_vec()
+                    // `pread` (`rread`, `u9fs.c:717`): what is asked for,
+                    // from where it is asked, and no more.
+                    let mut b = vec![0; count.min(MSIZE - 24) as usize];
+                    let got = std::fs::File::open(&real).and_then(|mut fd| {
+                        fd.seek(SeekFrom::Start(off))?;
+                        let mut n = 0;
+                        while n < b.len() {
+                            match fd.read(&mut b[n..])? {
+                                0 => break,
+                                k => n += k,
+                            }
+                        }
+                        Ok(n)
+                    });
+                    match got {
+                        Ok(n) => {
+                            b.truncate(n);
+                            b
                         }
                         Err(e) => return Ok(err(&e.to_string(), tag)),
                     }
@@ -306,13 +365,12 @@ impl Nineserver for Store {
                 let Some(real) = self.real(&f.path) else {
                     return Ok(err("file does not exist", tag));
                 };
-                let mut b = std::fs::read(&real).unwrap_or_default();
-                let at = off as usize;
-                if b.len() < at + data.len() {
-                    b.resize(at + data.len(), 0);
-                }
-                b[at..at + data.len()].copy_from_slice(data);
-                if let Err(e) = std::fs::write(&real, &b) {
+                // `pwrite` (`rwrite`, `u9fs.c:809`), at the offset asked.
+                let put = std::fs::OpenOptions::new().write(true).open(&real).and_then(|mut fd| {
+                    fd.seek(SeekFrom::Start(off))?;
+                    fd.write_all(data)
+                });
+                if let Err(e) = put {
                     return Ok(err(&e.to_string(), tag));
                 }
                 W::new().u32(data.len() as u32).frame(T::Write.reply(), tag)
@@ -337,6 +395,77 @@ impl Nineserver for Store {
                     None => err("file does not exist", tag),
                 }
             }
+
+            // `rwstat` (`u9fs.c:909`). A field of all ones is *"don't
+            // touch"*, and the changes are made *"in increasing order of harm
+            // to the file"*: the mode, the mtime, the name, the length.
+            x if x == T::Wstat as u8 => {
+                let (Some(fid), Some(n)) = (r.u32(), r.u16()) else {
+                    return Ok(err("short Twstat", tag));
+                };
+                let rest = r.rest();
+                let Some(d) = Dir::conv_m2d(&rest[..(n as usize).min(rest.len())]) else {
+                    return Ok(err("bad stat buffer", tag));
+                };
+                let Some(f) = self.fids.get(&fid) else {
+                    return Ok(err("unknown fid", tag));
+                };
+                let path = f.path.clone();
+                let Some(md) = self.stat(&path) else {
+                    return Ok(err("file does not exist", tag));
+                };
+                let Some(mut real) = self.real(&path) else {
+                    return Ok(err("file does not exist", tag));
+                };
+                if d.mode != !0 && ((d.mode & DMDIR != 0) != md.is_dir()) {
+                    return Ok(err("can't change directory bit", tag));
+                }
+                if path.as_os_str().is_empty() {
+                    return Ok(err("no wstat of root", tag));
+                }
+                if d.mode != !0 {
+                    if let Err(e) = std::fs::set_permissions(&real, std::fs::Permissions::from_mode(d.mode & 0o777)) {
+                        return Ok(err(&e.to_string(), tag));
+                    }
+                }
+                if d.mtime != !0 {
+                    let t = std::time::UNIX_EPOCH + std::time::Duration::from_secs(d.mtime as u64);
+                    let set = std::fs::File::options()
+                        .write(!md.is_dir())
+                        .read(md.is_dir())
+                        .open(&real)
+                        .and_then(|fd| fd.set_modified(t));
+                    if let Err(e) = set {
+                        return Ok(err(&e.to_string(), tag));
+                    }
+                }
+                if !d.name.is_empty() {
+                    let new = path.with_file_name(&d.name);
+                    let Some(to) = self.real(&new) else {
+                        return Ok(err("bad name", tag));
+                    };
+                    if new != path {
+                        if let Err(e) = std::fs::rename(&real, &to) {
+                            return Ok(err(&e.to_string(), tag));
+                        }
+                        if let Some(f) = self.fids.get_mut(&fid) {
+                            f.path = new;
+                        }
+                        real = to;
+                    }
+                }
+                if d.length != !0 {
+                    let cut = std::fs::OpenOptions::new().write(true).open(&real).and_then(|fd| fd.set_len(d.length));
+                    if let Err(e) = cut {
+                        return Ok(err(&e.to_string(), tag));
+                    }
+                }
+                W::new().frame(T::Wstat.reply(), tag)
+            }
+
+            // `Tflush`: every request here is answered before the next is
+            // read, so there is never one outstanding to abandon.
+            x if x == T::Flush as u8 => W::new().frame(T::Flush.reply(), tag),
 
             x if x == T::Clunk as u8 => {
                 if let Some(fid) = r.u32() {

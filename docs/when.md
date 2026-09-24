@@ -304,13 +304,13 @@ until 2026-09-23 because clang promotes `uchar` to `int` and kencc to
 | | |
 |---|---|
 | `include/u.h` | the **wasm32 architecture header**. Plan 9 keeps one per architecture; this is 386's, with clang's `va_list`, because wasm passes arguments in the engine's value stack and only the compiler knows where a variadic one is |
-| `libc/wasm/` | the machine-dependent half. Plan 9 generates it from `9syscall/sys.h`; this machine's trap instruction is an import (`sys.c`), its `brk_` is `memory.grow` (`sbrk.c`), its `main9.s` is called with the argument block's address (`main9.c`), and `procrfork.c` is how a process makes a process |
+| `libc/wasm/` | the machine-dependent half. Plan 9 generates it from `9syscall/sys.h`; this machine's trap instruction is an import (`sys.c`), its `brk_` is `memory.grow` (`sbrk.c`), its `main9.s` is called with the argument block's address (`main9.c`), `procrfork.c` is how a process makes a process, and **`setjmp.c`** is `setjmp`/`longjmp` as wasm exceptions, where 386's are `setjmp.s` (2026-09-24; RESEARCH §16.9) |
 | `libc/{port,fmt,9sys}/` | vendored verbatim from `plan9/sys/src/libc/`, but for one cast in `nsec.c` — kencc's `uchar` promotes to unsigned int, clang's to int (RESEARCH §15.6) |
-| `libbio/`, `libauth/` | vendored: buffered i/o, and `newns` — which is all of libauth that is left once there is no factotum to talk to |
+| `libbio/`, `libauth/`, `libregexp/` | vendored: buffered i/o; `newns` and `addns` — which is all of libauth that is left once there is no factotum to talk to; and **`libregexp` whole** (2026-09-24) |
 | `rc/` | Plan 9's rc, with `ipnx.c` as its platform file — it ships three of those and the mkfile picks one — and `haventfork.c`, Plan 9's own file for a system that cannot fork. `rcmain` beside it, installed at `/lib/rcmain` (Plan 9's is `/rc/lib/rcmain`), and running `/profile/shell.rc` then `$home/profile/shell.rc` in every shell |
-| `cmd/` | `boot` and `init`; `bind`, `cat`, `echo`, `ls`, `mkdir`, `rm`, `unmount`, a cut-down `tr` and `args`; and **`cp`, `date`, `mount`, `mv`, `ps`, `sleep`, `test`, `wc`** — vendored verbatim from `plan9/sys/src/cmd/` except `mount`, whose `amount0` is `fauth` plus `auth_proxy` there and `mount(fd, -1, …)` here, for the reason `newns.c` already carries. **Eighteen, against the demo's "twenty-four real Plan 9 commands"**, and that list of twenty-four is written down nowhere. `pwd` is not among them: `getwd` is `fd2path`, one of the nine calls this kernel omits |
-| `profile/`, `usr/kitty/profile/`, `etc/motd` | the system's configuration — `start.ns`, and `start`, `shell` and `stop` each as a `.env` and a `.rc` — and kitty's, the same seven, bound at `/home` (P7 step 1, 2026-09-24; docs/packages.md); and something to read. `/rc` is retired |
-| `mk.sh` | the build. `weaken.py` beside it restores common-symbol semantics for rc.h's tentative definitions, which the wasm backend has none of |
+| `cmd/` | **Plan 9's single-file commands, vendored verbatim** — 55 of `plan9/sys/src/cmd/*.c`'s 128 build as they are (2026-09-24), `sed`, `ed`, `ls`, `cat`, `echo` and `tr` among them; the cut-down `cat`, `echo`, `ls` and `tr` are gone. Not verbatim: `boot` and `init`, this system's, `args`, a test's, and `mount`, whose `amount0` is `fauth` plus `auth_proxy` there and `mount(fd, -1, …)` here until factotum exists. **`ed` does not build yet** (`notejmp`), and the other 73 are the rest of step 2: `userspace/build/failed` lists what `mk.sh` could not build and why |
+| `profile/`, `usr/kitty/profile/`, `etc/motd`, `pkg/system/pkg.cfg` | the system's configuration — `start.ns`, and `start`, `shell` and `stop` each as a `.env` and a `.rc` — and kitty's, the same seven, bound at `/home` (P7 step 1, 2026-09-24; docs/packages.md); something to read; and the **`system` package**'s description. Everything the build makes goes into `/pkg/system/2026.09.24/` — `wasm/bin` and `lib/rcmain` — bound onto `/bin` and `/lib` by `/profile/start.ns` and listed in `/profile/pkg`. `/rc` and `/wasm/bin` are gone |
+| `mk.sh` | the build. `weaken.py` beside it restores common-symbol semantics for rc.h's tentative definitions, which the wasm backend has none of. A command that does not build is recorded in `build/failed` with its reason and the build goes on, as `mk -k` does |
 
 **The system boots itself.** `cargo run -p ipnx` is `initcode.c:21` and nothing
 more — three opens of `#c/cons`, four binds, and `exec("/boot/boot")`.
@@ -338,12 +338,15 @@ Saranos.
 
 `/` is a union of the kernel's root and the machine's filesystem:
 `hosts/ipnx/src/store.rs` exports a host directory (`userspace/root`, or
-`IPNX_STORE`) over 9P, `#9/0` is the channel to it, and `boot` mounts it
+`IPNX_STORE`) over 9P — as `u9fs` does, and after it since 2026-09-24: a
+stat is the host file's own times, mode and inode, a `Twstat` changes the
+mode, the mtime, the name and the length, and reads and writes are at
+their offset (RESEARCH §16.9) — `#9/0` is the channel to it, and `boot` mounts it
 exactly as `boot.c:171` does. `ls /` shows both halves because `unionread`
 reads every element. A file written under `/tmp` is a file on the host, so it
 is still there after the next boot.
 
-Forty-seven tests in `hosts/ipnx` (counted 2026-09-24: forty-two in the binary — most typing at a scripted console after a full boot, some booting into a filesystem of their own — and five in the library), and 220 in `kernel/`. They need
+Forty-nine tests in `hosts/ipnx` (counted 2026-09-24: forty-four in the binary — most typing at a scripted console after a full boot, some booting into a filesystem of their own — and five in the library), and 220 in `kernel/`. They need
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
 and say so rather than passing quietly.
 

@@ -13,8 +13,11 @@
  *      in declaration order. wasm passes them in the engine's value stack, so
  *      only the compiler can know where a variadic argument is; clang supplies
  *      `__builtin_va_*` and there is no portable alternative.
- *   2. `jmp_buf` is unused here and sized as 386's. Nothing in the userspace
- *      calls setjmp; rc has its own thread machine (`rc/exec.c`).
+ *   2. `jmp_buf` is four longs, not 386's two: this machine's `setjmp`
+ *      cannot save a stack pointer and a pc, and keeps instead which call
+ *      it was made in, which `setjmp` it was, and what `longjmp` threw
+ *      (`libc/wasm/setjmp.c`). The JMPBUF indices below are 386's and mean
+ *      nothing here.
  *   3. The FP control bits are absent. They are the 387's register layout, and
  *      wasm has no floating-point control register at all.
  */
@@ -31,7 +34,7 @@ typedef unsigned long	uintptr;
 typedef unsigned long	usize;
 typedef	uint		Rune;
 typedef union FPdbleword FPdbleword;
-typedef long		jmp_buf[2];
+typedef long		jmp_buf[4];
 #define	JMPBUFSP	0
 #define	JMPBUFPC	1
 #define	JMPBUFDPC	0

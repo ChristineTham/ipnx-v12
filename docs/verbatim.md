@@ -409,3 +409,14 @@ On building P7, and on names:
   <br>— cited in `docs/packages.md`
 - *"our default user is called kitty, not glenda"*
   <br>— cited in `docs/when.md`, `hosts/ipnx/src/lib.rs`
+- *"1. as big as required. 2. yes"* — a package's size, and whether P7 step 2 brings in all of Plan 9's commands the machine can run
+- *"don't create too many packages. how about a system pkg?"*
+  <br>— cited in `docs/packages.md`
+- *"fix mod times"*
+- *"we also need sed working"*
+- *"Your cut down commands came from you being lazy, even though I told you to implement them properly"*
+  <br>— cited in `CLAUDE.md`
+- *"That's why we have to move away from the POC - you made too many shortcuts"*
+  <br>— cited in `CLAUDE.md`
+- *"Why are you not building all commands. You need to build all the libraries as well. a missing library is not an excuse"*
+  <br>— cited in `CLAUDE.md`

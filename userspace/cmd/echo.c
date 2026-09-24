@@ -4,28 +4,37 @@
 void
 main(int argc, char *argv[])
 {
-	char *buf, *p, *ep;
-	int i, nflag;
+	int nflag;
+	int i, len;
+	char *buf, *p;
 
 	nflag = 0;
-	if(argc > 1 && strcmp(argv[1], "-n") == 0){
+	if(argc > 1 && strcmp(argv[1], "-n") == 0)
 		nflag = 1;
-		argc--;
-		argv++;
-	}
-	buf = malloc(8192);
-	if(buf == nil)
-		sysfatal("no memory");
-	ep = buf+8192;
+
+	len = 1;
+	for(i = 1+nflag; i < argc; i++)
+		len += strlen(argv[i])+1;
+
+	buf = malloc(len);
+	if(buf == 0)
+		exits("no memory");
+
 	p = buf;
-	for(i = 1; i < argc; i++){
-		if(i > 1 && p < ep)
+	for(i = 1+nflag; i < argc; i++){
+		strcpy(p, argv[i]);
+		p += strlen(p);
+		if(i < argc-1)
 			*p++ = ' ';
-		p = strecpy(p, ep, argv[i]);
 	}
-	if(!nflag && p < ep)
+		
+	if(!nflag)
 		*p++ = '\n';
-	if(write(1, buf, p-buf) != p-buf)
-		sysfatal("write error: %r");
-	exits(nil);
+
+	if(write(1, buf, p-buf) < 0){
+		fprint(2, "echo: write error: %r\n");
+		exits("write error");
+	}
+
+	exits((char *)0);
 }

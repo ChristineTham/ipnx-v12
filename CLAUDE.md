@@ -91,7 +91,7 @@ no wasm backend, which is why the SDK is a prerequisite:
 bash userspace/mk.sh
 ```
 
-Three flags are load-bearing, each measured (RESEARCH §9.4, §11):
+Four flags are load-bearing, each measured (RESEARCH §9.4, §11, §16.9):
 `-fno-builtin`, because clang's libcall recogniser rewrites strlen's own body
 into a self-call; `-fms-extensions`, because `port/pool.c` is written in
 kencc's anonymous struct members; and `weaken.py`, because **the wasm backend
@@ -101,7 +101,11 @@ for every variable rc declares. It sets the weak bit in the `linking` section,
 keeping strong the one definition that carries an initialiser; `wasm-ld
 --allow-multiple-definition` cannot do the job, because it keeps the FIRST
 definition even over a later initialised one and two different files here
-initialise something.
+initialise something. And `-mllvm -wasm-enable-sjlj` (with
+`-mexception-handling` and `-wasm-use-legacy-eh=false`), because this machine
+has no stack a program can save: `setjmp`/`longjmp` are wasm exceptions, and
+`libc/wasm/setjmp.c` is the library's half — so the host enables wasmtime's
+exceptions (`gc`, `gc-null`).
 
 `userspace/build/` and `userspace/root/` are generated and gitignored. Guest
 binaries carry no `.wasm` extension: exec walks the namespace for `/bin/cat`,
@@ -414,6 +418,17 @@ generated. Work is sequenced by `docs/implementation.md`; what is built is
   resolved by longest prefix, while Plan 9 keys a mount by the identity of the
   channel mounted upon (`chan.c:855`, `findmount`) and checks at every
   component. Same word, different system.
+
+- **NO CUT-DOWNS, AND A MISSING LIBRARY IS NOT AN EXCUSE** (Christine's rule,
+  2026-09-24). *"Your cut down commands came from you being lazy, even though
+  I told you to implement them properly"*; *"That's why we have to move away
+  from the POC - you made too many shortcuts"*; *"Why are you not building all
+  commands. You need to build all the libraries as well. a missing library is
+  not an excuse"*. Plan 9's code is vendored whole and built as it is; what
+  does not build is a cause to fix — a library to vendor, a machine-dependent
+  piece to write (`setjmp` was one) — never a reason to write a smaller
+  version or to leave the command out. `userspace/build/failed` is the list of
+  what is left, with the reason for each.
 
 - **NEVER INVENT WORDS** (Christine's rule, restated 2026-09-17). Not for a
   thing she has not named, and not a second word for a thing already named —

@@ -435,7 +435,8 @@ mod userspace {
         for line in [
             "bind -a /root /\n",
             "mount -aC #s/boot /root \n",
-            "bind  /wasm/bin /bin\n",
+            "bind  /pkg/system/2026.09.24/wasm/bin /bin\n",
+            "bind -a /pkg/system/2026.09.24/lib /lib\n",
             "bind -c /usr/kitty /home\n",
             "bind  #c /dev\n",
             "bind -c #e /env\n",
@@ -479,12 +480,25 @@ mod userspace {
     fn a_child_may_sleep_before_it_execs() {
         let out = typing(
             "mkdir -p /tmp/p; bind '#|' /tmp/p\n\
-             cat /wasm/bin/echo >/tmp/p/data &\n\
+             cat /bin/echo >/tmp/p/data &\n\
              /tmp/p/data1 it ran\n\
              echo after\n",
         );
         assert!(out.contains("it ran\n"), "{out}");
         assert!(out.contains("after\n"), "{out}");
+    }
+
+    /// **`sed`, and `setjmp` under it.** Plan 9's `libregexp` recovers from
+    /// a malformed expression with `longjmp` (`regcomp.c`), which this
+    /// machine does with wasm exceptions (`libc/wasm/setjmp.c`): the bad
+    /// expression unwinds to sed's own complaint, and the shell goes on.
+    #[test]
+    fn sed_edits_and_a_bad_expression_unwinds() {
+        let out = typing("echo hello world | sed s/world/kitty/\necho x | sed 's/[/y/'\nseq 5 | sed -n '2,3p'\necho still here\n");
+        assert!(out.contains("hello kitty\n"), "{out}");
+        assert!(out.contains("sed: r.e.-using command garbled"), "{out}");
+        assert!(out.contains("2\n3\n"), "{out}");
+        assert!(out.contains("still here"), "{out}");
     }
 
     /// **An rc script runs by name** (`sysproc.c:340`): its `#!` line names
@@ -750,6 +764,37 @@ mod storage {
         assert!(s.path().join("tmp/sub").is_dir(), "no directory on the machine");
         assert!(typing_at("cat /tmp/sub/file\n", s.path()).contains("deep\n"));
     }
+
+    /// **A stat carries the machine file's own times and mode, and a wstat
+    /// changes them** — `stat2dir` and `rwstat` in `u9fs`
+    /// (`u9fs.c:694`, `:909`). The store reported every time as 0 and had no
+    /// `Twstat`, so `touch` could not date a file, `chmod` could not change
+    /// one and Plan 9's `mv`, which renames with `dirwstat`, could not move
+    /// one.
+    #[test]
+    fn stat_is_the_machines_and_wstat_changes_it() {
+        use std::os::unix::fs::PermissionsExt;
+        let s = Scratch::new("wstat");
+        let out = typing_at(
+            "echo x >/tmp/f
+touch -t 86400 /tmp/f
+chmod 600 /tmp/f
+ls -l /tmp/f
+mv /tmp/f /tmp/g
+cat /tmp/g
+",
+            s.path(),
+        );
+        assert!(out.contains("--rw------- ") && out.contains(" 2 Jan  2  1970 /tmp/f\n"), "{out:?}");
+        assert!(out.contains("x\n"), "{out:?}");
+        let md = std::fs::metadata(s.path().join("tmp/g")).expect("renamed on the machine");
+        assert!(!s.path().join("tmp/f").exists());
+        assert_eq!(md.permissions().mode() & 0o777, 0o600);
+        let when = md.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap();
+        assert_eq!(when.as_secs(), 86400);
+        let fresh = typing_at("echo y >/tmp/h\nls -l /tmp/h\n", s.path());
+        assert!(!fresh.contains("1970"), "a new file is dated now: {fresh:?}");
+    }
 }
 
 /// **P7's first step: the profiles** (docs/packages.md). `/profile` is the
@@ -774,7 +819,7 @@ mod profiles {
         for name in ["start.ns", "start.env", "start.rc", "shell.env", "shell.rc", "stop.env", "stop.rc"] {
             assert!(user.contains(&format!("{name}\n")), "no /home/profile/{name}: {out:?}");
         }
-        assert!(out.contains("can't stat /rc:"), "/rc is retired: {out:?}");
+        assert!(out.contains("/rc: file does not exist"), "/rc is retired: {out:?}");
         assert!(!out.contains("unknown fid"), "{out:?}");
     }
 

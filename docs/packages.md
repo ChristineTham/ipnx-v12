@@ -245,6 +245,24 @@ needed. Plan 9 starts its window system from the user's profile — a new
 user's is written to end in *"exec rio"* (`sys/lib/newuser:32`) — which is
 the user scope: emca starting at login and ending at logout.
 
+## The `system` package
+
+*"don't create too many packages. how about a system pkg?"* (Christine,
+2026-09-24; a package is *"as big as required"*). **Plan 9's userland is
+one package, `system`** — every Plan 9 command this machine can run, rc with
+its `rcmain`, and the libraries they are built from — at
+`/pkg/system/<version>/`, laid out as the root it binds onto:
+
+| in the package | bound by `/profile/start.ns` |
+|---|---|
+| `$objtype/bin/` — the commands and rc | `bind /pkg/system/<version>/$objtype/bin /bin` |
+| `lib/rcmain` | `bind -a /pkg/system/<version>/lib /lib` |
+| `pkg.cfg` | — its description, in `ndb` |
+
+It is installed to the system, so `/profile/pkg` lists it:
+`pkg=system version=2026.09.24`. `init` is not in it: boot runs
+`/$objtype/init` before any `/bin` exists.
+
 ## Where things are — no `/store`
 
 *"even better still, /pkg only contains packages. list of installed

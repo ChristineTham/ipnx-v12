@@ -245,7 +245,7 @@ one before:
 | | |
 |---|---|
 | **1. `/profile`** | the system's configuration — `start.ns` (was `/lib/namespace`), `start.rc` (was `/rc/bin/termrc`), `shell.rc`, `stop.rc`, and a `.env` before each — and the user's in `/home/profile`, `/home` being `/usr/$user`. `/rc` retired. `test` vendored, which rc's startup already calls |
-| **2. `/pkg`** | the system's programs as packages in `/pkg/<name>/<version>/`, bound onto `/bin` from the profile, listed in `/profile/pkg`; `rcmain` in rc's. `libndb` and `ndb/query` vendored, which every `.cfg` needs |
+| **2. `/pkg`** | **one package, `system`** (*"how about a system pkg?"*): every Plan 9 command the machine can run and every library they need, vendored whole and built as they are (*"a missing library is not an excuse"*), in `/pkg/system/<version>/`, bound onto `/bin` and `/lib` from `/profile/start.ns`, listed in `/profile/pkg`; `rcmain` in it. `libndb` and `ndb/query` among them |
 | **3. `pkg`** | `install` and `remove`, to the system, the user or the namespace; `pkg.cfg`, `install.rc`, `remove.rc`; a repository mounted as a file server; a SHA-256 per package checked against its index — which needs a hash command |
 | **4. services** | `/service/<name>/` with `service.cfg`, `start.rc`/`stop.rc`, started with their scope and ended by *"hangup"* to its note group |
 | **5. templates and projects** | instantiation; promoting a project with `template.rc`, `pkg.rc`, `service.rc`, `profile.rc`; a project as a window type (with P8's emca) |

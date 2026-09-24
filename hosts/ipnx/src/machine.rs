@@ -590,6 +590,11 @@ impl Wasm {
         config.async_support(true);
         // **The interrupt line** — see [`Clock`].
         config.epoch_interruption(true);
+        // **`setjmp` and `longjmp`** are wasm exceptions on this machine
+        // (`userspace/libc/wasm/setjmp.c`): Plan 9's are two instructions
+        // each on the 386 (`libc/386/setjmp.s`), saving and restoring a
+        // stack pointer this machine does not let a program see.
+        config.wasm_exceptions(true);
         let engine = Engine::new(&config).map_err(|e| e.to_string())?;
         let mut linker: Linker<Guest> = Linker::new(&engine);
         imports(&mut linker).map_err(|e| e.to_string())?;

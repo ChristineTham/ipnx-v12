@@ -21,10 +21,12 @@ bind #p /proc
 bind -c #s /srv
 bind -a #¤ /dev
 
-# standard bin (`plan9/lib/namespace`: `bind /$cputype/bin /bin`). Plan 9's
-# next line, `bind -a /rc/bin /bin`, is gone with /rc: rc scripts are
-# programs, and programs come in packages.
-bind /$objtype/bin /bin
+# standard bin (`plan9/lib/namespace`: `bind /$cputype/bin /bin`) — here the
+# programs are the `system` package's (docs/packages.md), installed to the
+# system, so its binds are these. Plan 9's next line, `bind -a /rc/bin /bin`,
+# went with /rc. rc's startup file is the package's too, at /lib/rcmain.
+bind /pkg/system/2026.09.24/$objtype/bin /bin
+bind -a /pkg/system/2026.09.24/lib /lib
 
 # the user's home: /home is /usr/$user (docs/packages.md), where the user's
 # profile is, at /home/profile

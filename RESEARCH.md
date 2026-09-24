@@ -4629,3 +4629,41 @@ not (`bind -a /etc /tmp; cat /tmp/motd`). `kernel/src/namec.rs` now does
 what `ewalk` does, and `a_union_is_tried_when_its_first_element_errs` fails
 without it. The same session's other kernel finding, one fid space per
 wire, is §16.5.
+
+### 16.9 Building Plan 9's commands as they are (2026-09-24)
+
+**A trial build of all 128 single-file commands** (`plan9/sys/src/cmd/*.c`)
+against the libc, libbio and libauth then vendored, with `mk.sh`'s flags:
+**51 compiled and linked** unchanged. Of the rest, 54 stopped at a header —
+`draw.h` 15, `thread.h` 8, `mach.h` 8, `libsec.h` 6, `String.h` 5,
+`regexp.h` 4, `mp.h` 3, `ip.h` 2, `ndb.h` 1, `ar.h` 1 (a library not
+vendored) — and 23 at the link: `fork` in 10, `execl` 7, `fd2path` 5,
+`mktemp` 4, `postnote` 4, `atnotify` 3, `dial` and `netmkaddr` 2 each, and
+one each of `qlock`, `truerand`, `read9pmsg`, `amount`, `auth_proxy`,
+`fauth`. Two define no `main` of their own. The cut-down `cat`, `echo`, `ls`
+and `tr` written earlier had no cause: Plan 9's own compile unchanged.
+
+**`setjmp` on a machine whose stack cannot be saved.** Plan 9's is two
+instructions a side on the 386 (`libc/386/setjmp.s`): save SP and the return
+pc, restore them. Wasm has no addressable stack. clang lowers `setjmp` and
+`longjmp` onto wasm exception handling (`-mllvm -wasm-enable-sjlj`, with
+`-wasm-use-legacy-eh=false` for the `try_table` encoding these engines
+accept), leaving the library three functions and a tag: `__wasm_setjmp`,
+`__wasm_setjmp_test`, `__wasm_longjmp` and `__c_longjmp`
+(`userspace/libc/wasm/setjmp.c`). `jmp_buf` grows to four longs. wasmtime
+39 exposes exceptions only under its `gc` feature and will not build an
+engine with it unless a collector is compiled in, so the host enables `gc`
+and `gc-null`. Measured: `sed 's/[/y/'` unwinds from `regcomp`'s `longjmp`
+into sed's *"r.e.-using command garbled"* and the shell goes on.
+
+**The store was a shortcut; `u9fs` is the model.** Every time was 0, every
+file mode `0644`, the qid a hash of the path with version 0, there was no
+`Twstat`, a read read the whole file and a write rewrote it. `u9fs`
+(`plan9/sys/src/cmd/unix/u9fs/u9fs.c`) takes the times, mode and inode from
+`stat` (`stat2dir`, `:694`; `plan9mode`, `:609`; `stat2qid`, `:624`, with
+*"qid.vers = st->st_mtime ^ (st->st_size << 8)"*), applies a wstat's mode,
+mtime, name and length in that order (`rwstat`, `:909`), masks a create's
+permission with the directory's (`usercreate`, `:1605`), and reads and writes
+with `pread`/`pwrite`. The store now does each. One consequence, as in
+`u9fs`: a directory's length is the host's (4096), where Plan 9's own file
+servers report 0.
