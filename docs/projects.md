@@ -34,6 +34,7 @@ what they are*: a `.cfg` is `ndb(6)`, a `.rc` is an rc script.
 | file | what it is |
 |---|---|
 | **`project.cfg`** | *"tells us what is in the project -name, version, etc."* |
+| **`project.lock`** | what was installed for it — exact versions and SHA-256 — written by `pkg` |
 | **`template.cfg`** | the template it is promoted into — *"name of template, version, date other properties"* |
 | **`template.rc`** | *"the set of commands to convert a project into a template"* |
 | **`pkg.cfg`**, **`pkg.rc`** | the same, for a package — *"same for pkg, service etc."* |
@@ -74,10 +75,10 @@ binding is user/process speccific."*
    packages bound and its services started; closing the window hangs them
    up.
 2. **`project.cfg` is the manifest** — Cargo's `Cargo.toml` (RESEARCH
-   §16.2): the packages and services it wants. **The lock is not in it**
-   (decided 2026-09-24) — the exact versions and SHA-256 of what was
-   installed, Cargo's `Cargo.lock`. *Open:* where it goes instead
-   ([proposals.md](proposals.md)).
+   §16.2): the packages and services it wants. **The lock is `project.lock`**, beside it
+   (decided 2026-09-24: *"lock can be project.lock"*) — the exact versions
+   and SHA-256 of what was installed, as Cargo keeps `Cargo.lock` beside
+   `Cargo.toml`. It is `ndb`, written by `pkg` and never by hand.
 3. **`/project/<x>` is a binding, per user or process**: the files live
    under their owner's `/usr/<name>` as everything a Plan 9 user owns does,
    and each user binds the projects they have at `/project/<x>`. Two users

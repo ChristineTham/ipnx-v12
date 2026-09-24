@@ -27,6 +27,7 @@ template, profile or project carries says what it is by its extension:
 |---|---|---|
 | **`.rc`** | an rc script, named by its role — `start.rc`, `shell.rc`, `stop.rc`, `install.rc`, `remove.rc` — or by the kind it makes a project into (projects.md) | rc |
 | **`.env`** | environment variables for the script of the same name — `/profile/start.env` for `/profile/start.rc` | the script's starter, before the script |
+| **`.lock`** | what was installed — exact versions and SHA-256, in `ndb` — written by `pkg`, never by hand: `project.lock` | `pkg` |
 | **`.cfg`** | the configuration — `pkg.cfg`, `service.cfg`, `template.cfg`, `profile.cfg`, `project.cfg`: *"name of template, version, date other properties"* | `libndb`; `ndb/query` from rc |
 
 **A command written in rc is named by what is typed** — `lc`, `9fs`,

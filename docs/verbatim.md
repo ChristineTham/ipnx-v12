@@ -399,3 +399,5 @@ On building P7, and on names:
   <br>— cited in `RESEARCH.md` §16.6
 - *"ok"* — after RESEARCH §16.6; taken as accepting that `rcmain` ships in rc's package and keeps its name
   <br>— cited in `docs/packages.md`
+- *"lock can be project.lock"*
+  <br>— cited in `docs/projects.md`

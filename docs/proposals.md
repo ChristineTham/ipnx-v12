@@ -60,13 +60,6 @@ named by what they are*; [projects.md](projects.md)).
 2. **Does `/profile/namespace` take an extension?** It is neither rc nor
    `ndb`: `newns`'s own language (`plan9/sys/src/libauth/newns.c`). Plan 9
    gives it none. *Proposed:* none.
-3. **Where is a project's lock?** Not in `project.cfg` (decided
-   2026-09-24). *Proposed:* a file of its own beside it, as Cargo keeps
-   `Cargo.lock` beside `Cargo.toml` (RESEARCH §16.2), written by `pkg` and
-   never by hand, in `ndb`. What to call it is the open part: `project.lock`
-   brings a fourth extension; a `.cfg` would call generated state
-   configuration.
-
 ## Decided, and moved into the specs
 
 **P7 — a package, a service, a template, a project, a profile** — proposed
@@ -77,7 +70,7 @@ the names were made symmetric — `start.rc`, `start.env`, `pkg.cfg` — and
 every `.cfg` made `ndb`. Of what that left open, decided the same day: a command
 written in rc keeps its bare name; the installed lists stay files of their
 own, not entries in `profile.cfg`; the lock is not in `project.cfg`; and
-promotion is to the user by default, to the system with `su`. And `rcmain` ships in rc's package, keeping its name.
+promotion is to the user by default, to the system with `su`. And `rcmain` ships in rc's package, keeping its name. A project's lock is `project.lock`.
 
 **The scheduler** — proposed and decided 2026-09-21, and it is now
 [implementation.md](implementation.md)'s **P6**, before the registries,
