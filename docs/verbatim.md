@@ -389,3 +389,6 @@ On building P7, and on names:
   <br>— cited in `docs/packages.md`, `docs/projects.md`
 - *"also you need docs/projects.md"*
   <br>— cited in `docs/projects.md`
+- *"why can't this be loaded with env `cat start.env`"* — on the `.env` format, proposals.md
+- *"what is format of namespace file?"*
+- *"I don't understand what /rc/bin had"*
