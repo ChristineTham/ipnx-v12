@@ -199,12 +199,28 @@ concept of /rc."* Plan 9's `/rc` holds three kinds of thing (`plan9/rc`):
    `listen`'s `service` directory — which moves to `/profile`;
 2. **commands written in rc** — most of `/rc/bin`'s 118 files (`9fs`,
    `Kill`, `dircp`, `diffy`, `replica/*` …), bound onto `/bin` by
-   `/lib/namespace:27` (*"bind -a /rc/bin /bin"*). These are programs, not
-   configuration — proposed: they go where programs go, `/bin`, installed
-   like any other;
-3. **`/rc/lib/rcmain`** — rc's own startup file, whose path is compiled into
-   rc (`userspace/rc/ipnx.c:47`, *"char \*Rcmain = "/rc/lib/rcmain""*) —
-   proposed: `/profile/rcmain`, since it configures the shell for every user.
+   `/lib/namespace:27` (*"bind -a /rc/bin /bin"*). Plan 9 keeps them in a
+   directory of their own only because it has no packages. **Here they are
+   a package like any other** — their files in `/store`, bound onto `/bin`
+   (*"Why are these not stored in /store and bound to /bin like a
+   package?"*);
+3. **`/rc/lib/rcmain`** — rc's startup file.
+
+**rc has two startup files, the system's in `/profile` and the user's in
+`/home/profile`** (*"rc should have two startup files - a system one (which
+is in /profile) and a user one (in /home/profile)"*). Plan 9's rc already
+reads exactly two, and in this order (`plan9/rc/lib/rcmain`):
+
+* **the system's, by every rc** — `rcmain`, whose path is compiled into rc
+  (`userspace/rc/ipnx.c:47`, *"char \*Rcmain = "/rc/lib/rcmain""*): it sets
+  `$home`, `$prompt`, `$path`;
+* **the user's, by a login shell** — *"if(flag l && /bin/test -r
+  $home/lib/profile) . $home/lib/profile"* (`rcmain:19`, `:24`).
+
+So the change is two paths and nothing else: **`/profile/rcmain`** for the
+system's (the path compiled into rc) and **`/home/profile/rcmain`** for the
+user's (the path `rcmain` sources). The names keep Plan 9's word for rc's
+startup file, for both — yours to change.
 
 ### What is installed — `/pkg`, `/service`, `/template`
 
@@ -223,8 +239,8 @@ repository's index (§16.1, §16.3). The user's are at `/home/pkg`,
 1. **Whose signature** the repository index carries, and where its keys
    live (apt's are keyrings on the machine; `/credentials` is proposed in
    `platforms.md`, unreviewed).
-2. **The rc-script commands and `rcmain`** — proposed above as `/bin` and
-   `/profile/rcmain`; yours to confirm.
+2. **The names of rc's two startup files** — proposed above as
+   `/profile/rcmain` and `/home/profile/rcmain`.
 3. **Identity**: login, logout, `su`, a daemon's own user — none built, and
    the user scope and a service's user need them. Plan 9's terminal has one
    user, the host owner, and no `su`.

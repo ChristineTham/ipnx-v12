@@ -348,3 +348,5 @@ On servers, and on what a project is:
 - *"what happened to /profile"*
 - *"I think we are getting confused between similar things. I envisaged /profile to contain any files required to configure a system - the kind of stuff in Unix /etc. network config, namespace bindings, init scripts etc. The user's profile is contained in /home (synonym for /usr/<username>), in /home/profile. So the info in /rc probably should be in /profile and we should retire the concept of /rc. Now I am thinking /pkg contains a list of packages installed. /service contains a list of services installed etc. /template has a list of templates etc."*
   <br>— cited in `docs/proposals.md`
+- *"I don't understand /rc/bin? Why are these not stored in /store and bound to /bin like a package? rc should have two startup files - a system one (which is in /profile) and a user one (in /home/profile)"*
+  <br>— cited in `docs/proposals.md`
