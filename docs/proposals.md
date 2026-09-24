@@ -45,107 +45,157 @@ The open questions, in order:
 **Nothing here is built.** The mechanism is: `#ec` attaches, binds under `#e`,
 and takes writes from eve.
 
-## P7 — a package, a template, a profile
+## P7 — a package, a service, a template, a project, a profile
 
-**PROPOSED 2026-09-24 — not reviewed.** Three separate designs, because they
-are three different things (Christine: *"In my original concept they are
-completely different"*). What each IS is hers, quoted; everything else here
-is a proposal. Two Plan 9 mechanisms carry most of it, so each proposal says
-where it uses them:
+**PROPOSED 2026-09-24 — not reviewed.** Separate designs, because they are
+different things (Christine: *"In my original concept they are completely
+different"*; and of servers: *"services and packages should be different.
+maybe we should use different specs for them"*). What each IS is hers,
+quoted (`verbatim.md`); everything else here is a proposal. Two Plan 9
+mechanisms carry most of it:
 
 * **the namespace file** — `bind`, `mount`, `cd`, `.` to include another —
   which `newns` reads (`libauth/newns.c:114`) and `/lib/namespace` is written
-  in; and
-* **`$home/lib/profile`** — the rc script `init` has sourced at login since
-  Plan 9 began (`init.c:178`: *"home=/usr/$user; cd; . lib/profile"*).
+  in. `/proc/<n>/ns` prints a process's namespace in it (`devproc.c`'s
+  `Qns`);
+* **rc scripts run at the right moment** — `/rc/bin/termrc` and `cpurc` at
+  start, which is where Plan 9 starts its servers (`cpurc:9`, `:60`, `:66`:
+  `ndb/cs`, `aux/listen`, `aux/timesync`), and `$home/lib/profile` at login
+  (`init.c:178`).
 
-`/proc/<n>/ns` already prints a process's namespace in the first format
-(`devproc.c`'s `Qns`), which is what makes *"save current namespace config as
-a template"* a read of one file.
+**Not researched as asked.** *"Use existing package managers as an
+inspiration for packages primitives"*: the manuals of FreeBSD `pkg`, apt/dpkg
+and Homebrew could not be read on 2026-09-24 — this environment's network
+proxy refuses those sites. RESEARCH §13 (2026-09-02) has what was read then:
+Debian's control file, four maintainer scripts and `conffiles`; the FreeBSD
+port's `Makefile`, `distinfo` and `pkg-plist`; Homebrew's single-file
+formula. The package primitives below are drawn from that and are to be
+checked against the manuals when they can be read.
 
 ### A package
 
 *"like a FreeBSD pkg or apt… a list files to be bound in the namespace, plus
 potentially initialisation scripts (write out config files, set out
 environment etc.)"*; installed *"to the system… to the namespace… or to the
-user"*.
+user"*, and it may *"modify a user's profile… It can also alter the system's
+environment (/rc, /profile)"*. It may also install a service — a separate
+thing, below.
+
+**Proposed primitives** (after RESEARCH §13's three formats):
+
+| primitive | from | here |
+|---|---|---|
+| name, version, description | Debian `control`, the port `Makefile`, the formula | lines of the package file |
+| dependencies | `Depends:`, `RUN_DEPENDS`, `depends_on` | packages installed first, into the same scope |
+| payload | `data.tar`, the port's staged files, the bottle | a directory in `/store/<name>/<version>`, immutable once verified |
+| where the payload appears | implicit in the archive / `pkg-plist` | **`bind` lines** — a namespace file |
+| checksum | `md5sums`, `distinfo`, `sha256` | the store entry's verification — **open** |
+| scripts | `preinst` `postinst` `prerm` `postrm`; `post_install` | an rc script at install and one at removal |
+| configuration a user may change | `conffiles` | written by the install script into the scope's own files, never into the store; left by removal unless purged |
+| a service | Debian's init scripts, a port's `rc.d` script, a formula's `service` block | **a service file the package carries** — below |
+
+**The three scopes** are where the lines go:
+
+| scope | the binds | the install script |
+|---|---|---|
+| namespace | made now, in the calling process's namespace | run now |
+| user | appended to the user's profile, so every login makes them | run now; environment it sets goes into the profile |
+| system | appended to the system's (`/lib/namespace` today) | run as the host owner; writes land in `/lib`, `/rc` |
+
+**Open:** where the store's bytes come from; what verification is (a hash,
+a signature, and whose); what pruning keeps; how a removal undoes what an
+arbitrary script changed.
+
+### A service
+
+*"servers/daemons… system, user or project specific… into system starts a
+server when system starts, configurable in /rc. In user, starts when user
+logs in, terminates when user logs out. Project - starts when project is
+opened, terminates when project is closed."*
 
 **Proposed:**
 
-1. **Its files are in `/store/<name>/<version>`**, immutable once verified
-   (*"a store entry never changes after verification"*).
-2. **The package file is a namespace file** — its `bind` lines say where the
-   store's files appear (`bind -a /store/go/1.23/bin /bin`) — **plus an rc
-   script** for initialisation, run once at install.
-3. **The three scopes are where the lines go:**
+1. **A service is an rc script** that starts a server and posts it in
+   `/srv` — what `cpurc` does for `ndb/cs` today — carried by a package and
+   installed to a scope.
+2. **Starting is running the script at the scope's beginning:**
 
-   | scope | the binds | the initialisation script |
+   | scope | starts | stops |
    |---|---|---|
-   | namespace | made now, in the calling process's namespace — shared with rc, as `bind` is | run now, its environment the caller's |
-   | user | appended to the user's profile, so every login makes them | run now; what it writes lands in the user's files, and environment it sets goes into the profile |
-   | system | appended to the system's profile (today `/lib/namespace`), so every user gets them | run as the host owner; writes land in the system's files (`/lib`, `/rc`) |
+   | system | at boot, from `/rc` (`termrc`, as Plan 9's servers are) | at shutdown |
+   | user | at login, from the profile | at logout |
+   | project | when the project is opened | when it is closed |
 
-4. **Removing** takes the lines out of the profile they went into, and
-   unbinds them now. What the script wrote is left — apt's `remove` — unless
-   asked (apt's `purge`).
+3. **Stopping is a note to a note group** — Plan 9's own way: when a `rio`
+   window is deleted it writes *"hangup"* to the window's note group
+   (`rio/wind.c:1111`), and when `rio` exits it posts *"hangup"* to every
+   window's (`rio/rio.c:329`). A user's services run in the login's note
+   group and a project's in the project window's, so closing either sends
+   *"hangup"* and its servers end with it. The kernel has note groups and
+   `notepg` already.
 
-**Open:** where the store's bytes come from (a host directory, fetched by the
-host, or `/net` once there is one); what *verification* is (a content hash,
-a signature, and whose); what *pruning* keeps (anything some profile or
-project names?); how the removal of a script's changes is known if the
-script is arbitrary rc.
+**Open:** what *logout* is (there is no login yet); whether a service is
+restarted when it dies; whether `/rc` holds one file per system service or
+lines in `termrc`; how a service's configuration is changed.
 
 ### A template
 
 *"a prototype for a project (ie. a NodeJS project, a Python project) - it may
 install packages, but contains project scaffolding"*; it *"instantiates new
 versions of files (scaffolding), not just binds of files shared across
-namespaces"*; it *"install packages into the current project, so is
-persistent. opening a project ensures all packages are available."*
+namespaces"*.
+
+**Proposed:** a directory under `/template/<name>` — the scaffolding
+(`package.json`, `.gitignore`, editor settings, sample code) and a list of
+packages. Instantiating copies the scaffolding into a new project and writes
+the package list into it, the project's from then on.
+
+**Open:** whether a template may include another (a namespace file's `.`
+would allow it).
+
+### A project
+
+*"a template install packages into the current project, so is persistent.
+opening a project ensures all packages are available."* *"a project is a type
+that is instantiated when user opens project file in a new emca window.
+Projects live in /project/x but the binding is user/process speccific. for 2
+different users, it could be two projects. Or alternatively two users share
+a project."*
 
 **Proposed:**
 
-1. **A template is a directory** under `/template/<name>`: the scaffolding
-   (`package.json`, `.gitignore`, editor settings, sample code), and a list of
-   the packages it installs.
-2. **Instantiating copies the scaffolding** into a new project directory and
-   writes the project's own list of packages into it — the project's, from
-   then on, to change.
-3. **Opening a project** installs every package on its list to the namespace
-   — the namespace scope above — so they are available for as long as the
-   project is open, in the processes working on it, and nowhere else.
+1. **A project is a window type** ([type.md](type.md)): opening a project
+   file opens a new emca window whose manager makes the project's namespace
+   — its packages installed to the namespace scope, its services started —
+   and closing the window ends them (*"hangup"*, above).
+2. **`/project/<x>` is a name in a namespace, not a place on disk.** Each
+   user's profile binds its own projects there; two users binding different
+   directories at `/project/x` have two projects, and binding the same one
+   share it — Plan 9's per-process namespace doing exactly what it is for.
 
-**Open:** what *opening* is on the command line (a command run in the
-project's directory? `cd`?); where new projects go (`platforms.md` proposed
-`/home/project/<name>`, unreviewed); whether a template may include another
-(a namespace file's `.` would allow it).
+**Open:** what the project file is (the list of packages and services, as a
+namespace file?); where a project's files are when no one has it bound;
+what two users sharing a project share of its services — one server, or
+one each.
 
 ### A profile
 
 *"how a user wants their namespace organised, user config files, environment
 variables, login scripts etc."*; it *"may be built from a template, but
-essentially once it is instantiated it belongs to the user"*, or from *"user
+essentially once it is instantiated it belongs to the user"*, or by *"user
 hand editing config files"*; and *"The user can save current namespace config
 as a template for future profiles"*.
 
-**Proposed:**
+**Proposed:** Plan 9's `$home/lib/profile` — an rc script, the user's —
+with a namespace file beside it for the binds, which the script applies;
+`init` sources it at login, as Plan 9's does (`init.c:178`), which ours does
+not yet. Built from a template is instantiating one; by hand is editing it.
+Saving the current configuration as a template writes `/proc/<pid>/ns` and
+the environment (`/env`) into a new template.
 
-1. **A profile is Plan 9's `$home/lib/profile`** — an rc script, the user's to
-   edit — with a namespace file beside it for the binds, which the script
-   applies. `init` sources it at login, as Plan 9's does (`init.c:178`); ours
-   does not yet.
-2. **Built from a template** is instantiating one into the user's home;
-   **by hand** is editing the files; both are the user's afterwards.
-3. **Saving the current configuration as a template** writes
-   `/proc/<pid>/ns` as the template's namespace file, and the environment
-   (`/env`) as the script's assignments.
-
-**Open:** whether there is a separate system profile beside `/lib/namespace`
-and `/rc/bin/termrc`, or whether those ARE it (*"alter the system's
-environment (/rc, /profile)"*); whether `/home` exists as `platforms.md`
-proposed or `$home` stays `/usr/$user` as Plan 9's is; and identity itself —
-`su`, users, logins — which is not built, and which the user and system
-scopes both need.
+**Open:** whether the system profile is `/lib/namespace` and `/rc/bin/termrc`
+or a separate `/profile`; and identity itself — `su`, users, login, logout —
+which is not built, and which the user scopes of packages and services need.
 
 ## Decided, and moved into the specs
 

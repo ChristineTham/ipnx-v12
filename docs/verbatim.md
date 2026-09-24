@@ -335,3 +335,11 @@ a profile is built from:
 - *"a template install packages into the current project, so is persistent. opening a project ensures all packages are available."*
 - *"A profile can be built from a template, or user hand editing config files. The user can save current namespace config as a template for future profiles"*
   <br>— cited in `docs/proposals.md`
+
+On servers, and on what a project is:
+
+- *"packages can also install servers/daemons - these can be system, user or project specific. Example, installing PostgreSQL or MongoDB - into system starts a server when system starts, configurable in /rc. In user, starts when user logs in, terminates when user logs out. Project - starts when project is opened, terminates when project is closed."*
+- *"This practically means a project is a type that is instantiated when user opens project file in a new emca window. Projects live in /project/x but the binding is user/process speccific. for 2 different users, it could be two projects. Or alternatively two users share a project."*
+- *"Use existing package managers as an inspiration for packages primitives"*
+- *"Sorry you are right - services and packages should be different. maybe we should use different specs for them"*
+  <br>— cited in `docs/proposals.md`
