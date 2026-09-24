@@ -354,3 +354,5 @@ On servers, and on what a project is:
   <br>— cited in `docs/proposals.md`
 - *"I am thinking we should actually name them by role rather than distinguishing between system and user. How about: /profile/startrc - executes when system boots /profile/shellrc - executes with every new shell /profile/stoprc - execute when system shuts down User equivalents are in /home/profile, /service/<service name> etc. Packages and templates don"* — the message ends there
   <br>— cited in `docs/proposals.md`
+- *"Packages and templates have configrc instead"* — completing the message above
+  <br>— cited in `docs/proposals.md`

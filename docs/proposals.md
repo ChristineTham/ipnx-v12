@@ -79,8 +79,9 @@ library"*; installed *"to the system… to the namespace… or to the user"*.
    verification"*).
 4. **Its files appear by `bind`** — lines in a namespace file, as
    `/lib/namespace` is written, which `newns` reads.
-5. **Its scripts** — dpkg's four (§16.1): before and after install, before
-   and after removal. Configuration it writes is listed as such and **left
+5. **Its script** — `configrc`, run at install (below, *the scripts*);
+   dpkg has four (§16.1): before and after install, before and after
+   removal. Configuration it writes is listed as such and **left
    on removal, taken only on purge**, as `conffiles` are.
 6. **The three scopes** are where the bind lines go: the calling process's
    namespace now; the user's profile, `/home/profile` (every login); or the
@@ -223,10 +224,19 @@ whether to read `-c`, a file or the terminal. The machinery stays rc's code,
 in rc's package; it runs `/profile/shellrc` and then
 `/home/profile/shellrc`, so the user's settings come last.
 
-**Not yet placed:** what the message breaking off at *"Packages and
-templates don"* says of them; and `emcarc`, named in the previous message,
-which this one does not mention — emca's own `startrc`, or a file of its
-own.
+**Packages and templates have `configrc` instead** (*"Packages and
+templates have configrc instead"*) — they are not started or stopped, they
+are set up:
+
+| script | a package's — `/pkg/<name>/configrc` | a template's — `/template/<name>/configrc` |
+|---|---|---|
+| **`configrc`** | when it is installed, in the scope it is installed to — dpkg's `postinst configure` (`redis-server.postinst`, §16.1) | when it is instantiated, in the new project — writing the scaffolding's configuration |
+
+This replaces `pkgrc` from the proposal before.
+
+**Not yet placed:** `emcarc`, named earlier and not in the role names —
+emca's own `startrc`, or a file of its own; and what undoes a package's
+`configrc` on removal (dpkg has `prerm` and `postrm`, §16.1).
 
 ### What is installed — `/pkg`, `/service`, `/template`
 
@@ -245,8 +255,8 @@ repository's index (§16.1, §16.3). The user's are at `/home/pkg`,
 1. **Whose signature** the repository index carries, and where its keys
    live (apt's are keyrings on the machine; `/credentials` is proposed in
    `platforms.md`, unreviewed).
-2. **Packages and templates' scripts, and `emcarc`** — see *Not yet
-   placed* above.
+2. **`emcarc`, and undoing a package's `configrc`** — see *Not yet placed*
+   above.
 3. **Identity**: login, logout, `su`, a daemon's own user — none built, and
    the user scope and a service's user need them. Plan 9's terminal has one
    user, the host owner, and no `su`.
