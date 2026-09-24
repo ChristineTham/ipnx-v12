@@ -79,7 +79,7 @@ library"*; installed *"to the system… to the namespace… or to the user"*.
    verification"*).
 4. **Its files appear by `bind`** — lines in a namespace file, as
    `/lib/namespace` is written, which `newns` reads.
-5. **Its script** — `configrc`, run at install (below, *the scripts*);
+5. **Its scripts** — `installrc` and `removerc` (below, *the scripts*);
    dpkg has four (§16.1): before and after install, before and after
    removal. Configuration it writes is listed as such and **left
    on removal, taken only on purge**, as `conffiles` are.
@@ -224,19 +224,20 @@ whether to read `-c`, a file or the terminal. The machinery stays rc's code,
 in rc's package; it runs `/profile/shellrc` and then
 `/home/profile/shellrc`, so the user's settings come last.
 
-**Packages and templates have `configrc` instead** (*"Packages and
-templates have configrc instead"*) — they are not started or stopped, they
-are set up:
+**Packages and templates have `installrc` and `removerc`** (*"Packages and
+templates have configrc instead"*, then *"or maybe installrc and
+removerc"*) — they are not started or stopped, they are installed and
+removed:
 
-| script | a package's — `/pkg/<name>/configrc` | a template's — `/template/<name>/configrc` |
-|---|---|---|
-| **`configrc`** | when it is installed, in the scope it is installed to — dpkg's `postinst configure` (`redis-server.postinst`, §16.1) | when it is instantiated, in the new project — writing the scaffolding's configuration |
+| script | a package's — `/pkg/<name>/…` | a template's — `/template/<name>/…` | dpkg's (§16.1) |
+|---|---|---|---|
+| **`installrc`** | at install, in the scope installed to | when a project is instantiated from it, in the new project | `postinst configure` |
+| **`removerc`** | at removal — undoing what `installrc` set up, leaving configuration unless purged | when the template is removed from `/template` | `prerm`, `postrm` |
 
-This replaces `pkgrc` from the proposal before.
+These replace `pkgrc` and, a message later, `configrc`.
 
 **Not yet placed:** `emcarc`, named earlier and not in the role names —
-emca's own `startrc`, or a file of its own; and what undoes a package's
-`configrc` on removal (dpkg has `prerm` and `postrm`, §16.1).
+emca's own `startrc`, or a file of its own.
 
 ### What is installed — `/pkg`, `/service`, `/template`
 
@@ -255,8 +256,7 @@ repository's index (§16.1, §16.3). The user's are at `/home/pkg`,
 1. **Whose signature** the repository index carries, and where its keys
    live (apt's are keyrings on the machine; `/credentials` is proposed in
    `platforms.md`, unreviewed).
-2. **`emcarc`, and undoing a package's `configrc`** — see *Not yet placed*
-   above.
+2. **`emcarc`** — see *Not yet placed* above.
 3. **Identity**: login, logout, `su`, a daemon's own user — none built, and
    the user scope and a service's user need them. Plan 9's terminal has one
    user, the host owner, and no `su`.

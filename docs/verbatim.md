@@ -356,3 +356,5 @@ On servers, and on what a project is:
   <br>— cited in `docs/proposals.md`
 - *"Packages and templates have configrc instead"* — completing the message above
   <br>— cited in `docs/proposals.md`
+- *"or maybe installrc and removerc"* — for packages and templates, in place of `configrc`
+  <br>— cited in `docs/proposals.md`
