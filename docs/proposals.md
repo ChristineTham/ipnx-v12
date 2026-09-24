@@ -206,31 +206,27 @@ concept of /rc."* Plan 9's `/rc` holds three kinds of thing (`plan9/rc`):
    package?"*);
 3. **`/rc/lib/rcmain`** — rc's startup file.
 
-**The scripts are named in Saranos's terms, not Plan 9's** (*"I am not
-liking the plan 9 names (termrc, cpurc) so why not name them after saranos
-terms (systemrc, userrc, servicerc, pkgrc, emcarc) in appropriate
-folders?"*):
+**The scripts are named by role, not by whose they are** (*"I am thinking
+we should actually name them by role rather than distinguishing between
+system and user"*):
 
-| script | where | when it runs | Plan 9's |
-|---|---|---|---|
-| **`systemrc`** | `/profile/systemrc` | once, at boot | `termrc`, `cpurc`, `/cfg/$sysname/*` (§16.3) |
-| **`userrc`** | `/home/profile/userrc` | at login, by the login shell | `$home/lib/profile` (`rcmain:19`, `:24`; `init.c:178`) |
-| **`emcarc`** | `/profile/emcarc`, and the user's own at `/home/profile/emcarc` | when emca starts | `rio -i`'s startup script — *"which typically contains several window commands"* (`rio(1)`) |
-| **`servicerc`** | `/service/<name>/servicerc` | when the service's scope starts | an init script (§16.1), a `cpurc` line (§16.3) |
-| **`pkgrc`** | `/pkg/<name>/pkgrc` | at install and removal, told which — as dpkg's scripts are told `configure`, `remove`, `purge` (`redis-server.postinst`, §16.1) | dpkg's `preinst` … `postrm` (§16.1) |
+| script | the system's — `/profile/…` | the user's — `/home/profile/…` | a service's — `/service/<name>/…` | Plan 9's |
+|---|---|---|---|---|
+| **`startrc`** | *"executes when system boots"* | at login | when its scope starts | `termrc`, `cpurc`, `/cfg/$sysname/*`; `$home/lib/profile`; a `cpurc` line (§16.3) |
+| **`shellrc`** | *"executes with every new shell"* | with every new shell of the user's | — | `rcmain`'s settings — prompt, `$path` (`plan9/rc/lib/rcmain`) |
+| **`stoprc`** | *"execute when system shuts down"* | at logout | when its scope ends | none: Plan 9 ends a window's processes with *"hangup"* (`rio/wind.c:1111`) |
 
-These are **rc's two startup files**, the system's and the user's
-(*"rc should have two startup files - a system one (which is in /profile)
-and a user one (in /home/profile)"*): `systemrc` sets up the system once,
-and what it puts in the environment every shell inherits; `userrc` is read
-by a login shell.
+**`shellrc` is `rcmain`'s configuration, taken out of it.** Plan 9's rc runs
+`rcmain` in every shell (`plan9/rc/lib/rcmain`); part of it is settings —
+the default prompt and `$path` — and part is rc's own machinery, choosing
+whether to read `-c`, a file or the terminal. The machinery stays rc's code,
+in rc's package; it runs `/profile/shellrc` and then
+`/home/profile/shellrc`, so the user's settings come last.
 
-**`rcmain` is not one of them.** It is Plan 9 rc's own code, run by every
-rc (`plan9/rc/lib/rcmain`): it chooses a default prompt and `$path`, and
-decides whether rc reads `-c`, a file or the terminal. That is the program's
-machinery, not configuration, so it stays with rc — in rc's package, in
-`/store` — and its one line naming the user's file changes from
-`$home/lib/profile` to `$home/profile/userrc`.
+**Not yet placed:** what the message breaking off at *"Packages and
+templates don"* says of them; and `emcarc`, named in the previous message,
+which this one does not mention — emca's own `startrc`, or a file of its
+own.
 
 ### What is installed — `/pkg`, `/service`, `/template`
 
@@ -249,8 +245,8 @@ repository's index (§16.1, §16.3). The user's are at `/home/pkg`,
 1. **Whose signature** the repository index carries, and where its keys
    live (apt's are keyrings on the machine; `/credentials` is proposed in
    `platforms.md`, unreviewed).
-2. **`rcmain`** — proposed above as rc's own code, kept in rc's package
-   rather than in `/profile`, since it is the program's machinery.
+2. **Packages and templates' scripts, and `emcarc`** — see *Not yet
+   placed* above.
 3. **Identity**: login, logout, `su`, a daemon's own user — none built, and
    the user scope and a service's user need them. Plan 9's terminal has one
    user, the host owner, and no `su`.
