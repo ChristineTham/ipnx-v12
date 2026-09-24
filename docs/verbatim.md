@@ -343,3 +343,5 @@ On servers, and on what a project is:
 - *"Use existing package managers as an inspiration for packages primitives"*
 - *"Sorry you are right - services and packages should be different. maybe we should use different specs for them"*
   <br>— cited in `docs/proposals.md`
+- *"a package should be like installing a toolchain or a library, services installs daemons"*
+  <br>— cited in `docs/proposals.md`

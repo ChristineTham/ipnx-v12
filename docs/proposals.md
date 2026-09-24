@@ -78,8 +78,9 @@ checked against the manuals when they can be read.
 potentially initialisation scripts (write out config files, set out
 environment etc.)"*; installed *"to the system… to the namespace… or to the
 user"*, and it may *"modify a user's profile… It can also alter the system's
-environment (/rc, /profile)"*. It may also install a service — a separate
-thing, below.
+environment (/rc, /profile)"*. And it is **a toolchain or a library, not a
+daemon**: *"a package should be like installing a toolchain or a library,
+services installs daemons"*. A package does not start anything.
 
 **Proposed primitives** (after RESEARCH §13's three formats):
 
@@ -92,7 +93,7 @@ thing, below.
 | checksum | `md5sums`, `distinfo`, `sha256` | the store entry's verification — **open** |
 | scripts | `preinst` `postinst` `prerm` `postrm`; `post_install` | an rc script at install and one at removal |
 | configuration a user may change | `conffiles` | written by the install script into the scope's own files, never into the store; left by removal unless purged |
-| a service | Debian's init scripts, a port's `rc.d` script, a formula's `service` block | **a service file the package carries** — below |
+| a service | Debian's init scripts, a port's `rc.d` script, a formula's `service` block | **not in a package** — a service is installed on its own (below). Those three formats put a daemon's start script inside its package; here the two are separate |
 
 **The three scopes** are where the lines go:
 
@@ -116,8 +117,10 @@ opened, terminates when project is closed."*
 **Proposed:**
 
 1. **A service is an rc script** that starts a server and posts it in
-   `/srv` — what `cpurc` does for `ndb/cs` today — carried by a package and
-   installed to a scope.
+   `/srv` — what `cpurc` does for `ndb/cs` today — **installed on its own**
+   (*"services installs daemons"*), to a scope. A service may need packages
+   — PostgreSQL's server needs PostgreSQL's binaries — and installs them
+   into the same scope.
 2. **Starting is running the script at the scope's beginning:**
 
    | scope | starts | stops |
@@ -134,7 +137,8 @@ opened, terminates when project is closed."*
    *"hangup"* and its servers end with it. The kernel has note groups and
    `notepg` already.
 
-**Open:** what *logout* is (there is no login yet); whether a service is
+**Open:** what installs a service — `pkg` with a flag, or a command of its
+own; what *logout* is (there is no login yet); whether a service is
 restarted when it dies; whether `/rc` holds one file per system service or
 lines in `termrc`; how a service's configuration is changed.
 
