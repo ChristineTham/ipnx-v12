@@ -236,8 +236,11 @@ removed:
 
 These replace `pkgrc` and, a message later, `configrc`.
 
-**Not yet placed:** `emcarc`, named earlier and not in the role names —
-emca's own `startrc`, or a file of its own.
+**emca is a service** (*"emca is a service"*): its scripts are
+`/service/emca/startrc` and `/service/emca/stoprc`, and `emcarc` is not
+needed. Plan 9 starts its window system from the user's profile — a new
+user's is written to end in *"exec rio"* (`sys/lib/newuser:32`) — which is
+the user scope: emca starting at login and ending at logout.
 
 ### What is installed — `/pkg`, `/service`, `/template`
 
@@ -256,8 +259,7 @@ repository's index (§16.1, §16.3). The user's are at `/home/pkg`,
 1. **Whose signature** the repository index carries, and where its keys
    live (apt's are keyrings on the machine; `/credentials` is proposed in
    `platforms.md`, unreviewed).
-2. **`emcarc`** — see *Not yet placed* above.
-3. **Identity**: login, logout, `su`, a daemon's own user — none built, and
+2. **Identity**: login, logout, `su`, a daemon's own user — none built, and
    the user scope and a service's user need them. Plan 9's terminal has one
    user, the host owner, and no `su`.
 

@@ -358,3 +358,5 @@ On servers, and on what a project is:
   <br>— cited in `docs/proposals.md`
 - *"or maybe installrc and removerc"* — for packages and templates, in place of `configrc`
   <br>— cited in `docs/proposals.md`
+- *"emca is a service"* — answering where `emcarc` goes
+  <br>— cited in `docs/proposals.md`
