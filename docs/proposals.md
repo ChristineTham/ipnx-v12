@@ -60,18 +60,7 @@ named by what they are*; [projects.md](projects.md)).
 2. **Does `/profile/namespace` take an extension?** It is neither rc nor
    `ndb`: `newns`'s own language (`plan9/sys/src/libauth/newns.c`). Plan 9
    gives it none. *Proposed:* none.
-3. **Where does rc's `rcmain` go, and what is it called?** It is not
-   configuration: it is the first thing every rc runs, and rc's own C
-   builds the call — *"fabricate bootstrap code (*=(argv);. /rc/lib/rcmain
-   $*; exit)"* (`plan9/sys/src/cmd/rc/exec.c:147`, `loadboot`, called at
-   `:231`), the path compiled in (`plan9/sys/src/cmd/rc/plan9.c:27`,
-   `Rcmain`). It sets the
-   defaults (`$home`, `$ifs`, `$prompt`, `$path`), imports functions from
-   `/env`, and decides what the shell does — run `-c`, read the terminal, or
-   run a script. It is at `/lib/rcmain` now. *Proposed:* it ships in rc's
-   package in step 2, beside the `rc` binary, and keeps Plan 9's name — the
-   name is compiled into rc, and it is rc's part, not the system's.
-4. **Where is a project's lock?** Not in `project.cfg` (decided
+3. **Where is a project's lock?** Not in `project.cfg` (decided
    2026-09-24). *Proposed:* a file of its own beside it, as Cargo keeps
    `Cargo.lock` beside `Cargo.toml` (RESEARCH §16.2), written by `pkg` and
    never by hand, in `ndb`. What to call it is the open part: `project.lock`
@@ -88,7 +77,7 @@ the names were made symmetric — `start.rc`, `start.env`, `pkg.cfg` — and
 every `.cfg` made `ndb`. Of what that left open, decided the same day: a command
 written in rc keeps its bare name; the installed lists stay files of their
 own, not entries in `profile.cfg`; the lock is not in `project.cfg`; and
-promotion is to the user by default, to the system with `su`.
+promotion is to the user by default, to the system with `su`. And `rcmain` ships in rc's package, keeping its name.
 
 **The scheduler** — proposed and decided 2026-09-21, and it is now
 [implementation.md](implementation.md)'s **P6**, before the registries,

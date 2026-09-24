@@ -192,7 +192,11 @@ concept of /rc."* Plan 9's `/rc` holds three kinds of thing (`plan9/rc`):
    a package like any other** — their files in `/pkg`, bound onto `/bin`
    (*"Why are these not stored in /store and bound to /bin like a
    package?"* — asked before `/store` was dropped);
-3. **`/rc/lib/rcmain`** — rc's startup file.
+3. **`/rc/lib/rcmain`** — rc's startup file, which every rc runs first
+   (`rc/exec.c:147`, the path compiled in at `rc/plan9.c:27`). **It ships
+   in rc's package, beside the `rc` binary, and keeps its name** (decided
+   2026-09-24) — as plan9port keeps it at the top of its installation and
+   finds it there (RESEARCH §16.6). Until step 2 it is at `/lib/rcmain`.
 
 **The scripts are named by role, not by whose they are** (*"I am thinking
 we should actually name them by role rather than distinguishing between

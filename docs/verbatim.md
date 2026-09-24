@@ -397,3 +397,5 @@ On building P7, and on names:
 - *"what else was in /rc"*
 - *"what does plan9port do? it obviously does not have /rc"*
   <br>— cited in `RESEARCH.md` §16.6
+- *"ok"* — after RESEARCH §16.6; taken as accepting that `rcmain` ships in rc's package and keeps its name
+  <br>— cited in `docs/packages.md`
