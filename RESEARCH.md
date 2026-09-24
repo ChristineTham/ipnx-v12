@@ -2721,7 +2721,7 @@ mutate —
 
 | the compensation | why it is unnecessary here |
 |---|---|
-| four maintainer scripts | installing is a **bind**; nothing to prepare or clean up |
+| four maintainer scripts | installing is a **bind**; nothing to prepare or clean up — **overruled 2026-09-24**: Christine's package has *"potentially initialisation scripts (write out config files, set out environment etc.)"* (`verbatim.md`) |
 | `md5sums` | the store is **immutable after verification**; files cannot drift |
 | `pkg-plist` | removal is an **unbind**; the namespace is the installation record |
 | `conffiles` | your `/home/<x>` **binds over** the system's — a different file in a union, never overwritten |

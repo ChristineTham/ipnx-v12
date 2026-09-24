@@ -319,3 +319,11 @@ registries"*:
 
 - *"I am questioning "one format, three registries" - either these are all the same or they are different thing. In my original concept they are completely different"*
   <br>— cited in `docs/implementation.md`
+
+What each of them is:
+
+- *"To me a pkg is like a FreeBSD pkg or apt or any other package manager. It contains a list files to be bound in the namespace, plus potentially initialisation scripts (write out config files, set out environment etc.)."*
+- *"A template is a prototype for a project (ie. a NodeJS project, a Python project) - it may install packages, but contains project scaffolding. eg. package.jso, gitignore, editor config files etc, sample code. The key difference between a template and a pkg is that a templates instantiates new versions of files (scaffolding), not just binds of files shared across namespaces."*
+- *"A profile is how a user wants their namespace organised, user config files, environment variables, login scripts etc."*
+- *"A profile may be built from a template, but essentially once it is instantiated it belongs to the user and up to the user to modify"*
+  <br>— cited in `docs/implementation.md`
