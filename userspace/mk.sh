@@ -137,6 +137,15 @@ link "$pkg/$OBJTYPE/bin/args" "$build/args.o"
 cp -f "$here"/profile/* "$root/profile/"
 cp -f "$here"/usr/kitty/profile/* "$root/usr/kitty/profile/"
 cp -f "$here/etc/motd" "$root/etc/motd"
+# The mount points of Plan 9's root, as its proto file lists them
+# (`sys/lib/sysconfig/proto/portproto`): `/mnt` and `/n` with theirs, and
+# `/fd`, `/net`, `/proc`, `/srv` — empty directories, what a server or a
+# device is mounted on.
+awk -v root="$root" '
+	/^[^\t]/ { top = $1 }
+	top !~ /^(mnt|n|fd|net|proc|srv)$/ || /[*$]/ { next }
+	{ d = gsub(/\t/, ""); path[d] = $1; p = root; for(i = 0; i <= d; i++) p = p "/" path[i]; print p }
+' "$sys/lib/sysconfig/proto/portproto" | xargs mkdir -p
 # Plan 9's `/adm/timezone`, which init copies into `#e/timezone` (`init.c`)
 mkdir -p "$root/adm" && cp -rf "$here/adm/timezone" "$root/adm/"
 cp -f "$here/pkg/system/pkg.cfg" "$pkg/pkg.cfg"

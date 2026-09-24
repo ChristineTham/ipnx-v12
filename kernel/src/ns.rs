@@ -70,17 +70,27 @@ pub struct Element {
     /// `Mount.spec` — `mount`'s aname. Empty for a bind, and for a mount
     /// that gave none.
     pub spec: String,
+    /// `Mount.mountid` — *"m->mountid = incref(&mountid)"* (`pgrp.c:274`):
+    /// the order mounts were made in, which `#p/<n>/ns` lists them by.
+    pub mountid: u32,
+}
+
+/// `static Ref mountid` (`pgrp.c:13`).
+static MOUNTID: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+
+fn newmountid() -> u32 {
+    MOUNTID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl Element {
     pub fn new(chan: Chan) -> Self {
-        Element { chan, mflag: mflag::MREPL, spec: String::new() }
+        Element { chan, mflag: mflag::MREPL, spec: String::new(), mountid: newmountid() }
     }
 
     /// The element as `bind`/`mount` made it: the channel, the flag word and
     /// the spec.
     pub fn with(chan: Chan, flag: i32, spec: &str) -> Self {
-        Element { chan, mflag: flag & mflag::MMASK, spec: spec.to_string() }
+        Element { chan, mflag: flag & mflag::MMASK, spec: spec.to_string(), mountid: newmountid() }
     }
 
     pub fn creatable(chan: Chan) -> Self {
@@ -229,6 +239,12 @@ impl Ns {
         let mut group = vec![to];
         for extra in group[0].chan.umh.clone().into_iter().skip(1) {
             group.push(Element::with(extra.chan, flg, &extra.spec));
+        }
+        // `newmount` numbers them as `cmount` makes them: the old node,
+        // then the new one, then the union it brought (`chan.c:711`, `:721`,
+        // `:731`).
+        for e in group.iter_mut() {
+            e.mountid = newmountid();
         }
         match how {
             Bind::Replace => *list = group,

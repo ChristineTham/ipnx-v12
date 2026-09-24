@@ -485,6 +485,9 @@ pub fn namec(
     Ok(c)
 }
 
+/// `Enocreate` (`port/error.h:8`).
+const ENOCREATE: &str = "mounted directory forbids creation";
+
 /// `namec(..., Acreate, ...)`: walk the parent, then create in the union's
 /// **create element** — the one bound with `MCREATE`. Plan 9 resolves the
 /// last element's parent and creates there (`chan.c`, `namec`'s `Acreate`
@@ -535,9 +538,16 @@ pub fn create(
         }
     }
 
-    // The create lands in the create element if this directory is a union.
-    let target = match ns.create_element(&parent) {
-        Some(e) => e.chan.clone(),
+    // **A directory mounted upon is created in through `createdir`**
+    // (`chan.c:1590`): the element bound with `MCREATE`, and if there is
+    // none, *"mounted directory forbids creation"* (`chan.c:1159`,
+    // `Enocreate`). Only a directory nothing is mounted on is created in
+    // itself.
+    let target = match ns.findmount(&parent) {
+        Some(els) => match els.iter().find(|e| e.create()) {
+            Some(e) => e.chan.clone(),
+            None => return Err(ENOCREATE.into()),
+        },
         None => parent.clone(),
     };
     // **`cnew = cunique(cnew)`** (`chan.c:1606`): *"We need our own copy of
@@ -819,6 +829,20 @@ mod tests {
         assert_eq!(c.dev, DevId::Root);
         let e = namec(&mut tab, &ns, &slash, &slash, "/nothing", A::Access, 0).unwrap_err();
         assert!(e.contains("does not exist"), "{e}");
+    }
+
+    /// **A union with no `MCREATE` element forbids creation** —
+    /// `createdir`'s *"error(Enocreate)"* (`chan.c:1159`) — rather than
+    /// creating in the directory mounted upon.
+    #[test]
+    fn a_union_without_a_create_element_forbids_creation() {
+        let (mut tab, slash) = tab_with_root();
+        let refuses = Refuses.attach("").unwrap();
+        tab.add(Box::new(Refuses));
+        let mut ns = Ns::new();
+        ns.mount(&slash, Element::new(refuses), Bind::After);
+        let e = create(&mut tab, &ns, &slash, &slash, "/new", crate::chan::mode::OWRITE, 0o666).unwrap_err();
+        assert_eq!(e, ENOCREATE);
     }
 
     #[test]

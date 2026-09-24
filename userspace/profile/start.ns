@@ -12,6 +12,7 @@
 # root
 mount -aC #s/boot /root
 bind -a /root /
+bind -c /root/mnt /mnt
 
 # kernel devices
 bind #c /dev

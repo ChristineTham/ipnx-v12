@@ -453,32 +453,46 @@ impl Dev for ProcDev {
                 // **These are the lines that rebuild the namespace.** They
                 // were `#<letter>/<qid>` on both sides, which is a report of
                 // the kernel's bookkeeping and not a namespace.
+                //
+                // **One mount a read, in the order they were made** —
+                // `mntscan` finds the next `mountid` after the last one read
+                // (`devproc.c:1000`), and when there is none the read is the
+                // `cd` line, then nothing. Plan 9 keeps the last id in
+                // `c->aux`; here the reads are told apart by offset, which a
+                // reader going forward advances by exactly the line it was
+                // given — `ns` reads so (`cmd/ns.c:70`), and tokenizes each
+                // read as one line.
                 Q::Ns => {
-                    let mut s = String::new();
+                    let mut lines: Vec<(u32, String)> = Vec::new();
                     for h in proc.ns.borrow().heads() {
                         let Some(from) = &h.from else { continue };
                         for e in &h.mount {
                             let flag = int2flag(e.mflag);
-                            if e.chan.path == "#M" {
+                            let line = if e.chan.path == "#M" {
                                 let wire = e.chan.mchan.as_deref();
                                 let name = wire
                                     .and_then(|w| crate::devsrv::srvname(&self.srv, w))
                                     .or_else(|| wire.map(|w| w.path.clone()))
                                     .unwrap_or_else(|| "#M".to_string());
-                                s.push_str(&format!(
-                                    "mount {flag} {name} {} {}\n",
-                                    from.path, e.spec
-                                ));
+                                format!("mount {flag} {name} {} {}\n", from.path, e.spec)
                             } else {
-                                s.push_str(&format!(
-                                    "bind {flag} {} {}\n",
-                                    e.chan.path, from.path
-                                ));
-                            }
+                                format!("bind {flag} {} {}\n", e.chan.path, from.path)
+                            };
+                            lines.push((e.mountid, line));
                         }
                     }
-                    s.push_str(&format!("cd {}\n", proc.dot.path));
-                    s
+                    lines.sort_by_key(|(id, _)| *id);
+                    lines.push((0, format!("cd {}\n", proc.dot.path)));
+                    let mut at = 0u64;
+                    for (_, l) in lines {
+                        let end = at + l.len() as u64;
+                        if off < end {
+                            let b = &l.as_bytes()[(off - at) as usize..];
+                            return Ok(b[..n.min(b.len())].to_vec());
+                        }
+                        at = end;
+                    }
+                    return Ok(Vec::new());
                 }
                 Q::Wait => return Err("wait is await's, not a read".into()),
                 Q::Ctl | Q::Notepg => return Err(EPERM.into()),
@@ -811,13 +825,23 @@ mod tests {
             .ns
             .borrow_mut()
             .mount(&on, crate::ns::Element::new(to), crate::ns::Bind::Replace);
-        let s = read(&mut d, 1, "ns");
+        // read as `ns` reads (`cmd/ns.c:70`): until a read answers nothing,
+        // each read one line (`devproc.c:952`)
+        let mut c = open(&mut d, 1, "ns", OREAD);
+        let (mut reads, mut off) = (Vec::new(), 0u64);
+        loop {
+            let b = d.read(&mut c, 4096, off).unwrap();
+            if b.is_empty() {
+                break;
+            }
+            off += b.len() as u64;
+            reads.push(String::from_utf8(b).unwrap());
+        }
         // `bind %s %s %s\n` with `to->path` then `from->path`
         // (`devproc.c`). **Paths, not device letters and qids** — these are
         // the lines that rebuild the namespace, and `#|/5` is not a name any
         // shell can be given.
-        assert!(s.contains("bind  #| /\n"), "{s}");
-        assert!(s.contains("cd /\n"), "{s}");
+        assert_eq!(reads, ["bind  #| /\n", "cd /\n"]);
     }
 
     /// `int2flag` (`devproc.c`) composes the letters and gives **`MREPL` the
