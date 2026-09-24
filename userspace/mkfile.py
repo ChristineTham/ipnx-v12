@@ -29,6 +29,7 @@ ROOT = os.environ["root"]
 OBJTYPE = os.environ.get("OBJTYPE", "wasm")
 CC = os.environ["CC"]
 LD = os.environ["LD"]
+NM = os.path.join(os.path.dirname(CC), "llvm-nm")
 AR = os.environ["AR"]
 CFLAGS = os.environ["CFLAGS"].split()
 LDFLAGS = os.environ["LDFLAGS"].split()
@@ -352,6 +353,9 @@ def syslibs():
 
 def link(out, objs, locallibs):
     os.makedirs(os.path.dirname(out), exist_ok=True)
+    # kencc's tentative definitions merge, as common symbols; the wasm
+    # backend has none, so the weak bit is set instead (weaken.py)
+    subprocess.run(["python3", os.path.join(HERE, "weaken.py"), NM] + objs, check=True, capture_output=True)
     cmd = [LD] + LDFLAGS + ["-o", out] + objs + locallibs + syslibs() + [os.path.join(BUILD, "libc.a")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
@@ -470,14 +474,8 @@ def build_cmds(mk, d, rel):
             if e:
                 fail(f"{rel}/{t}" if rel != "cmd" else t, e)
 
-# built by mk.sh, with the substitutions its mkfile leaves to the builder:
-# `ipnx.c` for `plan9.c` and `haventfork.c` for `havefork.c`
-BUILTBYMK = {"cmd/rc"}
-
 def walk(top, want):
     rel = os.path.relpath(top, os.path.join(SYS, "src"))
-    if rel in BUILTBYMK:
-        return
     try:
         mk = Mk(top, BASEENV) if os.path.isfile(os.path.join(top, "mkfile")) else None
     except Exception:

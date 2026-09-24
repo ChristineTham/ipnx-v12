@@ -152,22 +152,7 @@ outcode(tree *t, int eflag)
 			emitf(Xexit);
 			stuffdot(p);
 		} else
-			/*
-			 * c1, NOT c0 — and Plan 9's own line above says so:
-			 * the fork branch compiles `c1`, which is the COMMAND
-			 * inside the backquote, while `c0` is the separator
-			 * list (`ifs`, or whatever `` `` ``(sep){...}`` gave).
-			 * The no-fork branch shipped as `fnstr(c0)`, so the
-			 * child was handed the separators to run — and for a
-			 * bare `` `{...} `` c0 is nil, so it was handed
-			 * nothing at all. Every command substitution answered
-			 * with the value of $ifs.
-			 *
-			 * It is the same story as `-S` in exec.c: this branch
-			 * was written for a port that was not this edition and
-			 * has never been compiled here.
-			 */
-			emits(fnstr(c1));
+			emits(fnstr(c0));
 		break;
 	case ANDAND:
 		outcode(c0, 0);

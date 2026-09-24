@@ -9,13 +9,15 @@
  * asyncify, for `fork` and libthread as well — RESEARCH §16.12).
  *
  *   setjmp(j)      the stack unwinds into `asyncbuf`, the machine keeps a
- *                  copy of it and the stack pointer under j, and winds it
+ *                  copy of it under j's address, writes SP and a pc of 0
+ *                  into j as setjmp.s writes SP and pc, and winds the stack
  *                  back: the call answers 0.
  *   longjmp(j, v)  the stack unwinds and is dropped, the copy kept under j
  *                  is wound back instead, and setjmp's call answers v —
  *                  *"ansi: longjmp(0) => longjmp(1)"*, as setjmp.s says.
- *
- * `jmp_buf` holds nothing the machine reads: its address is the key.
+ *                  If j holds a pc — libthread's `_threadinitstack` writes
+ *                  one (`libthread/wasm.c`) — that function is called on
+ *                  j's stack instead, as setjmp.s would return into it.
  */
 #include <u.h>
 #include <libc.h>

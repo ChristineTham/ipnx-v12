@@ -13,10 +13,12 @@
  *      in declaration order. wasm passes them in the engine's value stack, so
  *      only the compiler can know where a variadic argument is; clang supplies
  *      `__builtin_va_*` and there is no portable alternative.
- *   2. `jmp_buf` is 386's two longs, and the machine keeps what is in
- *      them: a stack cannot be saved by the program here, so `setjmp` and
- *      `longjmp` are the machine's (asyncify, `libc/wasm/setjmp.c`), keyed
- *      by the jmp_buf's address. The JMPBUF indices are 386's.
+ *   2. `jmp_buf` is 386's two longs, SP and pc, with 386's indices. A
+ *      stack cannot be saved by the program here, so `setjmp` and `longjmp`
+ *      are the machine's (asyncify, `libc/wasm/setjmp.c`): it keeps the
+ *      frames under the jmp_buf's address and writes a pc of 0 — and a pc
+ *      that is not 0 is a function to start on SP, as libthread's
+ *      `_threadinitstack` writes one (`libthread/wasm.c`).
  *   3. The FP control bits are 386's, kept so that a program asking for them
  *      compiles as it does there (`hoc`, `awk`). wasm has no floating-point
  *      control register at all — it rounds to nearest and never traps — and

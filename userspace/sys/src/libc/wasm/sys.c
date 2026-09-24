@@ -50,7 +50,7 @@ SYS(alarm)	extern long	__alarm(ulong);
  * `notify`, `noted` and `rendezvous` — NOTIFY is call 28 in
  * `libc/9syscall/sys.h`, and Plan 9 generates their stubs from that file
  * with no C source at all. They are declared here for the same reason the
- * others are. A handler is entered through `__notestart` (procrfork.c).
+ * others are. A handler is entered through `__notestart` (main9.c).
  */
 SYS(notify)	extern int	__notify(void*);
 SYS(noted)	extern int	__noted(int);

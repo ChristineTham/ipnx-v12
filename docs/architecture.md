@@ -168,28 +168,33 @@ default reply"*) and this `boot` asks nothing — one method, no prompt. See
 
 ## Contract: the guest ABI
 
-A Plan 9-dialect binary is a wasm32 module that:
+A Plan 9-dialect binary is a wasm32 module that (as built by
+`userspace/mk.sh`; the stubs are `userspace/sys/src/libc/wasm/sys.c`):
 
-- **imports** `env.memory` (the host supplies linear memory) and the kernel
-  interface: `env.sys` (the trap gate), `env.forka` (bare fork),
-  `env.setj/longj/sjbuf` (setjmp over asyncify), `env.tsave/tjump/tdrop`
-  (libthread contexts), and `guard.rfork` (the lazy-fork guard);
-- **exports** `_start`, called once on the process's own execution context;
-- issues syscalls as **Plan 9's trap numbers and no others**, but for the four
-  the substrate forces — `ARGS` 200, `NOTEGET` 202, `AREAD` 210, `IOWAIT` 211
-  (the derived list is [syscalls.md](syscalls.md)); `read`/`write` are
-  `pread`/`pwrite` at
-  offset −1; strings and buffers cross through a per-process transfer
-  buffer; errors are `errstr` strings, never numbers.
+- **imports** from `sys` the calls of Plan 9's `libc/9syscall`, one import
+  per call, plus `setjmp` and `longjmp` (`libc/wasm/setjmp.c`) — and
+  nothing else;
+- **exports** `memory`, `__stack_pointer`, the function table,
+  `_start(argc, argv, heap, tos)` (`libc/wasm/main9.c`), `__notestart`
+  (where a note handler is entered), `__asyncbuf`/`__asyncbufsize`, and
+  asyncify's `asyncify_*` functions;
+- **is asyncified** (`wasm-opt --asyncify`, instrumenting only paths to
+  `sys.setjmp`, `sys.longjmp` and `sys.rfork`), because the machine owns
+  the stack (RESEARCH §16.12). Errors are `errstr` strings, never numbers.
 
-Fork obligations, chosen per call site:
+The machine's obligations, which are Plan 9's semantics:
 
-- **`procrfork(flags, fn, arg)`** — the lazy fork: the child borrows the
-  parent's context and must reach `exec` (or exit) inside the guard's extent;
-  the guard returns the pid to the parent.
-- **Bare `rfork(RFPROC)` / `fork()`** — dual return requires the binary to be
-  asyncified (a per-binary build flag, never system-wide); the host snapshots
-  memory and both sides rewind.
+- **`rfork(RFPROC)` returns twice**: the stack unwinds, the child is a new
+  instance with a copy of all of memory and the stack wound back in it,
+  where `rfork` answers 0; the parent's is wound back and answers the pid.
+  `RFMEM` is refused until shared memory is built.
+- **`setjmp(j)`** keeps the stack under j's address and writes SP and a pc
+  of 0 into j (`JMPBUFSP`, `JMPBUFPC`, 386's); **`longjmp(j, v)`** winds
+  back the kept stack with setjmp answering v — or, if j holds a pc, calls
+  that function on j's SP with SP as its argument (libthread's new thread,
+  `libthread/wasm.c`).
+- **The `Tos`** (`sys/include/tos.h`) is at the top of the stack, the stack
+  below it, its `pid` written for each process, as `kexit` writes it.
 
 A WASI-dialect binary is selected by its imports: a module importing
 `wasi_snapshot_preview1` (or `wasi_unstable`) gets the WASI shim instead — it

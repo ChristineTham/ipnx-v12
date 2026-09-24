@@ -50,7 +50,10 @@ CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-ex
 # `__stack_pointer` is exported because `notify(Ureg*)` writes the note onto
 # the process's stack below its stack pointer (pc/trap.c:834), and on this
 # machine the stack pointer is that global.
-LDFLAGS="--no-entry --export=_start --export-memory --export=__stack_pointer --stack-first -z stack-size=65536 --allow-multiple-definition"
+# The function table is exported because a jmp_buf's pc is an index into it:
+# libthread's `_threadinitstack` writes one, and `longjmp` starts it
+# (`libthread/wasm.c`).
+LDFLAGS="--no-entry --export=_start --export-memory --export=__stack_pointer --export-table --stack-first -z stack-size=65536 --allow-multiple-definition"
 
 # The rootfs: the programs in ONE package, `system` — Plan 9's userland as
 # this machine runs it, its commands and rc (docs/packages.md) — at
@@ -130,34 +133,16 @@ link "$pkg/$OBJTYPE/bin/args" "$build/args.o"
 cp -f "$here"/profile/* "$root/profile/"
 cp -f "$here"/usr/kitty/profile/* "$root/usr/kitty/profile/"
 cp -f "$here/etc/motd" "$root/etc/motd"
+# Plan 9's `/adm/timezone`, which init copies into `#e/timezone` (`init.c`)
+mkdir -p "$root/adm" && cp -rf "$here/adm/timezone" "$root/adm/"
 cp -f "$here/pkg/system/pkg.cfg" "$pkg/pkg.cfg"
 # what is installed to the system (docs/packages.md): `ndb`, one tuple each
 echo "pkg=system version=$VERSION" >"$root/profile/pkg"
 
-# ---- rc -------------------------------------------------------------------
-# rc is Plan 9's, built from its own mkfile's COMMONOFILES and y.tab, with two
-# substitutions both of which Plan 9 provides for: `haventfork.c` for
-# `havefork.c`, its own file for a system that cannot fork, which this
-# machine cannot; and `ipnx.c` for `plan9.c`, the platform file — Plan 9
-# ships three (`plan9.c`, `unix.c`, `win32.c`) and the mkfile picks one.
-rcdir=$sys/src/cmd/rc
-rcfiles=$(sed -n '/^COMMONOFILES=/,/^$/p' "$rcdir/mkfile" | grep -o '[a-z]*\.\$O' | sed 's/\.\$O$//; s/^havefork$/haventfork/')
-mkdir -p "$build/rc"
-(cd "$build/rc" && bison -y -d "$rcdir/syn.y" >/dev/null 2>&1)
-cp -f "$build/rc/y.tab.h" "$build/rc/x.tab.h"
-objs=()
-for f in $rcfiles ipnx; do
-	obj=$build/rc/$f.o
-	cc "$rcdir/$f.c" "$obj" -I"$rcdir" -I"$build/rc"
-	objs+=("$obj")
-done
-cc "$build/rc/y.tab.c" "$build/rc/y.tab.o" -I"$rcdir" -I"$build/rc"
-objs+=("$build/rc/y.tab.o")
-cp -f "$rcdir/rcmain" "$pkg/lib/rcmain"
-# rc.h's tentative definitions are common symbols everywhere but here;
-# weaken.py explains the whole of it.
-python3 "$here/weaken.py" "$WASI_SDK/bin/llvm-nm" "${objs[@]}"
-link "$pkg/$OBJTYPE/bin/rc" "${objs[@]}"
+# ---- rc's startup ---------------------------------------------------------
+# rc itself is built from its own mkfile, above, with `plan9.c` and
+# `havefork.c`, as on Plan 9. Its startup file goes where plan9.c looks.
+cp -f "$sys/src/cmd/rc/rcmain" "$pkg/lib/rcmain"
 
 # **The second pass.** Some sources are made by a Plan 9 program — libsec's
 # curves by `mpc` (`libsec/port/mkfile`: `%.c:D: %.mp`) — and Plan 9 builds

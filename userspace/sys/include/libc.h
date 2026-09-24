@@ -679,16 +679,6 @@ extern	int	exec(char*, char*[]);
 extern	int	execl(char*, ...);
 extern	int	fork(void);
 extern	int	rfork(int);
-/*
- * ADDED FOR THIS MACHINE, and the only addition to this header.
- *
- * `rfork(RFPROC)` returns twice and a wasm call cannot (RESEARCH §5.2), so a
- * process that makes a process says where the child starts. The name and the
- * signature are Plan 9's own, from <thread.h> (`libthread/create.c:103`);
- * what differs is that it answers a pid, there being no threads here.
- * `libc/wasm/procrfork.c` has the whole of it.
- */
-extern	int	procrfork(void (*)(void*), void*, uint, int);
 extern	int	fauth(int, char*);
 extern	int	fstat(int, uchar*, int);
 extern	int	fwstat(int, uchar*, int);

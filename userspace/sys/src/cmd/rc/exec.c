@@ -194,27 +194,9 @@ main(int argc, char *argv[])
 
 	err = openfd(2);
 	ARGBEGIN {
-	/*
-	 * ONE LINE DIFFERS FROM PLAN 9'S, and `S` is it.
-	 *
-	 * `haventfork.c` — Plan 9's own file for a system that cannot fork,
-	 * which this one cannot — starts every pipeline stage and subshell by
-	 * re-executing rc as `rc -S -c '<text>'` (`rcargv`, `haventfork.c:22`).
-	 * But `S` appears NOWHERE ELSE in rc's source: no case here, no
-	 * `flag['S']` read, not in the usage line. Measured 2026-09-19 over
-	 * `plan9/sys/src/cmd/rc/`: one hit, the one that passes it.
-	 *
-	 * So haventfork.c as shipped cannot work with this exec.c — every
-	 * stage it starts dies on the usage message, silently, because its
-	 * output is the pipe. It is a file kept for a port that was not this
-	 * edition. The flag is accepted here, and `rcmain` reads it (`flag
-	 * S`) to tell a fork from a new shell: only a new shell runs the
-	 * profiles' `shell.rc` (docs/packages.md), as a forked Plan 9 rc never
-	 * runs its startup again.
-	 */
 	case 'd': case 'e': case 'i': case 'l':
 	case 'p': case 'r': case 's': case 'v':
-	case 'x': case 'I': case 'V': case 'S':
+	case 'x': case 'I': case 'V':
 		flag[ARGC()] = flagset;
 		break;
 	case 'c':

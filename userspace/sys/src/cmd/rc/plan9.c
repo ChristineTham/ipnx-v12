@@ -24,7 +24,7 @@ char *syssigname[] = {
 	"term",
 	0
 };
-char *Rcmain = "/rc/lib/rcmain";
+char *Rcmain = "/lib/rcmain";	/* Plan 9's is /rc/lib/rcmain; /rc is retired (docs/packages.md) */
 char *Fdprefix = "/fd/";
 
 void execfinit(void);

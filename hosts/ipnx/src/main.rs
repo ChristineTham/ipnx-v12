@@ -94,7 +94,7 @@ mod tests {
   (import "sys" "exits" (func $exits (param i32)))
   (memory (export "memory") 1)
   (data (i32.const 8) "survived\00")
-  (func (export "_start") (param i32 i32 i32)
+  (func (export "_start") (param i32 i32 i32 i32)
     (drop (call $open (i32.const 0x7fff0000) (i32.const 0)))
     (call $exits (i32.const 8))))
 "#;
@@ -119,7 +119,7 @@ mod tests {
   (data (i32.const 8) "/boot/hello\00")
   (data (i32.const 512) "\00")
   (global $n (mut i32) (i32.const 0))
-  (func (export "_start") (param i32 i32 i32)
+  (func (export "_start") (param i32 i32 i32 i32)
     (global.set $n (call $open (i32.const 8) (i32.const 0)))
     (global.set $n
       (call $pread (global.get $n) (i32.const 256) (i32.const 256) (i64.const -1)))
@@ -146,7 +146,7 @@ mod tests {
   (data (i32.const 8)  "/nothing\00")
   (data (i32.const 64) "opened what is not there\00")
   (data (i32.const 96) "errstr said nothing\00")
-  (func (export "_start") (param i32 i32 i32)
+  (func (export "_start") (param i32 i32 i32 i32)
     (if (i32.ge_s (call $open (i32.const 8) (i32.const 0)) (i32.const 0))
       (then (call $exits (i32.const 64)) (return)))
     ;; `errstr` answers 0 and EXCHANGES; what it wrote is at 256
@@ -168,7 +168,7 @@ mod tests {
   (import "sys" "exits" (func $exits (param i32)))
   (memory (export "memory") 1)
   (data (i32.const 8) "oops\00")
-  (func (export "_start") (param i32 i32 i32) (call $exits (i32.const 8))))
+  (func (export "_start") (param i32 i32 i32 i32) (call $exits (i32.const 8))))
 "#;
         assert_eq!(run(BYE, &[]).unwrap(), "init 1: oops");
     }
@@ -183,7 +183,7 @@ mod tests {
 (module
   (import "sys" "exits" (func $exits (param i32)))
   (memory (export "memory") 1)
-  (func (export "_start") (param $argc i32) (param $argv i32) (param $heap i32)
+  (func (export "_start") (param $argc i32) (param $argv i32) (param $heap i32) (param $tos i32)
     (call $exits (i32.load (i32.add (local.get $argv) (i32.const 4))))))
 "#;
         let mut root = Root::new();
@@ -193,82 +193,6 @@ mod tests {
         k.procs.borrow_mut().ready(1);
         k.schedinit().unwrap();
         assert_eq!(k.procs.borrow().status(1).as_deref(), Some("init 1: second"));
-    }
-
-    /// **`procrfork` makes a second process and runs a function in it.**
-    ///
-    /// The child starts with a COPY of the parent's memory (RESEARCH §15.9):
-    /// it finds the byte the parent wrote just before, and the parent's pid
-    /// the parent read into it. It asks the kernel who it is — `#c/pid` —
-    /// and ends in error if the answer is the parent's, or if the copy is
-    /// missing what the parent wrote. The parent reaps it and checks its
-    /// status is empty, and that what the child wrote went into the child's
-    /// memory and not its own.
-    #[test]
-    fn procrfork_runs_a_function_as_another_process() {
-        const FORK: &str = r##"
-(module
-  (import "sys" "open"      (func $open      (param i32 i32) (result i32)))
-  (import "sys" "pread"     (func $pread     (param i32 i32 i32 i64) (result i32)))
-  (import "sys" "close"     (func $close     (param i32) (result i32)))
-  (import "sys" "exits"     (func $exits     (param i32)))
-  (import "sys" "await"     (func $await     (param i32 i32) (result i32)))
-  (import "sys" "procrfork" (func $procrfork (param i32 i32 i32 i32) (result i32)))
-  (type $fn (func (param i32)))
-  (memory (export "memory") 1)
-  (global (export "__stack_pointer") (mut i32) (i32.const 4096))
-  (table 1 1 funcref)
-  (elem (i32.const 0) $child)
-  (data (i32.const 8)   "#c/pid\00")
-  (data (i32.const 64)  "the child was this process\00")
-  (data (i32.const 96)  "the child's memory is not a copy\00")
-  (data (i32.const 160) "the child wrote into the parent\00")
-  (data (i32.const 200) "the child did not end cleanly\00")
-
-  ;; read `#c/pid` into $at, NUL-terminated, and answer its length
-  (func $pid (param $at i32) (result i32)
-    (local $fd i32) (local $n i32)
-    (local.set $fd (call $open (i32.const 8) (i32.const 0)))
-    (local.set $n
-      (call $pread (local.get $fd) (local.get $at) (i32.const 32) (i64.const -1)))
-    (i32.store8 (i32.add (local.get $at) (local.get $n)) (i32.const 0))
-    (drop (call $close (local.get $fd)))
-    (local.get $n))
-
-  ;; the child: the parent's byte at 512 must be here; its own pid, at
-  ;; 256, must not be the parent's, at 384. `readnum` right-justifies a
-  ;; number in NUMSIZE-1 columns, so a small pid's last digit is at +10.
-  (func $child (param $arg i32)
-    (if (i32.ne (i32.load8_u (i32.const 512)) (i32.const 89))
-      (then (call $exits (i32.const 96)) (return)))
-    (drop (call $pid (i32.const 256)))
-    (if (i32.eq (i32.load8_u (i32.const 266)) (i32.load8_u (i32.const 394)))
-      (then (call $exits (i32.const 64)) (return)))
-    (call $exits (i32.const 0)))
-
-  (func (export "__childstart") (param $f i32) (param $arg i32)
-    (call_indirect (type $fn) (local.get $arg) (local.get $f))
-    (call $exits (i32.const 0)))
-
-  (func (export "_start") (param i32 i32 i32)
-    (local $n i32)
-    (i32.store8 (i32.const 512) (i32.const 89))
-    (drop (call $pid (i32.const 384)))
-    ;; RFFDG
-    (drop (call $procrfork (i32.const 0) (i32.const 0) (i32.const 0) (i32.const 4)))
-    ;; `await`: "pid utime stime real 'status'" — an empty status is the
-    ;; two quotes at the end
-    (local.set $n (call $await (i32.const 640) (i32.const 128)))
-    (if (i32.or
-          (i32.ne (i32.load8_u (i32.add (i32.const 639) (local.get $n))) (i32.const 39))
-          (i32.ne (i32.load8_u (i32.add (i32.const 638) (local.get $n))) (i32.const 39)))
-      (then (call $exits (i32.const 200)) (return)))
-    ;; nothing the child wrote is here
-    (if (i32.ne (i32.load8_u (i32.const 266)) (i32.const 0))
-      (then (call $exits (i32.const 160)) (return)))
-    (call $exits (i32.const 0))))
-"##;
-        assert_eq!(run(FORK, &[]).unwrap(), "");
     }
 }
 
@@ -337,7 +261,7 @@ mod userspace {
         let out = commanding(&["echo", "hello", "it's here"], "");
         assert!(out.contains("hello it's here\n"), "{out:?}");
         let out = commanding(&["cat", "/env/objtype"], "");
-        assert!(out.starts_with("wasm"), "{out:?}");
+        assert!(out.contains("init: starting /bin/rc\nwasm"), "{out:?}");
     }
 
     /// The `init=` line: one token for `tokenize`, holding the command's
@@ -471,7 +395,7 @@ mod userspace {
         assert!(typing("sleep 1\necho awake\n").contains("awake"));
     }
 
-    /// **A `procrfork` child may sleep before it `exec`s.** The file rc runs
+    /// **A forked child may sleep before it `exec`s.** The file rc runs
     /// is the read end of a pipe, so the child sleeps in its `exec` until
     /// `cat` has written the image. A child that ran on its parent's frames
     /// could not sleep there without leaving neither of them enterable
@@ -513,6 +437,14 @@ mod userspace {
         let f = format!("/tmp/ed{}", std::process::id());
         let out = typing(&format!("echo a >{f}; {{echo zz; echo zz; echo 1p; echo q}} | ed {f}; rm {f}\n"));
         assert!(out.contains("2\n?\n?\na\n"), "{out:?}");
+    }
+
+    /// **A fork is a copy.** rc's `@{…}` forks (`havefork.c`): what the
+    /// subshell sets is in its copy of memory and not its parent's.
+    #[test]
+    fn a_subshell_is_a_copy() {
+        let out = typing("x=parent; @{x=child; echo in $x}; echo out $x\n");
+        assert!(out.contains("in child\nout parent\n"), "{out:?}");
     }
 
     /// **`fork` returns twice** (`fork(2)`): `time` forks, the child `exec`s
@@ -914,8 +846,7 @@ mod profiles {
     /// **`shell.rc` runs in every new shell**, the system's and then the
     /// user's — not only the login one, which is all Plan 9's
     /// `$home/lib/profile` gets. A child shell sets its own `$shellpid`; a
-    /// fork — a subshell, `rc -S` under `haventfork.c` — does not, as a
-    /// forked Plan 9 rc does not run its startup again.
+    /// fork — a pipeline's stage — does not run it again (`havefork.c`).
     #[test]
     fn shell_rc_runs_in_every_shell_system_then_user() {
         let root = Scratch::new("profile-shell");
@@ -928,9 +859,9 @@ mod profiles {
         add("profile/shell.env", "envorder=system\n");
         add("usr/kitty/profile/shell.env", "envorder=$envorder^user\n");
         add("profile/shell.rc", "order=system\n");
-        add("usr/kitty/profile/shell.rc", "order=$order^user; shellpid=$pid\n");
+        add("usr/kitty/profile/shell.rc", "order=$order^user; shellpid=$pid; runs=($runs x)\n");
         let out = typing_at(
-            "echo order $order $envorder\nrc -c 'echo child $shellpid $pid'\n{echo fork $shellpid $pid} | cat\n",
+            "echo order $order $envorder\nrc -c 'echo child $shellpid $pid'\necho shell $#runs\n{echo fork $#runs} | cat\n",
             root.path(),
         );
         assert!(out.contains("order systemuser systemuser\n"), "each .env before its .rc: {out:?}");
@@ -938,9 +869,9 @@ mod profiles {
         let pids: Vec<&str> = line.split_whitespace().collect();
         assert_eq!(pids.len(), 2, "{out:?}");
         assert_eq!(pids[0], pids[1], "the child ran shell.rc itself: {out:?}");
-        let line = out.lines().find_map(|l| l.split("fork ").nth(1)).expect(&out);
-        let pids: Vec<&str> = line.split_whitespace().collect();
-        assert_eq!(pids.len(), 2, "{out:?}");
-        assert_ne!(pids[0], pids[1], "a fork is not a new shell: {out:?}");
+        // a fork is a copy of the shell, and has run shell.rc as often as
+        // the shell has; a new shell would have run it once more
+        let count = |w: &str| out.lines().find_map(|l| l.split(w).nth(1).map(str::to_string)).expect(&out);
+        assert_eq!(count("shell "), count("fork "), "a fork is not a new shell: {out:?}");
     }
 }

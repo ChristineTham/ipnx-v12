@@ -1557,9 +1557,8 @@ impl Kernel {
             // `sysrfork` (`sysproc.c`) ends `ready(p); sched();` — **the
             // child goes on the run queue and the parent gives way to it**.
             // Without the `ready` a child exists and nothing can ever pick
-            // it; without the `sched` the parent runs on, which here it
-            // does anyway, because `procrfork` runs the child's few
-            // instructions on the parent's own instance until it `exec`s.
+            // it; without the `sched` the parent runs on. The `sched` is
+            // the machine's, when the parent's `rfork` returns.
             Call::Rfork { flags } => {
                 let child = self.procs.borrow_mut().rfork(up, flags);
                 match child {

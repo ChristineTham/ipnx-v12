@@ -1790,10 +1790,9 @@ impl Procs {
         // `await` would sleep for ever.
         // **Off the run queue.** On Plan 9 a process that exits is `up` and
         // so is on no queue — `runproc` took it off to enter it. Here a
-        // `procrfork` child can be readied and then end before the scheduler
-        // ever enters it, because it runs its few instructions on the
-        // parent's own instance; leaving it queued means `sched` picks a
-        // process the machine has nothing of.
+        // child can be readied and then end before the scheduler ever
+        // enters it; leaving it queued means `sched` picks a process the
+        // machine has nothing of.
         if self.state(pid) == State::Ready {
             let pri = self.tab[&pid].priority;
             self.dequeueproc(pri, pid);

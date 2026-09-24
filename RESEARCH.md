@@ -4783,8 +4783,34 @@ the stores, so every `ed` named its temporary file `/tmp/eXXXXX` and the
 second failed. `kencc.py` now compiles each file to IR with the optimiser
 off, makes every `@.str` an `internal global`, and optimises that.
 
-**Not yet:** `RFMEM` (shared memory, the decision's second half) and
-libthread's machine file (`libthread/wasm.c`, its coroutines by the same
-unwinding). rc and init were cut down to `procrfork` because nothing could
-fork; with `fork`, Plan 9's own `havefork.c`, `plan9.c` and `init.c` can be
-built as they are.
+**libthread's coroutines by the same unwinding.** A thread switch is
+`setjmp(t->sched)` then `longjmp(p->sched, 1)` (`sched.c:111`), and the
+kept stacks are exactly that. What is new is a thread's FIRST run: 386's
+`_threadinitstack` writes a launcher's pc and the new stack's top into the
+`jmp_buf` (`libthread/386.c`), and `longjmp` returns into it. Here
+`setjmp` writes SP and a pc of 0 into the `jmp_buf`, as `setjmp.s` writes
+SP and pc; `libthread/wasm.c` writes the launcher and the stack top as
+`386.c` does; and a `longjmp` that finds a pc calls that function — an
+index into the exported function table — on that stack. libthread builds,
+and `tprimes` runs its sieve.
+
+**`_tos`.** libthread reads the pid from `_tos` (`sched.c:36`), which here
+was a zeroed static. Plan 9's kernel puts the `Tos` at the top of the stack
+(`USTKTOP-sizeof(Tos)`), hands its address to `_main` in AX
+(`libc/386/main9.s`), and writes the pid into it on every return to user
+mode (`kexit`, `pc/trap.c:302`). The machine now does the first two at
+`_start` — which takes the address as a fourth argument — and writes the
+pid at start and in each forked child.
+
+**libc's `procrfork` is gone, and rc and init are Plan 9's.** Once
+libthread built, its `procrfork` (`create.c:103`) shadowed the one this
+libc had added in its name — init linked libthread's and exited at once.
+That addition only ever stood in for `fork`. rc is built from its mkfile
+with `havefork.c` and `plan9.c`, `init.c` is Plan 9's with the profiles
+marked in place, and `libc.h` is Plan 9's again. Measured differences:
+init prints *"init: starting /bin/rc"* as Plan 9's does; a subshell keeps
+its parent's `$pid`, which rc sets once (`exec.c:227`); and init copies
+`/adm/timezone/local` into `#e/timezone`, so `local` is set to GMT's.
+
+**Not yet:** `RFMEM` (shared memory, the decision's second half), which
+libthread's `proccreate` and `threadexec` need (`main.c:130`, `:143`).

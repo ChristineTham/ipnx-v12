@@ -57,21 +57,12 @@ Xbackq(void)
 	int c;
 	char *s, *ewd=&wd[8192], *stop;
 	struct io *f;
+	var *ifs = vlook("ifs");
 	word *v, *nextv;
 	int pfd[2];
 	int pid;
 
-	/*
-	 * The separators come off the ARGUMENT LIST, not from `vlook("ifs")`
-	 * — `havefork.c:88` reads exactly this, and `code.c` pushes it right
-	 * before `Xbackq` precisely so that `` `` ``(':'){...}`` can name its
-	 * own. Taking it from the variable instead left the pushed list
-	 * where it was, and it became the substitution's result: every
-	 * `` `{...} `` answered with the value of $ifs.
-	 */
-	stop = "";
-	if(runq->argv && runq->argv->words)
-		stop = runq->argv->words->word;
+	stop = ifs->val?ifs->val->word:"";
 	if(pipe(pfd)<0){
 		Xerror("can't make pipe");
 		return;
@@ -110,7 +101,6 @@ Xbackq(void)
 	}
 	closeio(f);
 	Waitfor(pid, 1);
-	poplist();	/* ditch split in "stop", as havefork.c:133 does */
 	/* v points to reversed arglist -- reverse it onto argv */
 	while(v){
 		nextv=v->next;
@@ -209,20 +199,6 @@ execforkexec(void)
 				strcat(file, argv[1]);
 				pid = ForkExecute(file, argv+1, mapfd(0), mapfd(1), mapfd(2));
 				if(pid >= 0){
-					/*
-					 * `havefork.c:230` does this and this file
-					 * does not. Without it `havewaitpid` says
-					 * no, `Waitfor` returns before it waits,
-					 * and `setstatus` is never reached — so
-					 * $status keeps whatever it held and no
-					 * command's exit status is ever seen.
-					 *
-					 * The fourth thing found by compiling a
-					 * file that had never been compiled: -S,
-					 * the backquote's subtree, the separator
-					 * list, and this.
-					 */
-					addwaitpid(pid);
 					free(argv);
 					return pid;
 				}

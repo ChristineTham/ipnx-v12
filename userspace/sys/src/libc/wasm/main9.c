@@ -36,27 +36,47 @@ int	_nprivates = NPRIVATES;
 
 void	_sbrkinit(void*);
 
+/*
+ * `tos` is where `main9.s` finds it in AX: the machine puts the `Tos` at the
+ * top of the stack, as Plan 9's kernel does at USTKTOP, and writes the pid
+ * into it, as `kexit` does (`pc/trap.c:302`).
+ */
 __attribute__((export_name("_start")))
 void
-_start(int argc, char *argv[], void *heap)
+_start(int argc, char *argv[], void *heap, Tos *tos)
 {
+	_tos = tos;
 	_sbrkinit(heap);
 	main(argc, argv);
 	exits("main");
 }
 
 /*
- * `_tos` — the top-of-stack structure. Plan 9's kernel maps a page at the top
- * of every process's stack (`portdat.h`'s `Tos`, `sys/include/tos.h`) holding
- * the process id, the cycle-counter frequency and the kernel's clock, and
- * `main9.s` takes its address out of AX, where `touser` left it. Reading a
- * pid then costs no system call.
- *
- * This kernel maps nothing, because this machine has no address space to map
- * into: a module's memory is its own. The structure is therefore an ordinary
- * variable, and `getpid` reads `/dev/pid` (`9sys/getpid.c`) as it does on Plan
- * 9 when `_tos` has not been set up. What reads it here is the pool allocator,
- * for the pid it puts in a panic message.
+ * `_tos` — the top-of-stack structure. Plan 9's kernel puts it at the top
+ * of every process's stack (`portdat.h`'s `Tos`, `sys/include/tos.h`)
+ * holding the process id, the cycle-counter frequency and the kernel's
+ * clock, and `main9.s` takes its address out of AX, where `touser` left it.
+ * Here the machine puts it at the top of the stack too, and `_start` is
+ * given its address. libthread reads the pid from it (`sched.c`).
  */
-static Tos _tosbuf;
-Tos *_tos = &_tosbuf;
+Tos *_tos;
+
+/*
+ * Where a note is taken. The machine calls this, on this instance, when the
+ * kernel hands it a note for the process's handler: `f` is what `notify(2)`
+ * was given, and `msg` is the note, which the machine has written onto this
+ * process's stack below its stack pointer — `notify(Ureg*)`'s own
+ * arrangement (pc/trap.c:834-857). `ureg` is nil: there is no register set
+ * on this machine for a handler to see.
+ *
+ * The handler leaves through `noted`, which never returns here. If it
+ * returns instead, it has returned into nothing — on Plan 9 into pc 0, a
+ * fault — and a fault is what this is.
+ */
+__attribute__((export_name("__notestart")))
+void
+__notestart(void (*f)(void*, char*), void *ureg, char *msg)
+{
+	(*f)(ureg, msg);
+	__builtin_trap();
+}

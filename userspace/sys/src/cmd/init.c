@@ -1,158 +1,41 @@
-/*
- * `init` — build the namespace, then start the shell.
- *
- * `plan9/sys/src/cmd/init.c`, cut to what this system has. What is left of
- * its `main` (`init.c:23`) is the same sequence:
- *
- *	cpu = readenv("#e/cputype");  setenv("#e/objtype", cpu);
- *	user = readenv("#c/user");    systemname = readenv("#c/sysname");
- *	newns(user, 0);
- *	for(;;){ print("\ninit: starting /bin/rc\n"); fexec(rcexec); manual = 1;
- *		cmd = 0; sleep(1000); }
- *
- * WHAT IS NOT HERE: `-c` and the cpu server's startup (`cpustart`, which
- * runs `/rc/bin/cpurc`; there is one service, a terminal, and no cpurc), the
- * priority write to `#p/n/ctl`, `$timezone`, the password prompt, and
- * `closefds` (this process's three are the console and are meant to be
- * inherited). `-m`, `-t` and a command are here: `init [-mt] [cmd]`, the
- * command given by `boot` from `$init` (`boot.c:208`).
- */
 #include <u.h>
 #include <libc.h>
+#include <auth.h>
+#include <authsrv.h>
 
-char	*service = "terminal";
+char*	readenv(char*);
+void	setenv(char*, char*);
+void	cpenv(char*, char*);
+void	closefds(void);
+void	fexec(void(*)(void));
+void	rcexec(void);
+void	cpustart(void);
+void	pass(int);
+void	stopexec(void);
+
+char	*service;
 char	*cmd;
 char	*cpu;
-char	*user;
 char	*systemname;
 int	manual;
-static int gotnote;
-
-/* `pinhead` (`init.c:119`): a note to init is reported and survived — it
- * is the shell's group the interrupt is for, and init is not in it. */
-void
-pinhead(void*, char *msg)
-{
-	gotnote = 1;
-	fprint(2, "init got note '%s'\n", msg);
-	noted(NCONT);
-}
-
-/* `readenv` (`init.c:190`) — a file whose length may be 0 and still have
- * contents, which is true of every file `#c` serves. */
-static char*
-readenv(char *name)
-{
-	char *val;
-	int f, len;
-
-	f = open(name, OREAD);
-	if(f < 0){
-		print("init: can't open %s: %r\n", name);
-		return "*unknown*";
-	}
-	len = 64;
-	val = malloc(len+1);
-	if(val == nil){
-		close(f);
-		return "*unknown*";
-	}
-	len = read(f, val, len);
-	close(f);
-	if(len < 0)
-		len = 0;
-	while(len > 0 && (val[len-1] == '\n' || val[len-1] == ' '))
-		len--;
-	val[len] = '\0';
-	return val;
-}
-
-static void
-setenv(char *name, char *val)
-{
-	int f;
-
-	f = create(name, OWRITE, 0666);
-	if(f < 0){
-		print("init: can't create %s: %r\n", name);
-		return;
-	}
-	write(f, val, strlen(val));
-	close(f);
-}
-
-/*
- * `rcexec` (`init.c:171`). Plan 9's terminal case is
- *
- *	rc -c ". /rc/bin/termrc; home=/usr/$user; cd; . lib/profile"
- *
- * — the system's startup, then the user's — and its `manual` case is a bare
- * `rc`. Both are here for the reason Plan 9 has both: the FIRST rc runs the
- * startup and exits, and the one after it is the shell you type at. The
- * startup is the profiles' (docs/packages.md): each `start.env`, read with
- * `.`, then its `start.rc` — the system's, then the user's. Their
- * `start.ns` files are already applied, by `newns` and `addns` in `main`,
- * and `$home` is already set, by `newns`. A user need not have any of
- * theirs.
- */
-static void
-rcexec(void *v)
-{
-	USED(v);
-	if(cmd)
-		exec("/bin/rc", (char*[]){ "rc", "-c", cmd, nil });
-	else if(manual)
-		exec("/bin/rc", (char*[]){ "rc", nil });
-	else
-		exec("/bin/rc", (char*[]){ "rc", "-c",
-			". /profile/start.env; . /profile/start.rc; cd; "
-			"if(/bin/test -r /home/profile/start.env) . /home/profile/start.env; "
-			"if(/bin/test -r /home/profile/start.rc) . /home/profile/start.rc", nil });
-	print("init: can't exec /bin/rc: %r\n");
-}
-
-/*
- * The end of the session: the user's `stop.env` and `stop.rc`, at logout,
- * and then the system's, at shutdown (docs/packages.md). Plan 9 has no counterpart — its
- * terminal is switched off and its user never logs out.
- */
-static void
-stopexec(void *v)
-{
-	USED(v);
-	exec("/bin/rc", (char*[]){ "rc", "-c",
-		"if(/bin/test -r /home/profile/stop.env) . /home/profile/stop.env; "
-		"if(/bin/test -r /home/profile/stop.rc) . /home/profile/stop.rc; "
-		". /profile/stop.env; . /profile/stop.rc", nil });
-	print("init: can't exec /bin/rc: %r\n");
-}
-
-static void
-stop(void)
-{
-	Waitmsg *w;
-	int pid;
-
-	pid = procrfork(stopexec, nil, 0, RFFDG|RFREND|RFNOTEG);
-	if(pid < 0)
-		return;
-	while((w = wait()) != nil){
-		if(w->pid == pid){
-			free(w);
-			return;
-		}
-		free(w);
-	}
-}
+int	iscpu;
 
 void
 main(int argc, char *argv[])
 {
-	Waitmsg *w;
-	int pid, bare;
+	char *user;
+	int fd;
+	char ctl[128];
 
-	/* `init.c:34` — without `-c`, whose cpu service is not here */
+	closefds();
+	alarm(0);
+
+	service = "cpu";
+	manual = 0;
 	ARGBEGIN{
+	case 'c':
+		service = "cpu";
+		break;
 	case 'm':
 		manual = 1;
 		break;
@@ -162,79 +45,268 @@ main(int argc, char *argv[])
 	}ARGEND
 	cmd = *argv;
 
-	/* `init.c:56` — the name of the machine, and therefore of the
-	 * directory its binaries are in. `/profile/start.ns` reads it as
-	 * `$objtype`, and the machine set `cputype` (`pc/main.c:252`). */
+	snprint(ctl, sizeof(ctl), "#p/%d/ctl", getpid());
+	fd = open(ctl, OWRITE);
+	if(fd < 0)
+		print("init: warning: can't open %s: %r\n", ctl);
+	else
+		if(write(fd, "pri 10", 6) != 6)
+			print("init: warning: can't set priority: %r\n");
+	close(fd);
+
 	cpu = readenv("#e/cputype");
 	setenv("#e/objtype", cpu);
+	setenv("#e/service", service);
+	cpenv("/adm/timezone/local", "#e/timezone");
 	user = readenv("#c/user");
 	systemname = readenv("#c/sysname");
-	setenv("#e/service", service);
-	setenv("#e/user", user);
-	setenv("#e/sysname", systemname);
 
-	/* `newns(user, 0)` — the namespace this instance is configured to
-	 * have, from `/profile/start.ns`. */
-	if(newns(user, 0) < 0)
-		print("init: can't build namespace: %r\n");
-
-	/* The user's namespace, added to the system's at login:
-	 * `/home/profile/start.ns` (docs/packages.md), so the user's binds come
-	 * after the system's. `addns` is libauth's (`newns.c:120`), what Plan
-	 * 9's `auth/newns -a` calls (`cmd/auth/newns.c:52`) — without its
-	 * `rfork(RFNAMEG)`, because this namespace is the one every shell after
-	 * it shares. Plan 9's init has no such step: its users bind in
-	 * `$home/lib/profile`, as rc commands. */
-	if(access("/home/profile/start.ns", AREAD) == 0 && addns(user, "/home/profile/start.ns") < 0)
-		print("init: can't add /home/profile/start.ns: %r\n");
-
+	newns(user, 0);
 	/*
-	 * Plan 9 goes round forever (`init.c:66`): the startup rc — or the
-	 * one running the command init was given — exits, `manual` becomes 1
-	 * and `cmd` 0, and every rc after it is the bare interactive one,
-	 * because a terminal does not end, so a shell that exited is a shell
-	 * that must be started again.
-	 *
-	 * **Input CAN end here**, and that is the one difference. A host
-	 * terminal closes, `#c`'s `consread` answers that as the `^D` its
-	 * user would have typed, and every shell after it reads the same
-	 * nothing — so a bare shell's exit is the end of the session rather
-	 * than a reason to start another. Plan 9's terminal does not end, so
-	 * its loop does not need the test.
-	 *
-	 * `sleep(1000)` is Plan 9's own last line of the loop and is here for
-	 * the reason it is there: a shell that dies at once must not be
-	 * restarted at once.
+	 * ipnx: the user's namespace, added to the system's at login —
+	 * `/home/profile/start.ns` (docs/packages.md), so the user's binds
+	 * come after the system's. `addns` is what `auth/newns -a` calls
+	 * (`cmd/auth/newns.c:52`).
 	 */
+	if(access("/home/profile/start.ns", AREAD) == 0)
+		addns(user, "/home/profile/start.ns");
+	iscpu = strcmp(service, "cpu")==0;
+
+	if(iscpu && manual == 0)
+		fexec(cpustart);
+
 	for(;;){
-		bare = cmd == nil && manual;
-		/* `fexec` (`init.c:127`): the child is put in a note group of its
-		 * own — *"rfork(RFNOTEG)"* — so an interrupt reaches the shell and
-		 * what it runs, and not init. */
-		pid = procrfork(rcexec, nil, 0, RFFDG|RFREND|RFNOTEG);
-		if(pid < 0){
-			print("init: can't start rc: %r\n");
-			exits("rc");
+		print("\ninit: starting /bin/rc\n");
+		/*
+		 * ipnx: **input can end here.** A host terminal closes, and
+		 * `#c`'s `consread` answers that as the ^D its user would have
+		 * typed, so every shell after it reads the same nothing: a bare
+		 * shell's exit is the end of the session, and the profiles'
+		 * `stop.rc` runs (docs/packages.md). Plan 9's terminal does not
+		 * end, so its loop does not need the test.
+		 */
+		if(cmd == 0 && manual){
+			fexec(rcexec);
+			fexec(stopexec);
+			exits(nil);
 		}
-		notify(pinhead);
+		fexec(rcexec);
+		manual = 1;
+		cmd = 0;
+		sleep(1000);
+	}
+}
+
+void
+pass(int fd)
+{
+	char key[DESKEYLEN];
+	char typed[32];
+	char crypted[DESKEYLEN];
+	int i;
+
+	for(;;){
+		print("\n%s password:", systemname);
+		for(i=0; i<sizeof typed; i++){
+			if(read(0, typed+i, 1) != 1){
+				print("init: can't read password; insecure\n");
+				return;
+			}
+			if(typed[i] == '\n'){
+				typed[i] = 0;
+				break;
+			}
+		}
+		if(i == sizeof typed)
+			continue;
+		if(passtokey(crypted, typed) == 0)
+			continue;
+		seek(fd, 0, 0);
+		if(read(fd, key, DESKEYLEN) != DESKEYLEN){
+			print("init: can't read key; insecure\n");
+			return;
+		}
+		if(memcmp(crypted, key, sizeof key))
+			continue;
+		/* clean up memory */
+		memset(crypted, 0, sizeof crypted);
+		memset(key, 0, sizeof key);
+		return;
+	}
+}
+
+static int gotnote;
+
+void
+pinhead(void*, char *msg)
+{
+	gotnote = 1;
+	fprint(2, "init got note '%s'\n", msg);
+	noted(NCONT);
+}
+
+void
+fexec(void (*execfn)(void))
+{
+	Waitmsg *w;
+	int pid;
+
+	switch(pid=fork()){
+	case 0:
+		rfork(RFNOTEG);
+		(*execfn)();
+		print("init: exec error: %r\n");
+		exits("exec");
+	case -1:
+		print("init: fork error: %r\n");
+		exits("fork");
+	default:
 	casedefault:
+		notify(pinhead);
 		gotnote = 0;
 		w = wait();
 		if(w == nil){
 			if(gotnote)
 				goto casedefault;
-			print("init: wait: %r\n");
-			exits(nil);
+			print("init: wait error: %r\n");
+			break;
+		}
+		if(w->pid != pid){
+			free(w);
+			goto casedefault;
+		}
+		if(strstr(w->msg, "exec error") != 0){
+			print("init: exit string %s\n", w->msg);
+			print("init: sleeping because exec failed\n");
+			free(w);
+			for(;;)
+				sleep(1000);
 		}
 		if(w->msg[0])
 			print("init: rc exit status: %s\n", w->msg);
 		free(w);
-		if(bare){
-			stop();
-			exits(nil);
-		}
-		manual = 1;
-		cmd = nil;
-		sleep(1000);
+		break;
 	}
+}
+
+void
+rcexec(void)
+{
+	if(cmd)
+		execl("/bin/rc", "rc", "-c", cmd, nil);
+	else if(manual || iscpu)
+		execl("/bin/rc", "rc", nil);
+	else if(strcmp(service, "terminal") == 0)
+		/* ipnx: the profiles' startup (docs/packages.md) — each
+		 * `start.env`, then its `start.rc`, the system's and then the
+		 * user's; `$home` is set by newns */
+		execl("/bin/rc", "rc", "-c",
+			". /profile/start.env; . /profile/start.rc; cd; "
+			"if(/bin/test -r /home/profile/start.env) . /home/profile/start.env; "
+			"if(/bin/test -r /home/profile/start.rc) . /home/profile/start.rc", nil);
+	else
+		execl("/bin/rc", "rc", nil);
+}
+
+/*
+ * ipnx: the end of the session — the user's `stop.env` and `stop.rc`, at
+ * logout, then the system's (docs/packages.md). Plan 9's terminal is
+ * switched off and its user never logs out.
+ */
+void
+stopexec(void)
+{
+	execl("/bin/rc", "rc", "-c",
+		"if(/bin/test -r /home/profile/stop.env) . /home/profile/stop.env; "
+		"if(/bin/test -r /home/profile/stop.rc) . /home/profile/stop.rc; "
+		". /profile/stop.env; . /profile/stop.rc", nil);
+}
+
+void
+cpustart(void)
+{
+	execl("/bin/rc", "rc", "-c", "/rc/bin/cpurc", nil);
+}
+
+char*
+readenv(char *name)
+{
+	int f, len;
+	Dir *d;
+	char *val;
+
+	f = open(name, OREAD);
+	if(f < 0){
+		print("init: can't open %s: %r\n", name);
+		return "*unknown*";	
+	}
+	d = dirfstat(f);
+	if(d == nil){
+		print("init: can't stat %s: %r\n", name);
+		return "*unknown*";
+	}
+	len = d->length;
+	free(d);
+	if(len == 0)	/* device files can be zero length but have contents */
+		len = 64;
+	val = malloc(len+1);
+	if(val == nil){
+		print("init: can't malloc %s: %r\n", name);
+		return "*unknown*";
+	}
+	len = read(f, val, len);
+	close(f);
+	if(len < 0){
+		print("init: can't read %s: %r\n", name);
+		return "*unknown*";
+	}else
+		val[len] = '\0';
+	return val;
+}
+
+void
+setenv(char *var, char *val)
+{
+	int fd;
+
+	fd = create(var, OWRITE, 0644);
+	if(fd < 0)
+		print("init: can't open %s\n", var);
+	else{
+		fprint(fd, val);
+		close(fd);
+	}
+}
+
+void
+cpenv(char *file, char *var)
+{
+	int i, fd;
+	char buf[8192];
+
+	fd = open(file, OREAD);
+	if(fd < 0)
+		print("init: can't open %s\n", file);
+	else{
+		i = read(fd, buf, sizeof(buf)-1);
+		if(i <= 0)
+			print("init: can't read %s: %r\n", file);
+		else{
+			close(fd);
+			buf[i] = 0;
+			setenv(var, buf);
+		}
+	}
+}
+
+/*
+ *  clean up after /boot
+ */
+void
+closefds(void)
+{
+	int i;
+
+	for(i = 3; i < 30; i++)
+		close(i);
 }

@@ -119,13 +119,12 @@ A tick that falls due during a call is taken at the call's end, still
 taken at `spllo`. Every call ends as `syscall()` does, in *"if(up->delaysched)
 sched();"* (`pc/trap.c:778`).
 
-**A `procrfork` child is a process of its own from the start** (2026-09-23;
-RESEARCH §15.9): a new instance of the parent's image, with a copy of the
-parent's memory and the parent's stack pointer, on a fiber of its own. It
-can sleep before it `exec`s — `exec` itself reads its image through a pipe
-or a server and waits there — and the parent goes on. It used to run on
-the parent's own frames, where a sleep left neither process enterable.
-`RFMEM` cannot be given on this machine and is refused. An image the
+**A forked child is a process of its own from the start** (2026-09-23;
+RESEARCH §15.9, §16.12): a new instance of the parent's image, with a copy
+of the parent's memory, its stack wound back in it, on a fiber of its own.
+It can sleep before it `exec`s — `exec` itself reads its image through a
+pipe or a server and waits there — and the parent goes on. `RFMEM` is
+refused until shared memory is built. An image the
 machine cannot run fails `exec` with *"exec header invalid"*, leaving the
 process in its old image; it used to end the whole system from inside the
 scheduler.
@@ -276,13 +275,14 @@ reaches the kernel through globals. Here the machine goes out of the kernel
 for the call and comes back before anything else can ask.
 
 `hosts/ipnx` serves the whole call list as imports — the counterpart of
-`libc/9syscall/mkfile`'s generated assembly — plus **`procrfork`**, which was
-how a process made a process before this machine could return twice from one
-call (RESEARCH §5.2, §11). **`rfork(RFPROC)` returns twice** (2026-09-24,
-RESEARCH §16.12): every image is asyncified, the stack unwinds to the
-machine, and the child is a new instance with a copy of memory and the stack
-wound back in it. `setjmp` and `longjmp` are the same mechanism. `RFMEM`
-is refused until shared memory is built. A failed call answers −1 and leaves its reason for
+`libc/9syscall/mkfile`'s generated assembly, and nothing else: **`rfork(RFPROC)`
+returns twice** (2026-09-24, RESEARCH §16.12). Every image is asyncified,
+the stack unwinds to the machine, and the child is a new instance with a
+copy of memory and the stack wound back in it. `setjmp` and `longjmp` are
+the same mechanism, and a `jmp_buf` holding a pc — libthread's new thread —
+starts that function on its stack. `procrfork`, the libc addition that
+stood in for `fork` until then, is gone, and rc and init are Plan 9's own
+fork-based code. `RFMEM` is refused until shared memory is built. A failed call answers −1 and leaves its reason for
 `errstr`, which is Plan 9's convention rather than an error type crossing the
 boundary.
 
@@ -317,10 +317,12 @@ mkfiles, and every linked image run through `wasm-opt --asyncify` (RESEARCH
 | `mkfile.py` | reads each mkfile as mk does — continuation, comments per physical line, `<` includes, `${VAR:a%b=c%d}`, backquotes (rc's `reduce` done natively), `DIRS` below first, `cc` first in `cmd` — and builds what it declares: `mksyslib`/`mklib` libraries (members added, `ar vu`), `mkone`, `mkmany`, the one-file programs of `cmd/mkfile`, explicit `$O.x:` links and `%.$O: ../cc/%.c` metarules; `init` to `/$objtype/init` (`cmd/mkfile:116`) |
 | `kencc.py` | **Plan 9's C as clang compiles it**, a derivation into `build/kencc/` (RESEARCH §16.10): `-Dconst=`; every unnamed member written `union { T; T T; }` — or only named where kencc's lookup would find another member first; the conversions kencc promotes, written `&(E)->T` from clang's own diagnostics; absolute includes; old designators; block-scope `static`; prototypes that disagree with their definitions; and string literals as writable data, as kencc's are (`8c/swt.c:106`) — IR with the optimiser off, `@.str` made `internal global`, then optimised |
 | `wasm/include/u.h`, `wasm/mkfile` | the **wasm32 architecture**: 386's `u.h` with clang's `va_list`, a `jmp_buf` whose address the machine keys its saved stack by, and 386's FP constants |
-| `sys/src/libc/wasm/` | the machine-dependent half of libc, what `libc/386` is for the 386: the call stubs (`sys.c`, which also makes a `notejmp` jump on the way back), `_start` (`main9.c`), `sbrk`, `procrfork`, `setjmp` (calls to the machine that unwind the stack, and the buffer it unwinds into), `tas` and the atomics, `execl`, `notejmp`, `cycles` (0: no counter), the FP control words, and the profiling pair. **libc is all of `port`, `9sys` and `fmt`**, less what this directory replaces — nothing of Plan 9's left out (the cut-down `lock.c` and `mem.c` are gone) |
-| **built** | **34 of the 36 libraries** — libsec among them, its curve tables made by the system's own `mpc` — and **277 programs** in `/pkg/system/2026.09.24/wasm/bin` |
-| **not built** | `libthread` (its `wasm.c`: threads are coroutines on stacks of their own, by the same unwinding, and procs share memory — `RFMEM`, shared memory; neither built yet) and `libdynld` (`dynld-wasm.c`); and so 234 programs, about 70 of them for want of libthread. `build/failed` is the list |
-| changed from Plan 9 | `sys/include/libc.h` (`procrfork`), `libc/9sys/nsec.c` (one cast), `libauth/newns.c` (`/profile/start.ns`), rc's `code.c`, `exec.c`, `haventfork.c` (fixes to Plan 9's own no-fork file) and `rcmain`, `cmd/init.c` (the profiles), and `ipnx.c`, rc's platform file |
+| `sys/src/libc/wasm/` | the machine-dependent half of libc, what `libc/386` is for the 386: the call stubs (`sys.c`, which also makes a `notejmp` jump on the way back), `_start` (`main9.c`, given the `Tos` the machine puts at the top of the stack, as `main9.s` is given it in AX), `sbrk`, `setjmp` (calls to the machine that unwind the stack, and the buffer it unwinds into), `tas` and the atomics, `execl`, `notejmp`, `cycles` (0: no counter), the FP control words, and the profiling pair. **libc is all of `port`, `9sys` and `fmt`**, less what this directory replaces — nothing of Plan 9's left out (the cut-down `lock.c` and `mem.c` are gone) |
+| **built** | **35 of the 36 libraries** — libsec among them, its curve tables made by the system's own `mpc`, and libthread, its threads coroutines by the machine's `setjmp`/`longjmp` — and **296 programs** in `/pkg/system/2026.09.24/wasm/bin`, rc and init among them as Plan 9's own |
+| **not built** | `libdynld` (`dynld-wasm.c`), and 215 programs — `fauth` 25, libsec's `sha1` and ciphers, `yylex` (lex's library), the compilers' generated files. `build/failed` is the list. libthread's `proccreate` and `threadexec` build and are refused at run time: they need `RFMEM` |
+| `sys/src/libthread/wasm.c` | libthread's machine file, after `386.c`: a new thread's stack, and the launcher its `jmp_buf` names |
+| changed from Plan 9 | `libc/9sys/nsec.c` (one cast), `libauth/newns.c` (`/profile/start.ns`), rc's `plan9.c` (`Rcmain` is `/lib/rcmain`) and `rcmain` (the profiles' `shell.rc`), `cmd/init.c` (the profiles: the user's `start.ns`, the startup, and the stop at the end of the session), each change marked `ipnx:` in place |
+| `adm/timezone` | Plan 9's, vendored; init copies `local` into `#e/timezone`, and `local` — a site's choice, US_Eastern in the Labs' tree — is GMT's |
 | `profile/`, `usr/kitty/profile/`, `etc/motd`, `pkg/system/pkg.cfg` | the system's configuration and kitty's (P7 step 1; docs/packages.md), and the `system` package's description |
 
 **The system boots itself.** `cargo run -p ipnx` is `initcode.c:21` and nothing
