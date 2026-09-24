@@ -367,3 +367,9 @@ Of the two questions left open — whose signature an index carries, and identit
   <br>— cited in `RESEARCH.md`
 - *"plan 9 way"* — choosing, for verification, a hash per package over an authenticated connection rather than apt's signed index
   <br>— cited in `docs/proposals.md`
+
+On `/store`:
+
+- *"I am wondering whether we need store. Why can files be in /pkg/name/version/... and /pkg/installed contains installed packages"*
+- *"even better still, /pkg only contains packages. list of installed packages is /profile/pkg etc"*
+  <br>— cited in `docs/proposals.md`

@@ -77,7 +77,7 @@ library"*; installed *"to the system… to the namespace… or to the user"*.
    index fetched over an authenticated connection** — the 9P session
    authenticated through `factotum`, as `srv` does without `-n`. No signed
    index and no keyring: trust is the connection, as everywhere in Plan 9.
-   A package is copied into `/store/<name>/<version>` only if its hash
+   A package is copied into `/pkg/<name>/<version>/` only if its hash
    matches the index, as 9legacy's `replica` refuses a file whose hash does
    not match its log (`applylog.c:1055`), and the store entry never changes
    after (*"a store entry never changes after verification"*). The hash is
@@ -90,11 +90,11 @@ library"*; installed *"to the system… to the namespace… or to the user"*.
    on removal, taken only on purge**, as `conffiles` are.
 6. **The three scopes** are where the bind lines go: the calling process's
    namespace now; the user's profile, `/home/profile` (every login); or the
-   system's, `/profile` (every user) — and the package is listed in `/pkg`
-   (or `/home/pkg`) as installed.
+   system's, `/profile` (every user) — and the package is listed as
+   installed in `/profile/pkg` (or `/home/profile/pkg`).
 7. **Pruning** — apt's marking (§16.1): a package installed only because
-   another needed it is marked so; a store entry that no profile, project or
-   system configuration names — directly or as a dependency — may be
+   another needed it is marked so; a version in `/pkg` that no profile or
+   project lists — directly or as a dependency — may be
    pruned (*"the store must be prunable"*).
 8. **A lock** — Cargo's (§16.2): where a package is installed persistently
    (a profile, a project), the exact version and its SHA-256 are recorded,
@@ -122,7 +122,8 @@ opened, terminates when project is closed."* *"services installs daemons."*
    `listen` runs a service as `none` in a namespace made from a namespace
    file (`/lib/namespace.httpd`, §16.3); Debian runs `redis` as user
    `redis` (§16.1).
-5. **Installed is listed in `/service`** (the user's in `/home/service`);
+5. **Installed is listed in `/profile/service`** (the user's in
+   `/home/profile/service`);
    **disabled is Plan 9's leading `!`** (`!tcp515`, §16.3). Enabling, starting, stopping
    and disabling are four acts, as in dpkg's scripts (§16.1).
 6. **When it runs:**
@@ -207,9 +208,9 @@ concept of /rc."* Plan 9's `/rc` holds three kinds of thing (`plan9/rc`):
    `Kill`, `dircp`, `diffy`, `replica/*` …), bound onto `/bin` by
    `/lib/namespace:27` (*"bind -a /rc/bin /bin"*). Plan 9 keeps them in a
    directory of their own only because it has no packages. **Here they are
-   a package like any other** — their files in `/store`, bound onto `/bin`
+   a package like any other** — their files in `/pkg`, bound onto `/bin`
    (*"Why are these not stored in /store and bound to /bin like a
-   package?"*);
+   package?"* — asked before `/store` was dropped);
 3. **`/rc/lib/rcmain`** — rc's startup file.
 
 **The scripts are named by role, not by whose they are** (*"I am thinking
@@ -234,7 +235,7 @@ templates have configrc instead"*, then *"or maybe installrc and
 removerc"*) — they are not started or stopped, they are installed and
 removed:
 
-| script | a package's — `/pkg/<name>/…` | a template's — `/template/<name>/…` | dpkg's (§16.1) |
+| script | a package's — `/pkg/<name>/<version>/…` | a template's — `/template/<name>/…` | dpkg's (§16.1) |
 |---|---|---|---|
 | **`installrc`** | at install, in the scope installed to | when a project is instantiated from it, in the new project | `postinst configure` |
 | **`removerc`** | at removal — undoing what `installrc` set up, leaving configuration unless purged | when the template is removed from `/template` | `prerm`, `postrm` |
@@ -247,17 +248,31 @@ needed. Plan 9 starts its window system from the user's profile — a new
 user's is written to end in *"exec rio"* (`sys/lib/newuser:32`) — which is
 the user scope: emca starting at login and ending at logout.
 
-### What is installed — `/pkg`, `/service`, `/template`
+### Where things are — no `/store`
 
-*"/pkg contains a list of packages installed. /service contains a list of
-services installed etc. /template has a list of templates etc."*
+*"even better still, /pkg only contains packages. list of installed
+packages is /profile/pkg etc"* — decided 2026-09-24, replacing `/store`:
 
-Each is **the record of what is installed**, one entry per item — dpkg's
-`/var/lib/dpkg/info/<name>.list` and `extended_states` (§16.1) in one place,
-readable with `ls`. The bytes are in `/store`; what is *available* is the
-repository's index (§16.1, §16.3). The user's are at `/home/pkg`,
-`/home/service` and `/home/template`, as the user's profile is at
-`/home/profile`.
+| | the things themselves | what is installed — system | what is installed — user |
+|---|---|---|---|
+| packages | `/pkg/<name>/<version>/` — downloaded, verified, never changed after | `/profile/pkg` | `/home/profile/pkg` |
+| services | `/service/<name>/` | `/profile/service` | `/home/profile/service` |
+| templates | `/template/<name>/` | `/profile/template` | `/home/profile/template` |
+
+A package installed to the namespace scope is in that process's binds and
+needs no list. **What is installed is configuration, so it is in the
+profiles**; `/pkg`, `/service` and `/template` hold only the things
+themselves.
+
+`/store` added nothing `/pkg/<name>/<version>/` does not have: it is named
+uniquely because a repository publishes one set of bytes per name and
+version, it is immutable once verified, installing still binds from it, and
+a version no profile or project lists may be pruned (*"the store must be
+prunable"* — now of `/pkg`). Plan 9 has no store; Cargo keeps what it
+downloads by name and version (`registry/cache/wasmtime-39.0.2.crate`,
+RESEARCH §16.2). A store addressed by content is needed only where one
+version can exist several times, built against different dependencies —
+not the case here.
 
 ### Decided
 
