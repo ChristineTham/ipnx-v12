@@ -327,3 +327,11 @@ What each of them is:
 - *"A profile is how a user wants their namespace organised, user config files, environment variables, login scripts etc."*
 - *"A profile may be built from a template, but essentially once it is instantiated it belongs to the user and up to the user to modify"*
   <br>— cited in `docs/implementation.md`
+
+Answering what a package's scripts change, what a template records, and what
+a profile is built from:
+
+- *"installing a package may modify a user's profile (add environment variables, execute scripts etc.). It can also alter the system's environment (/rc, /profile) etc. Think of it as apt install. a package install can be to the system (available to every user, process etc.) or to the namespace (only valid for current process) or to the user (available whenever the user logs in, in every user process)."*
+- *"a template install packages into the current project, so is persistent. opening a project ensures all packages are available."*
+- *"A profile can be built from a template, or user hand editing config files. The user can save current namespace config as a template for future profiles"*
+  <br>— cited in `docs/proposals.md`
