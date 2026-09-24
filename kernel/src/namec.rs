@@ -536,10 +536,17 @@ pub fn create(
     }
 
     // The create lands in the create element if this directory is a union.
-    let mut target = match ns.create_element(&parent) {
+    let target = match ns.create_element(&parent) {
         Some(e) => e.chan.clone(),
-        None => parent,
+        None => parent.clone(),
     };
+    // **`cnew = cunique(cnew)`** (`chan.c:1606`): *"We need our own copy of
+    // the Chan because we're about to send a create, which will move it."*
+    // Without it a create in `.` moved the current directory's own fid onto
+    // the new file — every relative name after `cd /tmp; echo a >x` answered
+    // "unknown fid" — and a create in a union moved the mount's channel.
+    let mut target = tab.dcclone(&target)?;
+    target.path = parent.path.clone();
     tab.dcreate(&mut target, last, omode & !crate::chan::mode::OEXCL, perm)?;
     Ok(target)
 }

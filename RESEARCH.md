@@ -4712,3 +4712,22 @@ library; `reduce` is an rc script, `rc ./reduce $O $objtype $ALLOFILES`, and
 without rc the list came back empty; the compilers take `pgen.c` from
 `../cc` by metarule and link `../cc/cc.a$O`, which `cmd/mkfile` builds first
 (`for(i in cc $DIRS)`). Result: 34 of 36 libraries and 246 programs.
+
+### 16.11 A create must send its own channel; building with the system itself (2026-09-24)
+
+**`cunique` before a create.** 9P's `Tcreate` moves the fid it is sent onto
+the new file. Plan 9's `namec` therefore creates on a copy — *"We need our
+own copy of the Chan because we're about to send a create, which will move
+it"*, `cnew = cunique(cnew)` (`port/chan.c:1606`). This kernel sent the
+parent's own channel: a create in `.` moved the current directory's fid, and
+after `cd /tmp; echo a >x` every relative name answered *"unknown fid"*; a
+create in a union moved the mount's channel. Found when the build ran a
+recipe on the system for the first time. `kernel/src/namec.rs` now clones
+first; `a_create_in_dot_leaves_dot_where_it_was` fails without it.
+
+**Sources made by Plan 9 programs.** libsec's elliptic-curve tables are
+generated at build time — `%.c:D: %.mp` → `mpc $prereq >> $target`
+(`libsec/port/mkfile`). `mkfile.py` runs such a recipe in rc on the system
+it is building, `ipnx rc recipe.rc` over the store, one at a time: 35 lines
+of `.mp` become 164 lines of C, and libsec builds. `mk.sh` makes this its
+second pass.

@@ -152,6 +152,19 @@ cp -f "$rcdir/rcmain" "$pkg/lib/rcmain"
 python3 "$here/weaken.py" "$WASI_SDK/bin/llvm-nm" "${objs[@]}"
 link "$pkg/$OBJTYPE/bin/rc" "${objs[@]}"
 
+# **The second pass.** Some sources are made by a Plan 9 program — libsec's
+# curves by `mpc` (`libsec/port/mkfile`: `%.c:D: %.mp`) — and Plan 9 builds
+# itself with itself, so the recipe runs on this system: `ipnx` is built,
+# and what failed is built again with it.
+if [ -s "$failed" ] && command -v cargo >/dev/null; then
+	(cd "$here/.." && env -u CC -u CFLAGS -u LD -u LDFLAGS -u AR cargo build -q -p ipnx) && export IPNX="$here/../target/debug/ipnx"
+	if [ -n "$IPNX" ]; then
+		: >"$failed"
+		python3 "$here/mkfile.py" libs libc
+		python3 "$here/mkfile.py" cmds
+	fi
+fi
+
 echo "mk.sh: #/boot: $(ls "$build/boot" | tr '\n' ' ')"
 echo "mk.sh: /pkg/system/$VERSION/$OBJTYPE/bin: $(ls "$pkg/$OBJTYPE/bin" | wc -l) programs"
 if [ -s "$failed" ]; then

@@ -233,6 +233,15 @@ def source_of(mk, obj):
     c = os.path.join(mk.dir, base + ".c")
     if os.path.exists(c):
         return c
+    # a source a recipe makes from another: `%.c:D: %.mp` (libsec/port),
+    # made by running the recipe on this system
+    for tg, pr, recipe in mk.rules:
+        if "%.c" in tg and recipe:
+            for p in pr:
+                if "%" in p:
+                    q = os.path.join(mk.dir, p.replace("%", os.path.basename(base)))
+                    if os.path.exists(q):
+                        return generate(mk, base, q, recipe)
     # a metarule naming where the source is: `%.$O: ../cc/%.c` (`8c/mkfile`)
     for tg, pr, _ in mk.rules:
         if "%.o" in tg:
@@ -251,6 +260,46 @@ def source_of(mk, obj):
     if os.path.exists(os.path.join(mk.dir, base + ".s")):
         return None  # Plan 9 assembler: this machine has none
     return c
+
+import threading
+GENLOCK = threading.Lock()
+
+def generate(mk, base, prereq, recipe):
+    """Make a source by running its mkfile's recipe — rc, with Plan 9's own
+    commands — on the system this builds (`ipnx`), as Plan 9 builds itself
+    with itself. The prerequisite goes into the store's /tmp, the recipe
+    runs there, and the target comes back into the derived tree."""
+    out = os.path.join(kencc.derived(mk.dir), base + ".c")
+    if os.path.exists(out) and os.path.getmtime(out) >= os.path.getmtime(prereq):
+        return out
+    ipnx = os.environ.get("IPNX")
+    if not ipnx or not os.path.exists(ipnx):
+        return out           # not yet: the second pass, once ipnx is built
+    stem = os.path.basename(base)
+    # one system at a time, each in a directory of its own: the compiles
+    # that ask for these run in parallel
+    with GENLOCK:
+        return _generate(prereq, recipe, stem, out, ipnx)
+
+def _generate(prereq, recipe, stem, out, ipnx):
+    name = "mkfile.py." + stem
+    work = os.path.join(ROOT, "tmp", name)
+    os.makedirs(work, exist_ok=True)
+    shutil.copy(prereq, os.path.join(work, os.path.basename(prereq)))
+    target = stem + ".c"
+    script = "cd /tmp/%s; prereq=%s; target=%s; stem=%s\n%s\n" % (
+        name, os.path.basename(prereq), target, stem, "\n".join(recipe))
+    with open(os.path.join(work, "recipe.rc"), "w") as f:
+        f.write(script)
+    env = dict(os.environ, IPNX_STORE=ROOT)
+    subprocess.run([ipnx, "rc", "/tmp/%s/recipe.rc" % name], env=env, capture_output=True,
+                   stdin=subprocess.DEVNULL, timeout=300)
+    made = os.path.join(work, target)
+    if os.path.exists(made) and os.path.getsize(made) > 0:
+        os.makedirs(os.path.dirname(out), exist_ok=True)
+        shutil.move(made, out)
+    shutil.rmtree(work, ignore_errors=True)
+    return out
 
 def yacc(mk):
     yf = mk.get("YFILES")
@@ -416,8 +465,14 @@ def build_cmds(mk, d, rel):
             if e:
                 fail(f"{rel}/{t}" if rel != "cmd" else t, e)
 
+# built by mk.sh, with the substitutions its mkfile leaves to the builder:
+# `ipnx.c` for `plan9.c` and `haventfork.c` for `havefork.c`
+BUILTBYMK = {"cmd/rc"}
+
 def walk(top, want):
     rel = os.path.relpath(top, os.path.join(SYS, "src"))
+    if rel in BUILTBYMK:
+        return
     try:
         mk = Mk(top, BASEENV) if os.path.isfile(os.path.join(top, "mkfile")) else None
     except Exception:

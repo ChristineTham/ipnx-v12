@@ -765,6 +765,20 @@ mod storage {
         assert!(typing_at("cat /tmp/sub/file\n", s.path()).contains("deep\n"));
     }
 
+    /// **A create sends its own copy of the directory's channel** —
+    /// `cunique` (`chan.c:1606`), *"because we're about to send a create,
+    /// which will move it"*. Sent on dot's own, a create in `.` moved the
+    /// current directory's fid onto the new file, and every relative name
+    /// after it answered "unknown fid".
+    #[test]
+    fn a_create_in_dot_leaves_dot_where_it_was() {
+        let s = Scratch::new("createdot");
+        let out = typing_at("cd /tmp\necho a >x\necho b >>x\ncat x\nmkdir d; cd d; echo e >f; cd ..; cat d/f\n", s.path());
+        assert!(out.contains("a\nb\n"), "{out:?}");
+        assert!(out.contains("e\n"), "{out:?}");
+        assert!(!out.contains("unknown fid"), "{out:?}");
+    }
+
     /// **A stat carries the machine file's own times and mode, and a wstat
     /// changes them** — `stat2dir` and `rwstat` in `u9fs`
     /// (`u9fs.c:694`, `:909`). The store reported every time as 0 and had no

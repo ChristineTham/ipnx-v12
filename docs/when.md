@@ -308,13 +308,13 @@ mkfiles.
 
 | | |
 |---|---|
-| `mk.sh` | the build: libc, then `mkfile.py libs` and `mkfile.py cmds`, then `boot`, `args` and rc. What does not build is written to `build/failed` with its reason, and the build goes on, as `mk -k` does |
+| `mk.sh` | the build: libc, then `mkfile.py libs` and `mkfile.py cmds`, then `boot`, `args` and rc; then **a second pass**, in which `ipnx` is built and what failed is built again — because some sources are made by Plan 9 programs (libsec's curves by `mpc`), and the recipe runs on this system, as Plan 9 builds itself with itself. What does not build is written to `build/failed` with its reason, and the build goes on, as `mk -k` does |
 | `mkfile.py` | reads each mkfile as mk does — continuation, comments per physical line, `<` includes, `${VAR:a%b=c%d}`, backquotes (rc's `reduce` done natively), `DIRS` below first, `cc` first in `cmd` — and builds what it declares: `mksyslib`/`mklib` libraries (members added, `ar vu`), `mkone`, `mkmany`, the one-file programs of `cmd/mkfile`, explicit `$O.x:` links and `%.$O: ../cc/%.c` metarules; `init` to `/$objtype/init` (`cmd/mkfile:116`) |
 | `kencc.py` | **Plan 9's C as clang compiles it**, a derivation into `build/kencc/` (RESEARCH §16.10): `-Dconst=`; every unnamed member written `union { T; T T; }` — or only named where kencc's lookup would find another member first; the conversions kencc promotes, written `&(E)->T` from clang's own diagnostics; absolute includes; old designators; block-scope `static`; prototypes that disagree with their definitions |
 | `wasm/include/u.h`, `wasm/mkfile` | the **wasm32 architecture**: 386's `u.h` with clang's `va_list`, a four-long `jmp_buf`, and 386's FP constants |
 | `sys/src/libc/wasm/` | the machine-dependent half of libc, what `libc/386` is for the 386: the call stubs (`sys.c`, which also makes a `notejmp` jump on the way back), `_start` (`main9.c`), `sbrk`, `procrfork`, `setjmp` (wasm exceptions), `tas` and the atomics, `execl`, `notejmp`, `cycles` (0: no counter), the FP control words, and the profiling pair. **libc is all of `port`, `9sys` and `fmt`**, less what this directory replaces — nothing of Plan 9's left out (the cut-down `lock.c` and `mem.c` are gone) |
-| **built** | **34 of the 36 libraries**, and **246 programs** in `/pkg/system/2026.09.24/wasm/bin` |
-| **not built** | `libthread` (its `wasm.c`: threads are coroutines on stacks of their own, and procs share memory — neither of which this machine has yet) and `libdynld` (`dynld-wasm.c`); `libsec` (three sources `mpc` generates at build time); and so about 280 programs, most for want of those three. `build/failed` is the list |
+| **built** | **34 of the 36 libraries** — libsec among them, its curve tables made by the system's own `mpc` — and **277 programs** in `/pkg/system/2026.09.24/wasm/bin` |
+| **not built** | `libthread` (its `wasm.c`: threads are coroutines on stacks of their own, and procs share memory — neither of which this machine has yet) and `libdynld` (`dynld-wasm.c`); and so 234 programs, about 70 of them for want of libthread. `build/failed` is the list |
 | changed from Plan 9 | `sys/include/libc.h` (`procrfork`), `libc/9sys/nsec.c` (one cast), `libauth/newns.c` (`/profile/start.ns`), rc's `code.c`, `exec.c`, `haventfork.c` (fixes to Plan 9's own no-fork file) and `rcmain`, `cmd/init.c` (the profiles), and `ipnx.c`, rc's platform file |
 | `profile/`, `usr/kitty/profile/`, `etc/motd`, `pkg/system/pkg.cfg` | the system's configuration and kitty's (P7 step 1; docs/packages.md), and the `system` package's description |
 
@@ -352,7 +352,7 @@ exactly as `boot.c:171` does. `ls /` shows both halves because `unionread`
 reads every element. A file written under `/tmp` is a file on the host, so it
 is still there after the next boot.
 
-Forty-nine tests in `hosts/ipnx` (counted 2026-09-24: forty-four in the binary — most typing at a scripted console after a full boot, some booting into a filesystem of their own — and five in the library), and 220 in `kernel/`. They need
+Fifty tests in `hosts/ipnx` (counted 2026-09-24: forty-five in the binary — most typing at a scripted console after a full boot, some booting into a filesystem of their own — and five in the library), and 220 in `kernel/`. They need
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
 and say so rather than passing quietly.
 
