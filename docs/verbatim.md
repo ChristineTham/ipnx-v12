@@ -373,3 +373,5 @@ On `/store`:
 - *"I am wondering whether we need store. Why can files be in /pkg/name/version/... and /pkg/installed contains installed packages"*
 - *"even better still, /pkg only contains packages. list of installed packages is /profile/pkg etc"*
   <br>— cited in `docs/proposals.md`
+- *"user can install packages, services etc by using su or sudo"*
+  <br>— cited in `docs/proposals.md`
