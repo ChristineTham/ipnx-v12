@@ -4578,3 +4578,28 @@ this repository at `../plan9port`) runs Plan 9's userland on Unix and has no
 
 So rc's startup file travels with rc's installation and is found relative
 to it, and rc-written commands sit beside compiled ones under bare names.
+
+### 16.7 How Plan 9 reads a file into the environment (2026-09-24)
+
+An earlier reply here said only that Plan 9 has no `env` command, which is
+true and misleading: it has three ways, none of them a command.
+
+1. **`/env` is the environment.** Each variable is a file in `#e`; writing
+   one sets it, and a new rc reads every file there at start (`Vinit`,
+   `sys/src/cmd/rc/plan9.c:129`).
+2. **rc reads and writes its own format.** `whatis` prints variables *"in a
+   form suitable for input to rc"* (`sys/man/1/rc:745`) — `plain=1`,
+   `list=(a b)`, `rcq='says hello'` — and that is read back with `.` or,
+   from a command's output, with `ifs=() eval \`{…}` — the idiom Plan 9's
+   own scripts use (`rc/bin/lp:97`, `aux/getflags`). Measured here: `ifs=()
+   eval \`{cat /tmp/t.env}` sets all three, list and quoted value intact,
+   and `whatis` prints them back in the same form. Per-machine settings are
+   done this way: `termrc` runs `. /cfg/$sysname/termrc` (`rc/bin/termrc:40`).
+3. **`plan9.ini` is loaded into the environment by the kernel.** One
+   `name=value` per line, `#` comments, no quoting — the value is
+   everything after `=` (`sys/src/9/pc/main.c:83`–`:93`) — and each pair is
+   set in `#e` and in the configuration environment `#ec`
+   (`main.c:257`–`:260`, `ksetenv`, `port/devenv.c:386`).
+
+Also found: `/lib/namespace` ends by including a per-machine namespace file,
+`. /cfg/$sysname/namespace` (`lib/namespace:47`).

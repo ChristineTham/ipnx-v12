@@ -401,3 +401,5 @@ On building P7, and on names:
   <br>— cited in `docs/packages.md`
 - *"lock can be project.lock"*
   <br>— cited in `docs/projects.md`
+- *"I am surprised Plan 9 does not have a way of reading and populating the environment - can you check again"*
+  <br>— cited in `RESEARCH.md` §16.7

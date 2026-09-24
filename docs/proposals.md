@@ -50,13 +50,16 @@ after *"rc files must always end in extension .rc"*, the `.env` and `.cfg`
 files, and `ndb` for every `.cfg` ([packages.md](packages.md), *Files are
 named by what they are*; [projects.md](projects.md)).
 
-1. **What is in a `.env`, and who reads it?** *Proposed:* `ndb`, for the
-   consistency asked for — one tuple, `name=value` pairs — read by whatever
-   starts the `.rc` of the same name, which sets each pair in `/env` first.
-   rc cannot `.` it: `ndb` quotes with `"`, rc with `'`. The alternative is
-   rc assignments, which rc reads with `.` and no new code, at the price of
-   a second format. A service's settings would be its `start.env` — what
-   Debian's `/etc/default/redis-server` is (RESEARCH §16.1).
+1. **What is in a `.env`, and who reads it?** Plan 9 has a way, and it is
+   rc's own (RESEARCH §16.7): the format `whatis` prints — `name=value`,
+   `list=(a b)`, `'…'` for spaces — read back with `.` or `ifs=() eval
+   \`{cat start.env}`, as Plan 9's scripts read `aux/getflags`'s output.
+   *Proposed:* that — a `.env` is what `whatis` writes, and whatever runs
+   `start.rc` first runs `. start.env`; so saving the environment is
+   `whatis` into a `.env`. Not `ndb`, whose `"` rc does not read; and not
+   `plan9.ini`'s `name=value`-to-end-of-line, which cannot hold a list. A
+   service's settings would be its `start.env` — what Debian's
+   `/etc/default/redis-server` is (RESEARCH §16.1).
 2. **Does `/profile/namespace` take an extension?** It is neither rc nor
    `ndb`: `newns`'s own language (`plan9/sys/src/libauth/newns.c`). Plan 9
    gives it none. *Proposed:* none.
