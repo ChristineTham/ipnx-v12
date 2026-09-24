@@ -4561,3 +4561,20 @@ the other's file. It surfaced as `/home`, the first bind `newns` makes of a
 directory under the server, answering *"unknown fid"*; `/$objtype/bin` had
 been lucky. The counter is now the driver's (`kernel/src/devmnt.rs`), and
 `two_mounts_of_one_wire_never_share_a_fid` fails without it.
+
+### 16.6 What plan9port does without `/rc` (measured 2026-09-24)
+
+plan9port (`github.com/9fans/plan9port`, commit `b6564bd`, cloned beside
+this repository at `../plan9port`) runs Plan 9's userland on Unix and has no
+`/rc`. Each of `/rc`'s parts goes somewhere else:
+
+| Plan 9 | plan9port |
+|---|---|
+| `/rc/lib/rcmain`, compiled in (`rc/plan9.c:27`) | **`$PLAN9/rcmain`**, at the top of the install: `Rcmain()` answers `unsharp("#9/rcmain")` (`src/cmd/rc/plan9ish.c:28`), `#9` being the install root (`src/lib9/unsharp.c:12`) |
+| `/rc/bin`, bound onto `/bin` | **mixed into `$PLAN9/bin`** with the binaries and the sh scripts — 24 rc scripts and 27 sh scripts in the source tree's `bin` (`9fs`, `man`, `sig`, `spell`, `src`, `yesterday` …), bare-named, one directory on `$PATH` (`bin/9`, `bin/9.rc` put it first) |
+| `termrc`, `cpurc`, `service/` | **none** — Unix boots the machine and starts daemons |
+| `/lib/namespace` | **none** — no per-process namespaces; "the namespace" is a directory where servers post, `/tmp/ns.$USER.$DISPLAY` (`src/lib9/getns.c:58`), or `$NAMESPACE` |
+| `$home/lib/profile` | **the same**, read by a login rc (`rcmain:20`) |
+
+So rc's startup file travels with rc's installation and is found relative
+to it, and rc-written commands sit beside compiled ones under bare names.

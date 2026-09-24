@@ -394,3 +394,6 @@ On building P7, and on names:
 - *"I don't understand what /rc/bin had"*
 - Answering the P7 open points: *"1. rc scripts used as commands (the old `/rc/bin`): keep bare names, since they're typed by name. = yes 2. `/lib/rcmain`: unchanged. = don't know what this is. explain 3. Installed lists: move `/profile/pkg` and the other lists into `profile.cfg`. no 4. A project's lock: stored as entries in `project.cfg`. no 5. Where promotion puts its result: the user's own `/home/pkg` and the like, or the system's with `su`. promotion to user by default, to system with su"*
   <br>— cited in `docs/packages.md`, `docs/projects.md`, `docs/proposals.md`
+- *"what else was in /rc"*
+- *"what does plan9port do? it obviously does not have /rc"*
+  <br>— cited in `RESEARCH.md` §16.6
