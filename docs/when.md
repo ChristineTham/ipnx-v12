@@ -35,7 +35,11 @@ Measured 2026-09-20.
 ## The host — `hosts/ipnx`, three files
 
 `machine.rs` is the machine: `procsetup`, `todget` and `touser` over wasmtime,
-and the import table that is this architecture's `9syscall`. `store.rs` is the
+and the import table that is this architecture's `9syscall`. `touser`
+compiles an image once and keeps the module by the image's bytes, so an
+image run again is not compiled again (2026-09-24; RESEARCH §15.12) — a
+booted session running three `echo`s went from 19.5s to 9.2s in a debug
+build; what is left is compiling each distinct image once per boot. `store.rs` is the
 filesystem the machine serves — qemu's `-fsdev local` half, a host directory
 exported over 9P. `main.rs` is `startboot` (`initcode.c:21`): the device
 table — which is what a Plan 9 kernel's configuration file is, `mkdevc`

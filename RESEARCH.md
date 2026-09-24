@@ -4234,3 +4234,25 @@ command's, because pid 1 is `boot` and then `init`, as on Plan 9. And a
 bare interactive shell ending at end of input makes `init` print *"rc exit
 status: rc N: false"*; that predates this change and is not yet compared
 with Plan 9.
+
+### §15.12 — Compiling each image once (2026-09-24)
+
+`touser` compiled the image with Cranelift on every `exec`, so the same few
+images — above all `rc`, which is re-executed for every pipeline stage and
+subshell — were compiled over and over. **Measured**, debug build, `printf
+'echo a; echo b; echo c\n' | target/debug/ipnx`: **19.4–19.8s wall, 18.3–18.6s
+user** before; **9.2s wall, 8.1–8.2s user** after. The rest is each distinct
+image — `boot`, `init`, `rc`, `bind`, `cat`, `echo` — compiled once per
+boot.
+
+**Where the cache is, and why there:** in the machine, keyed by the image's
+bytes (hashed to look up, compared whole on a hit, so what runs is exactly
+what was read). A compiled module is the machine's concern and nothing
+Plan 9 has a counterpart for; the kernel's image cache is `attachimage`'s,
+keyed by channel (`segment.c:259`), and serves the text segment. Keying the
+machine's by content keeps the `Machine` trait unchanged — it still names
+no machine — and needs no kernel change. An image that fails to compile is
+refused with `Ebadexec` as before and not kept.
+
+**Not done:** keeping compiled modules across boots (wasmtime can
+serialise a module to disk), which would remove most of the remaining 8s.

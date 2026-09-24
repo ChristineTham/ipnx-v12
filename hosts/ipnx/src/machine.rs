@@ -149,6 +149,20 @@ pub struct Wasm {
     /// The future owns its `Store`, so nothing here borrows anything: a
     /// process is a self-contained thing the scheduler can leave alone.
     procs: RefCell<HashMap<Pid, Fiber>>,
+    /// **Every image compiled so far, by its content.** Compiling is most
+    /// of what an `exec` costs — Cranelift, around a second a command in a
+    /// debug build — and the same few images are run over and over: every
+    /// pipeline stage and subshell is `rc` again. A module is immutable and
+    /// shared between instances, so an image seen before is not compiled
+    /// again.
+    ///
+    /// Keyed by the bytes themselves: looking one up hashes them and a hit
+    /// compares them whole, so what runs is exactly what was read. This is
+    /// the machine's; the kernel's image cache (`attachimage`) is by
+    /// channel, as Plan 9's is, and serves the text segment. An image that
+    /// fails to compile is not kept. Nothing is ever dropped: a system runs
+    /// a handful of distinct images, each tens of kilobytes.
+    modules: RefCell<HashMap<Box<[u8]>, Module>>,
     /// The clock: what raises this machine's interrupt. Stopped when the
     /// machine goes.
     _clock: Clock,
@@ -572,7 +586,25 @@ impl Wasm {
         let mut linker: Linker<Guest> = Linker::new(&engine);
         imports(&mut linker).map_err(|e| e.to_string())?;
         let clock = Clock::start(engine.clone());
-        Ok(Wasm { engine, linker, procs: RefCell::new(HashMap::new()), _clock: clock })
+        Ok(Wasm {
+            engine,
+            linker,
+            procs: RefCell::new(HashMap::new()),
+            modules: RefCell::new(HashMap::new()),
+            _clock: clock,
+        })
+    }
+}
+
+impl Wasm {
+    /// The module an image is: compiled once, then the same one each time.
+    fn compile(&self, image: &[u8]) -> Result<Module, String> {
+        if let Some(m) = self.modules.borrow().get(image) {
+            return Ok(m.clone());
+        }
+        let m = Module::new(&self.engine, image).map_err(|_| EBADEXEC.to_string())?;
+        self.modules.borrow_mut().insert(image.into(), m.clone());
+        Ok(m)
     }
 }
 
@@ -623,8 +655,10 @@ impl Machine for Wasm {
     /// invalid"*, `Ebadexec` (`sysproc.c:343`), and the process goes on in
     /// its old image. Compiled any later, the failure came out of the
     /// scheduler and ended the system.
+    ///
+    /// An image compiled before is not compiled again ([`Wasm::modules`]).
     fn touser(&self, pid: Pid, image: &[u8], args: &[String]) -> Result<(), String> {
-        let module = Module::new(&self.engine, image).map_err(|_| EBADEXEC.to_string())?;
+        let module = self.compile(image)?;
         // Replacing an entry IS `exec`: the old fiber goes, with whatever
         // was on it, because the process is the new image now.
         self.procs.borrow_mut().insert(pid, Fiber { run: None, image: Some((module, args.to_vec())) });
@@ -1420,6 +1454,28 @@ mod tests {
         assert!(w.load(4, 4).is_err(), "another process's");
         drop(_g);
         assert_eq!(&mem[4..8], &(-2i32).to_le_bytes());
+    }
+
+    /// An image is compiled once: the second `touser` of the same bytes
+    /// gets the same module, and different bytes a different one. An image
+    /// that is not a module is refused with `Ebadexec` and not kept.
+    #[test]
+    fn an_image_is_compiled_once() {
+        let w = Wasm::new().unwrap();
+        let a = wat::parse_str("(module (memory (export \"memory\") 1))").unwrap();
+        let b = wat::parse_str("(module (memory (export \"memory\") 2))").unwrap();
+        w.touser(1, &a, &[]).unwrap();
+        w.touser(2, &a, &[]).unwrap();
+        w.touser(3, &b, &[]).unwrap();
+        // One compilation is one image of machine code in memory; the same
+        // module shares it, another compilation has its own.
+        let code = |pid| w.procs.borrow()[&pid].image.as_ref().unwrap().0.image_range();
+        assert_eq!(code(1), code(2), "compiled again");
+        assert_ne!(code(1), code(3));
+        assert_eq!(w.modules.borrow().len(), 2);
+        assert_eq!(w.touser(4, b"junk", &[]), Err(EBADEXEC.to_string()));
+        assert_eq!(w.modules.borrow().len(), 2, "a refused image is not kept");
+        assert!(!w.procs.borrow().contains_key(&4));
     }
 
     /// A thread nobody entered has no kernel, and says so rather than using
