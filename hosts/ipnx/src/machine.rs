@@ -25,6 +25,7 @@ use ipnx_kernel::proc::{noted, NoteFlag, ERRMAX};
 use ipnx_kernel::proc::rf;
 use ipnx_kernel::{Call, Pid, Ret};
 use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
@@ -33,9 +34,71 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use wasmtime::{
-    Caller, Engine, Instance, Linker, Memory, Module, Store, StoreContextMut,
-    UpdateDeadline, Val,
+    AsContext, AsContextMut, Caller, Engine, Extern, ExternType, Instance, Linker, Memory,
+    MemoryType, Module, SharedMemory, Store, StoreContextMut, UpdateDeadline, Val,
 };
+
+/// **A process's memory.** Every image `mk.sh` builds imports one, and the
+/// machine makes it — shared, so that `rfork(RFMEM)` can give it to two
+/// processes (RESEARCH §16.13). A hand-written module, as the tests here
+/// use, declares its own.
+#[derive(Clone)]
+enum Mem {
+    Own(Memory),
+    Shared(SharedMemory),
+}
+
+impl Mem {
+    fn ptr(&self, store: impl AsContext) -> *mut u8 {
+        match self {
+            Mem::Own(m) => m.data_ptr(&store),
+            Mem::Shared(m) => m.data().as_ptr() as *mut u8,
+        }
+    }
+    fn size(&self, store: impl AsContext) -> usize {
+        match self {
+            Mem::Own(m) => m.data_size(&store),
+            Mem::Shared(m) => m.data_size(),
+        }
+    }
+    /// The bytes, while nothing grows the memory. A process's memory is
+    /// reached only while it runs — the machine is one thread, and a sharer
+    /// runs only when this one does not — so nothing writes it meanwhile.
+    fn data(&self, store: impl AsContext) -> &[u8] {
+        let (p, n) = (self.ptr(&store), self.size(&store));
+        unsafe { std::slice::from_raw_parts(p, n) }
+    }
+    fn read(&self, store: impl AsContext, at: usize, b: &mut [u8]) -> wasmtime::Result<()> {
+        let d = self.data(&store);
+        let src = at.checked_add(b.len()).and_then(|e| d.get(at..e)).ok_or_else(|| wasmtime::Error::msg("out of bounds memory access"))?;
+        b.copy_from_slice(src);
+        Ok(())
+    }
+    fn write(&self, store: impl AsContextMut, at: usize, b: &[u8]) -> wasmtime::Result<()> {
+        let (p, n) = (self.ptr(&store), self.size(&store));
+        if at.checked_add(b.len()).is_none_or(|e| e > n) {
+            return Err(wasmtime::Error::msg("out of bounds memory access"));
+        }
+        unsafe { std::ptr::copy_nonoverlapping(b.as_ptr(), p.add(at), b.len()) };
+        Ok(())
+    }
+    fn grow(&self, mut store: impl AsContextMut, pages: u64) -> wasmtime::Result<()> {
+        match self {
+            Mem::Own(m) => m.grow(&mut store, pages).map(|_| ()),
+            Mem::Shared(m) => m.grow(pages).map(|_| ()),
+        }
+    }
+    fn of(e: Option<Extern>) -> Option<Mem> {
+        match e? {
+            Extern::Memory(m) => Some(Mem::Own(m)),
+            Extern::SharedMemory(m) => Some(Mem::Shared(m)),
+            _ => None,
+        }
+    }
+    fn instance(inst: &Instance, store: impl AsContextMut) -> wasmtime::Result<Mem> {
+        Mem::of(inst.get_export(store, "memory")).ok_or_else(|| wasmtime::Error::msg("the module exports no memory"))
+    }
+}
 
 /// The error an `exits` or a completed `exec` raises to unwind the process it
 /// was running. It is not a fault, and [`Wasm::touser`] takes it as the
@@ -163,6 +226,12 @@ pub struct Wasm {
     /// fails to compile is not kept. Nothing is ever dropped: a system runs
     /// a handful of distinct images, each tens of kilobytes.
     modules: RefCell<HashMap<Box<[u8]>, Module>>,
+    /// **The processes sharing a memory by `RFMEM`**, each to its group.
+    /// Plan 9 gives each its own stack segment at the same address
+    /// (`segment.c:175`); one wasm memory has one stack region, so the
+    /// machine keeps each sharer's copy and puts the running one's in place
+    /// ([`Wasm::occupy`]). A process not sharing has no entry.
+    sharing: RefCell<HashMap<Pid, Rc<RefCell<Sharing>>>>,
     /// The clock: what raises this machine's interrupt. Stopped when the
     /// machine goes.
     _clock: Clock,
@@ -228,6 +297,9 @@ impl Drop for Clock {
 /// process's next call to end: the guest can be entered from a host call
 /// and from nowhere else, and this is not one.
 fn clockintr(c: StoreContextMut<'_, Guest>) -> wasmtime::Result<UpdateDeadline> {
+    if c.data().busy {
+        return Ok(UpdateDeadline::Continue(1));
+    }
     // Sound for the same reason [`call`] is: this runs inside a poll, inside
     // `gotolabel`, where the kernel is entered and nothing else holds it.
     let sched = unsafe { (*kernel()).timerintr(&|| userpc(&c)) };
@@ -240,6 +312,15 @@ fn clockintr(c: StoreContextMut<'_, Guest>) -> wasmtime::Result<UpdateDeadline> 
         _ => {}
     }
     Ok(if sched { UpdateDeadline::Yield(1) } else { UpdateDeadline::Continue(1) })
+}
+
+/// A memory shared by `RFMEM`: whose stack is in its stack region now, and
+/// every other sharer's, kept.
+struct Sharing {
+    mem: SharedMemory,
+    top: usize,
+    occupant: Option<Pid>,
+    stacks: HashMap<Pid, Vec<u8>>,
 }
 
 /// A process, as this machine holds one.
@@ -330,11 +411,19 @@ pub struct Guest {
     entry: Entry,
     /// Where its `Tos` is (`sys/include/tos.h`): the top of its stack.
     tos: i32,
+    /// The end of its stack region, which is `[0, stacktop)` — the image is
+    /// linked stack first — and the one part of a memory `RFMEM` does not
+    /// share (`segment.c:175`).
+    stacktop: i32,
+    /// **Its stack is in the unwind buffer, or being wound back from it**:
+    /// the clock does not take the processor now, because a process sharing
+    /// this memory would unwind into the same buffer.
+    busy: bool,
 }
 
 impl Guest {
     fn new(pid: Pid, module: Option<Module>) -> Guest {
-        Guest { pid, module, s: [0; MAXSYSARG], op: None, rewind: None, jmps: HashMap::new(), entry: Entry::None, tos: 0 }
+        Guest { pid, module, s: [0; MAXSYSARG], op: None, rewind: None, jmps: HashMap::new(), entry: Entry::None, tos: 0, stacktop: 0, busy: false }
     }
 }
 
@@ -345,8 +434,9 @@ enum Op {
     Setjmp { env: i32 },
     /// `longjmp(j, v)`: drop it, and wind back the one kept under j.
     Longjmp { env: i32, val: i32 },
-    /// `fork`: a copy for the child, wound back in both.
-    Fork { child: Pid },
+    /// `fork`: a copy for the child, wound back in both — sharing this
+    /// memory, for `RFMEM`.
+    Fork { child: Pid, share: bool },
 }
 
 /// A stack kept by `setjmp`: its frames as asyncify wrote them, the stack
@@ -431,14 +521,26 @@ thread_local! {
     static UMEM: Cell<Option<(Pid, *mut u8, usize)>> = const { Cell::new(None) };
 }
 
+/// A child's memory: a copy of all of its parent's; or, for `RFMEM`, the
+/// parent's own — and a copy of the parent's stack region, which is not
+/// shared (`segment.c:175`, *"case SG_STACK: n = newseg(…)"*).
+enum ForkMem {
+    Copy(Vec<u8>),
+    Share(SharedMemory, Vec<u8>),
+}
+
 /// **A process `fork` made**, waiting for the machine to keep its fiber:
 /// its image, a copy of its parent's memory, and the parent's stack
 /// pointer and stack to wind back.
 struct Fork {
     pid: Pid,
+    parent: Pid,
     module: Module,
-    mem: Vec<u8>,
+    mem: ForkMem,
+    /// The stack as it unwound, which the child winds back.
+    frames: Vec<u8>,
     sp: i32,
+    stacktop: i32,
     /// The entry the parent's stack is under, which the child's — the same
     /// stack, wound back from the copy of memory it was given — is under too.
     from: Entry,
@@ -470,7 +572,7 @@ impl Drop for Umem {
 /// guard drops.
 fn umem(c: &mut Caller<'_, Guest>) -> Umem {
     let pid = c.data().pid;
-    let m = memory(c).ok().map(|mem| (pid, mem.data_ptr(&*c), mem.data_size(&*c)));
+    let m = memory(c).ok().map(|mem| (pid, mem.ptr(&*c), mem.size(&*c)));
     Umem(UMEM.with(|u| u.replace(m)))
 }
 
@@ -563,10 +665,8 @@ async fn kcall(c: &mut Caller<'_, Guest>, k: Call) -> Result<Ret, String> {
     r
 }
 
-fn memory(c: &mut Caller<'_, Guest>) -> Result<Memory, wasmtime::Error> {
-    c.get_export("memory")
-        .and_then(|e| e.into_memory())
-        .ok_or_else(|| wasmtime::Error::msg("the module exports no memory"))
+fn memory(c: &mut Caller<'_, Guest>) -> Result<Mem, wasmtime::Error> {
+    Mem::of(c.get_export("memory")).ok_or_else(|| wasmtime::Error::msg("the module exports no memory"))
 }
 
 /// **An argument that cannot be read is not refused here.** Plan 9's
@@ -647,6 +747,10 @@ impl Wasm {
         config.async_support(true);
         // **The interrupt line** — see [`Clock`].
         config.epoch_interruption(true);
+        // **Shared memory**, for `RFMEM` (RESEARCH §16.13). Nothing runs
+        // on two threads: a memory is shared by processes, which this
+        // machine runs one at a time.
+        config.wasm_threads(true);
         let engine = Engine::new(&config).map_err(|e| e.to_string())?;
         let mut linker: Linker<Guest> = Linker::new(&engine);
         imports(&mut linker).map_err(|e| e.to_string())?;
@@ -656,6 +760,7 @@ impl Wasm {
             linker,
             procs: RefCell::new(HashMap::new()),
             modules: RefCell::new(HashMap::new()),
+            sharing: RefCell::new(HashMap::new()),
             _clock: clock,
         })
     }
@@ -724,6 +829,9 @@ impl Machine for Wasm {
     /// An image compiled before is not compiled again ([`Wasm::modules`]).
     fn touser(&self, pid: Pid, image: &[u8], args: &[String]) -> Result<(), String> {
         let module = self.compile(image)?;
+        // A new image is a new memory: nothing is shared any more
+        // (`sysproc.c:513`, *"putseg(up->seg[i])"*).
+        self.leave(pid);
         // Replacing an entry IS `exec`: the old fiber goes, with whatever
         // was on it, because the process is the new image now.
         self.procs.borrow_mut().insert(pid, Fiber { run: None, image: Some((module, args.to_vec())) });
@@ -748,6 +856,7 @@ impl Machine for Wasm {
             f.run = Some(self.start(pid, image, args)?);
         }
         let mut run = f.run.take().expect("a fiber");
+        self.occupy(pid);
         let waker = noop_waker();
         // The kernel is this thread's for the length of the poll, and not a
         // moment longer: `entered` drops before `sys`'s borrow ends.
@@ -759,6 +868,9 @@ impl Machine for Wasm {
         // now, before the scheduler can choose one.
         for k in FORKED.with(|q| std::mem::take(&mut *q.borrow_mut())) {
             let child = k.pid;
+            if let ForkMem::Share(mem, stack) = &k.mem {
+                self.share(k.parent, child, mem, k.stacktop as usize, stack.clone());
+            }
             let run = self.child(k)?;
             self.procs.borrow_mut().insert(child, Fiber { run: Some(run), image: None });
         }
@@ -791,6 +903,7 @@ impl Machine for Wasm {
                     // It `exec`d: the process lives on in its new image.
                     return Ok(Left::Sched);
                 }
+                self.leave(pid);
                 Ok(Left::Exited)
             }
         }
@@ -798,6 +911,72 @@ impl Machine for Wasm {
 }
 
 impl Wasm {
+    /// The imports for one instance of `module`: the calls, and — if the
+    /// image imports its memory, as every one `mk.sh` builds does — the
+    /// memory: `shared`, for an `RFMEM` child, or a new one.
+    fn linker(&self, store: &Store<Guest>, module: &Module, shared: Option<SharedMemory>) -> wasmtime::Result<Linker<Guest>> {
+        let mut l = self.linker.clone();
+        for imp in module.imports() {
+            if let ExternType::Memory(t) = imp.ty() {
+                let m = match shared.clone() {
+                    Some(m) => m,
+                    None => SharedMemory::new(
+                        &self.engine,
+                        MemoryType::shared(t.minimum() as u32, t.maximum().unwrap_or(65536) as u32),
+                    )?,
+                };
+                l.define(store, imp.module(), imp.name(), m)?;
+            }
+        }
+        Ok(l)
+    }
+
+    /// **Put `pid`'s stack in place** before it runs, if it shares its
+    /// memory: the one running keeps its stack in the region; the others'
+    /// are kept here. Plan 9's MMU does this by mapping each process's own
+    /// stack segment at the same address.
+    fn occupy(&self, pid: Pid) {
+        let Some(g) = self.sharing.borrow().get(&pid).cloned() else { return };
+        let mut g = g.borrow_mut();
+        if g.occupant == Some(pid) {
+            return;
+        }
+        // The region is reached only here and by the process whose stack
+        // it holds, which is not running now.
+        let region = unsafe { std::slice::from_raw_parts_mut(g.mem.data().as_ptr() as *mut u8, g.top) };
+        if let Some(o) = g.occupant {
+            let saved = region.to_vec();
+            g.stacks.insert(o, saved);
+        }
+        if let Some(img) = g.stacks.remove(&pid) {
+            region.copy_from_slice(&img);
+        }
+        g.occupant = Some(pid);
+    }
+
+    /// `pid` shares nothing any more: it exited, or `exec`d a new image.
+    fn leave(&self, pid: Pid) {
+        if let Some(g) = self.sharing.borrow_mut().remove(&pid) {
+            let mut g = g.borrow_mut();
+            g.stacks.remove(&pid);
+            if g.occupant == Some(pid) {
+                g.occupant = None;
+            }
+        }
+    }
+
+    /// `child` shares `parent`'s memory, with a stack of its own.
+    fn share(&self, parent: Pid, child: Pid, mem: &SharedMemory, top: usize, stack: Vec<u8>) {
+        let found = self.sharing.borrow().get(&parent).cloned();
+        let g = found.unwrap_or_else(|| {
+            let g = Rc::new(RefCell::new(Sharing { mem: mem.clone(), top, occupant: Some(parent), stacks: HashMap::new() }));
+            self.sharing.borrow_mut().insert(parent, g.clone());
+            g
+        });
+        g.borrow_mut().stacks.insert(child, stack);
+        self.sharing.borrow_mut().insert(child, g);
+    }
+
     /// Build the fiber: instantiate, place the arguments, and make the call
     /// to `_start` — as a future that has not begun.
     fn start(
@@ -810,7 +989,7 @@ impl Wasm {
         // Interrupts on: the next epoch calls `clockintr`.
         store.set_epoch_deadline(1);
         store.epoch_deadline_callback(clockintr);
-        let linker = self.linker.clone();
+        let linker = self.linker(&store, &module, None).map_err(|e| e.to_string())?;
         Ok(Box::pin(async move {
             let instance = linker.instantiate_async(&mut store, &module).await?;
             let (argc, argv, heap) = place(&mut store, &instance, &args)?;
@@ -833,35 +1012,45 @@ impl Wasm {
         &self,
         k: Fork,
     ) -> Result<Pin<Box<dyn Future<Output = Result<(), wasmtime::Error>> + Send>>, String> {
-        let Fork { pid, module, mem, sp, from, tos, jmps } = k;
+        let Fork { pid, module, mem, frames, sp, stacktop, from, tos, jmps, .. } = k;
         let mut store = Store::new(&self.engine, Guest::new(pid, Some(module.clone())));
         store.data_mut().tos = tos;
+        store.data_mut().stacktop = stacktop;
         store.data_mut().jmps = jmps;
         store.set_epoch_deadline(1);
         store.epoch_deadline_callback(clockintr);
-        let linker = self.linker.clone();
+        let shared = match &mem {
+            ForkMem::Share(m, _) => Some(m.clone()),
+            ForkMem::Copy(_) => None,
+        };
+        let linker = self.linker(&store, &module, shared).map_err(|e| e.to_string())?;
         Ok(Box::pin(async move {
             let instance = linker.instantiate_async(&mut store, &module).await?;
-            let m = instance
-                .get_memory(&mut store, "memory")
-                .ok_or_else(|| wasmtime::Error::msg("the module exports no memory"))?;
-            const PAGE: usize = 64 * 1024;
-            let have = m.data_size(&store);
-            if mem.len() > have {
-                m.grow(&mut store, ((mem.len() - have) / PAGE) as u64)?;
+            let m = Mem::instance(&instance, &mut store)?;
+            if let ForkMem::Copy(bytes) = &mem {
+                const PAGE: usize = 64 * 1024;
+                let have = m.size(&store);
+                if bytes.len() > have {
+                    m.grow(&mut store, ((bytes.len() - have) / PAGE) as u64)?;
+                }
+                m.write(&mut store, 0, bytes)?;
+                // its own pid in its `Tos`, as its first `kexit` would write
+                // it; a sharer's is in the stack it was given
+                m.write(&mut store, (tos + TOSPID) as usize, &(pid as u32).to_le_bytes())?;
             }
-            m.write(&mut store, 0, &mem)?;
-            // its own pid in its `Tos`, as its first `kexit` would write it
-            m.write(&mut store, (tos + TOSPID) as usize, &(pid as u32).to_le_bytes())?;
             instance
                 .get_global(&mut store, "__stack_pointer")
                 .ok_or_else(|| wasmtime::Error::msg("the module exports no stack pointer"))?
                 .set(&mut store, Val::I32(sp))?;
-            // The child is its parent's stack, wound back: the frames are in
-            // the memory it was given, as unwinding left them, and its
-            // `rfork` answers 0.
-            let buf = asyncbuf(&mut store, &instance).await?.0;
+            // The child is its parent's stack, wound back — from the
+            // frames as they unwound, which a sharer's buffer may no longer
+            // hold — and its `rfork` answers 0.
+            let (buf, size) = asyncbuf(&mut store, &instance).await?;
+            m.write(&mut store, buf as usize + 8, &frames)?;
+            m.write(&mut store, buf as usize, &((buf + 8 + frames.len() as i32) as u32).to_le_bytes())?;
+            m.write(&mut store, buf as usize + 4, &((buf + size) as u32).to_le_bytes())?;
             store.data_mut().rewind = Some(0);
+            store.data_mut().busy = true;
             instance
                 .get_typed_func::<i32, ()>(&mut store, "asyncify_start_rewind")?
                 .call_async(&mut store, buf)
@@ -907,7 +1096,7 @@ async fn run(store: &mut Store<Guest>, inst: &Instance, mut entry: Entry) -> was
         r?;
         inst.get_typed_func::<(), ()>(&mut *store, "asyncify_stop_unwind")?.call_async(&mut *store, ()).await?;
         let (buf, size) = asyncbuf(store, inst).await?;
-        let mem = inst.get_memory(&mut *store, "memory").ok_or_else(|| wasmtime::Error::msg("no memory"))?;
+        let mem = Mem::instance(inst, &mut *store)?;
         let cur = {
             let d = mem.data(&*store);
             u32::from_le_bytes(d[buf as usize..buf as usize + 4].try_into().unwrap()) as usize
@@ -934,6 +1123,7 @@ async fn run(store: &mut Store<Guest>, inst: &Instance, mut entry: Entry) -> was
                     .ok_or_else(|| wasmtime::Error::msg("the module exports no stack pointer"))?
                     .set(&mut *store, Val::I32(nsp & !15))?;
                 entry = Entry::Jump(pc, nsp);
+                store.data_mut().busy = false;
                 continue;
             }
             Op::Longjmp { env, val } => {
@@ -945,13 +1135,37 @@ async fn run(store: &mut Store<Guest>, inst: &Instance, mut entry: Entry) -> was
                     .ok_or_else(|| wasmtime::Error::msg("longjmp to a jmp_buf no setjmp made"))?;
                 (s.frames, s.sp, val, s.entry)
             }
-            Op::Fork { child } => {
-                // the child's copy: all of memory, the frames within it
+            Op::Fork { child, share } => {
+                // the child's memory: a copy of all of it; or for `RFMEM`
+                // this one, and a copy of the stack region with the child's
+                // pid in its `Tos`
                 let module = store.data().module.clone().ok_or_else(|| wasmtime::Error::msg("no module"))?;
-                let copy = mem.data(&*store).to_vec();
-                let (tos, jmps) = (store.data().tos, store.data().jmps.clone());
+                let (tos, top, parent) = (store.data().tos, store.data().stacktop, store.data().pid);
+                let cmem = match (&mem, share) {
+                    (Mem::Shared(m), true) => {
+                        let mut stack = mem.data(&*store)[..top as usize].to_vec();
+                        let at = (tos + TOSPID) as usize;
+                        if at + 4 <= stack.len() {
+                            stack[at..at + 4].copy_from_slice(&(child as u32).to_le_bytes());
+                        }
+                        ForkMem::Share(m.clone(), stack)
+                    }
+                    _ => ForkMem::Copy(mem.data(&*store).to_vec()),
+                };
+                let jmps = store.data().jmps.clone();
                 FORKED.with(|q| {
-                    q.borrow_mut().push(Fork { pid: child, module, mem: copy, sp, from: entry, tos, jmps })
+                    q.borrow_mut().push(Fork {
+                        pid: child,
+                        parent,
+                        module,
+                        mem: cmem,
+                        frames: frames.clone(),
+                        sp,
+                        stacktop: top,
+                        from: entry,
+                        tos,
+                        jmps,
+                    })
                 });
                 (frames, sp, child as i32, entry)
             }
@@ -988,8 +1202,9 @@ fn settos(store: &mut Store<Guest>, inst: &Instance, pid: Pid) -> wasmtime::Resu
     // module — is given none.
     let Some(sp) = inst.get_global(&mut *store, "__stack_pointer") else { return Ok(0) };
     let top = sp.get(&mut *store).i32().unwrap_or(0);
+    store.data_mut().stacktop = top;
     let tos = (top - TOSSIZE) & !15;
-    let mem = inst.get_memory(&mut *store, "memory").ok_or_else(|| wasmtime::Error::msg("no memory"))?;
+    let mem = Mem::instance(inst, &mut *store)?;
     mem.write(&mut *store, tos as usize, &[0u8; TOSSIZE as usize])?;
     mem.write(&mut *store, (tos + TOSPID) as usize, &(pid as u32).to_le_bytes())?;
     sp.set(&mut *store, Val::I32(tos))?;
@@ -1002,7 +1217,7 @@ const JMPBUFSP: usize = 0;
 const JMPBUFPC: usize = 1;
 
 /// A `jmp_buf`'s stack pointer and pc.
-fn jmpbuf(mem: &Memory, store: impl wasmtime::AsContext, env: i32) -> (i32, i32) {
+fn jmpbuf(mem: &Mem, store: impl AsContext, env: i32) -> (i32, i32) {
     let d = mem.data(&store);
     let w = |i: usize| {
         let a = env as usize + 4 * i;
@@ -1035,6 +1250,7 @@ async fn unwind(c: &mut Caller<'_, Guest>, op: Op) -> wasmtime::Result<()> {
     mem.write(&mut *c, b as usize, &((b + 8) as u32).to_le_bytes())?;
     mem.write(&mut *c, b as usize + 4, &((b + n) as u32).to_le_bytes())?;
     c.data_mut().op = Some((op, sp));
+    c.data_mut().busy = true;
     func(c, "asyncify_start_unwind")?.typed::<i32, ()>(&*c)?.call_async(&mut *c, b).await?;
     Ok(())
 }
@@ -1049,6 +1265,7 @@ async fn rewound(c: &mut Caller<'_, Guest>) -> wasmtime::Result<Option<i32>> {
         .typed::<(), ()>(&*c)?
         .call_async(&mut *c, ())
         .await?;
+    c.data_mut().busy = false;
     Ok(Some(v))
 }
 
@@ -1065,9 +1282,7 @@ fn place(
     instance: &Instance,
     args: &[String],
 ) -> Result<(i32, i32, i32), wasmtime::Error> {
-    let mem = instance
-        .get_memory(&mut *store, "memory")
-        .ok_or_else(|| wasmtime::Error::msg("the module exports no memory"))?;
+    let mem = Mem::instance(instance, &mut *store)?;
 
     let mut block: Vec<u8> = Vec::new();
     let ptrs = (args.len() + 1) * 4;
@@ -1079,7 +1294,7 @@ fn place(
         block.push(0);
         at += a.len() + 1;
     }
-    let base = mem.data_size(&*store);
+    let base = mem.size(&*store);
     let mut head: Vec<u8> = Vec::with_capacity(ptrs);
     for o in &offs {
         head.extend_from_slice(&((base + o) as u32).to_le_bytes());
@@ -1384,18 +1599,18 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
             Err(_) => return -1,
         }
         if flags & rf::PROC != 0 {
-            if flags & rf::MEM != 0 {
-                let _ = call(
-                    &mut c,
-                    Call::Errstr { buf: "rfork: RFMEM is not given yet on this machine".into() },
-                );
+            // `RFMEM` shares the memory, which a hand-written module's own
+            // memory cannot be
+            let share = flags & rf::MEM != 0;
+            if share && !matches!(memory(&mut c), Ok(Mem::Shared(_))) {
+                let _ = call(&mut c, Call::Errstr { buf: "rfork: this image's memory cannot be shared".into() });
                 return -1;
             }
             let child = match kcall(&mut c, Call::Rfork { flags }).await {
                 Ok(Ret::Pid(p)) => p,
                 _ => return -1,
             };
-            if unwind(&mut c, Op::Fork { child }).await.is_err() {
+            if unwind(&mut c, Op::Fork { child, share }).await.is_err() {
                 return -1;
             }
             return 0;

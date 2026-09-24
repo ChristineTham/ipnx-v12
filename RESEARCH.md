@@ -4812,5 +4812,41 @@ init prints *"init: starting /bin/rc"* as Plan 9's does; a subshell keeps
 its parent's `$pid`, which rc sets once (`exec.c:227`); and init copies
 `/adm/timezone/local` into `#e/timezone`, so `local` is set to GMT's.
 
-**Not yet:** `RFMEM` (shared memory, the decision's second half), which
-libthread's `proccreate` and `threadexec` need (`main.c:130`, `:143`).
+`RFMEM`, which libthread's `proccreate` and `threadexec` need
+(`main.c:130`, `:143`), is §16.13.
+
+### 16.13 `RFMEM` by shared memory, and each process's own stack (2026-09-24)
+
+**The decision's second half** (`docs/verbatim.md`): `rfork(RFMEM)` is wasm
+shared memory. What Plan 9 shares is exact — *"the child and the parent
+will share data and bss segments … Other segment types, in particular stack
+segments, will be unaffected"* (`fork(2)`), and `dupseg` makes a new stack
+segment whatever `share` says (`segment.c:175`, *"case SG_STACK: n =
+newseg(s->type, s->base, s->size)"*), while `SG_BSS` and `SG_DATA` go to
+`sameseg`. libthread depends on the difference: `_schedfork`'s child writes
+`*mainp = p; /* write to stack, so local to proc */` and `longjmp`s to a
+`setjmp` in `main`'s frame (`libthread/main.c:143`).
+
+**One wasm memory has one stack region**, and the images are linked stack
+first, so it is `[0, 64K)`. The machine keeps each sharing process's copy of
+that region and puts the running one's in place before it runs
+(`Wasm::occupy`) — what Plan 9's MMU does by mapping each process's own
+stack segment at the same address. The machine runs one process at a time,
+so the swap is exact. The `Tos` is at the top of the region and
+`_privates` in `_start`'s frame (as 386's `main9.s` reserves them), so both
+are each process's own; `9sys/privalloc.c:8` declares `extern void
+**_privates`, which the static array it replaced never matched.
+
+**What it needed.** Every object built `-matomics` (wasm-ld refuses
+`--shared-memory` otherwise); the images link `--import-memory
+--shared-memory --max-memory=4294967296`, wasm32's limit; `wasm-opt
+--enable-threads`; wasmtime's `threads` feature and `wasm_threads`. The
+machine makes each process's memory, so a fork that does not share is a new
+memory with the parent's copied in. The asyncify buffer is in shared data,
+so the clock does not take the processor from a process between the start
+of an unwind and the end of its rewind, and a fork child is given its
+frames rather than finding them in the buffer.
+
+Measured: `tprimes -p` (`libthread/tprimes.c`, `proccreate` for each
+prime) prints the primes below 30 as ten processes sharing one memory, each
+on its own stack. The whole suite passes unchanged.

@@ -174,6 +174,8 @@ A Plan 9-dialect binary is a wasm32 module that (as built by
 - **imports** from `sys` the calls of Plan 9's `libc/9syscall`, one import
   per call, plus `setjmp` and `longjmp` (`libc/wasm/setjmp.c`) — and
   nothing else;
+- **imports** its memory — shared, maximum 4 GiB, the stack first at
+  `[0, 64K)` — which the machine makes for each new image;
 - **exports** `memory`, `__stack_pointer`, the function table,
   `_start(argc, argv, heap, tos)` (`libc/wasm/main9.c`), `__notestart`
   (where a note handler is entered), `__asyncbuf`/`__asyncbufsize`, and
@@ -187,7 +189,9 @@ The machine's obligations, which are Plan 9's semantics:
 - **`rfork(RFPROC)` returns twice**: the stack unwinds, the child is a new
   instance with a copy of all of memory and the stack wound back in it,
   where `rfork` answers 0; the parent's is wound back and answers the pid.
-  `RFMEM` is refused until shared memory is built.
+  With `RFMEM` the child's instance imports the parent's memory, and its
+  stack region is its own: a copy the machine puts in place whenever it
+  runs (`segment.c:175`).
 - **`setjmp(j)`** keeps the stack under j's address and writes SP and a pc
   of 0 into j (`JMPBUFSP`, `JMPBUFPC`, 386's); **`longjmp(j, v)`** winds
   back the kept stack with setjmp answering v — or, if j holds a pc, calls

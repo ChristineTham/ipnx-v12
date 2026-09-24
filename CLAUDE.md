@@ -109,7 +109,9 @@ because this machine has no stack a program can save (RESEARCH §16.12):
 the stack into memory and wind back the one that should run — so a program
 forks as Plan 9's does. Christine chose it, 2026-09-24. `kencc.py` also makes
 string literals writable data, as kencc's are (`8c/swt.c:106`): `ed`'s own
-`mktemp` writes into one.
+`mktemp` writes into one. And **`-matomics` with `--shared-memory
+--import-memory`**, because `rfork(RFMEM)` is wasm shared memory (RESEARCH
+§16.13); the host enables wasmtime's `threads`.
 
 `userspace/build/` and `userspace/root/` are generated and gitignored. Guest
 binaries carry no `.wasm` extension: exec walks the namespace for `/bin/cat`,

@@ -12,7 +12,7 @@ ipnx-kernel = { path = "../../kernel" }
 # `async` is `wasmtime-fiber`: a host-stack fiber, which is this machine's
 # `setlabel`/`gotolabel` (`pc/l.s:1000`, `:992`). Nothing here is threaded —
 # the executor is a poll loop and the run queue is the kernel's.
-wasmtime = { version = "39", default-features = false, features = ["cranelift", "runtime", "std", "async"] }
+wasmtime = { version = "39", default-features = false, features = ["cranelift", "runtime", "std", "async", "threads"] }
 wat = "1"
 # `SIGINT`: the terminal turns `^C` into a signal to this process, and the
 # host catches it to hand the system its interrupt key.

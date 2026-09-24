@@ -438,11 +438,20 @@ def build_cmds(mk, d, rel):
                 if t.startswith("o."):
                     custom[t[2:]] = [p for p in pr if p.endswith(".o")]
     targ = mk.get("TARG")
+    # a rule with no recipe adds prerequisites to a target whose recipe is
+    # elsewhere — mkmany's `$O.%: %.$O $OFILES` — as mk merges them
+    # (`plumb/mkfile`: `$O.plumber: $PLUMBER`)
+    more = {}
+    for tg, pr, recipe in mk.rules:
+        if not recipe:
+            for t in tg:
+                if t.startswith("o.") and t[2:] in targ:
+                    more.setdefault(t[2:], []).extend(p for p in pr if p.endswith(".o"))
     if mk.uses("mkone") and targ:
         progs[targ[0]] = mk.get("OFILES")
     elif mk.uses("mkmany") or (targ and os.path.abspath(d) == os.path.join(SYS, "src", "cmd")):
         for t in targ:
-            progs[t] = [t + ".o"] + mk.get("OFILES")
+            progs[t] = list(dict.fromkeys([t + ".o"] + mk.get("OFILES") + more.get(t, [])))
     for t, objs in custom.items():
         if t in progs or t in targ:
             progs[t] = objs

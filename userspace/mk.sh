@@ -38,10 +38,10 @@ WASMOPT=$BINARYEN/bin/wasm-opt
 [ -x "$WASMOPT" ] || { echo "mk.sh: no binaryen at $BINARYEN (set BINARYEN)" >&2; exit 1; }
 ASYNCIFY="--asyncify --pass-arg=asyncify-imports@sys.setjmp,sys.longjmp,sys.rfork
 	--enable-bulk-memory --enable-nontrapping-float-to-int --enable-sign-ext
-	--enable-mutable-globals -O2"
+	--enable-mutable-globals --enable-threads -O2"
 
 CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-extensions -std=gnu89 -O2
-	-mbulk-memory -mnontrapping-fptoint -msign-ext
+	-mbulk-memory -mnontrapping-fptoint -msign-ext -matomics
 	-I$here/wasm/include -I$sys/include -I$sys/src/libc/fmt
 	-Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-missing-braces
 	-Wno-unused-value -Wno-unused-but-set-variable -Wno-incompatible-pointer-types
@@ -52,8 +52,12 @@ CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-ex
 # machine the stack pointer is that global.
 # The function table is exported because a jmp_buf's pc is an index into it:
 # libthread's `_threadinitstack` writes one, and `longjmp` starts it
-# (`libthread/wasm.c`).
-LDFLAGS="--no-entry --export=_start --export-memory --export=__stack_pointer --export-table --stack-first -z stack-size=65536 --allow-multiple-definition"
+# (`libthread/wasm.c`). The memory is imported, and shared, because the
+# machine makes it and `rfork(RFMEM)` gives it to two processes (RESEARCH
+# §16.13) — which needs every object built with `-matomics`; its maximum is
+# wasm32's. The stack is first, at [0, 64K), because it is the one part of
+# the memory each process has to itself.
+LDFLAGS="--no-entry --export=_start --import-memory --export-memory --shared-memory --max-memory=4294967296 --export=__stack_pointer --export-table --stack-first -z stack-size=65536 --allow-multiple-definition"
 
 # The rootfs: the programs in ONE package, `system` — Plan 9's userland as
 # this machine runs it, its commands and rc (docs/packages.md) — at

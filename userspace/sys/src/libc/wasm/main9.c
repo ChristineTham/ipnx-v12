@@ -26,13 +26,14 @@ extern void main(int, char*[]);
 
 /*
  * `_privates` and `_nprivates` — 386's `main9.s` reserves NPRIVATES words in
- * the frame and points `_privates` at them. `privalloc` (`9sys/privalloc.c`)
- * hands them out. Here they are static, because there is no frame to reserve
- * them in.
+ * `_main`'s frame and points `_privates` at them, and `_start` does the same.
+ * `privalloc` (`9sys/privalloc.c`) hands them out. They are on the stack
+ * because the stack is what `RFMEM` does not share: each process's are its
+ * own at the same address (libthread's `_threadgetproc` is one).
  */
 #define NPRIVATES 16
-void	*_privates[NPRIVATES];
-int	_nprivates = NPRIVATES;
+void	**_privates;
+int	_nprivates;
 
 void	_sbrkinit(void*);
 
@@ -45,7 +46,11 @@ __attribute__((export_name("_start")))
 void
 _start(int argc, char *argv[], void *heap, Tos *tos)
 {
+	void *privates[NPRIVATES];
+
 	_tos = tos;
+	_privates = privates;
+	_nprivates = NPRIVATES;
 	_sbrkinit(heap);
 	main(argc, argv);
 	exits("main");
