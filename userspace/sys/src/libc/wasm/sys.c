@@ -44,6 +44,7 @@ SYS(await)	extern int	__await(char*, int);
 SYS(errstr)	extern int	__errstr(char*, uint);
 SYS(fversion)	extern int	__fversion(int, int, char*, int);
 SYS(fd2path)	extern int	__fd2path(int, char*, int);
+SYS(fauth)	extern int	__fauth(int, char*);
 SYS(sleep)	extern int	__sleep(long);
 SYS(alarm)	extern long	__alarm(ulong);
 /*
@@ -93,6 +94,7 @@ int	await(char *s, int n){ int r = __await(s, n); _notejmped(); return r; }
 int	errstr(char *s, uint n){ int r = __errstr(s, n); _notejmped(); return r; }
 int	fversion(int fd, int m, char *v, int n){ int r = __fversion(fd, m, v, n); _notejmped(); return r; }
 int	fd2path(int fd, char *b, int n){ int r = __fd2path(fd, b, n); _notejmped(); return r; }
+int	fauth(int fd, char *a){ int r = __fauth(fd, a); _notejmped(); return r; }
 int	sleep(long n){ int r = __sleep(n); _notejmped(); return r; }
 long	alarm(ulong n){ long r = __alarm(n); _notejmped(); return r; }
 int	notify(void (*f)(void*, char*))		{ return __notify(f); }

@@ -14,9 +14,10 @@
  * to configure (no network), so connect just opens the device; boot.c then
  * does the 9P version handshake and mounts it as the root."*
  *
- * WHAT IS NOT HERE, and each because there is nothing behind it yet:
- * authentication (`fauth`/`auth_proxy` — no factotum), the swap process, and
- * the partition tables.
+ * WHAT IS NOT HERE, and each because there is nothing behind it yet: the
+ * swap process and the partition tables. Authentication is here as Plan 9
+ * has it: `fauth`, and `auth_proxy` if the server asks for it — which with
+ * no factotum fails, and the mount goes ahead (`boot.c:165`).
  *
  * AND NO PROMPT. Plan 9's `rootserver` (`boot.c:328`) asks `root is from
  * (local, tcp, ...)` and takes its default from `$bootargs`, or skips the
@@ -26,6 +27,7 @@
  */
 #include <u.h>
 #include <libc.h>
+#include <auth.h>
 
 char *rootdir = "/root";
 
@@ -139,47 +141,74 @@ execinit(void)
 	fatal(cmd);
 }
 
-void
-main(int argc, char *argv[])
+/*
+ * `connectroot` (`boot.c:124`): connect, the version handshake, and post
+ * the channel at `#s/boot` — before anything mounts it, because the
+ * version is negotiated once per connection and whoever mounts it next
+ * joins that session.
+ */
+static int
+connectroot(void)
 {
-	int fd;
-
-	USED(argc, argv);
-
-	/*
-	 * `nsinit` (`boot.c:151`). The order is the whole of it:
-	 *
-	 *	bind("/", "/", MREPL)          make the root a union of its own
-	 *	mount(fd, afd, "/root", …)     the server, somewhere to stand
-	 *	bind(rootdir, "/", MAFTER|MCREATE)
-	 *
-	 * That last line is what makes **the root a file server**: after it,
-	 * `/` answers from `#/` first and from the server after, so `/etc`,
-	 * `/profile` and `/lib` are the server's while `/boot` stays the kernel's.
-	 */
-	if(bind("/", "/", MREPL) < 0)
-		fatal("bind /");
+	int fd, n;
+	char buf[32];
 
 	fd = open("#9/0", ORDWR);
 	if(fd < 0)
-		fatal("open #9/0");
-
-	/*
-	 * Plan 9 does `fversion(fd, 0, buf, sizeof buf)` here, before posting
-	 * the channel, because `srvcreate` hands the same channel to whoever
-	 * mounts it next and the version is negotiated once per connection.
-	 * This kernel's `mount` does the handshake (`mntversion`,
-	 * `devmnt.c:118`) and refuses `fversion` saying so, so the order is
-	 * mount first, post after.
-	 */
-	if(mount(fd, -1, rootdir, MREPL|MCREATE, "") < 0)
-		fatal("mount /root");
+		fatal("can't connect to file server");
+	buf[0] = '\0';
+	n = fversion(fd, 0, buf, sizeof buf);
+	if(n < 0)
+		fatal("can't init 9P");
 	srvcreate("boot", fd);
+	return fd;
+}
 
-	if(bind(rootdir, "/", MAFTER|MCREATE) < 0)
+/*
+ * `nsinit` (`boot.c:151`). The order is the whole of it:
+ *
+ *	bind("/", "/", MREPL)          make the root a union of its own
+ *	mount(fd, afd, "/root", …)     the server, somewhere to stand
+ *	bind(rootdir, "/", MAFTER|MCREATE)
+ *
+ * That last line is what makes **the root a file server**: after it, `/`
+ * answers from `#/` first and from the server after, so `/etc`, `/profile`
+ * and `/lib` are the server's while `/boot` stays the kernel's.
+ */
+static void
+nsinit(int fd)
+{
+	int afd;
+	char *rp;
+	AuthInfo *ai;
+
+	if(bind("/", "/", MREPL) < 0)
+		fatal("bind /");
+	rp = getenv("rootspec");
+	if(rp == nil)
+		rp = "";
+
+	afd = fauth(fd, rp);
+	if(afd >= 0){
+		ai = auth_proxy(afd, auth_getkey, "proto=p9any role=client");
+		if(ai == nil)
+			print("authentication failed (%r), trying mount anyways\n");
+	}
+	if(mount(fd, afd, "/root", MREPL|MCREATE, rp) < 0)
+		fatal("mount /");
+	rp = getenv("rootdir");
+	if(rp == nil)
+		rp = rootdir;
+	if(bind(rp, "/", MAFTER|MCREATE) < 0)
 		fatal("second bind /");
+}
 
+void
+main(int argc, char *argv[])
+{
+	USED(argc, argv);
+
+	nsinit(connectroot());
 	authentication();
-
 	execinit();
 }

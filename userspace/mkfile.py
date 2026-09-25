@@ -243,6 +243,15 @@ def source_of(mk, obj):
                     q = os.path.join(mk.dir, p.replace("%", os.path.basename(base)))
                     if os.path.exists(q):
                         return generate(mk, base, q, recipe)
+    # a rule of its own naming where the source is: `enam.$O: ../4c/enam.c`
+    # (`4l/mkfile`)
+    for tg, pr, _ in mk.rules:
+        if base + ".o" in tg:
+            for p in pr:
+                if p.endswith(".c"):
+                    q = os.path.normpath(os.path.join(mk.dir, p))
+                    if os.path.exists(q):
+                        return q
     # a metarule naming where the source is: `%.$O: ../cc/%.c` (`8c/mkfile`)
     for tg, pr, _ in mk.rules:
         if "%.o" in tg:
@@ -302,12 +311,51 @@ def _generate(prereq, recipe, stem, out, ipnx):
     shutil.rmtree(work, ignore_errors=True)
     return out
 
+def sysyacc(mk, yf, od):
+    """**Plan 9's yacc, on the system**, as `mpc` is run for libsec: the
+    grammar goes into the store's /tmp, `$YACC $YFLAGS $prereq` runs there
+    (`cmd/mkone:21`), and y.tab.c and y.tab.h come back. It reads its parser
+    from `/sys/lib/yaccpar` (`yacc.c:16`). Before there is a system — the
+    first pass, and rc's own grammar — bison stands in; bison's output
+    differs where it puts a grammar's program section, so a grammar that
+    declares there what its actions use (`hoc.y:143`) needs this one."""
+    ipnx = os.environ.get("IPNX")
+    ybin = os.path.join(PKG, OBJTYPE, "bin", "yacc")
+    if not ipnx or not os.path.exists(ipnx) or not os.path.exists(ybin):
+        return False
+    flags = mk.get("YFLAGS") or ["-d"]
+    with GENLOCK:
+        name = "mkfile.py.yacc." + re.sub(r"[^A-Za-z0-9]", "_", os.path.relpath(mk.dir, SYS))
+        work = os.path.join(ROOT, "tmp", name)
+        shutil.rmtree(work, ignore_errors=True)
+        os.makedirs(work, exist_ok=True)
+        for y in yf:
+            shutil.copy(os.path.join(mk.dir, y), os.path.join(work, os.path.basename(y)))
+        script = "cd /tmp/%s\nyacc %s %s\n" % (name, " ".join(flags), " ".join(os.path.basename(y) for y in yf))
+        with open(os.path.join(work, "yacc.rc"), "w") as f:
+            f.write(script)
+        env = dict(os.environ, IPNX_STORE=ROOT)
+        subprocess.run([ipnx, "rc", "/tmp/%s/yacc.rc" % name], env=env, capture_output=True,
+                       stdin=subprocess.DEVNULL, timeout=300)
+        c = os.path.join(work, "y.tab.c")
+        ok = os.path.exists(c) and os.path.getsize(c) > 0
+        if ok:
+            shutil.copy(c, os.path.join(od, "y.tab.c"))
+            h = os.path.join(work, "y.tab.h")
+            if os.path.exists(h):
+                shutil.copy(h, os.path.join(od, "y.tab.h"))
+                shutil.copy(h, os.path.join(od, "x.tab.h"))
+        shutil.rmtree(work, ignore_errors=True)
+        return ok
+
 def yacc(mk):
     yf = mk.get("YFILES")
     if not yf:
         return True
     od = kencc.derived(mk.dir)
     os.makedirs(od, exist_ok=True)
+    if sysyacc(mk, yf, od):
+        return True
     r = subprocess.run(["bison", "-y", "-d", "-o", os.path.join(od, "y.tab.c")] + [os.path.join(mk.dir, y) for y in yf],
                        capture_output=True, text=True, cwd=mk.dir)
     if r.returncode != 0:
@@ -351,12 +399,90 @@ def archive(path, objs):
 def syslibs():
     return sorted(glob.glob(os.path.join(LIBDIR, "*.a")))
 
-def link(out, objs, locallibs):
+# ---------------------------------------------------------------------------
+# **What a program is linked with is what its headers name.** *"Each
+# library header file contains a #pragma that tells the loader the name of
+# the associated archive; it is not necessary to tell the loader which
+# libraries a program uses"* (comp.ms:397). The compiler records it in the
+# object (`cc/macbody:719`) and the loader searches the libraries so named
+# — the program's, and those of every library member it loads
+# (`8l/obj.c:624`, `addlib`). Linking every library instead lets a name be found in the wrong
+# one: `libl.a`'s `main` calls `yylex`, and a threaded program took it for
+# libthread's.
+
+PRAGMA = re.compile(r'^[ \t]*#[ \t]*pragma[ \t]+lib[ \t]+"([^"]+)"', re.M)
+INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]+([<"])([^>"]+)[>"]', re.M)
+INCDIRS = [os.path.join(HERE, "wasm", "include"), os.path.join(SYS, "include")]
+_pragmas = {}
+
+def pragmas(path, dirs=(), seen=None):
+    """`#pragma lib` in a file and in every header it includes."""
+    seen = set() if seen is None else seen
+    if path in seen or not os.path.isfile(path):
+        return []
+    seen.add(path)
+    if path in _pragmas and not dirs:
+        return _pragmas[path]
+    try:
+        text = open(path, errors="replace").read()
+    except OSError:
+        return []
+    libs = PRAGMA.findall(text)
+    for kind, name in INCLUDE.findall(text):
+        cands = ([os.path.dirname(path)] if kind == '"' else []) + list(dirs) + INCDIRS
+        for d in cands:
+            q = os.path.join(d, name)
+            if os.path.isfile(q):
+                libs += pragmas(q, dirs, seen)
+                break
+    if not dirs:
+        _pragmas[path] = libs
+    return libs
+
+_libdeps = {}
+
+def libdeps(name):
+    """What a library's own members name — the records the loader finds in
+    the members it loads."""
+    if name not in _libdeps:
+        _libdeps[name] = []
+        src = os.path.join(SYS, "src", name[:-2] if name.endswith(".a") else name)
+        found = []
+        for dp, _, fs in os.walk(src):
+            parts = os.path.relpath(dp, src).split(os.sep)
+            if any(x in kencc.ARCHS and x != OBJTYPE for x in parts):
+                continue
+            for f in fs:
+                if f.endswith((".c", ".h", ".y")):
+                    found += pragmas(os.path.join(dp, f))
+        _libdeps[name] = found
+    return _libdeps[name]
+
+def syslibs_for(sources, dirs):
+    """The system libraries named, and those they name, in first-named
+    order; libc is the loader's last resort and is added by `link`."""
+    todo = []
+    for src in sources:
+        todo += pragmas(src, dirs)
+    out, seen = [], set()
+    while todo:
+        n = os.path.basename(todo.pop(0))
+        if n in seen or n == "libc.a" or "/ape/" in n:
+            continue
+        seen.add(n)
+        p = os.path.join(LIBDIR, n)
+        if os.path.exists(p):
+            out.append(p)
+        todo += libdeps(n)
+    return out
+
+def link(out, objs, locallibs, libs=None):
     os.makedirs(os.path.dirname(out), exist_ok=True)
     # kencc's tentative definitions merge, as common symbols; the wasm
     # backend has none, so the weak bit is set instead (weaken.py)
     subprocess.run(["python3", os.path.join(HERE, "weaken.py"), NM] + objs, check=True, capture_output=True)
-    cmd = [LD] + LDFLAGS + ["-o", out] + objs + locallibs + syslibs() + [os.path.join(BUILD, "libc.a")]
+    libs = syslibs() if libs is None else libs
+    cmd = [LD] + LDFLAGS + ["-o", out] + objs + locallibs + libs + [os.path.join(BUILD, "libc.a")]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         und = sorted(set(re.findall(r"undefined symbol: (\S+)", r.stderr)))
@@ -417,13 +543,52 @@ def binpath(mk, name):
     sub = b.split("/bin", 1)[1].strip("/") if "/bin" in b else ""
     return os.path.join(PKG, OBJTYPE, "bin", sub, name)
 
+def locallib(mk, lib, path, rel):
+    """A directory library its mkfile makes by a rule of its own: from
+    objects named there (`$LIBS: $LIBSOFILES`, `ip/httpd/mkfile`), or by
+    running mk in another directory (`lib.$O.a: cd lib; mk`,
+    `auth/mkfile`)."""
+    for tg, pr, recipe in mk.rules:
+        if lib not in tg:
+            continue
+        objs = [p for p in pr if p.endswith(".o")]
+        if objs:
+            paths, errs = compile_all(mk, objs)
+            if errs:
+                fail(rel, "; ".join(errs[:3]))
+                return
+            archive(path, paths)
+            return
+        for line in recipe:
+            w = line.split()
+            if len(w) >= 2 and w[0] == "cd":
+                sub = os.path.normpath(os.path.join(mk.dir, w[1]))
+                try:
+                    smk = Mk(sub, BASEENV)
+                except Exception:
+                    return
+                objs, errs = compile_all(smk, smk.get("OFILES"))
+                if errs:
+                    fail(os.path.relpath(sub, os.path.join(SYS, "src")), "; ".join(errs[:3]))
+                    return
+                archive(path, objs)
+                return
+
 def build_cmds(mk, d, rel):
     local = []
-    # a directory library (mklib), or LIB= naming one in the directory
+    # a directory library (mklib), or LIB= naming one in the directory —
+    # `lib.$O.a` (`auth/mkfile`) or `libhttps.a$O` (`ip/httpd/mkfile`)
     for lib in mk.get("LIB"):
-        if lib.endswith(".a") and not lib.startswith("/"):
-            local.append(libpath(mk, lib))
+        if (lib.endswith(".a") or lib.endswith(".a" + BASEENV["O"][0])) and not lib.startswith("/"):
+            path = libpath(mk, lib)
+            local.append(path)
+            if not os.path.exists(path) and not mk.uses("mklib"):
+                locallib(mk, lib, path, rel)
     if mk.uses("mklib") or (mk.uses("mksyslib") and mk.get("LIB") and not mk.get("LIB")[0].startswith("/")):
+        # a directory library may have a grammar too (`cmd/cc`: `cc.y`)
+        if not yacc(mk):
+            fail(rel, "yacc failed")
+            return
         objs, errs = compile_all(mk, mk.get("OFILES"))
         if errs:
             fail(rel, "; ".join(errs[:3]))
@@ -479,7 +644,23 @@ def build_cmds(mk, d, rel):
             if broken:
                 fail(f"{rel}/{t}" if rel != "cmd" else t, broken[0])
                 continue
-            e = link(binpath(mk, t), [path_of[o] for o in objs], local)
+            srcs = []
+            for o in objs:
+                src = source_of(mk, o)
+                if src and os.path.basename(src) == "y.tab.c":
+                    srcs += [os.path.join(mk.dir, y) for y in mk.get("YFILES")]
+                elif src:
+                    srcs.append(src)
+            dirs = [mk.dir] + [rootpath(f[2:], mk.env) if f[2:].startswith("/") else os.path.join(mk.dir, f[2:])
+                               for f in mk.get("CFLAGS") if f.startswith("-I")]
+            # a directory library's members name theirs too
+            for l in local:
+                ldir = os.path.dirname(l).replace(os.path.join(BUILD, "obj"), os.path.join(SYS))
+                if os.path.isdir(ldir):
+                    for f in os.listdir(ldir):
+                        if f.endswith(".c"):
+                            srcs.append(os.path.join(ldir, f))
+            e = link(binpath(mk, t), [path_of[o] for o in objs], local, syslibs_for(srcs, dirs))
             if e:
                 fail(f"{rel}/{t}" if rel != "cmd" else t, e)
 

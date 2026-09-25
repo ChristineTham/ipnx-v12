@@ -259,12 +259,31 @@ impl Devtab {
         }
     }
 
-    /// Attach a 9P server over a channel — `mount(2)`'s device half.
-    pub fn dmount(&mut self, wire: Chan, uname: &str, aname: &str) -> Result<Chan, String> {
+    /// Attach a 9P server over a channel — `mount(2)`'s device half — with
+    /// an authentication file's fid, or NOFID.
+    pub fn dmount(&mut self, wire: Chan, uname: &str, aname: &str, afid: u32) -> Result<Chan, String> {
         let (uname, aname) = (uname.to_string(), aname.to_string());
         self.with_mnt(|m, tab| {
             let mut w = Wire { wire: wire.clone(), tab };
-            m.mount(wire.clone(), &mut w, &uname, &aname)
+            m.mount_auth(wire.clone(), &mut w, &uname, &aname, afid)
+        })?
+    }
+
+    /// `mntauth` — `fauth(2)`'s device half.
+    pub fn dauth(&mut self, wire: Chan, uname: &str, aname: &str) -> Result<Chan, String> {
+        let (uname, aname) = (uname.to_string(), aname.to_string());
+        self.with_mnt(|m, tab| {
+            let mut w = Wire { wire: wire.clone(), tab };
+            m.auth(wire.clone(), &mut w, &uname, &aname)
+        })?
+    }
+
+    /// `mntversion` — `fversion(2)`'s device half.
+    pub fn dfversion(&mut self, wire: Chan, msize: u32, version: &str) -> Result<String, String> {
+        let version = version.to_string();
+        self.with_mnt(|m, tab| {
+            let mut w = Wire { wire: wire.clone(), tab };
+            m.fversion(&wire, &mut w, msize, &version)
         })?
     }
 }

@@ -1475,7 +1475,11 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         let r = async {
             let old = cstr(&mut c, o).unwrap_or_default();
             let aname = if a == 0 { String::new() } else { cstr(&mut c, a).unwrap_or_default() };
-            or_fail(kcall(&mut c, Call::Mount { fd, afd, old, flag, aname }).await, |_| 0)
+            // *"return nm->mountid"* (`chan.c:760`)
+            or_fail(kcall(&mut c, Call::Mount { fd, afd, old, flag, aname }).await, |v| match v {
+                Ret::N(id) => id as i32,
+                _ => 0,
+            })
         }
         .await;
         deliver(&mut c).await?;
@@ -1541,6 +1545,21 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
 
     // `fd2path` (`sysfile.c:173`): the kernel answers the name, and it is
     // written into the caller's buffer as `snprint` would, cut to fit.
+    // `fauth(2)` (`auth.c:62`): a descriptor for the authentication file.
+    l.func_wrap_async("sys", "fauth", |mut c: Caller<'_, Guest>, (fd, a): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [fd.word(), a.word(), 0, 0, 0];
+        let r = async {
+            let aname = cstr(&mut c, a).unwrap_or_default();
+            or_fail(kcall(&mut c, Call::Fauth { fd, aname }).await, |v| match v {
+                Ret::Fd(f) => f,
+                _ => -1,
+            })
+        }
+        .await;
+        deliver(&mut c).await?;
+        Ok::<_, wasmtime::Error>(r)
+    }))?;
+
     l.func_wrap_async("sys", "fd2path", |mut c: Caller<'_, Guest>, (fd, p, n): (i32, i32, i32)| Box::new(async move {
         c.data_mut().s = [fd.word(), p.word(), n.word(), 0, 0];
         let r = async {
@@ -1568,11 +1587,24 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         c.data_mut().s = [fd.word(), m.word(), v.word(), n.word(), 0];
         let r = async {
         let version = cstr(&mut c, v).unwrap_or_default();
-        let _ = n;
-        or_fail(
-            kcall(&mut c, Call::Fversion { fd, msize: m as u32, version }).await,
-            |_| 0,
-        )
+        // `sysfversion` (`auth.c:23`): the version agreed goes back into
+        // the caller's buffer — *"if(returnlen < k) error(Eshort);
+        // memmove(version, buf, k)"* (`devmnt.c:142`) — and its length is
+        // the answer.
+        match kcall(&mut c, Call::Fversion { fd, msize: m as u32, version }).await {
+            Ok(Ret::Str(got)) => {
+                let b = got.into_bytes();
+                if n > 0 && (n as usize) < b.len() {
+                    let _ = call(&mut c, Call::Errstr { buf: "i/o count too small".into() });
+                    return -1;
+                }
+                if n > 0 && write(&mut c, v, &b).is_err() {
+                    return -1;
+                }
+                b.len() as i32
+            }
+            _ => -1,
+        }
     }
         .await;
         deliver(&mut c).await?;

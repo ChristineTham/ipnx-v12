@@ -109,7 +109,10 @@ because this machine has no stack a program can save (RESEARCH §16.12):
 the stack into memory and wind back the one that should run — so a program
 forks as Plan 9's does. Christine chose it, 2026-09-24. `kencc.py` also makes
 string literals writable data, as kencc's are (`8c/swt.c:106`): `ed`'s own
-`mktemp` writes into one. And **`-matomics` with `--shared-memory
+`mktemp` writes into one. `-fwchar-type=int -fno-signed-wchar`, because kencc's
+`wchar_t` is `Rune`, unsigned. A program is linked with **only the libraries its
+headers' `#pragma lib` name** (`comp.ms:397`, `8l/obj.c:624`) — linking every library
+lets `libl.a`'s `main` win (RESEARCH §16.15). And **`-matomics` with `--shared-memory
 --import-memory`**, because `rfork(RFMEM)` is wasm shared memory (RESEARCH
 §16.13); the host enables wasmtime's `threads`.
 

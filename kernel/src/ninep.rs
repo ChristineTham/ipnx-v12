@@ -174,6 +174,8 @@ pub const QTDIR: u8 = 0x80;
 /// shifts it into the mode as `DMEXCL` (`libc.h:599`, `0x20000000`), so the
 /// bit is stated once, in the qid.
 pub const QTEXCL: u8 = 0x20;
+/// `QTAUTH` (`libc.h:592`) — *"type bit for authentication file"*.
+pub const QTAUTH: u8 = 0x08;
 
 /// `DMDIR` — the directory bit in a mode (`libc.h`). `namec`'s `Acreate`
 /// requires it when the name ends in `/` or `/.`.

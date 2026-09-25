@@ -66,30 +66,41 @@ impl Mnt {
     /// optional — a server that has not agreed a version answers nothing.
     /// `mntversion` (`devmnt.c:100`), and only when the wire has no session:
     /// `mntattach` does it once and joins afterwards (`:317`, `m = c->mux`).
-    pub fn version(wire: &Chan, t: &mut dyn Transport) -> Result<u32, String> {
-        // `mntversion` asks for MAXRPC (`devmnt.c:118`, `msize = MAXRPC`).
-        // MAXCMNRPC is only the BUFFER the exchange itself uses
-        // (`:155`, `msg = malloc(MAXCMNRPC)`) — asking for it instead would
-        // cap every session at the old 8K and nothing would look wrong.
-        let mut msize = MAXRPC;
+    pub fn version(wire: &Chan, t: &mut dyn Transport, msize: u32, version: &str) -> Result<(u32, String), String> {
+        // *"if(msize == 0) msize = MAXRPC"* (`devmnt.c:116`): `mntversion`
+        // asks for MAXRPC. MAXCMNRPC is only the BUFFER the exchange itself
+        // uses (`:155`, `msg = malloc(MAXCMNRPC)`) — asking for it instead
+        // would cap every session at the old 8K and nothing would look wrong.
+        let mut msize = if msize == 0 { MAXRPC } else { msize };
         // `if(msize > c->iounit && c->iounit != 0) msize = c->iounit`
         // (`devmnt.c:119`): the wire's own chunk size bounds the session.
         if wire.iounit != 0 && msize > wire.iounit {
             msize = wire.iounit;
         }
-        let req = W::new().u32(msize).s(VERSION).frame(T::Version as u8, !0);
+        let v = if version.is_empty() { VERSION } else { version };
+        if !v.starts_with(VERSION) {
+            return Err("bad 9P version specification".into());
+        }
+        let req = W::new().u32(msize).s(v).frame(T::Version as u8, !0);
         let reply = t.rpc(&req)?;
-        let m = unframe(&reply).ok_or("malformed Rversion")?;
+        let m = unframe(&reply).ok_or("bad fversion conversion on reply")?;
         if m.ty != T::Version.reply() {
-            return Err(rerror(m.body).unwrap_or_else(|| "not Rversion".into()));
+            return Err(rerror(m.body).unwrap_or_else(|| "unexpected reply type in fversion".into()));
         }
         let mut r = R::new(m.body);
-        let got = r.u32().ok_or("short Rversion")?;
-        let version = r.s().ok_or("short Rversion")?;
-        if version != VERSION {
-            return Err(format!("server speaks {version}, not {VERSION}"));
+        let got = r.u32().ok_or("bad fversion conversion on reply")?;
+        let version = r.s().ok_or("bad fversion conversion on reply")?;
+        // `devmnt.c:193`-`:199`
+        if got > msize {
+            return Err("server tries to increase msize in fversion".into());
         }
-        Ok(got.min(msize))
+        if !(256..=1024 * 1024).contains(&got) {
+            return Err("nonsense value of msize in fversion".into());
+        }
+        if version.is_empty() || !v.starts_with(version) {
+            return Err(format!("bad 9P version returned from server: {version}"));
+        }
+        Ok((got, version.to_string()))
     }
 
     pub fn attach(
@@ -99,12 +110,14 @@ impl Mnt {
         uname: &str,
         aname: &str,
         fid: u32,
+        afid: u32,
     ) -> Result<(Mnt, Chan), String> {
         let mut mnt = Mnt { msize, wire, tag: 0 };
-        // Tattach: fid, afid (NOFID — no authentication), uname, aname
+        // Tattach: fid, afid — the authentication file's, or NOFID
+        // (`devmnt.c:344`) — uname, aname
         let req = W::new()
             .u32(fid)
-            .u32(crate::ninep::NOFID)
+            .u32(afid)
             .s(uname)
             .s(aname)
             .frame(T::Attach as u8, mnt.newtag());
@@ -260,6 +273,10 @@ pub struct MntDev {
     /// from under the other. Plan 9 recycles channels and with them fids;
     /// this counts up, which a u32 affords.
     fid: u32,
+    /// **Each wire's session** — the msize and version `mntversion`
+    /// agreed, kept where Plan 9 keeps them: on the wire, `c->mux`
+    /// (`devmnt.c:245`). A wire is named here by what identifies it.
+    sessions: std::collections::HashMap<(DevId, u32, u64), (u32, String)>,
 }
 
 impl MntDev {
@@ -279,21 +296,102 @@ impl MntDev {
     /// **A wire already carrying a session is joined, not re-versioned**:
     /// `m = c->mux`, and `mntversion` runs only when that is nil (`:317`).
     /// Two mounts of one channel are two attaches over one 9P session.
+    /// The wire's session: joined if it has one, `mntversion` if not
+    /// (`devmnt.c:317`, `mntattach`; `:236`, `mntauth`). A new one is
+    /// answered, not kept: the caller keeps it once its own RPCs are done,
+    /// because **a call that sleeps runs again and must take the same
+    /// path** — kept at once, the second run would skip the version its
+    /// record holds, and the record would be out of step
+    /// ([`crate::namec::Record`]).
+    fn session(&mut self, wire: &Chan, t: &mut dyn Transport) -> Result<(u32, Option<(u32, String)>), String> {
+        if let Some(m) = wire.mux.and_then(|i| self.mounts.get(i as usize)) {
+            return Ok((m.msize, None));
+        }
+        let key = (wire.dev, wire.devno, wire.qid.path);
+        if let Some((msize, _)) = self.sessions.get(&key) {
+            return Ok((*msize, None));
+        }
+        let (msize, v) = Mnt::version(wire, t, 0, "")?;
+        Ok((msize, Some((msize, v))))
+    }
+
+    /// Keep a session a call began, now its RPCs are done.
+    fn begin(&mut self, wire: &Chan, new: Option<(u32, String)>) {
+        if let Some(s) = new {
+            self.sessions.insert((wire.dev, wire.devno, wire.qid.path), s);
+        }
+    }
+
+    /// `fversion(2)` — `mntversion` on a descriptor (`devmnt.c:99`). A wire
+    /// with a session already answers its version, if the one asked for is
+    /// compatible (`:133`); otherwise the exchange is made and the session
+    /// begun.
+    pub fn fversion(&mut self, wire: &Chan, t: &mut dyn Transport, msize: u32, version: &str) -> Result<String, String> {
+        let key = (wire.dev, wire.devno, wire.qid.path);
+        if let Some((_, have)) = self.sessions.get(&key) {
+            let v = if version.is_empty() { VERSION } else { version };
+            if !v.starts_with(have.as_str()) {
+                return Err(format!("incompatible 9P versions {have} {v}"));
+            }
+            return Ok(have.clone());
+        }
+        let (msize, v) = Mnt::version(wire, t, msize, version)?;
+        self.sessions.insert(key, (msize, v.clone()));
+        Ok(v)
+    }
+
+    /// `mntauth` (`devmnt.c:230`): `Tauth` on the wire's session, and the
+    /// channel on its afid, which is read and written as a file is.
+    pub fn auth(&mut self, wire: Chan, t: &mut dyn Transport, uname: &str, aname: &str) -> Result<Chan, String> {
+        let (msize, new) = self.session(&wire, t)?;
+        let afid = self.newfid(t);
+        let mut mnt = Mnt { msize, wire, tag: 0 };
+        let tag = mnt.newtag();
+        let req = W::new().u32(afid).s(uname).s(aname).frame(T::Auth as u8, tag);
+        let reply = t.rpc(&req)?;
+        let m = unframe(&reply).ok_or("malformed Rauth")?;
+        if m.ty != T::Auth.reply() {
+            return Err(rerror(m.body).unwrap_or_else(|| "not Rauth".into()));
+        }
+        let aqid = Qid::read(&mut R::new(m.body)).ok_or("short Rauth")?;
+        self.begin(&mnt.wire, new);
+        let mut c = Chan::attach(DevId::Mnt, 0);
+        c.qid = aqid;
+        c.fid = afid;
+        c.mchan = Some(Box::new(mnt.wire.clone()));
+        c.mqid = aqid;
+        c.mode = crate::chan::mode::ORDWR;
+        c.flag |= crate::chan::flag::COPEN;
+        self.mounts.push(mnt);
+        c.devno = (self.mounts.len() - 1) as u32;
+        Ok(c)
+    }
+
     pub fn mount(
         &mut self,
-        mut wire: Chan,
+        wire: Chan,
         t: &mut dyn Transport,
         uname: &str,
         aname: &str,
     ) -> Result<Chan, String> {
-        let msize = match wire.mux.and_then(|i| self.mounts.get(i as usize)) {
-            Some(m) => m.msize,
-            None => Mnt::version(&wire, t)?,
-        };
+        self.mount_auth(wire, t, uname, aname, crate::ninep::NOFID)
+    }
+
+    /// `mntattach` with an authentication file: `afid` is its fid, or
+    /// NOFID (`devmnt.c:344`).
+    pub fn mount_auth(
+        &mut self,
+        wire: Chan,
+        t: &mut dyn Transport,
+        uname: &str,
+        aname: &str,
+        afid: u32,
+    ) -> Result<Chan, String> {
+        let (msize, new) = self.session(&wire, t)?;
         let joined = wire.mux;
-        wire.mux = Some(self.mounts.len() as u32);
         let fid = self.newfid(t);
-        let (m, mut c) = Mnt::attach(wire, msize, t, uname, aname, fid)?;
+        let (m, mut c) = Mnt::attach(wire.clone(), msize, t, uname, aname, fid, afid)?;
+        self.begin(&wire, new);
         self.mounts.push(m);
         c.devno = (self.mounts.len() - 1) as u32;
         c.mux = joined.or(Some(c.devno));
@@ -472,6 +570,9 @@ mod tests {
         versions: usize,
         attaches: usize,
         reads: usize,
+        /// The afid each `Tauth` named, and each `Tattach` carried.
+        authed: Vec<u32>,
+        attached_with: Vec<u32>,
     }
 
     impl Server {
@@ -479,7 +580,7 @@ mod tests {
             let mut files = HashMap::new();
             files.insert("hello".into(), b"from a server".to_vec());
             files.insert("big".into(), vec![b'x'; 5000]);
-            Server { files, fids: HashMap::new(), msize, handed: 0, versions: 0, attaches: 0, reads: 0 }
+            Server { files, fids: HashMap::new(), msize, handed: 0, versions: 0, attaches: 0, reads: 0, authed: Vec::new(), attached_with: Vec::new() }
         }
 
         fn reply(&mut self, req: &[u8]) -> Vec<u8> {
@@ -500,10 +601,15 @@ mod tests {
                     }
                     W::new().u32(msize).s(VERSION).frame(T::Version.reply(), tag)
                 }
+                x if x == T::Auth as u8 => {
+                    self.authed.push(r.u32().unwrap());
+                    let q = Qid { qtype: crate::ninep::QTAUTH, vers: 0, path: 9 };
+                    W::new().raw(&q.write(W::new()).into_body()).frame(T::Auth.reply(), tag)
+                }
                 x if x == T::Attach as u8 => {
                     self.attaches += 1;
                     let fid = r.u32().unwrap();
-                    let _afid = r.u32().unwrap();
+                    self.attached_with.push(r.u32().unwrap());
                     self.fids.insert(fid, String::new());
                     self.handed += 1;
                     let q = Qid { qtype: QTDIR, vers: 0, path: 0 };
@@ -653,6 +759,25 @@ mod tests {
         let mut c = d.open(&mut t, c, 0).unwrap();
         assert_eq!(d.read(&mut t, &mut c, 64, 0).unwrap(), b"from a server");
         assert_eq!(s.borrow().reads, 1, "one Tread, answered short, and no second");
+    }
+
+    /// **`fauth` then `mount`** (`auth.c:62`, `sysfile.c:1027`): `Tauth`
+    /// on the wire's one session makes a channel on its own fid, and the
+    /// attach names that fid as its `afid` (`devmnt.c:344`); without an
+    /// authentication file the `afid` is NOFID.
+    #[test]
+    fn an_authentication_file_is_attached_with_its_fid() {
+        let s = std::rc::Rc::new(std::cell::RefCell::new(Server::new(MAXRPC)));
+        let mut d = MntDev::new();
+        let mut t = Loopback(s.clone());
+        let wire = Chan::attach(DevId::Pipe, 0);
+        let ac = d.auth(wire.clone(), &mut t, "kitty", "").unwrap();
+        assert_eq!(ac.qid.qtype, crate::ninep::QTAUTH);
+        assert_eq!(s.borrow().authed, [ac.fid]);
+        d.mount_auth(wire.clone(), &mut t, "kitty", "", ac.fid).unwrap();
+        d.mount(wire, &mut t, "kitty", "").unwrap();
+        assert_eq!(s.borrow().attached_with, [ac.fid, NOFID]);
+        assert_eq!(s.borrow().versions, 1, "one session: fauth versioned it, the attaches joined");
     }
 
     /// A failed walk must clunk the fid it asked for. A server keeps every

@@ -329,10 +329,81 @@ def absinclude(m):
         return f'{m.group(1)}"{os.path.join(DERIVED, p[1:])}"'
     return m.group(0)
 
+HEX = set("0123456789abcdefABCDEF")
+
+def literals(text):
+    """kencc's literals, as clang takes them (`cc/lex.c`, `escchar`):
+
+      * `\\x` takes at most two hex digits, six in a wide string (`:1104`,
+        *"note this is not ansi, supposed to only accept 2 hex"*); clang
+        takes every hex digit that follows. A string that goes on with one
+        is split there, `"\\xe2" "abc"`, which is the same bytes.
+      * three quotes are a quote character; clang wants it escaped.
+    """
+    Q, D, B = "'", '"', "\\"
+    out, i, n = [], 0, len(text)
+    while i < n:
+        c = text[i]
+        if text.startswith("//", i):
+            j = text.find("\n", i)
+            j = n if j < 0 else j
+            out.append(text[i:j])
+            i = j
+        elif text.startswith("/*", i):
+            j = text.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            out.append(text[i:j])
+            i = j
+        elif text.startswith(Q * 3, i):
+            out.append(Q + B + Q + Q)
+            i += 3
+        elif c == Q:
+            j = i + 1
+            while j < n and text[j] != Q and text[j] != "\n":
+                j += 2 if text[j] == B else 1
+            out.append(text[i:j + 1])
+            i = j + 1
+        elif c == D:
+            wide = i > 0 and text[i - 1] == "L"
+            limit = 6 if wide else 2
+            j = i + 1
+            buf = [D]
+            while j < n and text[j] != D and text[j] != "\n":
+                if text[j] == B and j + 1 < n and text[j + 1] == "x":
+                    k = j + 2
+                    while k < n and k - (j + 2) < limit and text[k] in HEX:
+                        k += 1
+                    buf.append(text[j:k])
+                    if k < n and text[k] in HEX:
+                        buf.append(D + " " + ("L" if wide else "") + D)
+                    j = k
+                elif text[j] == B:
+                    buf.append(text[j:j + 2])
+                    j += 2
+                else:
+                    buf.append(text[j])
+                    j += 1
+            if j < n and text[j] == D:
+                buf.append(D)
+                j += 1
+            out.append("".join(buf))
+            i = j
+        else:
+            out.append(c)
+            i += 1
+    return "".join(out)
+
 def derive_text(text, path, table):
     """The file as clang takes it: each unnamed member flattened and named,
     or only named where a member of it would be hidden by the outer one."""
     text = re.sub(r'^([ \t]*#[ \t]*include[ \t]*)[<"](/[^">]+)[">]', absinclude, text, flags=re.M)
+    # **`main(void)` is given what `_main` passes it.** kencc's calls pass
+    # arguments whatever the callee declares — `_main` calls `main(argc,
+    # argv)` (`libc/386/main9.s`) and a `main(void)` ignores them. A wasm
+    # call must match the callee's signature, and clang names a `main(void)`
+    # `__main_void`, so `_main` finds no `main` at all.
+    text = re.sub(r'^main\(void\)', 'main(int, char**)', text, flags=re.M)
+    text = literals(text)
     edits = []
     local = Table()
     local.bytag, local.typedef, local.bypos = table.bytag, table.typedef, table.bypos

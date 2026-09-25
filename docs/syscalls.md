@@ -63,7 +63,7 @@ slots are dropped entirely.
 | 7 | `exec` | proc | (uses ns) | ✓ | image read via the caller's namespace, then instantiate |
 | 8 | `exits` | proc | — | ✓ | |
 | 9 | `_fsession` | drop | — | — | |
-| 10 | `fauth` | ns | `Tauth` | — | |
+| 10 | `fauth` | ns | `Tauth` | ✓ | `mntauth`: a channel on the afid, close-on-exec (2026-09-25) |
 | 11 | `_fstat` | drop | — | — | |
 | 12 | `segbrk` | mem | — | — | |
 | 13 | `_mount` | drop | — | — | |
@@ -76,7 +76,7 @@ slots are dropped entirely.
 | 20 | `_write` | drop | — | — | |
 | 21 | `pipe` | 9P | — | ✓ | the pipe device `#\|`; bidirectional |
 | 22 | `create` | 9P | `Tcreate` | ✓ | |
-| 23 | `fd2path` | fd | — | — | |
+| 23 | `fd2path` | fd | — | ✓ | `chanpath(c)` into the caller's buffer (2026-09-24) |
 | 24 | `brk_` | mem | — | (guest) | v0 deviation: heap is guest-local `memory.grow`, see plan |
 | 25 | `remove` | 9P | `Tremove` | ✓ | |
 | 26 | `_wstat` | drop | — | — | |
@@ -111,28 +111,28 @@ slots are dropped entirely.
 never leaves the supervisor — **29 of 40 live calls are pure kernel calls**, which is the
 concrete answer to "which survive as kernel calls and which become 9P messages".
 
-## The subset — 31 calls
+## The subset — 33 calls
 
-Of the 40 live calls the kernel implements 31.
+Of the 40 live calls the kernel implements 33.
 
 | processes | `rfork` `exec` `exits` `await` `sleep` `alarm` `notify` `noted` `rendezvous` `semacquire` `tsemacquire` `semrelease` |
 |---|---|
 | **namespace** | `bind` `mount` `unmount` `chdir` |
-| **channels** | `open` `create` `close` `pread` `pwrite` `seek` `dup` `pipe` `remove` `stat` `fstat` `wstat` `fwstat` `fversion` `errstr` |
+| **channels** | `open` `create` `close` `pread` `pwrite` `seek` `dup` `pipe` `remove` `stat` `fstat` `wstat` `fwstat` `fversion` `fauth` `fd2path` `errstr` |
 
-The nine it omits, and why:
+The seven it omits, and why:
 
 | omitted | why |
 |---|---|
 | `segbrk` `brk_` `segattach` `segdetach` `segfree` `segflush` | memory is the machine's, not the kernel's. A guest grows its own linear memory; on another machine the arrangement differs and the kernel does not change |
-| `fd2path` | a convenience over state the process already holds |
-| `fauth` | authentication is a file server's, established at attach |
 | `nsec` | time is a file |
 
 Each omission is a call the kernel does not have, not a call answered
 elsewhere in the kernel — **and each is itself a deviation**, because a
 kernel smaller than Plan 9's needs approval as a larger one does. None of the
-nine has it.
+seven has it. `fd2path` (2026-09-24) and `fauth` (2026-09-25) were on this
+list and are restored: both are Plan 9's (`sysfile.c:173`, `auth.c:62`), and
+programs call them.
 
 The semaphores were on this list until 2026-09-23 as *"a library over
 `rendezvous`"*. That was wrong: they are kernel calls in Plan 9

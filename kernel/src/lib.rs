@@ -111,6 +111,9 @@ pub enum Call {
     Wstat { path: String, edir: Vec<u8> },
     Fwstat { fd: Fd, edir: Vec<u8> },
     Fversion { fd: Fd, msize: u32, version: String },
+    /// `fauth(2)` — a channel for authenticating to the server on `fd`
+    /// (`sysfauth`, `auth.c:62`).
+    Fauth { fd: Fd, aname: String },
     /// `fd2path(2)` — the name the channel was reached by (`sysfd2path`,
     /// `sysfile.c:173`).
     Fd2path { fd: Fd },
@@ -789,7 +792,7 @@ mod tests {
              TSEMACQUIRE NSEC";
         for c in "RFORK EXEC EXITS AWAIT SLEEP ALARM NOTIFY NOTED RENDEZVOUS BIND MOUNT \
              UNMOUNT CHDIR OPEN CREATE CLOSE PREAD PWRITE SEEK DUP PIPE REMOVE STAT FSTAT \
-             WSTAT FWSTAT FVERSION ERRSTR SEMACQUIRE TSEMACQUIRE SEMRELEASE"
+             WSTAT FWSTAT FVERSION FAUTH ERRSTR SEMACQUIRE TSEMACQUIRE SEMRELEASE"
             .split_whitespace()
         {
             assert!(plan9.split_whitespace().any(|p| p == c), "{c} is not a Plan 9 syscall");
@@ -824,6 +827,7 @@ pub mod sysno {
     pub const SEEK: u32 = 39;
     pub const FD2PATH: u32 = 23;
     pub const FVERSION: u32 = 40;
+    pub const FAUTH: u32 = 10;
     pub const ERRSTR: u32 = 41;
     pub const STAT: u32 = 42;
     pub const FSTAT: u32 = 43;
@@ -870,6 +874,7 @@ fn scallnr(c: &Call) -> u32 {
         Call::Wstat { .. } => WSTAT,
         Call::Fwstat { .. } => FWSTAT,
         Call::Fversion { .. } => FVERSION,
+        Call::Fauth { .. } => FAUTH,
         Call::Fd2path { .. } => FD2PATH,
         Call::Errstr { .. } => ERRSTR,
     }
@@ -889,6 +894,8 @@ fn retval(nr: u32, s: &[u64; machine::MAXSYSARG], r: &Result<Ret, String>) -> i6
         Ret::Pid(p) => *p as i64,
         // `await` answers what fitted in the caller's buffer; `errstr`, 0.
         Ret::Str(m) if nr == sysno::AWAIT => m.len().min(s[1] as u32 as usize) as i64,
+        // `sysfversion` answers the version's length (`auth.c:23`)
+        Ret::Str(m) if nr == sysno::FVERSION => m.len() as i64,
         Ret::Str(_) | Ret::Wait(..) => 0,
     }
 }
@@ -960,6 +967,7 @@ fn sysctab(c: &Call) -> &'static str {
         Call::Fwstat { .. } => "Fwstat",
         Call::Errstr { .. } => "Errstr",
         Call::Fversion { .. } => "Fversion",
+        Call::Fauth { .. } => "Fauth",
         Call::Fd2path { .. } => "Fd2path",
     }
 }
@@ -1830,19 +1838,58 @@ impl Kernel {
             // `sysmount` (`sysfile.c`): the fd is a channel to a SERVER, and
             // `#M` speaks 9P down it. Every other device presents files as
             // function calls; this is the one crossing.
-            Call::Mount { fd, afd: _, old, flag, aname } => {
+            // `bindmount` (`sysfile.c:989`): the server's channel, and the
+            // authentication file's if there is one — its fid is the
+            // attach's `afid` (`devmnt.c:344`) — then `cmount`, and
+            // *"fdclose(fd, 0)"*: the mount holds the channel now, not the
+            // descriptor. It answers the new mount's id (`chan.c:760`).
+            Call::Mount { fd, afd, old, flag, aname } => {
                 let cell = self.chancell(up, fd)?;
                 let wire = cell.borrow().clone();
+                let afid = if afd >= 0 { self.chan(up, afd)?.fid } else { ninep::NOFID };
                 let on = self.walk(up, &old, namec::A::Todir, 0)?;
                 let user = self.procs.borrow().user(up).unwrap_or_default();
-                let to = self.tab.dmount(wire, &user, &aname)?;
+                let to = self.tab.dmount(wire, &user, &aname, afid)?;
                 self.tab.keepwire(cell);
-                let procs = self.procs.borrow();
-                let p = procs.get(up).ok_or("no such process")?;
-                p.ns.borrow_mut().mount(&on, element_of(to, flag, &aname), bind_of(flag));
-                Ok(Ret::Ok)
+                let id = {
+                    let procs = self.procs.borrow();
+                    let p = procs.get(up).ok_or("no such process")?;
+                    let id = p.ns.borrow_mut().mount(&on, element_of(to, flag, &aname), bind_of(flag));
+                    id
+                };
+                let last = {
+                    let procs = self.procs.borrow();
+                    let p = procs.get(up).ok_or("no such process")?;
+                    let r = p.fds.borrow_mut().close(fd);
+                    r.flatten()
+                };
+                if let Some(mut c) = last {
+                    self.tab.dclose(&mut c);
+                }
+                Ok(Ret::N(id as usize))
             }
-            Call::Fversion { .. } => Err("fversion is mntversion's, done at mount".into()),
+            // `sysfversion` (`auth.c:23`): `mntversion` on the descriptor,
+            // answering the version agreed, which the machine copies into
+            // the caller's buffer, and its length.
+            Call::Fversion { fd, msize, version } => {
+                let cell = self.chancell(up, fd)?;
+                let wire = cell.borrow().clone();
+                let v = self.tab.dfversion(wire, msize, &version)?;
+                self.tab.keepwire(cell);
+                Ok(Ret::Str(v))
+            }
+            // `sysfauth` (`auth.c:62`): `mntauth`, a descriptor on the new
+            // channel — *"ac is responsible for keeping c alive"* — and
+            // *"always mark it close on exec"*.
+            Call::Fauth { fd, aname } => {
+                let cell = self.chancell(up, fd)?;
+                let wire = cell.borrow().clone();
+                let user = self.procs.borrow().user(up).unwrap_or_default();
+                let mut ac = self.tab.dauth(wire, &user, &aname)?;
+                self.tab.keepwire(cell);
+                ac.flag |= chan::flag::CCEXEC;
+                Ok(Ret::Fd(self.newfd(up, ac)?))
+            }
             // `sysfd2path` (`sysfile.c:173`): *"snprint((char*)arg[1],
             // arg[2], "%s", chanpath(c))"* — the machine writes it into the
             // caller's buffer, as it does `errstr`'s.
@@ -2107,6 +2154,9 @@ impl Kernel {
                 self.validname(up, a(4), pc)?;
                 self.validname(up, a(2), pc)
             }
+            // `sysfauth`: *"validaddr(arg[1], 1, 0); aname =
+            // validnamedup((char*)arg[1], 1)"* (`auth.c:68`)
+            Call::Fauth { .. } => self.validname(up, a(1), pc),
             Call::Unmount { .. } => {
                 self.validname(up, a(1), pc)?;
                 if a(0) != 0 {
@@ -2291,6 +2341,11 @@ impl Kernel {
             }
             Call::Errstr { .. } | Call::Await => f.push_str(&format!("{:#x} {}", a(0), a(1))),
             Call::Fd2path { .. } => f.push_str(&format!("{} {:#x} {}", d(0), a(1), a(2))),
+            // `syscallfmt.c:147`
+            Call::Fauth { .. } => {
+                f.push_str(&format!("{}", d(0)));
+                self.fmtuserstring(up, &mut f, a(1), "", pc)?;
+            }
             Call::Mount { .. } => {
                 f.push_str(&format!("{} {} ", d(0), d(1)));
                 self.fmtuserstring(up, &mut f, a(2), " ", pc)?;

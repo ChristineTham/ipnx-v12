@@ -160,6 +160,10 @@ impl Nineserver for Store {
                 W::new().u32(msize.min(MSIZE)).s(v).frame(T::Version.reply(), tag)
             }
 
+            // `rauth` (`u9fs.c:380`) with `authnone` (`authnone.c:10`): this
+            // server asks for no authentication, and says so.
+            x if x == T::Auth as u8 => err("u9fs authnone: no authentication required", tag),
+
             x if x == T::Attach as u8 => {
                 let Some(fid) = r.u32() else { return Ok(err("short Tattach", tag)) };
                 // `afid[4] uname[s] aname[s]` — the afid is skipped and the

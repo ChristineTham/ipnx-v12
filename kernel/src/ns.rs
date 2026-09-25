@@ -197,7 +197,8 @@ impl Ns {
     }
 
     /// `bind(2)` and `mount(2)`: put `to` over the file `on`.
-    pub fn mount(&mut self, on: &Chan, to: Element, how: Bind) {
+    /// Answers the new mount's id — *"return nm->mountid"* (`chan.c:760`).
+    pub fn mount(&mut self, on: &Chan, to: Element, how: Bind) -> u32 {
         let fresh = !self.mounts.contains_key(&Key::of(on));
         let head = self.mounts.entry(Key::of(on)).or_default();
         head.from = Some(on.clone());
@@ -246,6 +247,7 @@ impl Ns {
         for e in group.iter_mut() {
             e.mountid = newmountid();
         }
+        let id = group[0].mountid;
         match how {
             Bind::Replace => *list = group,
             Bind::Before => {
@@ -255,6 +257,7 @@ impl Ns {
             }
             Bind::After => list.extend(group),
         }
+        id
     }
 
     /// `findmount`: is anything mounted on this file? Answered by the file's

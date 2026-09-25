@@ -42,6 +42,7 @@ ASYNCIFY="--asyncify --pass-arg=asyncify-imports@sys.setjmp,sys.longjmp,sys.rfor
 
 CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-extensions -std=gnu89 -O2
 	-mbulk-memory -mnontrapping-fptoint -msign-ext -matomics
+	-Xclang -fwchar-type=int -Xclang -fno-signed-wchar
 	-I$here/wasm/include -I$sys/include -I$sys/src/libc/fmt
 	-Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-missing-braces
 	-Wno-unused-value -Wno-unused-but-set-variable -Wno-incompatible-pointer-types
@@ -146,6 +147,8 @@ awk -v root="$root" '
 	top !~ /^(mnt|n|fd|net|proc|srv)$/ || /[*$]/ { next }
 	{ d = gsub(/\t/, ""); path[d] = $1; p = root; for(i = 0; i <= d; i++) p = p "/" path[i]; print p }
 ' "$sys/lib/sysconfig/proto/portproto" | xargs mkdir -p
+# Plan 9's yacc's parser, which it reads from `/sys/lib` (`yacc.c:16`)
+mkdir -p "$root/sys/lib" && cp -f "$sys/lib/yaccpar" "$sys/lib/yaccpars" "$root/sys/lib/"
 # Plan 9's `/adm/timezone`, which init copies into `#e/timezone` (`init.c`)
 mkdir -p "$root/adm" && cp -rf "$here/adm/timezone" "$root/adm/"
 cp -f "$here/pkg/system/pkg.cfg" "$pkg/pkg.cfg"

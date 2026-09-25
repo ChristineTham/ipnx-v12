@@ -4891,3 +4891,50 @@ Measured: `plumber -p /dev/null` mounts at `/mnt/plumb`; a rule written to
 `me edit / text 5 hello` to a reader of `/mnt/plumb/edit`, five runs in five.
 Its procs share one memory (§16.13) and its clients are separate processes
 reading one wire, so the gate and the mux are both exercised.
+
+### 16.15 `fauth`, `fversion`, and what a program is linked with (2026-09-25)
+
+**`fauth` and `fversion` are calls, and `mount` takes an authentication
+file.** `sysfauth` (`auth.c:62`) is `mntauth` on the descriptor —
+`Tauth` on the wire's session, and a channel on the afid, *"always mark it
+close on exec"*; `sysfversion` (`auth.c:23`) is `mntversion` with the size
+and version asked for; `bindmount` (`sysfile.c:989`) gives the afd's fid to
+the attach (`devmnt.c:344`) and ends *"fdclose(fd, 0)"*, answering the
+mount's id (`chan.c:760`). The session `mntversion` agreed is kept on the
+wire, as `c->mux` keeps it (`devmnt.c:245`), so `fversion` then `fauth`
+then `mount` is one session, not three. `boot` now does what Plan 9's does
+(`boot.c`, `connectroot` then `nsinit`): the descriptor is posted to `/srv`
+**before** it is mounted, because mounting closes it.
+
+**A call run again must take the path it took the first time.** The first
+version recorded the session when `Rversion` came back, in the middle of
+the call; a call that then slept on its `Tattach` ran again, found the
+session, skipped `Tversion`, and the recorded replies no longer matched the
+requests — `plumber`'s server saw two `Tattach`es on one fid and hung up.
+The session is now begun only once the call's RPCs have all finished.
+Generalised: **anything a sleeping call changes outside its record must be
+changed after its last RPC**, or the re-run diverges.
+
+**A program is linked with the libraries its headers name.** *"Each library
+header file contains a #pragma that tells the loader the name of the
+associated archive"* (`comp.ms:397`); `cc` writes it into the object
+(`cc/macbody:719`) and the loader searches those libraries, and those named
+by the members it loads (`8l/obj.c:624`, `addlib`). Linking every library
+instead let a name be found in the wrong one: `libl.a`'s `main` was taken
+by every threaded program whose own `main` is libthread's `threadmain`.
+`mkfile.py` now follows the pragmas from each program's sources through
+their headers, and each library's through its own.
+
+**Plan 9's yacc builds Plan 9's grammars.** A grammar is compiled by the
+system's own `yacc` (`cmd/yacc.c`), run under the system in the second
+pass, reading `/sys/lib/yaccpar` (`yacc.c:16`) — vendored with `yaccpars`.
+Bison remains only for the first pass, where there is no system yet.
+
+**Three more of kencc's language** (`cc/lex.c`), derived before clang sees
+them: `\x` takes at most two hex digits, six in a wide string (`:1104`,
+*"note this is not ansi, supposed to only accept 2 hex"*), so a string
+running on with a hex digit is split there; `'''` is a quote character;
+and `wchar_t` is unsigned (`Rune`), which clang is told with
+`-fwchar-type=int -fno-signed-wchar`. `main(void)` is given the two
+arguments `_start` passes. Measured: 401 programs and all 36 libraries,
+120 programs not built.
