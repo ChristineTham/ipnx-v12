@@ -46,6 +46,7 @@ Steps 2 and 3 are driven by clang's own diagnostics, which give the exact
 place and both types, and repeat until clang has nothing more to say.
 """
 import os, re, subprocess, threading
+from collections import ChainMap
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DERIVED = None           # build/kencc, set by init()
@@ -393,21 +394,40 @@ def literals(text):
             i += 1
     return "".join(out)
 
-def derive_text(text, path, table):
-    """The file as clang takes it: each unnamed member flattened and named,
-    or only named where a member of it would be hidden by the outer one."""
-    text = re.sub(r'^([ \t]*#[ \t]*include[ \t]*)[<"](/[^">]+)[">]', absinclude, text, flags=re.M)
+def mainfix(text):
+    """`main` as `_main` calls it — for every program, derived or not
+    (`boot` and `args` are compiled by mk.sh as they are)."""
     # **`main(void)` is given what `_main` passes it.** kencc's calls pass
     # arguments whatever the callee declares — `_main` calls `main(argc,
     # argv)` (`libc/386/main9.s`) and a `main(void)` ignores them. A wasm
     # call must match the callee's signature, and clang names a `main(void)`
     # `__main_void`, so `_main` finds no `main` at all.
-    text = re.sub(r'^main\(void\)', 'main(int, char**)', text, flags=re.M)
+    # APE's programs spell it `int main(void)` on one line, and `main()`.
+    text = re.sub(r'^((?:int|void)[ \t]+)?main[ \t]*\([ \t]*(?:void)?[ \t]*\)', r'\1main(int, char**)', text, flags=re.M)
+    # **And `main` answers an int.** kencc's `_main` takes whatever is in
+    # the return register (`libc/386/main9.s`, `ape/lib/ap/386/main9.s`:
+    # *"CALL main(SB); MOVL AX, 0(SP); CALL exit(SB)"*), so a Plan 9
+    # program's `void main` and an APE program's `int main` are called
+    # alike. A wasm call must match the callee's type, and one type must be
+    # the entry's: `int`, because APE's `exit(main(…))` carries the status a
+    # `return` gives. A `void main` falls off its end, as on 386.
+    text = re.sub(r'^void([ \t]*\n?[ \t]*)main([ \t]*\()', r'int\1main\2', text, flags=re.M)
+    return text
+
+
+def derive_text(text, path, table):
+    """The file as clang takes it: each unnamed member flattened and named,
+    or only named where a member of it would be hidden by the outer one."""
+    text = re.sub(r'^([ \t]*#[ \t]*include[ \t]*)[<"](/[^">]+)[">]', absinclude, text, flags=re.M)
+    text = mainfix(text)
     text = literals(text)
     edits = []
     local = Table()
-    local.bytag, local.typedef, local.bypos = table.bytag, table.typedef, table.bypos
+    local.bytag = ChainMap({}, *table.bytag.maps) if isinstance(table.bytag, ChainMap) else table.bytag
+    local.typedef = ChainMap({}, *table.typedef.maps) if isinstance(table.typedef, ChainMap) else table.typedef
+    local.bypos = ChainMap({}, *table.bypos.maps) if isinstance(table.bypos, ChainMap) else table.bypos
     parse(text, path, local, edits)
+    derive_text.local = local
     out = []
     last = 0
     taken = {}      # per record: what a name already finds
@@ -446,6 +466,61 @@ _lock = threading.Lock()
 def headers_of(d):
     return [os.path.join(d, f) for f in sorted(os.listdir(d)) if f.endswith(".h")]
 
+# **A file sees the records its headers declare, and no others** — as the
+# compiler does. One table for the whole tree let a tag another program
+# declares stand in for the one a file includes: `drawterm`'s `QLock`
+# (`cmd/unix`, which Plan 9 does not build: `BUGGERED=unix`,
+# `cmd/mkfile:11`) for libc's, acme's `Window` for rio's.
+INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]*([<"])([^>"]+)[>"]', re.M)
+_own = {}       # a file -> the Table of the records it declares
+_texts = {}
+_views = {}     # a derived file -> the Table it compiles against
+
+def incdirs(p):
+    """Where `<x.h>` is looked for: APE's headers for APE's sources
+    (`cmd/pcc.c:163`), libc's for the rest, and the other after them."""
+    libc = [os.path.join(HERE, "wasm", "include"), os.path.join(HERE, "sys", "include")]
+    ape = [os.path.join(HERE, "wasm", "include", "ape"), os.path.join(HERE, "sys", "include", "ape")]
+    if os.sep + os.path.join("sys", "src", "ape") + os.sep in p:
+        return ape + libc
+    return libc + ape
+
+def includes(p):
+    """The headers a file includes, and theirs, in the order they come."""
+    out, seen, todo = [], {p}, [p]
+    while todo:
+        f = todo.pop(0)
+        text = _texts.get(f)
+        if text is None:
+            continue
+        for kind, name in INCLUDE.findall(text):
+            if name.startswith("/"):
+                top = name.split("/")[1]
+                cands = [os.path.join(HERE, name[1:])] if top == "sys" or top in ARCHS else []
+            else:
+                dirs = ([os.path.dirname(f)] if kind == '"' else []) + incdirs(p)
+                cands = [os.path.normpath(os.path.join(d, name)) for d in dirs]
+            for q in cands:
+                if q in _texts:
+                    if q not in seen:
+                        seen.add(q)
+                        out.append(q)
+                        todo.append(q)
+                    break
+    return out
+
+def view(p):
+    """The table a file is derived and compiled against: its own records,
+    then those of the headers it includes, then — for a header found
+    through a directory this cannot see, a `-I` of the mkfile's — the
+    tree's."""
+    chain = [p] + includes(p)
+    t = Table()
+    t.bytag = ChainMap(*[_own[q].bytag for q in chain if q in _own], _table.bytag)
+    t.typedef = ChainMap(*[_own[q].typedef for q in chain if q in _own], _table.typedef)
+    t.bypos = ChainMap(*[_own[q].bypos for q in chain if q in _own], _table.bypos)
+    return t
+
 def init(build, roots):
     """Derive every C file and header under `roots` into build/kencc, with
     step 1 applied, and build the record table the later steps use."""
@@ -460,14 +535,28 @@ def init(build, roots):
                     files.append(os.path.join(dp, f))
     # headers first, so a .c's records see the types they embed
     files.sort(key=lambda p: (not p.endswith(".h"), p))
-    texts = {}
+    texts = _texts
     for p in files:
         with open(p, errors="replace") as f:
             texts[p] = f.read()
         parse(texts[p], derived(p), _table)
+        own = Table()
+        parse(texts[p], derived(p), own)
+        _own[p] = own
     for p in files:
         dst = derived(p)
-        new = derive_text(texts[p], dst, _table) if not p.endswith(".y") else texts[p]
+        if p.endswith(".y"):
+            new = texts[p]
+        else:
+            v = view(p)
+            new = derive_text(texts[p], dst, v)
+            # what the file declares, as its derivation decided each
+            # unnamed member — which the files that include it see
+            loc = derive_text.local
+            own = Table()
+            own.bytag, own.typedef, own.bypos = loc.bytag.maps[0], loc.typedef.maps[0], loc.bypos.maps[0]
+            _own[p] = own
+            _views[dst] = loc
         os.makedirs(os.path.dirname(dst), exist_ok=True)
         if not os.path.exists(dst) or open(dst, errors="replace").read() != new:
             with open(dst, "w") as f:
@@ -669,7 +758,7 @@ def compile(cc_, flags, src, out, rounds=8):
             rs = [tuple(map(int, re.split(r"[:\-]", x))) for x in re.findall(r"\{([^}]*)\}", m.group("ranges"))]
             diags.append({"file": m.group("file"), "line": int(m.group("line")), "col": int(m.group("col")),
                           "ranges": rs, "kind": m.group("kind"), "msg": m.group("msg")})
-        eds = fixes(diags, _table)
+        eds = fixes(diags, _views.get(src, _table))
         if eds:
             with _lock:
                 if apply(eds):
@@ -687,6 +776,15 @@ if __name__ == "__main__":
     import sys
     if len(sys.argv) < 4 or sys.argv[1] != "cc":
         sys.exit("usage: kencc.py cc src obj [flag...]")
-    r = cc(os.environ["CC"], os.environ["CFLAGS"].split() + sys.argv[4:], sys.argv[2], sys.argv[3])
+    src = sys.argv[2]
+    text = open(src, errors="replace").read()
+    if mainfix(text) != text:
+        # a program: its `main` as `_main` calls it, from a copy beside the
+        # object; `-I` keeps its own directory's headers
+        src = sys.argv[3] + ".c"
+        with open(src, "w") as f:
+            f.write(mainfix(text))
+        sys.argv.append("-I" + os.path.dirname(os.path.abspath(sys.argv[2])))
+    r = cc(os.environ["CC"], os.environ["CFLAGS"].split() + sys.argv[4:], src, sys.argv[3])
     sys.stderr.write(r.stderr)
     sys.exit(r.returncode)

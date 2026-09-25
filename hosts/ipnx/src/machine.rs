@@ -1521,6 +1521,31 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         Ok::<_, wasmtime::Error>(r)
     }))?;
 
+    // `_stat` and `_fstat`, the calls before 9P2000's (`sysfile.c:1258`):
+    // the old stat's fixed 116 bytes, and 0 (`return 0`).
+    l.func_wrap_async("sys", "_stat", |mut c: Caller<'_, Guest>, (p, e): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [p.word(), e.word(), 0, 0, 0];
+        let r = async {
+        let path = cstr(&mut c, p).unwrap_or_default();
+        let r = kcall(&mut c, Call::OldStat { path }).await;
+        if statlike(&mut c, r, e, 116) < 0 { -1 } else { 0 }
+    }
+        .await;
+        deliver(&mut c).await?;
+        Ok::<_, wasmtime::Error>(r)
+    }))?;
+
+    l.func_wrap_async("sys", "_fstat", |mut c: Caller<'_, Guest>, (fd, e): (i32, i32)| Box::new(async move {
+        c.data_mut().s = [fd.word(), e.word(), 0, 0, 0];
+        let r = async {
+        let r = kcall(&mut c, Call::OldFstat { fd }).await;
+        if statlike(&mut c, r, e, 116) < 0 { -1 } else { 0 }
+    }
+        .await;
+        deliver(&mut c).await?;
+        Ok::<_, wasmtime::Error>(r)
+    }))?;
+
     l.func_wrap_async("sys", "wstat", |mut c: Caller<'_, Guest>, (p, e, n): (i32, i32, i32)| Box::new(async move {
         c.data_mut().s = [p.word(), e.word(), n.word(), 0, 0];
         let r = async {
@@ -1757,6 +1782,33 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         Ok::<_, wasmtime::Error>(r)
     }))?;
 
+    // **The calls this kernel's table does not have** (`docs/syscalls.md`):
+    // `segattach` and the other memory calls, which Plan 9's `9syscall` and
+    // APE's `genall` make stubs for as for every call in `sys.h`. Each
+    // reaches the kernel by its number, and the kernel answers as Plan 9's
+    // does a call with no `systab` entry (`pc/trap.c:716`). A pointer's -1
+    // is an int's here.
+    for (name, n, nargs) in [
+        ("segbrk", ipnx_kernel::sysno::SEGBRK, 2),
+        ("segattach", ipnx_kernel::sysno::SEGATTACH, 4),
+        ("segdetach", ipnx_kernel::sysno::SEGDETACH, 1),
+        ("segfree", ipnx_kernel::sysno::SEGFREE, 2),
+        ("segflush", ipnx_kernel::sysno::SEGFLUSH, 2),
+    ] {
+        let ty = wasmtime::FuncType::new(l.engine(), std::iter::repeat(wasmtime::ValType::I32).take(nargs), [wasmtime::ValType::I32]);
+        l.func_new_async("sys", name, ty, move |mut c, args, ret| Box::new(async move {
+            let mut s = [0u64; 5];
+            for (i, a) in args.iter().enumerate() {
+                s[i] = a.unwrap_i32().word();
+            }
+            c.data_mut().s = s;
+            let _ = kcall(&mut c, Call::Bad { n }).await;
+            deliver(&mut c).await?;
+            ret[0] = wasmtime::Val::I32(-1);
+            Ok(())
+        }))?;
+    }
+
     l.func_wrap_async("sys", "sleep", |mut c: Caller<'_, Guest>, (ms,): (i32,)| {
         Box::new(async move {
         c.data_mut().s = [ms.word(), 0, 0, 0, 0];
@@ -1881,8 +1933,20 @@ fn statlike(
         Ok(Ret::Data(d)) => d,
         _ => return -1,
     };
-    if d.len() > n.max(0) as usize {
-        return -1;
+    // A stat larger than the buffer is its size alone: *"if(ss > nbuf)
+    // return BIT16SZ"* with the size written (`convD2M.c`, `devstat` in
+    // `dev.c:282`, `mntstat`), so `dirstat` knows what to ask for again
+    // (`dirstat.c:24`). Answering -1 failed every stat whose strings ran
+    // past `DIRSIZE`.
+    let n = n.max(0) as usize;
+    if d.len() > n {
+        if n < 2 {
+            return -1;
+        }
+        return match write(c, p, &d[..2]) {
+            Ok(()) => 2,
+            Err(_) => -1,
+        };
     }
     match write(c, p, &d) {
         Ok(()) => d.len() as i32,

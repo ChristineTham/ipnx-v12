@@ -39,6 +39,15 @@ LIBDIR = os.path.join(BUILD, "lib")        # /$objtype/lib
 KFLAGS = [f for f in CFLAGS if not f.startswith("-I")] + ["-Dconst=",
     "-I" + os.path.join(BUILD, "kencc", OBJTYPE, "include"),
     "-I" + os.path.join(BUILD, "kencc", "sys", "include")]
+# APE's, as `pcc` gives them to cpp (`cmd/pcc.c:163`): the machine's
+# `include/ape`, then `/sys/include/ape`, and nothing of libc's
+APEINC = [os.path.join(HERE, OBJTYPE, "include", "ape"), os.path.join(SYS, "include", "ape")]
+# — and kencc's `USED` and `SET`, which `pcc` gets from the compiler it
+# runs, kencc (`cmd/pcc.c:66`), as every Plan 9 program does; libc's come
+# from `u.h` (`wasm/include/u.h` says why), and APE has no u.h
+AFLAGS = [f for f in CFLAGS if not f.startswith("-I")] + ["-Dconst=",
+    "-DUSED(...)=do{}while(0)", "-DSET(...)=do{}while(0)"] + \
+    ["-I" + os.path.join(BUILD, "kencc", os.path.relpath(d, HERE)) for d in APEINC]
 FAILED = os.path.join(BUILD, "failed")
 JOBS = os.cpu_count() or 4
 
@@ -61,6 +70,14 @@ def reduce(args, cwd):
     objtype, files = args[1], args[2:]
     mach = os.path.join(cwd, "..", objtype)
     pats = [f[:-2] for f in os.listdir(mach) if f.endswith((".c", ".s"))] if os.path.isdir(mach) else []
+    # APE's anchors each pattern at the start of the name (`ape/lib/ap/gen/
+    # reduce`: `sed 's/..$//;s/^/^/'`); libc's does not
+    try:
+        anchored = "s/^/^/" in open(os.path.join(cwd, "reduce")).read()
+    except OSError:
+        anchored = False
+    if anchored:
+        return [f for f in files if not any(f.startswith(p) for p in pats)]
     return [f for f in files if not any(p in f for p in pats)]
 
 def backquote(cmd, cwd):
@@ -249,7 +266,7 @@ def source_of(mk, obj):
         if base + ".o" in tg:
             for p in pr:
                 if p.endswith(".c"):
-                    q = os.path.normpath(os.path.join(mk.dir, p))
+                    q = os.path.normpath(rootpath(p, mk.env) if p.startswith("/") else os.path.join(mk.dir, p))
                     if os.path.exists(q):
                         return q
     # a metarule naming where the source is: `%.$O: ../cc/%.c` (`8c/mkfile`)
@@ -257,15 +274,26 @@ def source_of(mk, obj):
         if "%.o" in tg:
             for p in pr:
                 if p.endswith("%.c"):
-                    q = os.path.normpath(os.path.join(mk.dir, p.replace("%", os.path.basename(base))))
+                    p = p.replace("%", os.path.basename(base))
+                    # absolute, as `ape/lib/draw` has it: `/sys/src/libdraw/%.c`
+                    q = os.path.normpath(rootpath(p, mk.env) if p.startswith("/") else os.path.join(mk.dir, p))
                     if os.path.exists(q):
                         return q
     # `(bc|units|mpc).c:R: \1.tab.c` (`cmd/mkfile`): a program of one .y
+    # — and `$YACC -o awkgram.c $YFLAGS $prereq` (`awk/mkfile`), the same:
+    # Plan 9's yacc on the system when there is one, as `yacc` does, so the
+    # parser and the y.tab.h the program's other files read agree on the
+    # token numbers
     y = os.path.join(mk.dir, base + ".y")
     if os.path.exists(y):
         out = os.path.join(kencc.derived(mk.dir), base + ".c")
         if not os.path.exists(out) or os.path.getmtime(out) < os.path.getmtime(y):
-            subprocess.run(["bison", "-y", "-d", "-o", out, y], capture_output=True, cwd=mk.dir)
+            work = os.path.join(kencc.derived(mk.dir), ".yacc." + base)
+            os.makedirs(work, exist_ok=True)
+            if sysyacc(mk, [base + ".y"], work):
+                shutil.copy(os.path.join(work, "y.tab.c"), out)
+            else:
+                subprocess.run(["bison", "-y", "-d", "-o", out, y], capture_output=True, cwd=mk.dir)
         return out
     if os.path.exists(os.path.join(mk.dir, base + ".s")):
         return None  # Plan 9 assembler: this machine has none
@@ -345,10 +373,34 @@ def sysyacc(mk, yf, od):
             if os.path.exists(h):
                 shutil.copy(h, os.path.join(od, "y.tab.h"))
                 shutil.copy(h, os.path.join(od, "x.tab.h"))
+            # and `y.debug`, which `-D` writes and the parser includes
+            # (`yacc.c:2133`, `7a/mkfile`)
+            d = os.path.join(work, "y.debug")
+            if os.path.exists(d):
+                shutil.copy(d, os.path.join(od, "y.debug"))
         shutil.rmtree(work, ignore_errors=True)
         return ok
 
 def yacc(mk):
+    """The grammar made into its parser — and **what includes the parser's
+    header made again when the header changed**, as mk makes it:
+    `$OFILES: $HFILES` (`mkone`), and `x.tab.h` among `rc`'s. The second
+    pass's parser is Plan 9's yacc's where the first was bison's, and the
+    two number the tokens differently: `rc`'s lexer, kept from the first
+    pass, answered bison's numbers to yacc's parser, and every script was a
+    syntax error."""
+    od = kencc.derived(mk.dir)
+    h = os.path.join(od, "y.tab.h")
+    old = open(h, "rb").read() if os.path.exists(h) else None
+    ok = _yacc(mk)
+    if ok and old is not None and os.path.exists(h) and open(h, "rb").read() != old:
+        o = objdir(mk)
+        for f in os.listdir(o) if os.path.isdir(o) else []:
+            if f.endswith(".o"):
+                os.remove(os.path.join(o, f))
+    return ok
+
+def _yacc(mk):
     yf = mk.get("YFILES")
     if not yf:
         return True
@@ -373,13 +425,46 @@ def compile_obj(mk, obj, extra):
     # the kencc derivation of the file, or the file itself when it is one
     # this build generated (a parser from bison)
     dsrc = kencc.derived(src) if src.startswith(SYS) and not src.startswith(kencc.DERIVED) else src
+    if dsrc == src and os.path.exists(src):
+        # a source this build made — a parser — has its `main` as every
+        # program's is (kencc.py, `mainfix`)
+        with open(src, errors="replace") as f:
+            text = f.read()
+        if kencc.mainfix(text) != text:
+            with open(src, "w") as f:
+                f.write(kencc.mainfix(text))
     if os.path.exists(out) and os.path.exists(dsrc) and os.path.getmtime(out) >= os.path.getmtime(dsrc):
         return out, None
-    flags = KFLAGS + ["-I" + kencc.derived(mk.dir), "-I" + od] + extra
+    by = delegate(mk, os.path.basename(obj))
+    if by:
+        extra = cflags_for(by)
+    flags = (AFLAGS if ape(by or mk) else KFLAGS) + ["-I" + kencc.derived(mk.dir), "-I" + od] + extra
     e = kencc.compile(CC, flags, dsrc, out)
     if e:
         return out, f"{os.path.basename(src)}: {e}"
     return out, None
+
+def delegate(mk, target):
+    """The mkfile a rule hands its target to, whose compiler and flags make
+    it: `cc.$O: cc.c` / `mk -f /sys/src/cmd/mkfile cc.$O` (`ape/cmd/mkfile:47`)
+    — APE's `cc` is a Plan 9 program, built as the commands are."""
+    for tg, pr, recipe in mk.rules:
+        if target in tg:
+            for line in recipe:
+                m = re.match(r"\s*mk\s+-f\s+(\S+)", line)
+                if m:
+                    f = rootpath(m.group(1), mk.env)
+                    try:
+                        return Mk(os.path.dirname(f), BASEENV)
+                    except Exception:
+                        return None
+    return None
+
+def ape(mk):
+    """A program or library of APE's: its compiler is `pcc` (`ape/config`,
+    `cmd/awk/mkfile`), which compiles against APE's headers and loads with
+    `libap.a` where a Plan 9 program has libc (`cmd/pcc.c:191`)."""
+    return mk.get("CC")[:1] == ["pcc"]
 
 def compile_all(mk, objs):
     extra = cflags_for(mk)
@@ -415,29 +500,41 @@ INCLUDE = re.compile(r'^[ \t]*#[ \t]*include[ \t]+([<"])([^>"]+)[>"]', re.M)
 INCDIRS = [os.path.join(HERE, "wasm", "include"), os.path.join(SYS, "include")]
 _pragmas = {}
 
-def pragmas(path, dirs=(), seen=None):
+def pragmas(path, dirs=(), seen=None, inc=None):
     """`#pragma lib` in a file and in every header it includes."""
+    inc = INCDIRS if inc is None else inc
     seen = set() if seen is None else seen
     if path in seen or not os.path.isfile(path):
         return []
     seen.add(path)
-    if path in _pragmas and not dirs:
-        return _pragmas[path]
+    key = (path, tuple(inc))
+    if key in _pragmas and not dirs:
+        return _pragmas[key]
     try:
         text = open(path, errors="replace").read()
     except OSError:
         return []
     libs = PRAGMA.findall(text)
     for kind, name in INCLUDE.findall(text):
-        cands = ([os.path.dirname(path)] if kind == '"' else []) + list(dirs) + INCDIRS
+        if name.startswith("/sys/"):
+            cands, name = [HERE], name[1:]
+        else:
+            cands = ([os.path.dirname(path)] if kind == '"' else []) + list(dirs) + inc
         for d in cands:
             q = os.path.join(d, name)
             if os.path.isfile(q):
-                libs += pragmas(q, dirs, seen)
+                libs += pragmas(q, dirs, seen, inc)
                 break
     if not dirs:
-        _pragmas[path] = libs
+        _pragmas[key] = libs
     return libs
+
+def libname(p):
+    """A library a pragma names, as the loader finds it under
+    `/$objtype/lib`: `libbio.a`, or `ape/libap.a`."""
+    p = p.replace("$M", OBJTYPE).replace("$objtype", OBJTYPE)
+    pre = "/" + OBJTYPE + "/lib/"
+    return p[len(pre):] if p.startswith(pre) else os.path.basename(p)
 
 _libdeps = {}
 
@@ -446,7 +543,11 @@ def libdeps(name):
     the members it loads."""
     if name not in _libdeps:
         _libdeps[name] = []
-        src = os.path.join(SYS, "src", name[:-2] if name.endswith(".a") else name)
+        base = os.path.basename(name)[:-2] if name.endswith(".a") else os.path.basename(name)
+        isape = name.startswith("ape/")
+        # APE's libraries are `ape/lib/X` for `ape/libX.a` (`ape/lib/mkfile`)
+        src = os.path.join(SYS, "src", "ape", "lib", base[3:]) if isape else os.path.join(SYS, "src", base)
+        inc = APEINC if isape else INCDIRS
         found = []
         for dp, _, fs in os.walk(src):
             parts = os.path.relpath(dp, src).split(os.sep)
@@ -454,20 +555,21 @@ def libdeps(name):
                 continue
             for f in fs:
                 if f.endswith((".c", ".h", ".y")):
-                    found += pragmas(os.path.join(dp, f))
+                    found += pragmas(os.path.join(dp, f), inc=inc)
         _libdeps[name] = found
     return _libdeps[name]
 
-def syslibs_for(sources, dirs):
+def syslibs_for(sources, dirs, isape=False):
     """The system libraries named, and those they name, in first-named
-    order; libc is the loader's last resort and is added by `link`."""
+    order; libc — APE's libap — is the loader's last resort and is added by
+    `link`."""
     todo = []
     for src in sources:
-        todo += pragmas(src, dirs)
+        todo += pragmas(src, dirs, inc=APEINC if isape else INCDIRS)
     out, seen = [], set()
     while todo:
-        n = os.path.basename(todo.pop(0))
-        if n in seen or n == "libc.a" or "/ape/" in n:
+        n = libname(todo.pop(0))
+        if n in seen or n == lastlib(isape):
             continue
         seen.add(n)
         p = os.path.join(LIBDIR, n)
@@ -476,13 +578,19 @@ def syslibs_for(sources, dirs):
         todo += libdeps(n)
     return out
 
-def link(out, objs, locallibs, libs=None):
+def lastlib(isape):
+    """What the loader searches last: libc, or for APE `libap.a`, which pcc
+    appends (`cmd/pcc.c:191`)."""
+    return "ape/libap.a" if isape else "libc.a"
+
+def link(out, objs, locallibs, libs=None, isape=False):
     os.makedirs(os.path.dirname(out), exist_ok=True)
     # kencc's tentative definitions merge, as common symbols; the wasm
     # backend has none, so the weak bit is set instead (weaken.py)
     subprocess.run(["python3", os.path.join(HERE, "weaken.py"), NM] + objs, check=True, capture_output=True)
     libs = syslibs() if libs is None else libs
-    cmd = [LD] + LDFLAGS + ["-o", out] + objs + locallibs + libs + [os.path.join(BUILD, "libc.a")]
+    last = os.path.join(LIBDIR, lastlib(isape)) if isape else os.path.join(BUILD, "libc.a")
+    cmd = [LD] + LDFLAGS + ["-o", out] + objs + locallibs + libs + [last]
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         und = sorted(set(re.findall(r"undefined symbol: (\S+)", r.stderr)))
@@ -498,7 +606,7 @@ def libpath(mk, lib):
     """A LIB= target: /$objtype/lib/libX.a is a system library; anything
     else is the directory's own, linked into its programs."""
     if lib.startswith("/" + OBJTYPE + "/lib/") or lib.startswith("/$objtype/lib/"):
-        return os.path.join(LIBDIR, os.path.basename(lib))
+        return os.path.join(LIBDIR, lib.split("/lib/", 1)[1])
     # a directory's own, where its mkfile says: `lib/lib.$O.a` is built by
     # `lib/mkfile` as `lib.$O.a`, and both name the one file
     return os.path.normpath(os.path.join(objdir(mk), lib))
@@ -660,7 +768,8 @@ def build_cmds(mk, d, rel):
                     for f in os.listdir(ldir):
                         if f.endswith(".c"):
                             srcs.append(os.path.join(ldir, f))
-            e = link(binpath(mk, t), [path_of[o] for o in objs], local, syslibs_for(srcs, dirs))
+            isape = ape(delegate(mk, "o." + t) or mk)
+            e = link(binpath(mk, t), [path_of[o] for o in objs], local, syslibs_for(srcs, dirs, isape), isape)
             if e:
                 fail(f"{rel}/{t}" if rel != "cmd" else t, e)
 
@@ -674,6 +783,11 @@ def walk(top, want):
     # the portable directory and this machine's; another architecture's is
     # its own (`libmp/mkfile`: `for(i in port $objtype)`)
     dirs = [x for x in dirs if x not in kencc.ARCHS or x == OBJTYPE]
+    # and the machine's, where the recipe adds it to them (`ape/lib/ap/
+    # mkfile`: `for(i in $DIRS $objtype)`; `libmp`'s is in DIRS already)
+    if mk and OBJTYPE not in dirs and os.path.isdir(os.path.join(top, OBJTYPE)) and \
+            any(re.search(r"for\s*\(i in [^)]*\$objtype", l) for _, _, r in mk.rules for l in r):
+        dirs = dirs + [OBJTYPE]
     # `for(i in cc $DIRS)` (`cmd/mkfile`): the compilers' common library first
     if "cc" in dirs:
         dirs = ["cc"] + [x for x in dirs if x != "cc"]
@@ -697,8 +811,11 @@ def main():
             if os.path.basename(d) in skip:
                 continue
             walk(d, "libs")
+        # APE's, which the plain libraries do not need (`ape/mkfile`)
+        walk(os.path.join(src, "ape", "lib"), "libs")
     else:
         walk(os.path.join(src, "cmd"), "cmds")
+        walk(os.path.join(src, "ape", "cmd"), "cmds")
     with open(FAILED, "a") as f:
         for x in failures:
             f.write(x + "\n")

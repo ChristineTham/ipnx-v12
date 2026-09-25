@@ -4938,3 +4938,58 @@ and `wchar_t` is unsigned (`Rune`), which clang is told with
 `-fwchar-type=int -fno-signed-wchar`. `main(void)` is given the two
 arguments `_start` passes. Measured: 401 programs and all 36 libraries,
 120 programs not built.
+
+### 16.16 APE, the calls this kernel lacks, and what one tree-wide table got wrong (2026-09-25)
+
+**APE builds**, with a machine directory of its own as every architecture
+has (`ape/lib/ap/wasm`): `_start` calls `_envsetup`, `main` and `exit`
+(`386/main9.s`); the call stubs are the machine's imports named `_OPEN`,
+`_PREAD` … as `genall` names them; `brk` is `memory.grow`, replacing
+`plan9/brk.c` by name as `riscv64/brk.c` does. Under `pcc` the compiler is
+still kencc (`cmd/pcc.c:66`), so `USED` and `SET` are the compiler's there
+too, and nothing in APE's headers defines them.
+
+**`main` has one type.** kencc's `_main` calls `main` and passes whatever
+is in the return register to `exit` (`ape/lib/ap/386/main9.s`), so a
+`void main` and an `int main` are called alike. A wasm call is checked
+against the callee's type — wasm-ld turns a mismatch into a stub that traps
+— and clang also renames the entry: measured, `main(int, char**)` becomes
+`__main_argc_argv` whether it answers `int` or `void`, `main(void)` becomes
+`__main_void`, and only a three-argument `main` keeps its name. So every
+`main` is derived to `int main(int, char**)`, `libc`'s `_start` declares
+that, and `-Wno-return-mismatch` restores C89's `return;` in an int
+function, which kencc accepts.
+
+**A call the kernel does not have is answered as Plan 9 answers one**
+(`pc/trap.c:716`): *"bad sys call number"*, the note *"sys: bad sys call"*,
+`Ebadarg`. The `seg*` calls have stubs as `9syscall` makes them; APE's
+`select` (`_buf.c:60`) is their one caller. **`_stat` and `_fstat`** are
+Plan 9's too (`sysfile.c:1258`, `:1292`), and `5i`, `ki`, `qi` and `vi`
+call them; they are built.
+
+**Two differences in `stat`, found reading `sys_stat`:**
+
+| | Plan 9 | was here |
+|---|---|---|
+| the name | *"name = pathlast(c->path); if(name) l = dirsetname(…)"* (`sysfile.c:966`) | the server's name for the file |
+| a buffer too small | the size in two bytes and `BIT16SZ` (`convD2M.c`, *"so user can know how much is needed"*) | -1: `dirstat` (`dirstat.c:24`) gave up on any file whose strings ran past `DIRSIZE` |
+
+**An open of `.` must copy it** — `cunique` in `Aopen` (`chan.c:1479`),
+mounted on or not. Opened in place, `ls` clunked the current directory's
+fid, every relative name after it was "unknown fid", and Plan 9's yacc
+could not reopen its temporary file.
+
+**The derivation's table was one for the whole tree**, and a struct tag
+another program declares stood in for the one a file includes:
+`drawterm`'s `QLock` (`cmd/unix`, which Plan 9 does not build:
+`BUGGERED=unix`, `cmd/mkfile:11`) for libc's in `vncs`, acme's `Window`
+for rio's. Each file is now derived against the records of the headers it
+includes, as the compiler sees them.
+
+**A parser's header changing must remake what includes it** (`$OFILES:
+$HFILES`, `mkone`). The second pass's grammars are Plan 9's yacc's where
+the first pass's were bison's, and the two number tokens differently: rc's
+lexer, kept from the first pass, gave bison's numbers to yacc's parser, and
+every script was a syntax error.
+
+Measured: all 36 libraries and APE's 12; 436 programs, 96 not built.

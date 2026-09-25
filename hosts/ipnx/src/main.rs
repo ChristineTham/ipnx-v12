@@ -101,6 +101,50 @@ mod tests {
         assert_eq!(run(BAD, &[]).unwrap(), "init 1: sys: bad address in syscall");
     }
 
+    /// **A call the kernel does not have ends the process**, as Plan 9's
+    /// kernel ends one that makes a call with no `systab` entry
+    /// (`pc/trap.c:716`): *"sys: bad sys call"*, `NDebug`. `segattach` is
+    /// one (`docs/syscalls.md`).
+    #[test]
+    fn a_call_the_kernel_does_not_have_ends_the_process_with_the_note() {
+        const BAD: &str = r#"
+(module
+  (import "sys" "segattach" (func $segattach (param i32 i32 i32 i32) (result i32)))
+  (import "sys" "exits" (func $exits (param i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 8) "survived\00")
+  (data (i32.const 32) "shared\00")
+  (func (export "_start") (param i32 i32 i32 i32)
+    (drop (call $segattach (i32.const 0) (i32.const 32) (i32.const 0) (i32.const 4096)))
+    (call $exits (i32.const 8))))
+"#;
+        assert_eq!(run(BAD, &[]).unwrap(), "init 1: sys: bad sys call");
+    }
+
+    /// **A stat larger than the buffer answers its size**: two bytes, and
+    /// `BIT16SZ` (`convD2M.c`: *"set size before erroring, so user can know
+    /// how much is needed"*), which `dirstat` reads to ask again
+    /// (`dirstat.c:24`). It answered -1, and `dirstat` gave up.
+    #[test]
+    fn a_stat_too_big_for_its_buffer_answers_its_size() {
+        const SHORT: &str = r#"
+(module
+  (import "sys" "stat"  (func $stat  (param i32 i32 i32) (result i32)))
+  (import "sys" "exits" (func $exits (param i32)))
+  (memory (export "memory") 1)
+  (data (i32.const 8) "/boot/init\00")
+  (data (i32.const 32) "not BIT16SZ\00")
+  (data (i32.const 64) "no size\00")
+  (func (export "_start") (param i32 i32 i32 i32)
+    (if (i32.ne (call $stat (i32.const 8) (i32.const 256) (i32.const 10)) (i32.const 2))
+      (then (call $exits (i32.const 32)) (return)))
+    (if (i32.le_u (i32.load16_u (i32.const 256)) (i32.const 8))
+      (then (call $exits (i32.const 64)) (return)))
+    (call $exits (i32.const 0))))
+"#;
+        assert_eq!(run(SHORT, &[]).unwrap(), "");
+    }
+
     /// The path the demo takes: a guest resolves a name through its namespace,
     /// reads what it finds, and closes it.
     ///

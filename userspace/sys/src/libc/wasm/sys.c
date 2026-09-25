@@ -63,6 +63,24 @@ SYS(rendezvous)	extern void*	__rendezvous(void*, void*);
 SYS(semacquire)	extern int	__semacquire(long*, int);
 SYS(tsemacquire)	extern int	__tsemacquire(long*, ulong);
 SYS(semrelease)	extern long	__semrelease(long*, long);
+/*
+ * SEGBRK 12 and SEGATTACH … SEGFLUSH 30–33 — calls this kernel does not
+ * have (`docs/syscalls.md`). Plan 9 makes their stubs from `sys.h` as it
+ * makes every other, and so does this file; the kernel answers them as
+ * Plan 9's answers a call with no `systab` entry (`pc/trap.c:716`).
+ */
+/*
+ * _FSTAT 11 and _STAT 18 — the calls before 9P2000's, which Plan 9's kernel
+ * keeps and its emulators still make (`5i/syscall.c:370`). `9syscall/mkfile`
+ * names their stubs as `sys.h` does, lower case: `_stat`, `_fstat`.
+ */
+SYS(_stat)	extern int	___stat(char*, char*);
+SYS(_fstat)	extern int	___fstat(int, char*);
+SYS(segbrk)	extern void*	__segbrk(void*, void*);
+SYS(segattach)	extern void*	__segattach(int, char*, void*, ulong);
+SYS(segdetach)	extern int	__segdetach(void*);
+SYS(segfree)	extern int	__segfree(void*, ulong);
+SYS(segflush)	extern int	__segflush(void*, ulong);
 
 /*
  * Every stub but `notify` and `noted` looks, on the way back, for a jump a
@@ -103,6 +121,13 @@ void*	rendezvous(void *tag, void *val){ void* r = __rendezvous(tag, val); _notej
 int	semacquire(long *a, int b){ int r = __semacquire(a, b); _notejmped(); return r; }
 int	tsemacquire(long *a, ulong ms){ int r = __tsemacquire(a, ms); _notejmped(); return r; }
 long	semrelease(long *a, long n){ long r = __semrelease(a, n); _notejmped(); return r; }
+int	_stat(char *f, char *b){ int r = ___stat(f, b); _notejmped(); return r; }
+int	_fstat(int fd, char *b){ int r = ___fstat(fd, b); _notejmped(); return r; }
+void*	segbrk(void *a, void *b){ void *r = __segbrk(a, b); _notejmped(); return r; }
+void*	segattach(int a, char *c, void *v, ulong n){ void *r = __segattach(a, c, v, n); _notejmped(); return r; }
+int	segdetach(void *a){ int r = __segdetach(a); _notejmped(); return r; }
+int	segfree(void *a, ulong n){ int r = __segfree(a, n); _notejmped(); return r; }
+int	segflush(void *a, ulong n){ int r = __segflush(a, n); _notejmped(); return r; }
 
 /*
  * `exits` is the one call whose stub is not a forwarding call. Two things

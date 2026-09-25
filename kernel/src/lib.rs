@@ -108,12 +108,22 @@ pub enum Call {
     Remove { path: String },
     Stat { path: String },
     Fstat { fd: Fd },
+    /// `_stat` and `_fstat` — the calls before 9P2000's, which Plan 9's
+    /// kernel keeps (`systab.h:71`, `:78`) and its emulators still make
+    /// (`5i/syscall.c:370`): the stat in the old fixed 116 bytes.
+    OldStat { path: String },
+    OldFstat { fd: Fd },
     Wstat { path: String, edir: Vec<u8> },
     Fwstat { fd: Fd, edir: Vec<u8> },
     Fversion { fd: Fd, msize: u32, version: String },
     /// `fauth(2)` — a channel for authenticating to the server on `fd`
     /// (`sysfauth`, `auth.c:62`).
     Fauth { fd: Fd, aname: String },
+    /// **A call this kernel's table does not have** — `segattach` and the
+    /// other memory calls (`docs/syscalls.md`). A process that makes one is
+    /// answered as Plan 9's kernel answers a number with no `systab` entry
+    /// (`pc/trap.c:716`).
+    Bad { n: u32 },
     /// `fd2path(2)` — the name the channel was reached by (`sysfd2path`,
     /// `sysfile.c:173`).
     Fd2path { fd: Fd },
@@ -828,8 +838,15 @@ pub mod sysno {
     pub const FD2PATH: u32 = 23;
     pub const FVERSION: u32 = 40;
     pub const FAUTH: u32 = 10;
+    pub const SEGBRK: u32 = 12;
+    pub const SEGATTACH: u32 = 30;
+    pub const SEGDETACH: u32 = 31;
+    pub const SEGFREE: u32 = 32;
+    pub const SEGFLUSH: u32 = 33;
     pub const ERRSTR: u32 = 41;
     pub const STAT: u32 = 42;
+    pub const OLDFSTAT: u32 = 11;
+    pub const OLDSTAT: u32 = 18;
     pub const FSTAT: u32 = 43;
     pub const WSTAT: u32 = 44;
     pub const FWSTAT: u32 = 45;
@@ -844,6 +861,7 @@ pub mod sysno {
 fn scallnr(c: &Call) -> u32 {
     use sysno::*;
     match c {
+        Call::Bad { n } => *n,
         Call::Rfork { .. } => RFORK,
         Call::Exec { .. } => EXEC,
         Call::Exits { .. } => EXITS,
@@ -870,6 +888,8 @@ fn scallnr(c: &Call) -> u32 {
         Call::Pipe => PIPE,
         Call::Remove { .. } => REMOVE,
         Call::Stat { .. } => STAT,
+        Call::OldStat { .. } => OLDSTAT,
+        Call::OldFstat { .. } => OLDFSTAT,
         Call::Fstat { .. } => FSTAT,
         Call::Wstat { .. } => WSTAT,
         Call::Fwstat { .. } => FWSTAT,
@@ -902,6 +922,70 @@ fn retval(nr: u32, s: &[u64; machine::MAXSYSARG], r: &Result<Ret, String>) -> i6
 
 /// `Ebadexec` (`port/error.h:34`).
 pub const EBADEXEC: &str = "exec header invalid";
+
+/// `pathlast` (`sysfile.c:917`): the last element of a channel's name.
+fn pathlast(p: &str) -> Option<&str> {
+    if p.is_empty() {
+        return None;
+    }
+    Some(match p.rfind('/') {
+        Some(i) => &p[i + 1..],
+        None => p,
+    })
+}
+
+/// `dirsetname` (`sysfile.c:420`): the stat with its name replaced.
+fn dirsetname(name: &str, d: Vec<u8>) -> Vec<u8> {
+    match ninep::Dir::conv_m2d(&d) {
+        Some(mut dir) => {
+            dir.name = name.to_string();
+            dir.conv_d2m()
+        }
+        None => d,
+    }
+}
+
+/// The rest of `sys_stat`/`sys_fstat` (`sysfile.c:1274`–`:1283`), and
+/// `packoldstat` (`:1224`): name, uid and gid in 28 bytes each, then the
+/// qid's path — with `DMDIR` set only for a directory — its version, the
+/// mode, the times, the length, the type and the device.
+fn oldstat(c: &chan::Chan, d: Vec<u8>, old: &str) -> Result<Ret, String> {
+    // *"uchar buf[128]"*: a stat that does not fit is `BIT16SZ` from the
+    // device, and *"if(l <= BIT16SZ) error(old)"*
+    if d.len() > 128 {
+        return Err(old.into());
+    }
+    let d = match pathlast(&c.path) {
+        Some(name) => dirsetname(name, d),
+        None => d,
+    };
+    let dir = match ninep::Dir::conv_m2d(&d) {
+        Some(dir) if d.len() <= 128 => dir,
+        _ => return Err(old.into()),
+    };
+    let mut b = vec![0u8; 116];
+    // `strncpy(p, s, 28)`: at most 28 bytes, the rest zero
+    for (i, s) in [&dir.name, &dir.uid, &dir.gid].iter().enumerate() {
+        let n = s.len().min(28);
+        b[i * 28..i * 28 + n].copy_from_slice(&s.as_bytes()[..n]);
+    }
+    const DMDIR: u32 = 0x8000_0000;
+    let mut q = (dir.qid.path as u32) & !DMDIR;
+    if dir.qid.qtype & ninep::QTDIR != 0 {
+        q |= DMDIR;
+    }
+    let mut at = 84;
+    for w in [q, dir.qid.vers, dir.mode, dir.atime, dir.mtime] {
+        b[at..at + 4].copy_from_slice(&w.to_le_bytes());
+        at += 4;
+    }
+    b[at..at + 8].copy_from_slice(&dir.length.to_le_bytes());
+    at += 8;
+    b[at..at + 2].copy_from_slice(&dir.dtype.to_le_bytes());
+    at += 2;
+    b[at..at + 2].copy_from_slice(&(dir.dev as u16).to_le_bytes());
+    Ok(Ret::Data(b))
+}
 
 /// `sizeof(Exec)` (`a.out.h:2`): eight `long`s. `sysexec` reads the header
 /// and copies this much of it into `line`, the buffer `shargs` reads a `#!`
@@ -962,12 +1046,24 @@ fn sysctab(c: &Call) -> &'static str {
         Call::Pipe => "Pipe",
         Call::Remove { .. } => "Remove",
         Call::Stat { .. } => "Stat",
+        Call::OldStat { .. } => "_stat",
+        Call::OldFstat { .. } => "_fstat",
         Call::Fstat { .. } => "Fstat",
         Call::Wstat { .. } => "Wstat",
         Call::Fwstat { .. } => "Fwstat",
         Call::Errstr { .. } => "Errstr",
         Call::Fversion { .. } => "Fversion",
         Call::Fauth { .. } => "Fauth",
+        // `systab.h:114`'s names: the table of names is whole even where
+        // the table of calls is not
+        Call::Bad { n } => match *n {
+            sysno::SEGBRK => "Segbrk",
+            sysno::SEGATTACH => "Segattach",
+            sysno::SEGDETACH => "Segdetach",
+            sysno::SEGFREE => "Segfree",
+            sysno::SEGFLUSH => "Segflush",
+            _ => "huh?",
+        },
         Call::Fd2path { .. } => "Fd2path",
     }
 }
@@ -1190,6 +1286,15 @@ impl Kernel {
     /// Plan 9's does at its top ([`Kernel::validargs`]) — after the tracer's
     /// stop, as there.
     fn dispatch_(&mut self, up: Pid, call: Call, pc: &dyn Fn() -> u64, trapped: bool) -> Result<Ret, String> {
+        // *"if(scallnr >= nsyscall || systab[scallnr] == 0){ pprint("bad sys
+        // call number %lud pc %lux\n", …); postnote(up, 1, "sys: bad sys
+        // call", NDebug); error(Ebadarg); }"* (`pc/trap.c:716`) — before
+        // `psstate` is set, as there.
+        if let Call::Bad { n } = call {
+            self.pprint(up, &format!("bad sys call number {n} pc {:x}\n", pc()));
+            machine::Syscalls::postnote(self, up, "sys: bad sys call", proc::NoteFlag::NDebug);
+            return Err(proc::Procs::EBADARG.into());
+        }
         if let Some(p) = self.procs.borrow_mut().get_mut(up) {
             p.psstate = Some(sysctab(&call).to_string());
         }
@@ -1591,6 +1696,8 @@ impl Kernel {
 
     fn dispatch(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
         match call {
+            // answered by `dispatch_`, before a call is looked up
+            Call::Bad { .. } => Err(proc::Procs::EBADARG.into()),
             // ---- processes
             // `sysrfork` (`sysproc.c`) ends `ready(p); sched();` — **the
             // child goes on the run queue and the parent gives way to it**.
@@ -1815,9 +1922,32 @@ impl Kernel {
                 self.tab.dremove(&mut c)?;
                 Ok(Ret::Ok)
             }
+            // `sysstat` (`sysfile.c:951`): the device's stat, then *"name =
+            // pathlast(c->path); if(name) l = dirsetname(…)"* — a file is
+            // named as it was reached, not as its server calls it. `fstat`
+            // does not (`:932`).
             Call::Stat { path } => {
                 let c = self.walk(up, &path, namec::A::Access, 0)?;
-                Ok(Ret::Data(self.tab.dstat(&c)?))
+                let d = self.tab.dstat(&c)?;
+                Ok(Ret::Data(match pathlast(&c.path) {
+                    Some(name) => dirsetname(name, d),
+                    None => d,
+                }))
+            }
+            // `sys_stat` and `sys_fstat` (`sysfile.c:1258`, `:1292`): into
+            // *"uchar buf[128]; /* old DIRLEN plus a little should be
+            // plenty */"*, named by `pathlast` — both of them — and laid
+            // down by `packoldstat`. What does not fit is *"old stat system
+            // call - recompile"*.
+            Call::OldStat { path } => {
+                let c = self.walk(up, &path, namec::A::Access, 0)?;
+                let d = self.tab.dstat(&c)?;
+                oldstat(&c, d, "old stat system call - recompile")
+            }
+            Call::OldFstat { fd } => {
+                let c = self.chan(up, fd)?;
+                let d = self.tab.dstat(&c)?;
+                oldstat(&c, d, "old fstat system call - recompile")
             }
             Call::Fstat { fd } => {
                 let c = self.chan(up, fd)?;
@@ -2145,6 +2275,12 @@ impl Kernel {
                 self.validname(up, a(0), pc)
             }
             Call::Fstat { .. } | Call::Fwstat { .. } => self.validaddr(up, a(1), a(2), pc),
+            // `sys_stat`: *"validaddr(arg[1], 116, 1); validaddr(arg[0], 1, 0)"*
+            Call::OldStat { .. } => {
+                self.validaddr(up, a(1), 116, pc)?;
+                self.validname(up, a(0), pc)
+            }
+            Call::OldFstat { .. } => self.validaddr(up, a(1), 116, pc),
             Call::Pread { .. } | Call::Pwrite { .. } => self.validaddr(up, a(1), a(2), pc),
             Call::Bind { .. } => {
                 self.validname(up, a(0), pc)?;
@@ -2276,6 +2412,9 @@ impl Kernel {
         let d = |i: usize| sa[i] as u32 as i32;
         let mut f = format!("{up} {text} {} {:x} ", sysctab(call), pc());
         match call {
+            // the name and the pc: this kernel does not have the call, and
+            // what its arguments mean is the call's
+            Call::Bad { .. } => {}
             Call::Chdir { .. } | Call::Exits { .. } | Call::Remove { .. } => {
                 self.fmtuserstring(up, &mut f, a(0), "", pc)?;
             }
@@ -2339,6 +2478,12 @@ impl Kernel {
                 self.fmtuserstring(up, &mut f, a(0), " ", pc)?;
                 f.push_str(&format!("{:#x} {}", a(1), a(2)));
             }
+            // `syscallfmt.c:186`, `:141`
+            Call::OldStat { .. } => {
+                self.fmtuserstring(up, &mut f, a(0), " ", pc)?;
+                f.push_str(&format!("{:#x}", a(1)));
+            }
+            Call::OldFstat { .. } => f.push_str(&format!("{} {:#x}", d(0), a(1))),
             Call::Errstr { .. } | Call::Await => f.push_str(&format!("{:#x} {}", a(0), a(1))),
             Call::Fd2path { .. } => f.push_str(&format!("{} {:#x} {}", d(0), a(1), a(2))),
             // `syscallfmt.c:147`
@@ -3048,6 +3193,42 @@ mod syscalls {
         k.procs.borrow_mut().get_mut(1).unwrap().s = [0, 0x200, 8, 0, 0];
         let t = k.sysretfmt(1, &Ok(Ret::Data(b"ab\x01".to_vec())), 5, 7);
         assert_eq!(t, " 0x200/\"ab.\" 8 0 = 3 \"\" 5 7\n");
+    }
+
+    /// **`_stat` lays the old stat down as `packoldstat` does**
+    /// (`sysfile.c:1224`): the name as the channel was reached
+    /// (`pathlast`), 28 bytes each of name, uid and gid, `DMDIR` in the qid
+    /// path for a directory, then vers, mode, the times, the length, type
+    /// and dev — 116 bytes. A stat that does not fit its 128 is the old
+    /// call's error.
+    #[test]
+    fn the_old_stat_is_packoldstats() {
+        let dir = ninep::Dir {
+            dtype: b'M' as u16,
+            dev: 3,
+            qid: ninep::Qid { qtype: ninep::QTDIR, vers: 7, path: 0x42 },
+            mode: 0x8000_01ed,
+            atime: 10,
+            mtime: 20,
+            length: 0,
+            name: "servers-name".into(),
+            uid: "kitty".into(),
+            gid: "sys".into(),
+            muid: "".into(),
+        };
+        let mut c = chan::Chan::attach(dev::DevId::Mnt, 0);
+        c.path = "/usr/kitty/lib".into();
+        let Ok(Ret::Data(b)) = oldstat(&c, dir.conv_d2m(), "old") else { panic!("no stat") };
+        assert_eq!(b.len(), 116);
+        assert_eq!(&b[..4], b"lib\0", "named by pathlast, not by the server");
+        assert_eq!(&b[28..34], b"kitty\0");
+        assert_eq!(&b[56..60], b"sys\0");
+        assert_eq!(u32::from_le_bytes(b[84..88].try_into().unwrap()), 0x8000_0042);
+        assert_eq!(u32::from_le_bytes(b[88..92].try_into().unwrap()), 7);
+        assert_eq!(u32::from_le_bytes(b[96..100].try_into().unwrap()), 10);
+        assert_eq!(u16::from_le_bytes(b[112..114].try_into().unwrap()), b'M' as u16);
+        let long = ninep::Dir { uid: "u".repeat(100), ..dir };
+        assert_eq!(oldstat(&c, long.conv_d2m(), "old"), Err("old".into()));
     }
 
     /// A string that runs off the process's memory is `validaddr`'s: the

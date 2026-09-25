@@ -12,6 +12,11 @@
 # `-fno-builtin` is load-bearing (RESEARCH §9.4): clang's libcall recogniser
 # otherwise rewrites strlen's own body into a call to strlen.
 #
+# `-Wno-return-mismatch` and `-Wno-int-conversion` turn two of clang's
+# errors back into what kencc makes them, and C89 allowed: a `return;` in a
+# function that answers an int (`ape/cmd/expr`), and an int passed where a
+# pointer is declared (`ape/cmd/make`).
+#
 # **Asyncify** (Binaryen's `wasm-opt`, at `$BINARYEN`) is how this machine has
 # `setjmp`, `longjmp` and `fork` at all: a stack the program cannot reach is
 # unwound into memory and wound back by the machine (RESEARCH §16.12). Every
@@ -46,7 +51,7 @@ CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-ex
 	-I$here/wasm/include -I$sys/include -I$sys/src/libc/fmt
 	-Wall -Wno-unknown-pragmas -Wno-parentheses -Wno-missing-braces
 	-Wno-unused-value -Wno-unused-but-set-variable -Wno-incompatible-pointer-types
-	-Wno-dangling-else -Wno-empty-body -Wno-implicit-int-float-conversion -Wno-unused-variable -Wno-unused-parameter -Wno-unused-label -Wno-implicit-int -Wno-implicit-function-declaration -Wno-incompatible-library-redeclaration -Wno-builtin-requires-header"
+	-Wno-return-mismatch -Wno-int-conversion -Wno-dangling-else -Wno-empty-body -Wno-implicit-int-float-conversion -Wno-unused-variable -Wno-unused-parameter -Wno-unused-label -Wno-implicit-int -Wno-implicit-function-declaration -Wno-incompatible-library-redeclaration -Wno-builtin-requires-header"
 
 # `__stack_pointer` is exported because `notify(Ureg*)` writes the note onto
 # the process's stack below its stack pointer (pc/trap.c:834), and on this

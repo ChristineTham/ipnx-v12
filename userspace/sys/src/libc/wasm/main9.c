@@ -22,7 +22,12 @@
 #include <libc.h>
 #include <tos.h>
 
-extern void main(int, char*[]);
+/*
+ * `int`, as every program's `main` is once kencc.py has derived it: a wasm
+ * call must match its callee, and one type serves Plan 9's `void main` and
+ * APE's `int main` both (kencc.py says why).
+ */
+extern int main(int, char*[]);
 
 /*
  * `_privates` and `_nprivates` — 386's `main9.s` reserves NPRIVATES words in

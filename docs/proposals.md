@@ -66,6 +66,28 @@ Plan 9's mechanism though not from what a program sees:
    has no such function; the alternative is reference-counted channels
    throughout the kernel.
 
+**The wasm32 `Ureg`, and APE's signal trampoline** — proposed 2026-09-25.
+Built, and awaiting review, because each is a machine-dependent file Plan 9
+has for every architecture and this one's cannot be 386's:
+
+1. **`wasm/include/ureg.h` and `wasm/include/ape/ureg.h`** hold two words,
+   `pc` and `sp`. Every architecture has a `Ureg` — the registers a trap
+   saves (`386/include/ureg.h`) — and libap's `plan9/lib.h` includes it.
+   This machine has no register set a program can see, and the machine
+   hands a note handler nil (`libc/wasm/main9.c`). The two words are the
+   two a jmp_buf holds here (`wasm/include/u.h`): a function-table index
+   and the `__stack_pointer` global. The alternative is an empty-in-effect
+   struct with 386's names, which would compile code that could not work.
+   `aux/vmware` reads 386's registers by name and is not for this machine
+   either way.
+2. **`ape/lib/ap/wasm/notetramp.c`** calls the signal handler inside the
+   note and leaves with `NCONT`. 386's points the Ureg's pc at `notecont`
+   and leaves with `NSAVE`, so the handler runs outside the note, then
+   `NRSTR` (`ape/lib/ap/386/notetramp.c`). With no Ureg to point, the
+   handler runs where the note found it. `siglongjmp` from a handler is
+   recorded and made by the interrupted call's stub on its way back, as
+   `libc/wasm/notejmp.c` already does for `notejmp`.
+
 ## Decided, and moved into the specs
 
 **P7 — a package, a service, a template, a project, a profile** — proposed

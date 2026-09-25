@@ -48,8 +48,9 @@ Two structural notes the table depends on:
 ## Plan 9's 52 slots, dispositioned
 
 `sys.h` names 52 slots (0–47, 50–53): 11 superseded `_` variants kept for old binaries, one
-reserved slot, **40 live calls**. V12 runs only recompiled binaries, so the superseded
-slots are dropped entirely.
+reserved slot, **40 live calls**. A superseded slot is kept where Plan 9's own
+source still makes the call — `_stat` and `_fstat`, which the `5i`, `ki`, `qi` and `vi`
+emulators use (2026-09-25); the other nine are not made by anything in the tree.
 
 | slot | call | class | 9P message | note |
 |---|---|---|---|---|---|
@@ -64,14 +65,14 @@ slots are dropped entirely.
 | 8 | `exits` | proc | — | ✓ | |
 | 9 | `_fsession` | drop | — | — | |
 | 10 | `fauth` | ns | `Tauth` | ✓ | `mntauth`: a channel on the afid, close-on-exec (2026-09-25) |
-| 11 | `_fstat` | drop | — | — | |
+| 11 | `_fstat` | 9P | `Tstat` | ✓ | the old 116-byte stat, `packoldstat` (`sysfile.c:1292`); Plan 9's emulators call it |
 | 12 | `segbrk` | mem | — | — | |
 | 13 | `_mount` | drop | — | — | |
 | 14 | `open` | 9P | `Twalk`+`Topen` | ✓ | |
 | 15 | `_read` | drop | — | — | |
 | 16 | `oseek` | drop | — | — | |
 | 17 | `sleep` | proc | — | ✓ | |
-| 18 | `_stat` | drop | — | — | |
+| 18 | `_stat` | 9P | `Twalk`+`Tstat` | ✓ | the old 116-byte stat (`sysfile.c:1258`); `5i/syscall.c:370` calls it |
 | 19 | `rfork` | proc | — | ✓ | v0: the lazy path, `RFPROC` implies `RFMEM` |
 | 20 | `_write` | drop | — | — | |
 | 21 | `pipe` | 9P | — | ✓ | the pipe device `#\|`; bidirectional |
@@ -113,7 +114,7 @@ concrete answer to "which survive as kernel calls and which become 9P messages".
 
 ## The subset — 33 calls
 
-Of the 40 live calls the kernel implements 33.
+Of the 40 live calls the kernel implements 33, and two of the superseded ones, `_stat` and `_fstat`.
 
 | processes | `rfork` `exec` `exits` `await` `sleep` `alarm` `notify` `noted` `rendezvous` `semacquire` `tsemacquire` `semrelease` |
 |---|---|
@@ -126,6 +127,14 @@ The seven it omits, and why:
 |---|---|
 | `segbrk` `brk_` `segattach` `segdetach` `segfree` `segflush` | memory is the machine's, not the kernel's. A guest grows its own linear memory; on another machine the arrangement differs and the kernel does not change |
 | `nsec` | time is a file |
+
+**A process that makes one is answered as Plan 9's kernel answers a call
+with no `systab` entry** (`pc/trap.c:716`): *"bad sys call number"* on its
+standard error, the note *"sys: bad sys call"*, and `Ebadarg`. The five
+`seg*` calls have stubs in libc and libap, as `9syscall` and APE's `genall`
+make one for every call in `sys.h`, and each reaches the kernel by its
+number (2026-09-25). APE's `select` is the one caller in the tree
+(`ape/lib/ap/plan9/_buf.c:60`).
 
 Each omission is a call the kernel does not have, not a call answered
 elsewhere in the kernel — **and each is itself a deviation**, because a
