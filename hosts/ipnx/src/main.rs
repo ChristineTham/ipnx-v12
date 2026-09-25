@@ -758,6 +758,25 @@ mod storage {
         assert!(!out.contains("unknown fid"), "{out:?}");
     }
 
+    /// **An open of `.` opens a copy of it** — `cunique` in `namec`'s
+    /// `Aopen` (`chan.c:1479`), *"our own copy to open or remove"*. Opened
+    /// in place, `ls` read the current directory's own fid and its close
+    /// clunked it: every relative name after it answered "unknown fid", and
+    /// Plan 9's yacc could not reopen its temporary file.
+    #[test]
+    fn an_open_of_dot_leaves_dot_where_it_was() {
+        let s = Scratch::new("opendot");
+        let out = typing_at("cd /tmp
+echo a >x
+ls
+cat x
+ls -l x
+", s.path());
+        assert!(out.contains("a\n"), "{out:?}");
+        assert!(out.contains("kitty") && out.contains(" x\n"), "{out:?}");
+        assert!(!out.contains("unknown fid"), "{out:?}");
+    }
+
     /// **A stat carries the machine file's own times and mode, and a wstat
     /// changes them** — `stat2dir` and `rwstat` in `u9fs`
     /// (`u9fs.c:694`, `:909`). The store reported every time as 0 and had no

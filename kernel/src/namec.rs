@@ -466,6 +466,10 @@ pub fn namec(
     omode: u16,
 ) -> Result<Chan, String> {
     let (s, names) = start(tab, ns, name, slash, dot)?;
+    // A walk of one element or more answers a channel of its own; none
+    // answers the namespace's own `dot` or `slash`, which `cunique` below
+    // must copy before anything opens or removes it.
+    let mut owned = !names.is_empty();
     let mut c = walk(tab, ns, s.chan, &names, s.nomount)?;
     // Whether the LAST element steps onto what is mounted there, per access
     // mode (`chan.c:1456`). Two say no, and each says why:
@@ -486,6 +490,7 @@ pub fn namec(
         let path = c.path.clone();
         let (first, rest) = domount(tab, ns, c)?;
         c = first;
+        owned |= !rest.is_empty();
         if !matches!(amode, A::Bind) {
             c.path = path;
         }
@@ -495,6 +500,16 @@ pub fn namec(
         if rest.len() > 1 && matches!(amode, A::Bind | A::Open) {
             c.umh = rest;
         }
+    }
+    // **`c = cunique(c)`** (`chan.c:1479`): *"our own copy to open or
+    // remove"* — for `Aaccess`, `Aremove` and `Aopen`, mounted on or not.
+    // Opening `.` without it opened the current directory's own fid, and
+    // its close clunked it: every name relative to `.` after `ls` was
+    // "unknown fid".
+    if !owned && matches!(amode, A::Access | A::Remove | A::Open) {
+        let path = c.path.clone();
+        c = tab.dcclone(&c)?;
+        c.path = path;
     }
     match amode {
         // `Aaccess`, `Abind`, `Amount` and `Aremove` resolve and stop.
