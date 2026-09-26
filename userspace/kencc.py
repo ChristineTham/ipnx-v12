@@ -411,7 +411,8 @@ def mainfix(text):
     # alike. A wasm call must match the callee's type, and one type must be
     # the entry's: `int`, because APE's `exit(main(…))` carries the status a
     # `return` gives. A `void main` falls off its end, as on 386.
-    text = re.sub(r'^void([ \t]*\n?[ \t]*)main([ \t]*\()', r'int\1main\2', text, flags=re.M)
+    # — and its declarations, `extern void main(int, char*[]);` (`units.y:61`)
+    text = re.sub(r'^((?:extern[ \t]+)?)void([ \t]*\n?[ \t]*)main([ \t]*\()', r'\1int\2main\3', text, flags=re.M)
     return text
 
 
@@ -533,6 +534,17 @@ def init(build, roots):
             for f in fn:
                 if f.endswith((".c", ".h", ".y")):
                     files.append(os.path.join(dp, f))
+    # and what a file includes by a name with none of those endings —
+    # `#include "macbody"` (`cc/mac.c`), C by another name
+    more = set()
+    for p in files:
+        d = os.path.dirname(p)
+        with open(p, errors="replace") as f:
+            for kind, name in INCLUDE.findall(f.read()):
+                q = os.path.normpath(os.path.join(d, name))
+                if kind == '"' and not name.endswith((".c", ".h", ".y")) and os.path.isfile(q):
+                    more.add(q)
+    files += sorted(more - set(files))
     # headers first, so a .c's records see the types they embed
     files.sort(key=lambda p: (not p.endswith(".h"), p))
     texts = _texts

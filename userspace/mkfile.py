@@ -260,6 +260,13 @@ def source_of(mk, obj):
                     q = os.path.join(mk.dir, p.replace("%", os.path.basename(base)))
                     if os.path.exists(q):
                         return generate(mk, base, q, recipe)
+    # a rule that makes the source itself: `picl.c: picl.lx` / `$LEX -t
+    # $prereq > $target` (`pic/mkfile`), `systab.c: …/sys.h` / `tr A-Z a-z
+    # <$prereq | awk -f mksystab >$target` (`ptrace/mkfile`) — run on the
+    # system, as `mpc` is
+    for tg, pr, recipe in mk.rules:
+        if base + ".c" in tg and recipe and not any("%" in t for t in tg):
+            return generate_rule(mk, base, pr, recipe)
     # a rule of its own naming where the source is: `enam.$O: ../4c/enam.c`
     # (`4l/mkfile`)
     for tg, pr, _ in mk.rules:
@@ -337,6 +344,65 @@ def _generate(prereq, recipe, stem, out, ipnx):
         os.makedirs(os.path.dirname(out), exist_ok=True)
         shutil.move(made, out)
     shutil.rmtree(work, ignore_errors=True)
+    return out
+
+def prereq_path(mk, p):
+    """Where a prerequisite is: the directory's, one this build made, or a
+    Plan 9 absolute path."""
+    if p.startswith("/"):
+        return rootpath(p, mk.env)
+    for d in (mk.dir, kencc.derived(mk.dir)):
+        q = os.path.join(d, p)
+        if os.path.exists(q):
+            return q
+    return os.path.join(mk.dir, p)
+
+def generate_rule(mk, base, prereqs, recipe):
+    """A source made by an explicit rule, on the system: the directory's
+    files and the prerequisites go into the store's /tmp, with the mkfile's
+    variables the recipe names (`$LEX`, `$YACC`, from `mkfile.proto`), and
+    the recipe runs there."""
+    out = os.path.join(kencc.derived(mk.dir), base + ".c")
+    paths = [prereq_path(mk, x) for x in prereqs]
+    if os.path.exists(out) and all(os.path.getmtime(out) >= os.path.getmtime(q) for q in paths if os.path.exists(q)):
+        return out
+    ipnx = os.environ.get("IPNX")
+    if not ipnx or not os.path.exists(ipnx):
+        return out           # not yet: the second pass, once ipnx is built
+    with GENLOCK:
+        name = "mkfile.py.gen." + re.sub(r"[^A-Za-z0-9]", "_", os.path.relpath(os.path.join(mk.dir, base), SYS))
+        work = os.path.join(ROOT, "tmp", name)
+        shutil.rmtree(work, ignore_errors=True)
+        os.makedirs(work, exist_ok=True)
+        for f in os.listdir(mk.dir):
+            q = os.path.join(mk.dir, f)
+            if os.path.isfile(q):
+                shutil.copy(q, os.path.join(work, f))
+        for x, q in zip(prereqs, paths):
+            if os.path.isfile(q):
+                dst = os.path.join(work, x.lstrip("/") if x.startswith("/") else x)
+                os.makedirs(os.path.dirname(dst), exist_ok=True)
+                shutil.copy(q, dst)
+        target = base + ".c"
+        os.makedirs(os.path.dirname(os.path.join(work, target)), exist_ok=True)
+        text = "\n".join(recipe)
+        sets = []
+        for v in sorted(set(re.findall(r"\$([A-Za-z_][A-Za-z_0-9]*)", text)) - {"prereq", "target", "stem"}):
+            if v in mk.env:
+                sets.append("%s=(%s)" % (v, " ".join("'%s'" % w.replace("'", "''") for w in mk.env[v])))
+        pre = " ".join(x.lstrip("/") if x.startswith("/") else x for x in prereqs)
+        script = "cd /tmp/%s\nprereq=(%s)\ntarget=%s\nstem=%s\n%s\n%s\n" % (
+            name, pre, target, os.path.basename(base), "\n".join(sets), text)
+        with open(os.path.join(work, "recipe.rc"), "w") as f:
+            f.write(script)
+        env = dict(os.environ, IPNX_STORE=ROOT)
+        subprocess.run([ipnx, "rc", "/tmp/%s/recipe.rc" % name], env=env, capture_output=True,
+                       stdin=subprocess.DEVNULL, timeout=300)
+        made = os.path.join(work, target)
+        if os.path.exists(made) and os.path.getsize(made) > 0:
+            os.makedirs(os.path.dirname(out), exist_ok=True)
+            shutil.move(made, out)
+        shutil.rmtree(work, ignore_errors=True)
     return out
 
 def sysyacc(mk, yf, od):
@@ -711,6 +777,18 @@ def build_cmds(mk, d, rel):
                 if t.startswith("o."):
                     custom[t[2:]] = [p for p in pr if p.endswith(".o")]
     targ = mk.get("TARG")
+    # **a program made by copying**: `$O.mk9660: mk9660.rc` / `cp mk9660.rc
+    # $target` (`disk/9660/mkfile`), `$O.sources: $O.9down` / `cp $O.9down
+    # $target` (`ip/httpd/mkfile`) — a script, or another program by a
+    # second name
+    copies = {}
+    for tg, pr, recipe in mk.rules:
+        m = re.match(r"\s*cp\s+(\S+)\s+\$target\s*$", recipe[0]) if len(recipe) == 1 else None
+        if m:
+            src = m.group(1).replace("$prereq", pr[0] if pr else "").replace("$O.", "o.")
+            for t in tg:
+                if t.startswith("o.") and t[2:] in targ:
+                    copies[t[2:]] = src
     # a rule with no recipe adds prerequisites to a target whose recipe is
     # elsewhere — mkmany's `$O.%: %.$O $OFILES` — as mk merges them
     # (`plumb/mkfile`: `$O.plumber: $PLUMBER`)
@@ -728,6 +806,8 @@ def build_cmds(mk, d, rel):
     for t, objs in custom.items():
         if t in progs or t in targ:
             progs[t] = objs
+    for t in copies:
+        progs.pop(t, None)
     if progs:
         if not yacc(mk):
             fail(rel, "yacc failed")
@@ -772,6 +852,14 @@ def build_cmds(mk, d, rel):
             e = link(binpath(mk, t), [path_of[o] for o in objs], local, syslibs_for(srcs, dirs, isape), isape)
             if e:
                 fail(f"{rel}/{t}" if rel != "cmd" else t, e)
+    for t, src in copies.items():
+        f = binpath(mk, src[2:]) if src.startswith("o.") else prereq_path(mk, src)
+        if os.path.isfile(f):
+            os.makedirs(os.path.dirname(binpath(mk, t)), exist_ok=True)
+            shutil.copy(f, binpath(mk, t))
+            os.chmod(binpath(mk, t), 0o755)
+        else:
+            fail(f"{rel}/{t}" if rel != "cmd" else t, f"no {src} to copy")
 
 def walk(top, want):
     rel = os.path.relpath(top, os.path.join(SYS, "src"))

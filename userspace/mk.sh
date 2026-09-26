@@ -156,6 +156,15 @@ awk -v root="$root" '
 mkdir -p "$root/sys/lib" && cp -f "$sys/lib/yaccpar" "$sys/lib/yaccpars" "$root/sys/lib/"
 # Plan 9's `/adm/timezone`, which init copies into `#e/timezone` (`init.c`)
 mkdir -p "$root/adm" && cp -rf "$here/adm/timezone" "$root/adm/"
+# **The commands written in rc** — Plan 9's `/rc/bin`, vendored whole at
+# `rc/bin` — are the package's `rc/bin`, bound onto `/bin` after the
+# programs as `/lib/namespace:27` binds them (docs/packages.md, "`/rc`
+# retired"). Its startup configuration stays out: `termrc`, `cpurc`, their
+# `.local`s and the `service` directories are what `/profile` is for.
+mkdir -p "$pkg/rc"
+cp -a "$here/rc/bin" "$pkg/rc/"
+rm -rf "$pkg/rc/bin/termrc" "$pkg/rc/bin/termrc.local" "$pkg/rc/bin/cpurc" \
+	"$pkg/rc/bin/cpurc.local" "$pkg/rc/bin/service" "$pkg/rc/bin/service.auth"
 cp -f "$here/pkg/system/pkg.cfg" "$pkg/pkg.cfg"
 # what is installed to the system (docs/packages.md): `ndb`, one tuple each
 echo "pkg=system version=$VERSION" >"$root/profile/pkg"

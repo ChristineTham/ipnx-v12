@@ -4993,3 +4993,12 @@ lexer, kept from the first pass, gave bison's numbers to yacc's parser, and
 every script was a syntax error.
 
 Measured: all 36 libraries and APE's 12; 436 programs, 96 not built.
+
+**Later the same day** (2026-09-26): a source an explicit rule makes —
+`picl.c` by `$LEX -t` (`pic/mkfile`), `systab.c` by `tr | awk -f
+mksystab` (`ptrace/mkfile`) — is made by running the recipe on the system
+with the directory's files and the mkfile's variables it names; a program
+made by `cp` (`$O.mk9660: mk9660.rc`) is copied; and a C file included by
+a name with no `.c` or `.h` (`#include "macbody"`, `cc/mac.c`) is derived
+like the rest — which built every compiler, loader and assembler but `ic`
+and `7l`. 459 programs, 63 not built.

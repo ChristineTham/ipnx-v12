@@ -24,9 +24,11 @@ bind -a #¤ /dev
 
 # standard bin (`plan9/lib/namespace`: `bind /$cputype/bin /bin`) — here the
 # programs are the `system` package's (docs/packages.md), installed to the
-# system, so its binds are these. Plan 9's next line, `bind -a /rc/bin /bin`,
-# went with /rc. rc's startup file is the package's too, at /lib/rcmain.
+# system, so its binds are these — Plan 9's next line, `bind -a /rc/bin
+# /bin`, too: the commands written in rc are the package's `rc/bin`. rc's
+# startup file is the package's, at /lib/rcmain.
 bind /pkg/system/2026.09.24/$objtype/bin /bin
+bind -a /pkg/system/2026.09.24/rc/bin /bin
 bind -a /pkg/system/2026.09.24/lib /lib
 
 # the user's home: /home is /usr/$user (docs/packages.md), where the user's
