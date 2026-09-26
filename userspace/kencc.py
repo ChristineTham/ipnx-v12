@@ -340,6 +340,11 @@ def literals(text):
         takes every hex digit that follows. A string that goes on with one
         is split there, `"\\xe2" "abc"`, which is the same bytes.
       * three quotes are a quote character; clang wants it escaped.
+      * *"all multibyte runes are alpha"* (`:459`, `:732`): an identifier
+        may hold any rune past ASCII, and clang takes only Unicode's
+        identifier characters — `OS½` (`ip/ftpfs/ftpfs.c:75`). Outside a
+        literal or a comment such a rune is spelled `_U00BD_`, the same in
+        every file.
     """
     Q, D, B = "'", '"', "\\"
     out, i, n = [], 0, len(text)
@@ -389,6 +394,9 @@ def literals(text):
                 j += 1
             out.append("".join(buf))
             i = j
+        elif ord(c) > 0x7f:
+            out.append("_U%04X_" % ord(c))
+            i += 1
         else:
             out.append(c)
             i += 1
@@ -680,6 +688,14 @@ def fixes(diags, table):
                 l, c = d["line"], d["col"]
                 ed.append((d["file"], (l, c), (l, c + len(m.group(1))),
                            lambda s, p=p, f=m.group(1): ".".join(p) + "." + f))
+            continue
+        # a block's `extern char lastc;` against the file's `extern int
+        # lastc;` (`db/setup.c:102`, `db/defs.h:110`), which kencc takes:
+        # the block's is written as the file's
+        m = re.match(r"redeclaration of '(\w+)' with a different type: '([^']*)' vs '([^']*)'", msg)
+        if m:
+            l, c, new, old = d["line"], d["col"], m.group(2), m.group(3)
+            ed.append((d["file"], (l, 1), (l, c), lambda s, new=new, old=old: s[::-1].replace(new[::-1], old[::-1], 1)[::-1]))
             continue
         m = re.match(r"redefinition of parameter '(\w+)'", msg)
         if m:

@@ -168,6 +168,32 @@ def logical_lines(path):
         out.append(cur)
     return out
 
+def rulesplit(s):
+    """A rule line's targets, attributes and prerequisites, split at the
+    first colon outside `${…}` — `${SCRIPTS:%=$O.%}:QV:` (`replica/mkfile`)
+    is a rule whose target holds two — or None when it is not a rule."""
+    depth = 0
+    for i, c in enumerate(s):
+        if s.startswith("${", i):
+            depth += 1
+        elif c == "}" and depth:
+            depth -= 1
+        elif depth == 0 and c == "=":
+            return None
+        elif depth == 0 and c == ":":
+            head, rest = s[:i], s[i + 1:]
+            if not head.strip():
+                return None
+            a = re.match(r"^([A-Za-z]*:)?(.*)$", rest)
+            return _Rule(head, a.group(1), a.group(2))
+    return None
+
+class _Rule:
+    def __init__(self, *g):
+        self.g = g
+    def group(self, n):
+        return self.g[n - 1]
+
 class Mk:
     def __init__(self, dirpath, env):
         self.dir = dirpath
@@ -200,7 +226,7 @@ class Mk:
                 name, val = m.group(1), m.group(2)
                 self.env[name] = expand(val, self.env, self.dir)
                 continue
-            m = re.match(r"^([^:=]+?):([A-Za-z]*:)?(.*)$", s)
+            m = rulesplit(s)
             if m:
                 recipe = []
                 while i < len(lines) and (lines[i].startswith("\t") or lines[i].startswith(" ")):
@@ -224,11 +250,62 @@ failures = []
 def fail(unit, why):
     failures.append(f"{unit}: {why}")
 
+def rcwords(line):
+    """A line's words as rc reads them: split at blanks outside quotes, and
+    quotes removed — `'...'` literal, `''` inside it a quote — so
+    `'-DDEFAULT='$DEFAULT` is one word (`faces/mkfile:23`) and
+    `-D'SPOOL="/mail"'` is `-DSPOOL="/mail"` (`upas/scanmail/mkfile:24`)."""
+    words, cur, i, q, have = [], [], 0, False, False
+    while i < len(line):
+        c = line[i]
+        if q:
+            if c == "'" and line[i + 1:i + 2] == "'":
+                cur.append("'")
+                i += 1
+            elif c == "'":
+                q = False
+            else:
+                cur.append(c)
+        elif c == "'":
+            q, have = True, True
+        elif c in " \t":
+            if cur or have:
+                words.append("".join(cur))
+            cur, have = [], False
+        else:
+            cur.append(c)
+        i += 1
+    if cur or have:
+        words.append("".join(cur))
+    return words
+
+def unquote(w):
+    """One word with rc's quotes removed."""
+    return "".join(rcwords(w)) if "'" in w else w
+
+def recipe_flags(mk, obj):
+    """The flags a rule of an object's own gives its compile:
+    `scanmail.$O: scanmail.c` / `$CC $CFLAGS -D'SPOOL="/mail"' scanmail.c`."""
+    for tg, pr, recipe in mk.rules:
+        if obj in tg:
+            for line in recipe:
+                w = rcwords(line)
+                if w[:1] == ["$CC"]:
+                    out = []
+                    for x in w[1:]:
+                        if x.startswith("-D"):
+                            out.append(x)
+                        elif x.startswith("-I"):
+                            d = rootpath(x[2:], mk.env) if x[2:].startswith("/") else os.path.join(mk.dir, x[2:])
+                            out.append("-I" + (kencc.derived(d) if d.startswith(HERE) else d))
+                    return out
+    return []
+
 def cflags_for(mk):
     """The mkfile's CFLAGS, as this compiler takes them: -D and -I kept (a
     Plan 9 path mapped into this tree), kencc's own switches dropped."""
     out = []
-    for f in mk.get("CFLAGS"):
+    for f in (unquote(w) for w in mk.get("CFLAGS")):
         if f.startswith("-D"):
             out.append(f)
         elif f.startswith("-I"):
@@ -504,6 +581,7 @@ def compile_obj(mk, obj, extra):
     by = delegate(mk, os.path.basename(obj))
     if by:
         extra = cflags_for(by)
+    extra = extra + recipe_flags(mk, os.path.basename(obj))
     flags = (AFLAGS if ape(by or mk) else KFLAGS) + ["-I" + kencc.derived(mk.dir), "-I" + od] + extra
     e = kencc.compile(CC, flags, dsrc, out)
     if e:
@@ -725,7 +803,10 @@ def locallib(mk, lib, path, rel):
     for tg, pr, recipe in mk.rules:
         if lib not in tg:
             continue
-        objs = [p for p in pr if p.endswith(".o")]
+        # mk's archive members, `$LIB(%)` (`fossil/mkfile:104`): the
+        # object is the name in the parentheses
+        objs = [re.sub(r"^.*\((.*)\)$", r"\1", p) for p in pr]
+        objs = [p for p in objs if p.endswith(".o")]
         if objs:
             paths, errs = compile_all(mk, objs)
             if errs:
@@ -733,10 +814,13 @@ def locallib(mk, lib, path, rel):
                 return
             archive(path, paths)
             return
+        if os.path.exists(path):
+            return      # made by another directory's mk, once
         for line in recipe:
-            w = line.split()
-            if len(w) >= 2 and w[0] == "cd":
-                sub = os.path.normpath(os.path.join(mk.dir, w[1]))
+            # `cd lib; mk`, and `@{cd lib; mk}` (`bzip2/mkfile:43`)
+            m = re.search(r"\bcd\s+([^\s;}]+)", line)
+            if m:
+                sub = os.path.normpath(os.path.join(mk.dir, m.group(1)))
                 try:
                     smk = Mk(sub, BASEENV)
                 except Exception:
@@ -756,7 +840,11 @@ def build_cmds(mk, d, rel):
         if (lib.endswith(".a") or lib.endswith(".a" + BASEENV["O"][0])) and not lib.startswith("/"):
             path = libpath(mk, lib)
             local.append(path)
-            if not os.path.exists(path) and not mk.uses("mklib"):
+            # every time: `ar vu` adds this directory's members to a
+            # library others add to as well — `usbdev.a` gets disk's,
+            # ether's and serial's, and usbd links them all
+            # (`usb/disk/mkfile`: `$LIBD:V: $LIBDOFILES`)
+            if not mk.uses("mklib"):
                 locallib(mk, lib, path, rel)
     if mk.uses("mklib") or (mk.uses("mksyslib") and mk.get("LIB") and not mk.get("LIB")[0].startswith("/")):
         # a directory library may have a grammar too (`cmd/cc`: `cc.y`)
@@ -777,6 +865,10 @@ def build_cmds(mk, d, rel):
                 if t.startswith("o."):
                     custom[t[2:]] = [p for p in pr if p.endswith(".o")]
     targ = mk.get("TARG")
+    # `LIB=` naming objects, not an archive — `LIB=${LIBFILES:%=%.$O}`
+    # (`vac/mkfile:9`) — which mkmany loads into every program
+    # (`$O.%: %.$O $OFILES $LIB`)
+    libobjs = [l for l in mk.get("LIB") if l.endswith(".o")]
     # **a program made by copying**: `$O.mk9660: mk9660.rc` / `cp mk9660.rc
     # $target` (`disk/9660/mkfile`), `$O.sources: $O.9down` / `cp $O.9down
     # $target` (`ip/httpd/mkfile`) — a script, or another program by a
@@ -799,15 +891,22 @@ def build_cmds(mk, d, rel):
                 if t.startswith("o.") and t[2:] in targ:
                     more.setdefault(t[2:], []).extend(p for p in pr if p.endswith(".o"))
     if mk.uses("mkone") and targ:
-        progs[targ[0]] = mk.get("OFILES")
+        progs[targ[0]] = mk.get("OFILES") + libobjs
     elif mk.uses("mkmany") or (targ and os.path.abspath(d) == os.path.join(SYS, "src", "cmd")):
         for t in targ:
-            progs[t] = list(dict.fromkeys([t + ".o"] + mk.get("OFILES") + more.get(t, [])))
+            progs[t] = list(dict.fromkeys([t + ".o"] + mk.get("OFILES") + more.get(t, []) + libobjs))
     for t, objs in custom.items():
         if t in progs or t in targ:
             progs[t] = objs
     for t in copies:
         progs.pop(t, None)
+    # a target whose rule makes nothing: `${SCRIPTS:%=$O.%}:QV: ;`
+    # (`replica/mkfile`) — rc scripts, which are the package's `rc/bin`
+    for tg, pr, recipe in mk.rules:
+        if recipe and all(l.strip() in (";", "") for l in recipe):
+            for t in tg:
+                if t.startswith("o."):
+                    progs.pop(t[2:], None)
     if progs:
         if not yacc(mk):
             fail(rel, "yacc failed")
