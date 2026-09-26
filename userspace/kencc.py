@@ -765,6 +765,20 @@ def fixes(diags, table):
             l, c, new, old = d["line"], d["col"], m.group(2), m.group(3)
             ed.append((d["file"], (l, 1), (l, c), lambda s, new=new, old=old: s[::-1].replace(new[::-1], old[::-1], 1)[::-1]))
             continue
+        # `extern struct symtab symtab[];` where the structure is not
+        # defined (`grap/grapl.lx:12`, declared and not used): kencc takes an
+        # extern array of an incomplete type, C does not. The declaration
+        # goes; if anything used it, what uses it now says so
+        if msg.startswith("array has incomplete element type"):
+            try:
+                line = open(d["file"]).read().split("\n")[d["line"] - 1]
+            except (OSError, IndexError):
+                continue
+            if re.fullmatch(r"\s*extern\s[^;{}]*\[\s*\]\s*;\s*", line):
+                l = d["line"]
+                ed.append((d["file"], (l, 1), (l, len(line) + 1),
+                           lambda s: "/* kencc: an extern array of an incomplete type: " + s.strip().replace("*/", "") + " */"))
+            continue
         m = re.match(r"redefinition of parameter '(\w+)'", msg)
         if m:
             l, c = d["line"], d["col"]
