@@ -1782,6 +1782,13 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         Ok::<_, wasmtime::Error>(r)
     }))?;
 
+    l.func_wrap_async("sys", "sysr1", |mut c: Caller<'_, Guest>, (): ()| Box::new(async move {
+        c.data_mut().s = [0; 5];
+        let r = match kcall(&mut c, Call::Sysr1).await { Ok(_) => 0, Err(_) => -1 };
+        deliver(&mut c).await?;
+        Ok::<_, wasmtime::Error>(r)
+    }))?;
+
     // **The calls this kernel's table does not have** (`docs/syscalls.md`):
     // `segattach` and the other memory calls, which Plan 9's `9syscall` and
     // APE's `genall` make stubs for as for every call in `sys.h`. Each

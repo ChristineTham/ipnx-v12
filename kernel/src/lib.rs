@@ -124,6 +124,8 @@ pub enum Call {
     /// answered as Plan 9's kernel answers a number with no `systab` entry
     /// (`pc/trap.c:716`).
     Bad { n: u32 },
+    /// `sysr1` (`sysproc.c:25`) — *"checkpagerefs(); return 0;"*.
+    Sysr1,
     /// `fd2path(2)` — the name the channel was reached by (`sysfd2path`,
     /// `sysfile.c:173`).
     Fd2path { fd: Fd },
@@ -838,6 +840,7 @@ pub mod sysno {
     pub const FD2PATH: u32 = 23;
     pub const FVERSION: u32 = 40;
     pub const FAUTH: u32 = 10;
+    pub const SYSR1: u32 = 0;
     pub const SEGBRK: u32 = 12;
     pub const SEGATTACH: u32 = 30;
     pub const SEGDETACH: u32 = 31;
@@ -862,6 +865,7 @@ fn scallnr(c: &Call) -> u32 {
     use sysno::*;
     match c {
         Call::Bad { n } => *n,
+        Call::Sysr1 => SYSR1,
         Call::Rfork { .. } => RFORK,
         Call::Exec { .. } => EXEC,
         Call::Exits { .. } => EXITS,
@@ -1056,6 +1060,7 @@ fn sysctab(c: &Call) -> &'static str {
         Call::Fauth { .. } => "Fauth",
         // `systab.h:114`'s names: the table of names is whole even where
         // the table of calls is not
+        Call::Sysr1 => "Sysr1",
         Call::Bad { n } => match *n {
             sysno::SEGBRK => "Segbrk",
             sysno::SEGATTACH => "Segattach",
@@ -1698,6 +1703,10 @@ impl Kernel {
         match call {
             // answered by `dispatch_`, before a call is looked up
             Call::Bad { .. } => Err(proc::Procs::EBADARG.into()),
+            // `sysr1` (`sysproc.c:25`): `checkpagerefs` checks the page
+            // tables' reference counts, and this kernel has no pages; the
+            // call answers 0, as there
+            Call::Sysr1 => Ok(Ret::Ok),
             // ---- processes
             // `sysrfork` (`sysproc.c`) ends `ready(p); sched();` — **the
             // child goes on the run queue and the parent gives way to it**.
@@ -2414,7 +2423,7 @@ impl Kernel {
         match call {
             // the name and the pc: this kernel does not have the call, and
             // what its arguments mean is the call's
-            Call::Bad { .. } => {}
+            Call::Bad { .. } | Call::Sysr1 => {}
             Call::Chdir { .. } | Call::Exits { .. } | Call::Remove { .. } => {
                 self.fmtuserstring(up, &mut f, a(0), "", pc)?;
             }

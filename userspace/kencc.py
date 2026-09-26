@@ -448,6 +448,11 @@ def derive_text(text, path, table):
     or only named where a member of it would be hidden by the outer one."""
     text = re.sub(r'^([ \t]*#[ \t]*include[ \t]*)[<"](/[^">]+)[">]', absinclude, text, flags=re.M)
     text = mainfix(text)
+    # **`long double` is `double`**: *"case BDOUBLE|BLONG: return
+    # types[TDOUBLE]"* (`cc/sub.c:264`). clang's is 128 bits on wasm32,
+    # with arithmetic in a runtime library this machine does not have
+    # (`cifs`: `__divtf3`), and cannot be told otherwise there
+    text = re.sub(r"\blong(\s+)double\b", r"double", text)
     text = literals(text)
     edits = []
     local = Table()

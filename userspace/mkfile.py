@@ -372,6 +372,18 @@ def source_of(mk, obj):
                     q = os.path.normpath(rootpath(p, mk.env) if p.startswith("/") else os.path.join(mk.dir, p))
                     if os.path.exists(q):
                         return q
+    # a metarule with a directory in it: `obj/%.$O: src/%.c`
+    # (`gs/mkfile:134`) — the stem is what the `%` matches
+    for tg, pr, _ in mk.rules:
+        for t in tg:
+            if "%" in t and t != "%.o" and t.endswith(".o"):
+                m = re.fullmatch(re.escape(t).replace("%", "(.+)"), obj)
+                if m:
+                    for p in pr:
+                        if p.endswith(".c") and "%" in p:
+                            q = os.path.normpath(os.path.join(mk.dir, p.replace("%", m.group(1))))
+                            if os.path.exists(q):
+                                return q
     # a metarule naming where the source is: `%.$O: ../cc/%.c` (`8c/mkfile`)
     for tg, pr, _ in mk.rules:
         if "%.o" in tg:
@@ -453,12 +465,12 @@ def prereq_path(mk, p):
             return q
     return os.path.join(mk.dir, p)
 
-def generate_rule(mk, base, prereqs, recipe):
+def generate_rule(mk, base, prereqs, recipe, target=None, out=None):
     """A source made by an explicit rule, on the system: the directory's
     files and the prerequisites go into the store's /tmp, with the mkfile's
     variables the recipe names (`$LEX`, `$YACC`, from `mkfile.proto`), and
     the recipe runs there."""
-    out = os.path.join(kencc.derived(mk.dir), base + ".c")
+    out = out or os.path.join(kencc.derived(mk.dir), base + ".c")
     paths = [prereq_path(mk, x) for x in prereqs]
     if os.path.exists(out) and all(os.path.getmtime(out) >= os.path.getmtime(q) for q in paths if os.path.exists(q)):
         return out
@@ -479,7 +491,7 @@ def generate_rule(mk, base, prereqs, recipe):
                 dst = os.path.join(work, x.lstrip("/") if x.startswith("/") else x)
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 shutil.copy(q, dst)
-        target = base + ".c"
+        target = target or base + ".c"
         os.makedirs(os.path.dirname(os.path.join(work, target)), exist_ok=True)
         text = "\n".join(recipe)
         sets = []
@@ -491,6 +503,7 @@ def generate_rule(mk, base, prereqs, recipe):
             name, pre, target, os.path.basename(base), "\n".join(sets), text)
         with open(os.path.join(work, "recipe.rc"), "w") as f:
             f.write(script)
+        before = set(os.listdir(work))
         env = dict(os.environ, IPNX_STORE=ROOT)
         subprocess.run([ipnx, "rc", "/tmp/%s/recipe.rc" % name], env=env, capture_output=True,
                        stdin=subprocess.DEVNULL, timeout=300)
@@ -498,6 +511,15 @@ def generate_rule(mk, base, prereqs, recipe):
         if os.path.exists(made) and os.path.getsize(made) > 0:
             os.makedirs(os.path.dirname(out), exist_ok=True)
             shutil.move(made, out)
+            # and what else it made, where the directory would keep it:
+            # `yacc -d -o $target rfc822.y` writes y.tab.h too
+            # (`upas/smtp/mkfile`), which `../smtp/y.tab.h` finds
+            od = kencc.derived(mk.dir)
+            for f in set(os.listdir(work)) - before:
+                q = os.path.join(work, f)
+                if os.path.isfile(q):
+                    os.makedirs(od, exist_ok=True)
+                    shutil.move(q, os.path.join(od, f))
         shutil.rmtree(work, ignore_errors=True)
     return out
 
@@ -732,7 +754,16 @@ def syslibs_for(sources, dirs, isape=False):
         todo += pragmas(src, dirs, inc=APEINC if isape else INCDIRS)
     out, seen = [], set()
     while todo:
-        n = libname(todo.pop(0))
+        raw = todo.pop(0)
+        # a directory's library, named where it is built:
+        # `#pragma lib "/sys/src/cmd/map/libmap/libmap.a$O"` (`map/map.h:1`)
+        if raw.startswith("/sys/src/"):
+            p = os.path.join(BUILD, "obj", raw[len("/sys/"):].replace("$O", BASEENV["O"][0]))
+            if p not in seen and os.path.exists(p):
+                seen.add(p)
+                out.append(p)
+            continue
+        n = libname(raw)
         if n in seen or n == lastlib(isape):
             continue
         seen.add(n)
@@ -754,7 +785,20 @@ def link(out, objs, locallibs, libs=None, isape=False):
     subprocess.run(["python3", os.path.join(HERE, "weaken.py"), NM] + objs, check=True, capture_output=True)
     libs = syslibs() if libs is None else libs
     last = os.path.join(LIBDIR, lastlib(isape)) if isape else os.path.join(BUILD, "libc.a")
-    cmd = [LD] + LDFLAGS + ["-o", out] + objs + locallibs + libs + [last]
+    # and what libc's own members name — `crypt.c`'s libsec
+    # (`libc/port/crypt.c:13`) — which the loader searches once it loads
+    # them; wasm-ld finds a name in any archive, in whatever order
+    after, seen, todo = [], set(os.path.basename(l) for l in libs), list(libdeps(lastlib(isape)))
+    while todo:
+        n = libname(todo.pop(0))
+        if n in seen or n == lastlib(isape):
+            continue
+        seen.add(n)
+        q = os.path.join(LIBDIR, n)
+        if os.path.exists(q):
+            after.append(q)
+        todo += libdeps(n)
+    cmd = [LD] + LDFLAGS + ["-o", out] + objs + locallibs + libs + [last] + after
     r = subprocess.run(cmd, capture_output=True, text=True)
     if r.returncode != 0:
         und = sorted(set(re.findall(r"undefined symbol: (\S+)", r.stderr)))
@@ -852,12 +896,18 @@ def locallib(mk, lib, path, rel):
                 archive(path, objs)
                 return
 
+def isarchive(name):
+    """A library's name as the mkfiles spell it: `libX.a`, `libhttps.a$O`
+    (`ip/httpd/mkfile`), `libsmb.a.$O` (`aquarela/mkfile:77`)."""
+    o = BASEENV["O"][0]
+    return name.endswith((".a", ".a" + o, ".a." + o))
+
 def build_cmds(mk, d, rel):
     local = []
     # a directory library (mklib), or LIB= naming one in the directory —
     # `lib.$O.a` (`auth/mkfile`) or `libhttps.a$O` (`ip/httpd/mkfile`)
     for lib in mk.get("LIB"):
-        if (lib.endswith(".a") or lib.endswith(".a" + BASEENV["O"][0])) and not lib.startswith("/"):
+        if isarchive(lib) and not lib.startswith("/"):
             path = libpath(mk, lib)
             local.append(path)
             # every time: `ar vu` adds this directory's members to a
@@ -888,7 +938,7 @@ def build_cmds(mk, d, rel):
     # `LIB=` naming objects, not an archive — `LIB=${LIBFILES:%=%.$O}`
     # (`vac/mkfile:9`) — which mkmany loads into every program
     # (`$O.%: %.$O $OFILES $LIB`)
-    libobjs = [l for l in mk.get("LIB") if l.endswith(".o")]
+    libobjs = [l for l in mk.get("LIB") if l.endswith(".o") and not isarchive(l)]
     # **a program made by copying**: `$O.mk9660: mk9660.rc` / `cp mk9660.rc
     # $target` (`disk/9660/mkfile`), `$O.sources: $O.9down` / `cp $O.9down
     # $target` (`ip/httpd/mkfile`) — a script, or another program by a
@@ -911,7 +961,10 @@ def build_cmds(mk, d, rel):
                 if t.startswith("o.") and t[2:] in targ:
                     more.setdefault(t[2:], []).extend(p for p in pr if p.endswith(".o"))
     if mk.uses("mkone") and targ:
-        progs[targ[0]] = mk.get("OFILES") + libobjs
+        # and what a rule with no recipe adds to mkone's `$O.out`:
+        # `$O.out: devwren.$O` (`disk/kfs/mkfile:41`)
+        extra = [p for tg, pr, recipe in mk.rules if "o.out" in tg and not recipe for p in pr if p.endswith(".o")]
+        progs[targ[0]] = mk.get("OFILES") + libobjs + extra
     elif mk.uses("mkmany") or (targ and os.path.abspath(d) == os.path.join(SYS, "src", "cmd")):
         for t in targ:
             progs[t] = list(dict.fromkeys([t + ".o"] + mk.get("OFILES") + more.get(t, []) + libobjs))
@@ -920,6 +973,24 @@ def build_cmds(mk, d, rel):
             progs[t] = objs
     for t in copies:
         progs.pop(t, None)
+    # **a program its rule writes**: `$O.conf:D: conf.rc` / `{ echo
+    # '#!/bin/rc' … sed 1d conf.rc } >$target` (`fossil/mkfile:129`) — the
+    # recipe run on the system, as a source's is
+    for tg, pr, recipe in mk.rules:
+        if not recipe or all(l.strip() in (";", "") for l in recipe):
+            continue
+        words = " ".join(recipe)
+        if "$LD" in words or re.search(r"\b(pcc|mk)\b", words) or len(recipe) == 1 and re.match(r"\s*cp\s", recipe[0]):
+            continue
+        for t in tg:
+            if t.startswith("o.") and t[2:] in targ and t[2:] in progs and "%" not in t:
+                progs.pop(t[2:])
+                out = binpath(mk, t[2:])
+                generate_rule(mk, t, pr, recipe, target=t, out=out)
+                if os.path.isfile(out):
+                    os.chmod(out, 0o755)
+                elif os.environ.get("IPNX"):
+                    fail(f"{rel}/{t[2:]}" if rel != "cmd" else t[2:], "its recipe made nothing")
     # a target whose rule makes nothing: `${SCRIPTS:%=$O.%}:QV: ;`
     # (`replica/mkfile`) — rc scripts, which are the package's `rc/bin`
     for tg, pr, recipe in mk.rules:
@@ -927,6 +998,15 @@ def build_cmds(mk, d, rel):
             for t in tg:
                 if t.startswith("o."):
                     progs.pop(t[2:], None)
+    # a header a rule makes: `protos.h:D: mkfile` / `{ for(i in $PROTOS)
+    # echo extern Proto $i';' } >$target` (`ip/snoopy/mkfile`)
+    for h in mk.get("HFILES"):
+        if "/" in h or not h.endswith(".h") or os.path.exists(os.path.join(mk.dir, h)) or h in ("y.tab.h", "x.tab.h"):
+            continue
+        for tg, pr, recipe in mk.rules:
+            if h in tg and recipe:
+                generate_rule(mk, h[:-2], pr, recipe, target=h, out=os.path.join(kencc.derived(mk.dir), h))
+                break
     if progs:
         if not yacc(mk):
             fail(rel, "yacc failed")
@@ -963,10 +1043,14 @@ def build_cmds(mk, d, rel):
             # a directory library's members name theirs too
             for l in local:
                 ldir = os.path.dirname(l).replace(os.path.join(BUILD, "obj"), os.path.join(SYS))
-                if os.path.isdir(ldir):
-                    for f in os.listdir(ldir):
+                # and the directory below it that a `cd libplot; mk install`
+                # builds it in (`plot/mkfile`)
+                for dp, dn, fn in os.walk(ldir) if os.path.isdir(ldir) else []:
+                    if os.path.relpath(dp, ldir).count(os.sep) > 0:
+                        continue
+                    for f in fn:
                         if f.endswith(".c"):
-                            srcs.append(os.path.join(ldir, f))
+                            srcs.append(os.path.join(dp, f))
             isape = ape(delegate(mk, "o." + t) or mk) or rule_compiler(mk, "o." + t) == "pcc"
             e = link(binpath(mk, t), [path_of[o] for o in objs], local, syslibs_for(srcs, dirs, isape), isape)
             if e:

@@ -54,7 +54,7 @@ emulators use (2026-09-25); the other nine are not made by anything in the tree.
 
 | slot | call | class | 9P message | note |
 |---|---|---|---|---|---|
-| 0 | `sysr1` | drop | — | — | reserved |
+| 0 | `sysr1` | proc | — | ✓ | *"checkpagerefs(); return 0;"* (`sysproc.c:25`); no pages here, so it answers 0; `acid` calls it |
 | 1 | `_errstr` | drop | — | — | superseded by 41 |
 | 2 | `bind` | ns | — | ✓ | resolves source *at bind time*; MREPL/MBEFORE/MAFTER/MCREATE — a mount point is a union list |
 | 3 | `chdir` | fd | — | ✓ | cwd is a Chan in the proc |

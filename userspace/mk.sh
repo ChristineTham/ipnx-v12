@@ -154,6 +154,8 @@ awk -v root="$root" '
 ' "$sys/lib/sysconfig/proto/portproto" | xargs mkdir -p
 # Plan 9's yacc's parser, which it reads from `/sys/lib` (`yacc.c:16`)
 mkdir -p "$root/sys/lib" && cp -f "$sys/lib/yaccpar" "$sys/lib/yaccpars" "$root/sys/lib/"
+# and lex's, from `/sys/lib/lex` (`lex/lmain.c:17`)
+mkdir -p "$root/sys/lib/lex" && cp -f "$sys/lib/lex/ncform" "$root/sys/lib/lex/"
 # Plan 9's `/adm/timezone`, which init copies into `#e/timezone` (`init.c`)
 mkdir -p "$root/adm" && cp -rf "$here/adm/timezone" "$root/adm/"
 # **The commands written in rc** — Plan 9's `/rc/bin`, vendored whole at

@@ -88,7 +88,48 @@ has for every architecture and this one's cannot be 386's:
    recorded and made by the interrupted call's stub on its way back, as
    `libc/wasm/notejmp.c` already does for `notejmp`.
 
-## Decided, and moved into the specs
+**P7 steps 3–6: what the endorsed design leaves open** — proposed
+2026-09-26. `docs/packages.md` and `docs/implementation.md` say what a
+package, a service, a template and an identity are; these are the forms
+they have not been given, each a gap until reviewed. Nothing here is built.
+
+1. **A package file is `disk/mkfs -a`'s archive** — Plan 9's own
+   distribution format: `mkfs -a proto` writes each file's header line
+   (`mkfs.c:477`, *"%q %luo %q %q %lud %lld"*: name, mode, owner, group,
+   mtime, length) and its bytes, ending *"end of archive"* (`:188`), and
+   `disk/mkext` reads it back (`mkext.c:71`). The file is named
+   `<name>-<version>.mkfs`, and the package's own `pkg.cfg`, `install.rc`
+   and `remove.rc` are in it at the top. The alternative is `tar`, which
+   Plan 9 also has; `mkfs` carries owners and modes by name, as `/pkg`
+   wants.
+2. **The index is ndb**, `index` at the repository's root, one entry per
+   package version, as `pkg.cfg` already is:
+   `pkg=<name> version=<v> sha256=<hex> file=<name>-<v>.mkfs`, with
+   `depends=<name>>=<v>` and `breaks=` lines under it. `ndb/query` reads
+   it. The hash is `sha1sum -2 256` (`sha1sum.c:78`), which is Plan 9's —
+   no new command.
+3. **A repository is a line of `/profile/repository`** (the user's in
+   `/home/profile/repository`): what to mount and where, in
+   `namespace(6)`'s words — `mount -c /srv/pkgsrv /n/pkg` or `bind
+   /usr/kitty/repo /n/pkg` — read by `pkg` with `newns`'s own parser, so a
+   repository is exactly a namespace line.
+4. **`pkg`'s command line**, an rc script in the `system` package:
+   `pkg install [-s|-u|-n] name[=version]` (system, user, namespace;
+   system the default for the host owner, user for anyone else),
+   `pkg remove [-s|-u|-n] [-p] name` (`-p` purges configuration),
+   `pkg list [-s|-u]`, `pkg prune`. Installing to the namespace is the
+   binds, run in the calling rc — so `pkg` is sourced there with `.`, as
+   rc's own `.` runs a script in the shell that asks.
+5. **`service.cfg` is ndb too** — `service=<name> packages=<p> …
+   user=none namespace=<file>` — and the four acts are one script,
+   `service enable|disable|start|stop name`, editing
+   `/profile/service`'s leading `!` and running `start.rc`/`stop.rc`.
+6. **`su` and `sudo` are rc scripts over `auth/login`**, as the identity
+   design says (`auth/login` naming the host owner; `sudo` one command run
+   that way). `auth/login`, `auth/none` and `auth/as` are Plan 9's and
+   built; they need `factotum` running, which a boot does not start yet.
+
+
 
 **P7 — a package, a service, a template, a project, a profile** — proposed
 and answered piece by piece on 2026-09-24, and endorsed the same day

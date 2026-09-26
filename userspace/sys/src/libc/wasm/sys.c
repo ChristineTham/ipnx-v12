@@ -74,6 +74,8 @@ SYS(semrelease)	extern long	__semrelease(long*, long);
  * keeps and its emulators still make (`5i/syscall.c:370`). `9syscall/mkfile`
  * names their stubs as `sys.h` does, lower case: `_stat`, `_fstat`.
  */
+/* SYSR1 0 — `sysr1` (`sysproc.c:25`) */
+SYS(sysr1)	extern int	__sysr1(void);
 SYS(_stat)	extern int	___stat(char*, char*);
 SYS(_fstat)	extern int	___fstat(int, char*);
 SYS(segbrk)	extern void*	__segbrk(void*, void*);
@@ -121,6 +123,7 @@ void*	rendezvous(void *tag, void *val){ void* r = __rendezvous(tag, val); _notej
 int	semacquire(long *a, int b){ int r = __semacquire(a, b); _notejmped(); return r; }
 int	tsemacquire(long *a, ulong ms){ int r = __tsemacquire(a, ms); _notejmped(); return r; }
 long	semrelease(long *a, long n){ long r = __semrelease(a, n); _notejmped(); return r; }
+int	sysr1(void){ int r = __sysr1(); _notejmped(); return r; }
 int	_stat(char *f, char *b){ int r = ___stat(f, b); _notejmped(); return r; }
 int	_fstat(int fd, char *b){ int r = ___fstat(fd, b); _notejmped(); return r; }
 void*	segbrk(void *a, void *b){ void *r = __segbrk(a, b); _notejmped(); return r; }

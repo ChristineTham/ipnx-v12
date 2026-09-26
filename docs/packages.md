@@ -257,6 +257,7 @@ its `rcmain`, and the libraries they are built from — at
 |---|---|
 | `$objtype/bin/` — the commands and rc | `bind /pkg/system/<version>/$objtype/bin /bin` |
 | `lib/rcmain` | `bind -a /pkg/system/<version>/lib /lib` |
+| `rc/bin/` — the commands written in rc, Plan 9's `/rc/bin` less its startup files | `bind -a /pkg/system/<version>/rc/bin /bin`, after the programs, as `/lib/namespace:27` binds `/rc/bin` |
 | `pkg.cfg` | — its description, in `ndb` |
 
 It is installed to the system, so `/profile/pkg` lists it:
