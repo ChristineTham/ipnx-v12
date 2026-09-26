@@ -421,6 +421,15 @@ def literals(text):
             i += 1
     return "".join(out)
 
+FLOATL = re.compile(r"""(//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\\n])*"|'(?:\\.|[^'\\\n])*')|(?<![\w.])((?:\d+\.\d*|\.\d+)(?:[eE][+-]?\d+)?|\d+[eE][+-]?\d+)[lL]\b""", re.S)
+
+def floatl(text):
+    """A floating constant's `L` is read and ignored — *"if(c == 'L' || c ==
+    'l') { … c1 |= Numlong; }"*, and the constant is `LDCONST`, a double
+    (`cc/lex.c:913`) — where clang makes it a long double (`cifs/dfs.c:89`,
+    `1000.0L`)."""
+    return FLOATL.sub(lambda m: m.group(1) or m.group(2), text)
+
 def mainfix(text):
     """`main` as `_main` calls it — for every program, derived or not
     (`boot` and `args` are compiled by mk.sh as they are)."""
@@ -453,6 +462,7 @@ def derive_text(text, path, table):
     # with arithmetic in a runtime library this machine does not have
     # (`cifs`: `__divtf3`), and cannot be told otherwise there
     text = re.sub(r"\blong(\s+)double\b", r"double", text)
+    text = floatl(text)
     text = literals(text)
     edits = []
     local = Table()

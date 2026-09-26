@@ -80,15 +80,26 @@ def reduce(args, cwd):
         return [f for f in files if not any(f.startswith(p) for p in pats)]
     return [f for f in files if not any(p in f for p in pats)]
 
-def backquote(cmd, cwd):
+def backquote(cmd, cwd, env=None):
     w = cmd.split()
     if w[:2] == ["rc", "./reduce"]:
         return reduce(w[2:], cwd)
     # rc's `{...}: the commands used in these mkfiles are ls, sed, echo, grep
     # and pwd, which sh runs the same; rc's `>[2]` is sh's `2>`.
     cmd = cmd.replace(">[2]", "2>")
+    # Plan 9's sed reads Plan 9's regular expressions (`regexp(6)`): `(…)`
+    # groups and `|` alternates, as sh's sed does only with -E — so
+    # `cmd/mkfile:17`'s `/^('$NOMK')$/d` leaves out `unix` and `old`, as
+    # Plan 9 does, and `gs/mkfile:67`'s `(.*)` is a group
+    cmd = re.sub(r"\bsed\b(?!\s+-E)", "sed -E", cmd)
     try:
-        out = subprocess.run(["sh", "-c", cmd], cwd=cwd, capture_output=True, text=True, timeout=30).stdout
+        # with mk's variables in its environment, as mk runs it: `'$NOMK'`
+        # is the mkfile's
+        e = dict(os.environ)
+        for k, v in (env or {}).items():
+            if re.fullmatch(r"[A-Za-z_][A-Za-z_0-9]*", k):
+                e[k] = " ".join(v)
+        out = subprocess.run(["sh", "-c", cmd], cwd=cwd, capture_output=True, text=True, timeout=30, env=e).stdout
     except Exception:
         return []
     return out.split()
@@ -116,7 +127,7 @@ def expand(text, env, cwd):
     # backquotes first
     def bq(m):
         inner = " ".join(expand(m.group(1), env, cwd)) if "rc ./reduce" in m.group(1) else m.group(1)
-        return " ".join(backquote(inner, cwd))
+        return " ".join(backquote(inner, cwd, env))
     text = re.sub(r"`\{([^}]*)\}", bq, text)
     words = []
     for tok in text.split():
@@ -493,9 +504,29 @@ def generate_rule(mk, base, prereqs, recipe, target=None, out=None):
                 shutil.copy(q, dst)
         target = target or base + ".c"
         os.makedirs(os.path.dirname(os.path.join(work, target)), exist_ok=True)
+        # a tool the recipe compiles for the machine it runs on and then
+        # runs: `$Oo^c -FVw genrtab.c && $Oo^l -o $Oo.genrtab genrtab.$Oo`
+        # (`jtagfs/mkfile`). That machine is this one, so it is built as a
+        # program is and run on the system
+        lines = []
+        for line in recipe:
+            m = re.match(r"\s*\$Oo\^c\s.*?(\S+)\.c\s*&&\s*\$Oo\^l\s+-o\s+\$Oo\.(\S+)", line)
+            if m:
+                src = os.path.join(mk.dir, m.group(1) + ".c")
+                obj = os.path.join(objdir(mk), m.group(1) + ".o")
+                dsrc = kencc.derived(src)
+                e = kencc.compile(CC, KFLAGS + ["-I" + kencc.derived(mk.dir)] + cflags_for(mk), dsrc, obj)
+                if e is None:
+                    link(os.path.join(work, BASEENV["O"][0] + "." + m.group(2)), [obj], [],
+                         syslibs_for([src], [mk.dir]))
+                continue
+            lines.append(line)
+        recipe = lines
         text = "\n".join(recipe)
         sets = []
-        for v in sorted(set(re.findall(r"\$([A-Za-z_][A-Za-z_0-9]*)", text)) - {"prereq", "target", "stem"}):
+        if "$Oo" in text:
+            sets.append("Oo=%s" % BASEENV["O"][0])
+        for v in sorted(set(re.findall(r"\$([A-Za-z_][A-Za-z_0-9]*)", text)) - {"prereq", "target", "stem", "Oo"}):
             if v in mk.env:
                 sets.append("%s=(%s)" % (v, " ".join("'%s'" % w.replace("'", "''") for w in mk.env[v])))
         pre = " ".join(x.lstrip("/") if x.startswith("/") else x for x in prereqs)
@@ -1012,6 +1043,11 @@ def build_cmds(mk, d, rel):
             fail(rel, "yacc failed")
             return
         allobjs = sorted(set(o for objs in progs.values() for o in objs))
+        # the sources recipes make, first and one at a time: what one makes
+        # beside its target another's includes — `rfc822.tab.c`'s recipe
+        # writes the `y.tab.h` that `smtpd.c` reads (`upas/smtp/mkfile`)
+        for o in allobjs:
+            source_of(mk, o)
         paths, errs = compile_all(mk, allobjs)
         bad = set()
         for e in errs:
