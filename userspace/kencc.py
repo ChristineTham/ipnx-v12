@@ -84,6 +84,7 @@ class Record:
         self.key = key            # "tag" or "unnamed at file:line:col"
         self.fields = []          # named members, in order
         self.unnamed = []         # (typename, flattened)
+        self.first = None         # the first member: a field's name, or an unnamed one's type
     def __repr__(self):
         return f"Record({self.key}, {self.fields}, {self.unnamed})"
 
@@ -276,11 +277,15 @@ def member(decl, rec, text, edits):
     decl = [t for t in decl if t[0] != "rec"]
     words = [t[1] for t in decl]
     if not body and len(words) == 1 and decl[0][0] == "id" and words[0] not in KEYWORDS:
+        if rec.first is None and not rec.fields and not rec.unnamed:
+            rec.first = words[0]
         rec.unnamed.append((words[0], True))
         if edits is not None:
             edits.append((rec, words[0], decl[0][2], decl[0][3]))
         return
     if not body and len(words) == 2 and words[0] in ("struct", "union") and decl[1][0] == "id":
+        if rec.first is None and not rec.fields and not rec.unnamed:
+            rec.first = words[1]
         rec.unnamed.append((words[1], True))
         if edits is not None:
             edits.append((rec, words[1], decl[0][2], decl[1][3], words[0]))
@@ -314,6 +319,8 @@ def member(decl, rec, text, edits):
                 if t[0] == "id" and t[1] not in KEYWORDS:
                     name = t[1]
         if name:
+            if rec.first is None and not rec.fields and not rec.unnamed:
+                rec.first = name
             rec.fields.append(name)
 
 # ---------------------------------------------------------------------------
@@ -340,6 +347,9 @@ def literals(text):
         takes every hex digit that follows. A string that goes on with one
         is split there, `"\\xe2" "abc"`, which is the same bytes.
       * three quotes are a quote character; clang wants it escaped.
+      * an empty element in a list — `Gpiogpo1en = 0x04, /* gpio1
+        enable */,` (`usb/ether/asix.c:45`) — which kencc takes; no C has
+        two commas in a row, so the second goes.
       * *"all multibyte runes are alpha"* (`:459`, `:732`): an identifier
         may hold any rune past ASCII, and clang takes only Unicode's
         identifier characters — `OS½` (`ip/ftpfs/ftpfs.c:75`). Outside a
@@ -348,6 +358,7 @@ def literals(text):
     """
     Q, D, B = "'", '"', "\\"
     out, i, n = [], 0, len(text)
+    sig = ""        # the last character outside a literal, a comment or a blank
     while i < n:
         c = text[i]
         if text.startswith("//", i):
@@ -362,12 +373,14 @@ def literals(text):
             i = j
         elif text.startswith(Q * 3, i):
             out.append(Q + B + Q + Q)
+            sig = Q
             i += 3
         elif c == Q:
             j = i + 1
             while j < n and text[j] != Q and text[j] != "\n":
                 j += 2 if text[j] == B else 1
             out.append(text[i:j + 1])
+            sig = Q
             i = j + 1
         elif c == D:
             wide = i > 0 and text[i - 1] == "L"
@@ -393,12 +406,18 @@ def literals(text):
                 buf.append(D)
                 j += 1
             out.append("".join(buf))
+            sig = D
             i = j
         elif ord(c) > 0x7f:
             out.append("_U%04X_" % ord(c))
+            sig = "_"
+            i += 1
+        elif c == "," and sig == ",":
             i += 1
         else:
             out.append(c)
+            if c not in " \t\n":
+                sig = c
             i += 1
     return "".join(out)
 
@@ -444,6 +463,14 @@ def derive_text(text, path, table):
         rec, t, s, e = ed[0], ed[1], ed[2], ed[3]
         kw = ed[4] + " " if len(ed) > 4 else ""
         inner = local.record(kw + t if kw else t)
+        # a name that is no record — a macro, `BZ_RAND_DECLS;`
+        # (`bzip2/lib/bzlib_private.h:215`), which expands to members — is
+        # left as it is written
+        if inner is None:
+            for i, (n, f) in enumerate(rec.unnamed):
+                if n == t:
+                    rec.unnamed[i] = (n, False)
+            continue
         if id(rec) not in taken:
             taken[id(rec)] = set(rec.fields)
         # kencc: the outer structure's own members are found first, then the
@@ -594,6 +621,8 @@ def derived(p):
 DIAG = re.compile(r"^(?P<file>[^:\n]+):(?P<line>\d+):(?P<col>\d+):(?P<ranges>(?:\{\d+:\d+-\d+:\d+\})*):? (?P<kind>warning|error|note): (?P<msg>.*)$", re.M)
 CONV = re.compile(r"incompatible pointer types (?:passing|assigning to|initializing|returning) '([^']*)'(?: \(aka '[^']*'\))? (?:to parameter of type|from|with an expression of type|from a function with result type) '([^']*)'")
 
+VCONV = re.compile(r"(?:assigning to|initializing) '([^'*]*)'(?: \(aka '[^']*'\))? (?:from|with an expression of) incompatible type '([^'*]*)'")
+
 def ptrtarget(t):
     t = t.strip()
     if not t.endswith("*") or t.endswith("**"):
@@ -677,8 +706,32 @@ def fixes(diags, table):
             p = table.path(rf, rt)
             if not p:
                 continue
+            # **a first member is at the structure's own address**, so the
+            # pointer is already the one kencc's promotion gives — `Biobuf*`
+            # for `Biobufhdr*` (`bio.h:39`) — and clang's is a warning only.
+            # Rewriting it anyway reached into macro arguments (`assert`) and
+            # into headers two compiles were editing at once
+            r, leading = rf, True
+            for t in p:
+                if r is None or r.first != t:
+                    leading = False
+                    break
+                r = table.record(t)
+            if leading:
+                continue
             (l1, c1, l2, c2) = d["ranges"][-1]
             ed.append((d["file"], (l1, c1), (l2, c2), lambda s, p=p: f"(&({s})->{'.'.join(p)})"))
+            continue
+        # the same promotion for a structure itself: `*s = res;` with `Store
+        # *s` and `Node res` (`acid/builtin.c:1309`) assigns res's unnamed
+        # `Store`
+        m = VCONV.match(msg)
+        if m and d["ranges"]:
+            rf, rt = table.record(m.group(2)), table.record(m.group(1))
+            p = table.path(rf, rt) if rf is not None and rt is not None and rf is not rt else None
+            if p:
+                (l1, c1, l2, c2) = d["ranges"][-1]
+                ed.append((d["file"], (l1, c1), (l2, c2), lambda s, p=p: f"({s}).{'.'.join(p)}"))
             continue
         m = re.match(r"no member named '(\w+)' in '([^']*)'", msg)
         if m:

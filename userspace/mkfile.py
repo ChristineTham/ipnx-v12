@@ -224,7 +224,9 @@ class Mk:
             m = re.match(r"^([A-Za-z_][A-Za-z_0-9]*)\s*=(?!=)(.*)$", s)
             if m and ":" not in s[:s.index("=")]:
                 name, val = m.group(1), m.group(2)
-                self.env[name] = expand(val, self.env, self.dir)
+                # rc's quotes are the assignment's, and go: `NTERMDIR='"…"'`
+                # is `"…"` (`troff/mkfile:35`)
+                self.env[name] = [unquote(w) for w in expand(val, self.env, self.dir)]
                 continue
             m = rulesplit(s)
             if m:
@@ -283,14 +285,31 @@ def unquote(w):
     """One word with rc's quotes removed."""
     return "".join(rcwords(w)) if "'" in w else w
 
+def rule_compiler(mk, target):
+    """The compiler an object's or a program's own rule names: `pcc -c …
+    lpdsend.c`, `pcc -o $target lpdsend.$O` (`lp/mkfile:22`) — APE's, in a
+    directory whose others are not."""
+    for tg, pr, recipe in mk.rules:
+        if target in tg:
+            for line in recipe:
+                w = rcwords(line)
+                if w[:1] in (["$CC"], ["$LD"], ["pcc"]):
+                    return w[0]
+    return None
+
 def recipe_flags(mk, obj):
     """The flags a rule of an object's own gives its compile:
     `scanmail.$O: scanmail.c` / `$CC $CFLAGS -D'SPOOL="/mail"' scanmail.c`."""
     for tg, pr, recipe in mk.rules:
         if obj in tg:
             for line in recipe:
+                # the mkfile's variables, as mk gives them to rc:
+                # `-DFONTDIR'='$FONTDIR` (`troff/mkfile:51`)
+                line = re.sub(r"\$([A-Za-z_][A-Za-z_0-9]*)",
+                              lambda m: " ".join(mk.env[m.group(1)]) if m.group(1) in mk.env and m.group(1) not in ("CC", "CFLAGS") else m.group(0),
+                              line)
                 w = rcwords(line)
-                if w[:1] == ["$CC"]:
+                if w[:1] in (["$CC"], ["pcc"]):
                     out = []
                     for x in w[1:]:
                         if x.startswith("-D"):
@@ -582,7 +601,8 @@ def compile_obj(mk, obj, extra):
     if by:
         extra = cflags_for(by)
     extra = extra + recipe_flags(mk, os.path.basename(obj))
-    flags = (AFLAGS if ape(by or mk) else KFLAGS) + ["-I" + kencc.derived(mk.dir), "-I" + od] + extra
+    isape = ape(by or mk) or rule_compiler(mk, os.path.basename(obj)) == "pcc"
+    flags = (AFLAGS if isape else KFLAGS) + ["-I" + kencc.derived(mk.dir), "-I" + od] + extra
     e = kencc.compile(CC, flags, dsrc, out)
     if e:
         return out, f"{os.path.basename(src)}: {e}"
@@ -947,7 +967,7 @@ def build_cmds(mk, d, rel):
                     for f in os.listdir(ldir):
                         if f.endswith(".c"):
                             srcs.append(os.path.join(ldir, f))
-            isape = ape(delegate(mk, "o." + t) or mk)
+            isape = ape(delegate(mk, "o." + t) or mk) or rule_compiler(mk, "o." + t) == "pcc"
             e = link(binpath(mk, t), [path_of[o] for o in objs], local, syslibs_for(srcs, dirs, isape), isape)
             if e:
                 fail(f"{rel}/{t}" if rel != "cmd" else t, e)
