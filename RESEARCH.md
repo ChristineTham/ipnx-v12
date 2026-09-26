@@ -5002,3 +5002,21 @@ made by `cp` (`$O.mk9660: mk9660.rc`) is copied; and a C file included by
 a name with no `.c` or `.h` (`#include "macbody"`, `cc/mac.c`) is derived
 like the rest — which built every compiler, loader and assembler but `ic`
 and `7l`. 459 programs, 63 not built.
+
+**`newns` was a cut-down, and is Plan 9's again** (2026-09-26).
+`libauth/newns.c` had its authentication taken out — no `factotum` rpc, no
+`import`, no `addns`, no `atnotify` — on the grounds that there were no
+notes and no `fauth`; both exist now. It is Plan 9's file with one line
+changed, the default namespace file (`/profile/start.ns`, docs/packages.md).
+`docs/when.md` had recorded only that line.
+
+**mk runs a backquote with its variables and Plan 9's `sed`.** `cmd/mkfile:17`
+(`/^('$NOMK')$/d`) needs `$NOMK` from the mkfile and `regexp(6)`'s `(…|…)`;
+run by sh without either it dropped nothing, so `cmd/unix` — which Plan 9
+does not build (`BUGGERED=unix`, `:11`) — was built, and drawterm's
+`QLock` reached the derivation's table. Backquotes now run with the
+mkfile's variables in their environment and `sed -E`.
+
+**The second pass repeats while it builds more**: a pass can run a tool the
+same pass has not yet remade — `grap` ran the first pass's `lex`, built with
+bison's parser, before `lex`'s directory was reached.

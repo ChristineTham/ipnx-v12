@@ -179,13 +179,20 @@ cp -f "$sys/src/cmd/rc/rcmain" "$pkg/lib/rcmain"
 # **The second pass.** Some sources are made by a Plan 9 program — libsec's
 # curves by `mpc` (`libsec/port/mkfile`: `%.c:D: %.mp`) — and Plan 9 builds
 # itself with itself, so the recipe runs on this system: `ipnx` is built,
-# and what failed is built again with it.
+# and what failed is built again with it — and again, while that builds
+# more: a pass can use a tool the same pass has just remade (`grap` runs
+# `lex` before `lex`'s own directory is reached, and the first pass's lex
+# was built with bison's parser, not yacc's).
 if [ -s "$failed" ] && command -v cargo >/dev/null; then
 	(cd "$here/.." && env -u CC -u CFLAGS -u LD -u LDFLAGS -u AR cargo build -q -p ipnx) && export IPNX="$here/../target/debug/ipnx"
 	if [ -n "$IPNX" ]; then
-		: >"$failed"
-		python3 "$here/mkfile.py" libs libc
-		python3 "$here/mkfile.py" cmds
+		before=$(($(wc -l <"$failed") + 1))
+		while [ -s "$failed" ] && [ "$(wc -l <"$failed")" -lt "$before" ]; do
+			before=$(wc -l <"$failed")
+			: >"$failed"
+			python3 "$here/mkfile.py" libs libc
+			python3 "$here/mkfile.py" cmds
+		done
 	fi
 fi
 
