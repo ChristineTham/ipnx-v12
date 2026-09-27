@@ -80,7 +80,11 @@ jobs:
         continue-on-error: true
         run: cargo test -p conformance -- --nocapture
 
+      # The programs are the `system` package's (docs/packages.md), and
+      # what did not build is `build/failed`, each with its reason.
       - name: measurements (for RESEARCH)
         run: |
           echo "guest binaries: $(du -sb userspace/root | cut -f1) bytes"
-          ls -l userspace/root/wasm/bin
+          echo "programs: $(find userspace/root/pkg/system -path '*/wasm/bin/*' -type f | wc -l)"
+          echo "not built: $(wc -l < userspace/build/failed)"
+          cat userspace/build/failed

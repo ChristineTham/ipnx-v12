@@ -495,9 +495,16 @@ pub fn startboot(
 /// keys go in, the screen comes out.
 ///
 /// **`^C` in the script is the interrupt key**, pressed a moment after what
-/// comes before it was typed — long enough for a command started by that
-/// line to be running, which is when a person presses it. What comes after
-/// it is typed once the interrupt has been handed over.
+/// comes before it was typed — or, given a **marker** ([`Term::marked`]), a
+/// moment after the screen shows it and then stays still: once the command
+/// the line ends with is running and quiet, which is when a person presses
+/// the key. Timed from the typing alone, a machine still compiling an image
+/// was still starting the command when the key came — the note ended what
+/// was being started, or reached the shell's child before its `exec`, which
+/// clears notes (`sysproc.c:579`) — and the command ran its course. The
+/// keys are typed when the console is first polled, early in the boot, so
+/// only what the script itself prints can say how far it has got. What
+/// comes after the key is typed once the interrupt has been handed over.
 #[derive(Clone, Default)]
 pub struct Term(std::rc::Rc<std::cell::RefCell<Script>>);
 
@@ -508,8 +515,14 @@ pub struct Script {
     keys: std::collections::VecDeque<Vec<u8>>,
     /// Whether the first has been typed.
     typed: bool,
-    /// When the next `^C` is pressed.
+    /// When the next `^C` is pressed, at the earliest.
     at: Option<std::time::Instant>,
+    /// When the screen last changed.
+    shown: Option<std::time::Instant>,
+    /// What the screen must show, since the keys before the next `^C` were
+    /// typed, before the key is pressed; and where on the screen they were.
+    marker: Option<Vec<u8>>,
+    from: usize,
 }
 
 /// How long after the line before it a scripted `^C` is pressed.
@@ -521,15 +534,35 @@ impl Term {
         t.0.borrow_mut().keys = keys.split('\x03').map(|k| k.as_bytes().to_vec()).collect();
         t
     }
+    /// The same, each `^C` pressed only once the screen has shown `marker`
+    /// since the keys before it were typed, and been still a moment.
+    pub fn marked(keys: &str, marker: &str) -> Term {
+        let t = Term::typing(keys);
+        t.0.borrow_mut().marker = Some(marker.as_bytes().to_vec());
+        t
+    }
     /// What the console was shown.
     pub fn screen(&self) -> String {
         String::from_utf8_lossy(&self.0.borrow().screen).into_owned()
     }
 }
 
+impl Script {
+    /// Whether a marked `^C` may be pressed: the marker shown since the
+    /// keys were typed, and the screen still since.
+    fn ready(&self) -> bool {
+        let Some(m) = &self.marker else { return true };
+        let since = &self.screen[self.from.min(self.screen.len())..];
+        since.windows(m.len()).any(|w| w == m.as_slice())
+            && self.shown.is_some_and(|s| std::time::Instant::now() >= s + INTERRUPT_AFTER)
+    }
+}
+
 impl Console for Term {
     fn putstrn(&mut self, s: &[u8]) {
-        self.0.borrow_mut().screen.extend_from_slice(s);
+        let mut t = self.0.borrow_mut();
+        t.screen.extend_from_slice(s);
+        t.shown = Some(std::time::Instant::now());
     }
     /// What is typed before the next `^C`, all at once; then nothing until
     /// it is pressed; and after the last, the end of input — which is what
@@ -541,6 +574,7 @@ impl Console for Term {
             t.typed = true;
             if t.keys.len() > 1 {
                 t.at = Some(std::time::Instant::now() + INTERRUPT_AFTER);
+                t.from = t.screen.len();
             }
             return Some(first);
         }
@@ -552,7 +586,7 @@ impl Console for Term {
     fn interrupt(&mut self) -> bool {
         let mut t = self.0.borrow_mut();
         match t.at {
-            Some(at) if std::time::Instant::now() >= at => {
+            Some(at) if std::time::Instant::now() >= at && t.ready() => {
                 t.at = None;
                 t.keys.pop_front();
                 t.typed = false;

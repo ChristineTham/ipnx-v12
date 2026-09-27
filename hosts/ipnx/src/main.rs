@@ -265,6 +265,17 @@ mod userspace {
         typing_at(keys, &rootfs())
     }
 
+    /// The same, each `^C` pressed once the screen shows `marker` and is
+    /// still ([`Term::marked`]).
+    pub(super) fn typing_marked(keys: &str, marker: &str) -> String {
+        let term = Term::marked(keys, marker);
+        let store = store::Store::new(&rootfs()).expect("a store");
+        match startboot(&[BOOT.to_string()], &[], &plan9ini(&[]), Box::new(term.clone()), Some(Box::new(store))) {
+            Ok(_) => term.screen(),
+            Err(e) => panic!("{e}"),
+        }
+    }
+
     /// The same, on a filesystem of this test's own.
     pub(super) fn typing_at(keys: &str, store: &std::path::Path) -> String {
         let term = Term::typing(keys);
@@ -579,14 +590,27 @@ mod userspace {
     /// **`kill` is a note** (`devproc.c:1363`): it wakes a sleeping process
     /// at once — `postnote` takes it off its `Rendez` — and the process ends
     /// itself in `procctl` on its way out of the kernel. The sleep was for
-    /// thirty seconds; the test takes nothing like that.
+    /// thirty seconds; the test takes nothing like that — **timed by the
+    /// system's own clock**, from the kill to the end of the wait, because
+    /// the host's includes the boot, and a loaded machine boots slowly.
     #[test]
     fn kill_ends_a_sleeping_process_at_once() {
-        let t = std::time::Instant::now();
         // `exec`, so `$apid` is the sleeping process and not an rc around it.
-        let out = typing("{exec sleep 30} &\necho kill >/proc/$apid/ctl\nwait\necho done\n");
+        let out = typing("{exec sleep 30} &\ndate -n\necho kill >/proc/$apid/ctl\nwait\ndate -n\necho done\n");
         assert!(out.contains("done"), "{out}");
-        assert!(t.elapsed() < std::time::Duration::from_secs(25), "it waited out the sleep");
+        assert!(guest_seconds(&out) < 20, "it waited out the sleep: {out}");
+    }
+
+    /// The seconds between the first two `date -n` lines a script printed.
+    fn guest_seconds(out: &str) -> u64 {
+        // the last word of a line: the shell's prompts come before it
+        let t: Vec<u64> = out
+            .lines()
+            .filter_map(|l| l.split_whitespace().last()?.parse().ok())
+            .filter(|&n| n > 1_000_000_000)
+            .collect();
+        assert!(t.len() >= 2, "two clock readings: {out}");
+        t[1] - t[0]
     }
 
     /// **A tracer's view of a call** (`devproc.c:1411`, `pc/trap.c:682`):
@@ -619,17 +643,19 @@ mod userspace {
     /// and rc, which has, carries on (P6's acceptance test).
     #[test]
     fn control_c_interrupts_a_command_and_the_shell_carries_on() {
-        let t = std::time::Instant::now();
-        let out = typing("sleep 30\n\x03echo after\n");
+        // `sleep 0` first, so the image is compiled before the one the key
+        // interrupts starts; "sleeping" is the sign the line has got that
+        // far (`Term::marked`)
+        let out = typing_marked("sleep 0; echo sleeping; date -n; sleep 30\n\x03date -n; echo after\n", "sleeping\n");
         assert!(out.contains("after"), "{out}");
-        assert!(t.elapsed() < std::time::Duration::from_secs(25), "the sleep ran its course");
+        assert!(guest_seconds(&out) < 20, "the sleep ran its course: {out}");
     }
 
     /// And a command waiting for the keyboard: `cat` asleep in `qread` is
     /// woken by the note and ends.
     #[test]
     fn control_c_interrupts_a_command_reading_the_console() {
-        let out = typing("cat\n\x03echo after\n");
+        let out = typing_marked("cat </dev/null; echo reading; cat\n\x03echo after\n", "reading\n");
         assert!(out.contains("after"), "{out}");
     }
 
