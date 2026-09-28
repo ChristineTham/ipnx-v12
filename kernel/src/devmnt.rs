@@ -468,7 +468,24 @@ impl MntDev {
 
     pub fn read(&mut self, t: &mut dyn Transport, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
         let fid = c.fid;
-        self.mnt(c)?.read(t, fid, n, off)
+        let mut buf = self.mnt(c)?.read(t, fid, n, off)?;
+        // a directory's entries are the mount driver's, as a stat is
+        // (`devmnt.c:667`)
+        if c.qid.qtype & crate::ninep::QTDIR != 0 {
+            let mut p = 0;
+            while p + 2 < buf.len() {
+                let len = 2 + u16::from_le_bytes([buf[p], buf[p + 1]]) as usize;
+                if p + len > buf.len() {
+                    break;
+                }
+                dirfix(&mut buf[p..p + len], c);
+                p += len;
+            }
+            if p != buf.len() {
+                return Err("invalid directory entry received from server".into());
+            }
+        }
+        Ok(buf)
     }
 
     pub fn write(&mut self, t: &mut dyn Transport, c: &mut Chan, data: &[u8], off: u64) -> Result<usize, String> {
@@ -479,7 +496,9 @@ impl MntDev {
     pub fn stat(&mut self, t: &mut dyn Transport, c: &Chan) -> Result<Vec<u8>, String> {
         let fid = c.fid;
         let m = self.mounts.get_mut(c.devno as usize).ok_or("not mounted")?;
-        m.stat(t, fid)
+        let mut d = m.stat(t, fid)?;
+        dirfix(&mut d, c);
+        Ok(d)
     }
 
     pub fn wstat(&mut self, t: &mut dyn Transport, c: &mut Chan, edir: &[u8]) -> Result<(), String> {
@@ -500,6 +519,19 @@ impl MntDev {
         if let Ok(m) = self.mnt(c) {
             let _ = m.clunk(t, fid);
         }
+    }
+}
+
+/// `mntdirfix` (`devmnt.c:1161`): **a directory entry from a server says
+/// `M` and the mount's number**, whatever the server wrote there — the type
+/// and dev are the kernel's, not the server's. APE decides a regular file by
+/// it: `d->type != 'M'` is a character device (`ape/lib/ap/plan9/
+/// dirtostat.c:23`), and ghostscript reads a character device a byte at a
+/// time (`gs/src/zfile.c:1121`).
+fn dirfix(d: &mut [u8], c: &Chan) {
+    if d.len() >= 8 {
+        d[2..4].copy_from_slice(&(DevId::Mnt.letter() as u16).to_le_bytes());
+        d[4..8].copy_from_slice(&c.devno.to_le_bytes());
     }
 }
 
@@ -657,6 +689,14 @@ mod tests {
                     let slice = if off >= data.len() { &[][..] } else { &data[off..end] };
                     W::new().u32(slice.len() as u32).raw(slice).frame(T::Read.reply(), tag)
                 }
+                x if x == T::Stat as u8 => {
+                    let fid = r.u32().unwrap();
+                    let Some(name) = self.fids.get(&fid) else { return err("unknown fid") };
+                    // what a server may write: its own letter and number
+                    let d = crate::ninep::Dir { dtype: b'9' as u16, dev: 7, name: name.clone(), ..Default::default() };
+                    let b = d.conv_d2m();
+                    W::new().u16(b.len() as u16).raw(&b).frame(T::Stat.reply(), tag)
+                }
                 x if x == T::Clunk as u8 => {
                     let fid = r.u32().unwrap();
                     self.fids.remove(&fid);
@@ -695,6 +735,21 @@ mod tests {
         c.fid = 2;
         let mut c = d.open(&mut t, c, 0).unwrap();
         assert_eq!(d.read(&mut t, &mut c, 64, 0).unwrap(), b"from a server");
+    }
+
+    /// `mntdirfix` (`devmnt.c:1161`): the type and dev in a stat are the
+    /// mount driver's letter and the mount's number, not what the server
+    /// wrote. APE calls anything not `M` a character device
+    /// (`dirtostat.c:23`).
+    #[test]
+    fn a_stat_through_a_mount_says_m() {
+        let (mut d, mut t, root, _) = mounted(MAXRPC);
+        let mut c = d.walk(&mut t, &root, "hello").unwrap().expect("no hello");
+        c.fid = 2;
+        let dir = crate::ninep::Dir::conv_m2d(&d.stat(&mut t, &c).unwrap()).expect("a stat");
+        assert_eq!(dir.dtype, 'M' as u16, "the mount driver's letter");
+        assert_eq!(dir.dev, c.devno, "the mount's number");
+        assert_eq!(dir.name, "hello");
     }
 
     /// **Two mounts of one wire share one fid space**, so no fid may be

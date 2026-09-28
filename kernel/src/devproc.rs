@@ -423,22 +423,34 @@ impl Dev for ProcDev {
                     String::from_utf8_lossy(&b).into_owned()
                 }
                 Q::Args => String::new(),
-                // `fd`: the working directory, then one line per open fd.
+                // `fd`: the working directory, then one line per open fd —
+                // `procfds` and `procfdprint` (`devproc.c:566`, `:551`):
+                // *"%3d %.2s %C %4ld (%.16llux %*lud %.2ux) %5ld %8lld %s"*
+                // — the mode, the device, the qid (its version as wide as
+                // the widest, `procqidwidth`), the iounit and the offset.
                 Q::Fd => {
                     let mut s = format!("{}\n", proc.dot.path);
                     let fds = proc.fds.borrow();
-                    for fd in 0..fds.slots() {
-                        if let Some(cell) = fds.get(fd) {
-                            let ch = cell.borrow();
-                            s.push_str(&format!(
-                                "{:3} {} {:11} {:11} {}\n",
-                                fd,
-                                ch.dev.letter(),
-                                ch.devno,
-                                ch.qid.path,
-                                ch.path
-                            ));
-                        }
+                    let chans: Vec<(i32, crate::chan::Chan)> =
+                        (0..fds.slots()).filter_map(|fd| fds.get(fd).map(|c| (fd, c.borrow().clone()))).collect();
+                    let w = chans.iter().map(|(_, c)| c.qid.vers.to_string().len()).max().unwrap_or(0);
+                    for (fd, ch) in chans {
+                        // `&"r w rw"[(c->mode&3)<<1]`, two characters
+                        let m = ["r ", "w ", "rw", ""][(ch.mode & 3) as usize];
+                        s.push_str(&format!(
+                            "{:3} {} {} {:4} ({:016x} {:w$} {:02x}) {:5} {:8} {}\n",
+                            fd,
+                            m,
+                            ch.dev.letter(),
+                            ch.devno,
+                            ch.qid.path,
+                            ch.qid.vers,
+                            ch.qid.qtype,
+                            ch.iounit,
+                            ch.offset,
+                            ch.path,
+                            w = w
+                        ));
                     }
                     s
                 }
@@ -901,6 +913,12 @@ mod tests {
         let s = read(&mut d, 1, "fd");
         assert!(s.lines().count() >= 2, "the cwd, then one line per fd: {s}");
         assert!(s.contains('|'), "the device letter is there: {s}");
+        // `procfdprint`'s columns (`devproc.c:557`): mode, device, devno,
+        // the qid in parentheses, iounit, offset, name
+        let line = s.lines().find(|l| l.contains('|')).unwrap();
+        let w: Vec<&str> = line.split_whitespace().collect();
+        assert!(line.contains('(') && line.contains(')'), "the qid: {line}");
+        assert_eq!(w.len(), 10, "fd mode dev devno (path vers type) iounit offset name: {line}");
     }
 
     /// `kill` through `/proc/n/ctl` — a process is killed by writing to a

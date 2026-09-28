@@ -154,6 +154,12 @@ awk -v root="$root" '
 ' "$sys/lib/sysconfig/proto/portproto" | xargs mkdir -p
 # Plan 9's yacc's parser, which it reads from `/sys/lib` (`yacc.c:16`)
 mkdir -p "$root/sys/lib" && cp -f "$sys/lib/yaccpar" "$sys/lib/yaccpars" "$root/sys/lib/"
+# ghostscript's startup files, where it looks (`gs -h`'s search path), as its
+# mkfile's `libinstall` puts them: `cp lib/* /sys/lib/ghostscript`
+mkdir -p "$root/sys/lib/ghostscript" && cp -f "$sys"/src/cmd/gs/lib/* "$root/sys/lib/ghostscript/" 2>/dev/null || true
+# and its fonts, which Plan 9 keeps beside them (`/sys/lib/ghostscript/font`,
+# the second directory of `GS_LIB_DEFAULT`, `gs/mkfile:202`)
+cp -rf "$sys/lib/ghostscript/font" "$root/sys/lib/ghostscript/"
 # and lex's, from `/sys/lib/lex` (`lex/lmain.c:17`)
 mkdir -p "$root/sys/lib/lex" && cp -f "$sys/lib/lex/ncform" "$root/sys/lib/lex/"
 # Plan 9's `/adm/timezone`, which init copies into `#e/timezone` (`init.c`)

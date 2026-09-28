@@ -508,6 +508,29 @@ def generate_rule(mk, base, prereqs, recipe, target=None, out=None):
         # runs: `$Oo^c -FVw genrtab.c && $Oo^l -o $Oo.genrtab genrtab.$Oo`
         # (`jtagfs/mkfile`). That machine is this one, so it is built as a
         # program is and run on the system
+        # and a prerequisite that is a program another rule builds with pcc
+        # — `$O.genarch:U: src/genarch.c` / `pcc -DHAVE_LONG_LONG -B -o
+        # $O.genarch src/genarch.c` (`gs/mkfile:163`), which `./$O.genarch
+        # $target` then runs to describe the machine it runs on: built for
+        # this one, into the directory the recipe runs in
+        for x in prereqs:
+            if not re.fullmatch(r"o\.\w+", x):
+                continue
+            for tg2, pr2, recipe2 in mk.rules:
+                if x not in tg2:
+                    continue
+                for line in recipe2:
+                    w = rcwords(line)
+                    if w[:1] == ["pcc"] and "-o" in w:
+                        srcs = [os.path.join(mk.dir, y) for y in w if y.endswith(".c")]
+                        defs = [y for y in w if y.startswith("-D")]
+                        objs = []
+                        for src in srcs:
+                            obj = os.path.join(objdir(mk), os.path.basename(src)[:-2] + ".o")
+                            if kencc.compile(CC, AFLAGS + defs + ["-I" + kencc.derived(mk.dir)], kencc.derived(src), obj) is None:
+                                objs.append(obj)
+                        if objs and len(objs) == len(srcs):
+                            link(os.path.join(work, x), objs, [], syslibs_for(srcs, [mk.dir], True), True)
         lines = []
         for line in recipe:
             m = re.match(r"\s*\$Oo\^c\s.*?(\S+)\.c\s*&&\s*\$Oo\^l\s+-o\s+\$Oo\.(\S+)", line)

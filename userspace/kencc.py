@@ -462,6 +462,12 @@ def derive_text(text, path, table):
     # with arithmetic in a runtime library this machine does not have
     # (`cifs`: `__divtf3`), and cannot be told otherwise there
     text = re.sub(r"\blong(\s+)double\b", r"double", text)
+    # **`signed char` is `char`**: *"case BCHAR: case BCHAR|BSIGNED: return
+    # types[TCHAR]"* (`cc/sub.c:211`), one type — so APE's `typedef char
+    # int8_t` and ghostscript's `typedef signed char int8_t` agree, as they
+    # do under kencc. clang's `char` is signed on wasm32, so nothing else
+    # changes
+    text = re.sub(r"\bsigned(\s+)char\b", r"char", text)
     text = floatl(text)
     text = literals(text)
     edits = []

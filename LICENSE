@@ -54,4 +54,5 @@ include/, and rc/ — under the Plan 9 Foundation's MIT licence, per
 userspace/NOTICE and userspace/LICENSE, which are the Foundation's own.
 Ghostscript (userspace/sys/src/cmd/gs), as Plan 9 distributes it, is under
 the Aladdin Free Public License or the GPL instead, per
-userspace/LICENSE.afpl and userspace/LICENSE.gpl.
+userspace/LICENSE.afpl and userspace/LICENSE.gpl; its fonts
+(userspace/sys/lib/ghostscript/font) are under the GPL, per their README.

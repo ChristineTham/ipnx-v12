@@ -24,6 +24,8 @@
 #include "sparc.h"
 #elif Tpower64
 #include "power64.h"
+#elif Twasm	/* ipnx: this machine's, which genarch writes (mkfile: $objtype.h) */
+#include "wasm.h"
 #else
 	I do not know about your architecture.
 	Update switch in arch.h with new architecture.

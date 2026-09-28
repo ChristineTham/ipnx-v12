@@ -5020,3 +5020,65 @@ mkfile's variables in their environment and `sed -E`.
 **The second pass repeats while it builds more**: a pass can run a tool the
 same pass has not yet remade — `grap` ran the first pass's `lex`, built with
 bison's parser, before `lex`'s directory was reached.
+
+### 16.17 A stat through a mount says `M`; ghostscript (2026-09-27)
+
+**The mount driver writes its own letter into every directory entry a
+server returns** — `mntdirfix` (`devmnt.c:1161`), called from `mntstat`
+(`:490`) and from `mntread` for each entry of a directory (`:673`):
+
+> `r = devtab[c->type]->dc; … PBIT16(dirbuf, r); … PBIT32(dirbuf, c->dev);`
+
+The mount driver here passed the server's `type` and `dev` through, so
+`ls -l` of a file in the root showed `9`, the root file server's letter.
+**APE decides what a file is by that letter** (`ape/lib/ap/plan9/
+dirtostat.c:23`): anything that is not `M`, `|`, `s` or a directory is
+`S_IFCHR`. Every file in the root was therefore a character device to an
+APE program, and ghostscript reads a character device **a byte at a time**
+(`gs/src/zfile.c:1121`: *"Defeat buffering for terminals"*). Its scanner
+then stalled inside the first string literal of `gs_init.ps` that crossed a
+buffer boundary (`(gs: Interpreter revision \()`, offset 1398). This was
+found with a DEBUG build's `-ZIsA` trace, which showed `[s]init … len=1`.
+With `mntdirfix` in place, `gs_init.ps` is `M` and a regular file, and gs
+runs.
+
+**ghostscript builds as its mkfile builds it.** `arch.h` selects a header
+per `$objtype` (`-DT$objtype`), and `$objtype.h` is written by `genarch`, a
+program the mkfile compiles with `pcc` and runs on the target
+(`gs/mkfile:148`, `:163`) — here, on the system in the second pass.
+`arch.h` gains a `Twasm` case for this machine, as each architecture has
+one. **`signed char` is `char` to kencc** (`cc/sub.c:211`: *"case BCHAR:
+case BCHAR|BSIGNED: return types[TCHAR]"*). APE's `typedef char int8_t`
+and ghostscript's `typedef signed char int8_t` agree there and are two
+types to clang, so the derivation makes them one. The fonts are Plan 9's
+`/sys/lib/ghostscript/font`, the second directory of `GS_LIB_DEFAULT`
+(`gs/mkfile:202`), vendored under the GPL their README names.
+
+Measured with the release host: `gs -dBATCH` rendering a filled path, or
+`Times-Roman` text, to `pbmraw` at 100×100 takes 9 s, most of it the
+initialisation that `gs_init.ps` runs. `gs -q -dNODISPLAY -c '1 2 add =='`
+takes 1 min 46 s under the **debug** host, which is wasmtime compiling a
+4 MB module unoptimised. That is why there is no gs test in `cargo test`;
+the kernel's `a_stat_through_a_mount_says_m` is the test for the cause.
+
+**`/proc/n/fd` is `procfdprint`'s format** (`devproc.c:557`):
+
+> `"%3d %.2s %C %4ld (%.16llux %*lud %.2ux) %5ld %8lld %s\n"`
+
+That is the mode, the letter, the dev, the qid in parentheses (its version
+as wide as the widest, `procqidwidth`), the iounit, the offset and the
+name. It had been four columns of its own.
+
+**`#` begins a comment anywhere in rc, even in the middle of a word**:
+`wordchr` excludes it (`rc/lex.c:12`). `gs -sDEVICE#pbmraw`, the form gs
+documents for shells where `=` is special, is `gs -sDEVICE` in rc, and so
+is the rest of the line. The rc form is `'-sDEVICE=pbmraw'`.
+
+**Found while doing this, not yet fixed:**
+
+- rc given a list of about 3,000 words stops with *"call stack exhausted"*:
+  wasmtime's `max_wasm_stack`, where Plan 9's stack would hold it.
+- Writing `stop` to a compute-bound process's `ctl` hung the whole system.
+- The derivation's rule that removes a doubled comma (`kencc.literals`)
+  also fires inside a macro call's argument list, where `f(a,,b)` is an
+  empty argument. It should apply only outside parentheses.
