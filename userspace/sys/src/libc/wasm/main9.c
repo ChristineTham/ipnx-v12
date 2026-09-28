@@ -7,16 +7,11 @@
  * `_main`, which reads `inargc-4(FP)`, takes the address of `inargv+0(FP)`,
  * and calls `main(argc, argv)`. If main returns it calls `exits("main")`.
  *
- * This machine has no stack to have built. The embedding instantiates the
- * module, writes the argument block into the module's own memory, and calls
- * the exported entry with three numbers: the count, the address of the
- * pointer array, and the address just past the block — which is where this
- * process's heap begins, because everything below it is spoken for.
- *
- * That third argument is the only thing here 386's version has no counterpart
- * for, and it exists for the same reason the rest of the file differs: a wasm
- * module's memory is not laid out by whoever loaded it, so the loader must say
- * what it used.
+ * The machine builds the stack as `sysexec` does — the `Tos` at the top,
+ * the argument strings below it, the pointer array below them
+ * (`sysproc.c:450`) — and calls the exported entry with the count, the
+ * array and the `Tos`, which are the three things `main9.s` finds in its
+ * frame and in AX. The heap begins at `end`, as it does there.
  */
 #include <u.h>
 #include <libc.h>
@@ -40,7 +35,6 @@ extern int main(int, char*[]);
 void	**_privates;
 int	_nprivates;
 
-void	_sbrkinit(void*);
 
 /*
  * `tos` is where `main9.s` finds it in AX: the machine puts the `Tos` at the
@@ -49,14 +43,13 @@ void	_sbrkinit(void*);
  */
 __attribute__((export_name("_start")))
 void
-_start(int argc, char *argv[], void *heap, Tos *tos)
+_start(int argc, char *argv[], Tos *tos)
 {
 	void *privates[NPRIVATES];
 
 	_tos = tos;
 	_privates = privates;
 	_nprivates = NPRIVATES;
-	_sbrkinit(heap);
 	main(argc, argv);
 	exits("main");
 }

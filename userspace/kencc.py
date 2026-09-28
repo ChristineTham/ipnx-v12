@@ -349,7 +349,8 @@ def literals(text):
       * three quotes are a quote character; clang wants it escaped.
       * an empty element in a list — `Gpiogpo1en = 0x04, /* gpio1
         enable */,` (`usb/ether/asix.c:45`) — which kencc takes; no C has
-        two commas in a row, so the second goes.
+        two commas in a row outside parentheses, so the second goes. Inside
+        them it is a macro's empty argument, `f(a,,b)`, and stays.
       * *"all multibyte runes are alpha"* (`:459`, `:732`): an identifier
         may hold any rune past ASCII, and clang takes only Unicode's
         identifier characters — `OS½` (`ip/ftpfs/ftpfs.c:75`). Outside a
@@ -359,6 +360,7 @@ def literals(text):
     Q, D, B = "'", '"', "\\"
     out, i, n = [], 0, len(text)
     sig = ""        # the last character outside a literal, a comment or a blank
+    depth = 0       # parentheses open
     while i < n:
         c = text[i]
         if text.startswith("//", i):
@@ -412,9 +414,13 @@ def literals(text):
             out.append("_U%04X_" % ord(c))
             sig = "_"
             i += 1
-        elif c == "," and sig == ",":
+        elif c == "," and sig == "," and depth == 0:
             i += 1
         else:
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth = max(0, depth - 1)
             out.append(c)
             if c not in " \t\n":
                 sig = c
@@ -429,6 +435,18 @@ def floatl(text):
     (`cc/lex.c:913`) — where clang makes it a long double (`cifs/dfs.c:89`,
     `1000.0L`)."""
     return FLOATL.sub(lambda m: m.group(1) or m.group(2), text)
+
+def loaderend(text):
+    """**`end` is the loader's** — for every file, derived or not (libc's
+    are compiled by mk.sh as they are): the end of bss, which Plan 9's
+    loaders define (`8l/pass.c:96`, *"xdefine("end", SBSS, bsssize +
+    datsize)"*) and a program declares — `extern char end[];`
+    (`7l/compat.c:77`, `libc/9sys/sbrk.c:4`), `char end[];`
+    (`ape/lib/ap/plan9/brk.c:7`). wasm-ld defines the same address as
+    `__heap_base`, and has no way to give it a second name, so the file's
+    `end` is that."""
+    return re.sub(r"^(?:extern)?[ \t]*char[ \t]+end[ \t]*\[[ \t]*\][ \t]*;",
+                  "extern char __heap_base[];\n#define end __heap_base", text, flags=re.M)
 
 def mainfix(text):
     """`main` as `_main` calls it — for every program, derived or not
@@ -468,6 +486,7 @@ def derive_text(text, path, table):
     # do under kencc. clang's `char` is signed on wasm32, so nothing else
     # changes
     text = re.sub(r"\bsigned(\s+)char\b", r"char", text)
+    text = loaderend(text)
     text = floatl(text)
     text = literals(text)
     edits = []
@@ -894,6 +913,13 @@ if __name__ == "__main__":
         sys.exit("usage: kencc.py cc src obj [flag...]")
     src = sys.argv[2]
     text = open(src, errors="replace").read()
+    if loaderend(text) != text:
+        # the loader's `end`, from a copy beside the object
+        src = sys.argv[3] + ".end.c"
+        text = loaderend(text)
+        with open(src, "w") as f:
+            f.write(text)
+        sys.argv.append("-I" + os.path.dirname(os.path.abspath(sys.argv[2])))
     if mainfix(text) != text:
         # a program: its `main` as `_main` calls it, from a copy beside the
         # object; `-I` keeps its own directory's headers

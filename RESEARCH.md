@@ -5082,3 +5082,62 @@ is the rest of the line. The rc form is `'-sDEVICE=pbmraw'`.
 - The derivation's rule that removes a doubled comma (`kencc.literals`)
   also fires inside a macro call's argument list, where `f(a,,b)` is an
   empty argument. It should apply only outside parentheses.
+
+### 16.18 Plan 9's stack, the argument block on it, and `end` (2026-09-28)
+
+**A process's stack is Plan 9's size**: *"#define USTKSIZE
+(16\*1024\*1024) /\* size of user stack \*/"* (`pc/mem.h:51`). There are
+two stacks here, and each was far smaller:
+
+| | was | now | what ran out |
+|---|---|---|---|
+| wasmtime's call stack (wasm frames, on the fiber) | 512K, the default | `max_wasm_stack` 16M, the fiber 18M | rc parsing a list of 2,000 words: *"call stack exhausted"* |
+| the stack region in memory (`--stack-first`) | 64K | `-z stack-size=16777216` | 5,000 words; a 200-word line of long paths: *"out of bounds memory access"* |
+
+Measured, rc's `x=(1 … n); echo $#x`: 1,000 words ran and 2,000 did not
+at 512K; 3,000 ran and 5,000 did not at 64K; 40,000 run now.
+
+**The region is copied only as far as it is used.** A fork copies the
+parent's memory, and `RFMEM` sharers swap the region on every switch
+(§16.13), so a 16M region copied whole would be 16M a fork and 32M a
+switch. Below the stack pointer nothing is live — wasm's C ABI has no red
+zone — so each copy starts there: a fork at the stack pointer of its
+`rfork`, a switch at the one the outgoing process had when it left the
+processor. That is recorded at every point a process can leave it — the
+waits in `kcall` and `rfork`, and the clock's `Yield` — and a process on a
+stack outside the region (libthread's, in the heap) is taken at the point
+it left the region, which the machine sees in `longjmp`.
+
+**The argument block is on the stack, as `sysexec` puts it**
+(`sysproc.c:389`, `:450`): the `Tos` at the top, the strings under it, the
+pointer array under them, the stack pointer 16-aligned below, and
+*"if(spage > TSTKSIZ) error(Enovmem)"* with `TSTKSIZ` 100 pages
+(`pc/mem.h:53`). It had been placed past the end of memory, because 64K of
+stack could not hold it, and `sbrk` started past it. **So the heap begins
+at `end`**, as Plan 9's does (`libc/9sys/sbrk.c:4`, *"static char \*bloc
+= { end }"*), and `_start` is called as `main9.s` finds its frame: the
+count, the array and the `Tos`, with no third number saying where the heap
+is. `7l`, which allocates from `end` itself (`7l/compat.c:77`), had been
+writing over its own arguments.
+
+**`end` is the loader's.** Plan 9's loaders define it (`8l/pass.c:96`,
+*"xdefine("end", SBSS, bsssize + datsize)"*); wasm-ld defines the same
+address as `__heap_base` and cannot give it a second name (it has no
+`--defsym`), so a file's `char end[];` becomes that name (`kencc.py`,
+`loaderend`) — libc's, APE's and 7l's.
+
+**The derivation's doubled comma** is removed only outside parentheses:
+inside them it is a macro's empty argument, `f(a,,b)`.
+
+**Data files**: `units` reads `/lib/units` (`units.y:290`) and `grap`
+`/sys/lib/grap.defines` (`grap/main.c:12`), both vendored from `plan9/`.
+
+**A debug build compiles its dependencies optimised**
+(`[profile.dev.package."*"]`): an unoptimised Cranelift took 1 min 46 s to
+start ghostscript; optimised, 13 s.
+
+**`stop` on a busy process does not hang the system.** It was seen once
+(§16.17) with the ghostscript that read a byte at a time; it did not
+recur with a process in a loop of no calls (awk, rc), of reads through the
+mount driver, of 1-byte reads (`dd -bs 1`), or with `startsyscall` after
+it. `stop_stops_a_process_in_a_tight_loop` is the test.

@@ -61,9 +61,12 @@ CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-ex
 # (`libthread/wasm.c`). The memory is imported, and shared, because the
 # machine makes it and `rfork(RFMEM)` gives it to two processes (RESEARCH
 # §16.13) — which needs every object built with `-matomics`; its maximum is
-# wasm32's. The stack is first, at [0, 64K), because it is the one part of
-# the memory each process has to itself.
-LDFLAGS="--no-entry --export=_start --import-memory --export-memory --shared-memory --max-memory=4294967296 --export=__stack_pointer --export-table --stack-first -z stack-size=65536 --allow-multiple-definition"
+# wasm32's. The stack is first, at [0, 16M), because it is the one part of
+# the memory each process has to itself; 16M is Plan 9's (`pc/mem.h:51`,
+# *"#define USTKSIZE (16*1024*1024)"*), and the machine copies only what a
+# stack is using, so the size costs nothing that is not used. The argument
+# block is at its top, under the `Tos`, as `sysexec` puts it.
+LDFLAGS="--no-entry --export=_start --import-memory --export-memory --shared-memory --max-memory=4294967296 --export=__stack_pointer --export-table --stack-first -z stack-size=16777216 --allow-multiple-definition"
 
 # The rootfs: the programs in ONE package, `system` — Plan 9's userland as
 # this machine runs it, its commands and rc (docs/packages.md) — at
@@ -160,6 +163,8 @@ mkdir -p "$root/sys/lib/ghostscript" && cp -f "$sys"/src/cmd/gs/lib/* "$root/sys
 # and its fonts, which Plan 9 keeps beside them (`/sys/lib/ghostscript/font`,
 # the second directory of `GS_LIB_DEFAULT`, `gs/mkfile:202`)
 cp -rf "$sys/lib/ghostscript/font" "$root/sys/lib/ghostscript/"
+# grap's macros (`grap/main.c:12`, `GRAPDEFINES "/sys/lib/grap.defines"`)
+cp -f "$sys/lib/grap.defines" "$root/sys/lib/"
 # and lex's, from `/sys/lib/lex` (`lex/lmain.c:17`)
 mkdir -p "$root/sys/lib/lex" && cp -f "$sys/lib/lex/ncform" "$root/sys/lib/lex/"
 # Plan 9's `/adm/timezone`, which init copies into `#e/timezone` (`init.c`)
@@ -181,6 +186,9 @@ echo "pkg=system version=$VERSION" >"$root/profile/pkg"
 # rc itself is built from its own mkfile, above, with `plan9.c` and
 # `havefork.c`, as on Plan 9. Its startup file goes where plan9.c looks.
 cp -f "$sys/src/cmd/rc/rcmain" "$pkg/lib/rcmain"
+# and the data files Plan 9's programs read from `/lib`: units' table
+# (`units.y:290`, *"file = "/lib/units""*)
+cp -f "$here/lib/units" "$pkg/lib/units"
 
 # **The second pass.** Some sources are made by a Plan 9 program — libsec's
 # curves by `mpc` (`libsec/port/mkfile`: `%.c:D: %.mp`) — and Plan 9 builds

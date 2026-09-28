@@ -9,3 +9,11 @@ members = ["kernel", "hosts/ipnx", "conformance"]
 edition = "2021"
 license = "MIT"
 rust-version = "1.77"
+
+# **The dependencies are built optimised even in a debug build.** wasmtime
+# compiles every image with Cranelift, and an unoptimised Cranelift took
+# 1 min 46 s to start ghostscript's 4M module where an optimised one takes
+# seconds (RESEARCH §16.17) — so a test that runs a large program measured
+# the compiler, not the system. The system's own crates stay debug.
+[profile.dev.package."*"]
+opt-level = 3

@@ -50,7 +50,7 @@ measurements in RESEARCH.md are recorded as data, taken in the parent
 repository.
 
 Plan 9 sources are vendored under userspace/ — sys/, each architecture's
-include/, and rc/ — under the Plan 9 Foundation's MIT licence, per
+include/, rc/ and lib/ — under the Plan 9 Foundation's MIT licence, per
 userspace/NOTICE and userspace/LICENSE, which are the Foundation's own.
 Ghostscript (userspace/sys/src/cmd/gs), as Plan 9 distributes it, is under
 the Aladdin Free Public License or the GPL instead, per

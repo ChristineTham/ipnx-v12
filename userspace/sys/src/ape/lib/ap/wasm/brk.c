@@ -1,8 +1,8 @@
 /*
  * `brk` and `sbrk` — `ape/lib/ap/plan9/brk.c`, replaced here as
  * `riscv64/brk.c` replaces it there. The call, `_BRK_`, is `memory.grow`
- * on this machine, as `libc/wasm/sbrk.c` says; the rounding and `ENOMEM`
- * are plan9/brk.c's.
+ * on this machine, as `libc/wasm/sbrk.c` says; `end`, the rounding and
+ * `ENOMEM` are plan9/brk.c's.
  */
 #include "../plan9/lib.h"
 #include <errno.h>
@@ -12,13 +12,8 @@
 
 enum { Pagesz = 64*1024 };	/* a wasm page, fixed by the format */
 
-static char *bloc;
-
-void
-_sbrkinit(void *heap)
-{
-	bloc = heap;
-}
+char	end[];
+static	char	*bloc = { end };
 
 static int
 _BRK_(void *p)

@@ -94,7 +94,7 @@ mod tests {
   (import "sys" "exits" (func $exits (param i32)))
   (memory (export "memory") 1)
   (data (i32.const 8) "survived\00")
-  (func (export "_start") (param i32 i32 i32 i32)
+  (func (export "_start") (param i32 i32 i32)
     (drop (call $open (i32.const 0x7fff0000) (i32.const 0)))
     (call $exits (i32.const 8))))
 "#;
@@ -114,7 +114,7 @@ mod tests {
   (memory (export "memory") 1)
   (data (i32.const 8) "survived\00")
   (data (i32.const 32) "shared\00")
-  (func (export "_start") (param i32 i32 i32 i32)
+  (func (export "_start") (param i32 i32 i32)
     (drop (call $segattach (i32.const 0) (i32.const 32) (i32.const 0) (i32.const 4096)))
     (call $exits (i32.const 8))))
 "#;
@@ -135,7 +135,7 @@ mod tests {
   (data (i32.const 8) "/boot/init\00")
   (data (i32.const 32) "not BIT16SZ\00")
   (data (i32.const 64) "no size\00")
-  (func (export "_start") (param i32 i32 i32 i32)
+  (func (export "_start") (param i32 i32 i32)
     (if (i32.ne (call $stat (i32.const 8) (i32.const 256) (i32.const 10)) (i32.const 2))
       (then (call $exits (i32.const 32)) (return)))
     (if (i32.le_u (i32.load16_u (i32.const 256)) (i32.const 8))
@@ -163,7 +163,7 @@ mod tests {
   (data (i32.const 8) "/boot/hello\00")
   (data (i32.const 512) "\00")
   (global $n (mut i32) (i32.const 0))
-  (func (export "_start") (param i32 i32 i32 i32)
+  (func (export "_start") (param i32 i32 i32)
     (global.set $n (call $open (i32.const 8) (i32.const 0)))
     (global.set $n
       (call $pread (global.get $n) (i32.const 256) (i32.const 256) (i64.const -1)))
@@ -190,7 +190,7 @@ mod tests {
   (data (i32.const 8)  "/nothing\00")
   (data (i32.const 64) "opened what is not there\00")
   (data (i32.const 96) "errstr said nothing\00")
-  (func (export "_start") (param i32 i32 i32 i32)
+  (func (export "_start") (param i32 i32 i32)
     (if (i32.ge_s (call $open (i32.const 8) (i32.const 0)) (i32.const 0))
       (then (call $exits (i32.const 64)) (return)))
     ;; `errstr` answers 0 and EXCHANGES; what it wrote is at 256
@@ -212,7 +212,7 @@ mod tests {
   (import "sys" "exits" (func $exits (param i32)))
   (memory (export "memory") 1)
   (data (i32.const 8) "oops\00")
-  (func (export "_start") (param i32 i32 i32 i32) (call $exits (i32.const 8))))
+  (func (export "_start") (param i32 i32 i32) (call $exits (i32.const 8))))
 "#;
         assert_eq!(run(BYE, &[]).unwrap(), "init 1: oops");
     }
@@ -227,7 +227,7 @@ mod tests {
 (module
   (import "sys" "exits" (func $exits (param i32)))
   (memory (export "memory") 1)
-  (func (export "_start") (param $argc i32) (param $argv i32) (param $heap i32) (param $tos i32)
+  (func (export "_start") (param $argc i32) (param $argv i32) (param $tos i32)
     (call $exits (i32.load (i32.add (local.get $argv) (i32.const 4))))))
 "#;
         let mut root = Root::new();
@@ -574,6 +574,52 @@ mod userspace {
              echo still here\n",
         );
         assert!(out.contains("still here"), "{out}");
+    }
+
+    /// **`stop` stops a process that makes no call** (`devproc.c:1223`,
+    /// `procstopwait`): the writer waits until the loop is `Stopped`, which
+    /// only the clock can bring about, and the system goes on around both.
+    #[test]
+    fn stop_stops_a_process_in_a_tight_loop() {
+        let out = typing(
+            "awk 'BEGIN{for(;;)x++}' &\n\
+             sleep 1\n\
+             echo stop >/proc/$apid/ctl\n\
+             sed 's/  */ /g' /proc/$apid/status\n\
+             echo kill >/proc/$apid/ctl\n\
+             echo still here\n",
+        );
+        assert!(out.contains("awk kitty Stopped"), "{out}");
+        assert!(out.contains("still here"), "{out}");
+    }
+
+    /// **A process's stack is Plan 9's size** (`pc/mem.h:51`, 16M): rc parses
+    /// a list of 5,000 words, which recurses once a word, where the old 64K
+    /// stack and wasmtime's 512K call stack each ran out near 1,500.
+    #[test]
+    fn rc_parses_a_long_list() {
+        let out = typing(
+            "{echo -n 'x=('; seq 5000 | tr '\\012' ' '; echo ')'; echo 'echo $#x words'} >/tmp/long.rc\n\
+             . /tmp/long.rc\n",
+        );
+        assert!(out.contains("5000 words"), "{out}");
+    }
+
+    /// **ghostscript runs, with its fonts** (RESEARCH §16.17): it reads
+    /// `gs_init.ps` through the mount driver, which says the file is a file,
+    /// and finds Times-Roman in `/sys/lib/ghostscript/font`.
+    #[test]
+    fn gs_computes_and_measures_text() {
+        let out = typing(
+            "gs -q -dNODISPLAY -c '1 2 add ==' -c '/Times-Roman findfont 10 scalefont setfont (Hi) stringwidth pop ==' -c quit\n",
+        );
+        // the last word of each line: the prompt shares the first
+        let last = |l: &str| l.split_whitespace().last().unwrap_or("").to_string();
+        assert!(out.lines().any(|l| last(l) == "3"), "{out}");
+        // H is 7.22 and i 2.78 at 10pt in Times-Roman's metrics, 10 less
+        // the rounding of its hinting
+        let w = out.lines().filter_map(|l| last(l).parse::<f64>().ok()).find(|w| (9.5..10.5).contains(w));
+        assert!(w.is_some(), "{out}");
     }
 
     /// **rc catches a note.** `Trapinit` is `plan9.c`'s now, `notify(notifyf)`;

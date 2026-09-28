@@ -12,9 +12,9 @@
  * nothing else changes: the same two functions, the same rounding, the same
  * `(void*)-1` on failure.
  *
- * `bloc` starts where the embedding said the heap begins (`main9.c`), rather
- * than at `end[]`, because the embedding wrote the argument block into this
- * memory before anything of the process ran.
+ * `bloc` starts at `end`, as Plan 9's does: the machine puts the argument
+ * block on the stack, as `sysexec` does (`sysproc.c:450`), and nothing lies
+ * between the end of bss and the break.
  */
 #include <u.h>
 #include <libc.h>
@@ -25,13 +25,8 @@ enum
 	Pagesz	= 64*1024,	/* a wasm page, fixed by the format */
 };
 
-static char *bloc;
-
-void
-_sbrkinit(void *heap)
-{
-	bloc = heap;
-}
+extern	char	end[];
+static	char	*bloc = { end };
 
 /* the address just past the last byte this module's memory holds */
 static uintptr

@@ -3,7 +3,7 @@
  * `ape/lib/ap/386/main9.s`, as `libc/wasm/main9.c` is of `libc/386/main9.s`:
  * `_envsetup()`, then `main`, then `exit` with what it answered. The
  * machine calls `_start` with what `libc/wasm/main9.c` says it does — the
- * count, the pointers, where the heap begins, and the `Tos`.
+ * count, the pointers and the `Tos`.
  */
 #include "../plan9/lib.h"
 #include "../plan9/sys9.h"
@@ -24,7 +24,6 @@ typedef unsigned long long uvlong;
 extern	int	main(int, char**);
 extern	void	_envsetup(void);
 extern	char	**environ;
-void	_sbrkinit(void*);
 
 /*
  * `main9p.s` declares these — `GLOBL _tos(SB), $4`, and `_privates` in
@@ -37,14 +36,13 @@ int	_nprivates;
 
 __attribute__((export_name("_start")))
 void
-_start(int argc, char *argv[], void *heap, Tos *tos)
+_start(int argc, char *argv[], Tos *tos)
 {
 	void *privates[NPRIVATES];
 
 	_tos = tos;
 	_privates = privates;
 	_nprivates = NPRIVATES;
-	_sbrkinit(heap);
 	_envsetup();
 	exit(main(argc, argv));
 }

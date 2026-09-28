@@ -175,9 +175,12 @@ A Plan 9-dialect binary is a wasm32 module that (as built by
   per call, plus `setjmp` and `longjmp` (`libc/wasm/setjmp.c`) — and
   nothing else;
 - **imports** its memory — shared, maximum 4 GiB, the stack first at
-  `[0, 64K)` — which the machine makes for each new image;
+  `[0, 16M)`, Plan 9's `USTKSIZE` (`pc/mem.h:51`) — which the machine makes
+  for each new image, putting the `Tos` at the top of the stack and the
+  argument block under it, as `sysexec` does (`sysproc.c:450`); the heap
+  begins at `end`, which wasm-ld calls `__heap_base`;
 - **exports** `memory`, `__stack_pointer`, the function table,
-  `_start(argc, argv, heap, tos)` (`libc/wasm/main9.c`), `__notestart`
+  `_start(argc, argv, tos)` (`libc/wasm/main9.c`), `__notestart`
   (where a note handler is entered), `__asyncbuf`/`__asyncbufsize`, and
   asyncify's `asyncify_*` functions;
 - **is asyncified** (`wasm-opt --asyncify`, instrumenting only paths to
