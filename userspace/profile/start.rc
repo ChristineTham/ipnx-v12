@@ -7,10 +7,10 @@
 # None of those exist here yet. What is left is what termrc is FOR: the
 # devices a terminal wants, bound by the system rather than by the embedding.
 
-# bind all likely devices (`termrc:14`). `/profile/start.ns` has already bound
-# the ones a namespace must have; these are the ones a TERMINAL wants to see
-# under /dev, which is what Plan 9's loop is for.
-for(i in p d)
+# bind all likely devices (`termrc:12`), Plan 9's list as it is: a letter
+# this kernel does not have fails, silently, as it does on a terminal
+# without that hardware. `#t` is the serial line the surface is on.
+for(i in f t m v L P u U '$' Σ κ)
 	/bin/bind -a '#'^$i /dev >/dev/null >[2=1]
 
 # a name (`termrc:31`, with `ndb/cs` left out — there is no network to get a
@@ -21,8 +21,8 @@ if (~ $#sysname 0 || ~ $sysname '') {
 	echo -n $sysname >/dev/sysname
 }
 
-# parallelism for mk (`termrc:11`)
-NPROC = 1
+# parallelism for mk (`termrc:8`): one line of /dev/sysstat a processor
+NPROC = `{wc -l /dev/sysstat}
 
 # the system's services (docs/packages.md): each named in /profile/service
 # without Plan 9's leading `!`, as `cpurc` starts the daemons it lists

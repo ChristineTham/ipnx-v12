@@ -16,6 +16,7 @@
 
 pub mod machine;
 pub mod store;
+pub mod uart;
 
 use ipnx_kernel::{
     chan,
@@ -28,6 +29,7 @@ use ipnx_kernel::{
     devproc::ProcDev,
     devroot::Root,
     devsrv::SrvDev,
+    devuart::UartDev,
     devvirtio9p::{Nineserver, Virtio9p},
     dev::DevId,
     Call, Kernel, Ret,
@@ -214,6 +216,13 @@ impl Console for Host {
             _ => Err("this host reboots by being started again".into()),
         }
     }
+
+    /// One serial line, `eia0`, with nothing at its far end yet: the
+    /// surface this host serves is the terminal, which reaches the system
+    /// through `#c`.
+    fn physuart(&mut self) -> Vec<(ipnx_kernel::devuart::Uart, Box<dyn ipnx_kernel::devuart::PhysUart>)> {
+        vec![uart::Eia::found("eia0", uart::Line::new())]
+    }
 }
 
 /// The device table — the letters this kernel carries. Plan 9 writes the same
@@ -221,7 +230,7 @@ impl Console for Host {
 ///
 /// Absent, and for one reason each: `#i` (draw) and `#m` (mouse) are hardware
 /// this machine has none of.
-pub const LETTERS: [DevId; 10] = [
+pub const LETTERS: [DevId; 11] = [
     DevId::Root,
     DevId::Pipe,
     DevId::Srv,
@@ -232,6 +241,7 @@ pub const LETTERS: [DevId; 10] = [
     DevId::Cons,
     DevId::Cap,
     DevId::Virtio9p,
+    DevId::Uart,
 ];
 
 /// The boot namespace, from `plan9/sys/src/9/port/initcode.c:28`, which is
@@ -368,6 +378,9 @@ pub fn boot(
         v9.add(store);
     }
     k.tab.add(Box::new(v9));
+    // `uartreset` (`devuart.c:163`) — the lines the host has.
+    let mut host = host;
+    k.tab.add(Box::new(UartDev::new(k.up.clone(), host.physuart())));
     // **`eve` starts EMPTY**, as `userinit` leaves it (`pc/main.c:285`:
     // `kstrdup(&eve, "")`). `boot` names the host owner by writing
     // `#c/hostowner` — `glenda()` (`bootauth.c:56`), reached because there
@@ -523,6 +536,8 @@ pub struct Script {
     /// typed, before the key is pressed; and where on the screen they were.
     marker: Option<Vec<u8>>,
     from: usize,
+    /// The serial line `eia0` is on, if the test has one.
+    line: Option<uart::Line>,
 }
 
 /// How long after the line before it a scripted `^C` is pressed.
@@ -539,6 +554,12 @@ impl Term {
     pub fn marked(keys: &str, marker: &str) -> Term {
         let t = Term::typing(keys);
         t.0.borrow_mut().marker = Some(marker.as_bytes().to_vec());
+        t
+    }
+    /// The same, with `eia0` on this line — whose far end the test holds.
+    pub fn with_line(keys: &str, line: uart::Line) -> Term {
+        let t = Term::typing(keys);
+        t.0.borrow_mut().line = Some(line);
         t
     }
     /// What the console was shown.
@@ -612,5 +633,9 @@ impl Console for Term {
     }
     fn reboot(&mut self, cmd: &str) -> Result<(), String> {
         Host.reboot(cmd)
+    }
+    fn physuart(&mut self) -> Vec<(ipnx_kernel::devuart::Uart, Box<dyn ipnx_kernel::devuart::PhysUart>)> {
+        let line = self.0.borrow().line.clone().unwrap_or_default();
+        vec![uart::Eia::found("eia0", line)]
     }
 }

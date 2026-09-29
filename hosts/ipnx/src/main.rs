@@ -1159,3 +1159,96 @@ mod profiles {
         assert_eq!(count("shell "), count("fork "), "a fork is not a new shell: {out:?}");
     }
 }
+
+/// **P8 step 1: the serial line** (docs/implementation.md). `#t`'s `eia0`
+/// on a host [`ipnx::uart::Line`], and Plan 9's own way to serve a
+/// namespace down a wire: `exportfs` with the line as its standard input.
+/// The far end is this test, speaking 9P.
+#[cfg(test)]
+mod serial {
+    use super::*;
+    use ipnx::uart::Line;
+    use ipnx_kernel::ninep::{unframe, R, T, W, NOFID};
+    use std::time::Duration;
+
+    fn rootfs() -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../userspace/root")
+    }
+
+    /// One exchange on the line: the message out, the reply read whole.
+    fn rpc(far: &Line, msg: Vec<u8>) -> Result<(u8, Vec<u8>), String> {
+        let t = Duration::from_secs(120);
+        far.send(&msg);
+        let size = far.recv(4, t);
+        if size.len() < 4 {
+            return Err("no reply".into());
+        }
+        let n = u32::from_le_bytes(size[..4].try_into().unwrap()) as usize;
+        let mut whole = size;
+        whole.extend(far.recv(n - 4, t));
+        let m = unframe(&whole).ok_or("a short reply")?;
+        if m.ty == T::Error as u8 {
+            return Err(R::new(m.body).s().unwrap_or("?").to_string());
+        }
+        Ok((m.ty, m.body.to_vec()))
+    }
+
+    /// Version, attach, walk to `rcmain`, open, read, clunk.
+    fn conversation(far: &Line) -> Result<Vec<u8>, String> {
+        let (ty, body) = rpc(far, W::new().u32(8192 + 24).s("9P2000").frame(T::Version as u8, !0))?;
+        assert_eq!(ty, T::Version.reply());
+        assert_eq!(R::new(&body[4..]).s(), Some("9P2000"));
+        let (ty, _) = rpc(far, W::new().u32(0).u32(NOFID).s(ipnx::USER).s("").frame(T::Attach as u8, 1))?;
+        assert_eq!(ty, T::Attach.reply());
+        let (ty, body) = rpc(far, W::new().u32(0).u32(1).u16(1).s("rcmain").frame(T::Walk as u8, 2))?;
+        assert_eq!(ty, T::Walk.reply());
+        assert_eq!(R::new(&body).u16(), Some(1), "one qid: the walk reached it");
+        let (ty, _) = rpc(far, W::new().u32(1).u8(0).frame(T::Open as u8, 3))?;
+        assert_eq!(ty, T::Open.reply());
+        let (ty, body) = rpc(far, W::new().u32(1).u64(0).u32(8192).frame(T::Read as u8, 4))?;
+        assert_eq!(ty, T::Read.reply());
+        let mut r = R::new(&body);
+        let n = r.u32().unwrap() as usize;
+        let data = r.rest()[..n].to_vec();
+        for (tag, fid) in [(5, 1), (6, 0)] {
+            let (ty, _) = rpc(far, W::new().u32(fid).frame(T::Clunk as u8, tag))?;
+            assert_eq!(ty, T::Clunk.reply());
+        }
+        Ok(data)
+    }
+
+    /// `/profile/start.rc` binds `#t` onto `/dev` in termrc's loop
+    /// (`termrc:12`), and the status file reads as `i8250status` does.
+    #[test]
+    fn the_line_is_in_dev_after_boot() {
+        let out = super::userspace::typing("ls /dev | grep eia\ncat /dev/eia0status\n");
+        assert!(out.contains("/dev/eia0\n/dev/eia0ctl\n/dev/eia0status\n"), "{out:?}");
+        assert!(out.contains("b0 c0 d0 e0 l5 m0 pn r0 s1 i0\ndev(0) type(0)"), "never enabled: {out:?}");
+    }
+
+    /// `exportfs -r /lib` on `eia0`, with `c1` so that the far end going
+    /// is the end of the line: the test reads a file through it, hangs up,
+    /// and the system carries on to its end.
+    #[test]
+    fn exportfs_serves_a_tree_down_the_serial_line() {
+        let line = Line::new();
+        line.connect();
+        let far = line.clone();
+        let client = std::thread::spawn(move || {
+            let r = conversation(&far);
+            far.hangup();
+            r
+        });
+        let cmd = "{echo c1 >[1=3]; exportfs -r /lib} <>'#t/eia0' >[3]'#t/eia0ctl'";
+        let term = Term::with_line("", line);
+        let store = store::Store::new(&rootfs()).expect("a store");
+        let args: Vec<String> = ["rc", "-c", cmd].iter().map(|s| s.to_string()).collect();
+        let r = startboot(&[BOOT.to_string()], &[], &plan9ini(&args), Box::new(term.clone()), Some(Box::new(store)));
+        let data = client.join().expect("the far end").unwrap_or_else(|e| panic!("{e}: {}", term.screen()));
+        assert!(r.is_ok(), "{r:?}: {}", term.screen());
+        // `/lib/rcmain` is the system package's, bound onto `/lib` by
+        // `/profile/start.ns`.
+        let pkg = std::fs::read_dir(rootfs().join("pkg/system")).unwrap().flatten().next().unwrap().path();
+        assert_eq!(data, std::fs::read(pkg.join("lib/rcmain")).unwrap(), "{}", term.screen());
+    }
+}

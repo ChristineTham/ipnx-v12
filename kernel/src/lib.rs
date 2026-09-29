@@ -53,6 +53,8 @@ pub mod namec;
 pub mod ninep;
 pub mod ns;
 pub mod proc;
+pub mod qio;
+pub mod devuart;
 pub mod sha1;
 
 pub use chan::Chan;
@@ -486,7 +488,14 @@ impl Kernel {
                     .get(dev::DevId::Cons)
                     .and_then(|d| d.as_any().downcast_mut::<devcons::Cons>())
                     .is_some_and(|c| c.waiting());
-                let Some(alarm) = alarm.or(if keyboard { hz } else { None }) else {
+                // An open serial line with someone at the far end: input
+                // is coming, and `uartclock` takes it in.
+                let line = self
+                    .tab
+                    .get(dev::DevId::Uart)
+                    .and_then(|d| d.as_any().downcast_mut::<devuart::UartDev>())
+                    .is_some_and(|u| u.waiting());
+                let Some(alarm) = alarm.or(if keyboard || line { hz } else { None }) else {
                     return Ok(());
                 };
                 let when = hz.map_or(alarm, |h| h.min(alarm));
@@ -532,6 +541,10 @@ impl Kernel {
         // clock routine, which takes the keyboard in.
         if let Some(c) = self.tab.get(dev::DevId::Cons).and_then(|d| d.as_any().downcast_mut::<devcons::Cons>()) {
             c.kbdputcclock(now);
+        }
+        // `addclock0link(uartclock, 22)` (`devuart.c:244`).
+        if let Some(u) = self.tab.get(dev::DevId::Uart).and_then(|d| d.as_any().downcast_mut::<devuart::UartDev>()) {
+            u.uartclock(now);
         }
         let mut procs = self.procs.borrow_mut();
         // `intrtime`: the time spent in the handler, taken out of the idle

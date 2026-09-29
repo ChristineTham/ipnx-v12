@@ -337,6 +337,10 @@ pub enum Rid {
     /// process waits for its reply while another reads the wire. It has at
     /// most one outstanding, so it is named by the process.
     Mntrpc(Pid),
+    /// `&p->r`, the `Rendez` in a `Uart` (`portdat.h:982`) — where
+    /// `uartdrainoutput` waits for the line to take what is queued
+    /// (`devuart.c:314`). Named by the uart's number.
+    Uart(u32),
 }
 
 /// `struct Sema` (`portdat.h:438`) — one process waiting in `semacquire`,

@@ -94,6 +94,11 @@ pub enum DevId {
     /// connection. This is a 9legacy device — not in `plan9-stock` — and it
     /// is configured into the shipped kernels (`pc/pcf:11`).
     Virtio9p,
+    /// `#t` — uart: serial lines, `eia0` and its `ctl` and `status` for each
+    /// (`port/devuart.c`). The hardware behind one is a `PhysUart` the host
+    /// supplies, as Plan 9's is the i8250 the PC has; its far end is the
+    /// surface.
+    Uart,
 }
 
 impl DevId {
@@ -109,6 +114,7 @@ impl DevId {
             DevId::Cons => 'c',
             DevId::Cap => '\u{a4}',
             DevId::Virtio9p => '9',
+            DevId::Uart => 't',
         }
     }
 
@@ -127,6 +133,7 @@ impl DevId {
             DevId::Cons => "cons",
             DevId::Cap => "cap",
             DevId::Virtio9p => "virtio9p",
+            DevId::Uart => "uart",
         }
     }
 
@@ -142,6 +149,7 @@ impl DevId {
             'c' => DevId::Cons,
             '\u{a4}' => DevId::Cap,
             '9' => DevId::Virtio9p,
+            't' => DevId::Uart,
             _ => return None,
         })
     }
@@ -360,7 +368,7 @@ mod tests {
     fn every_letter_round_trips() {
         for d in [
             DevId::Root, DevId::Pipe, DevId::Srv, DevId::Mnt, DevId::Proc, DevId::Dup,
-            DevId::Env, DevId::Cons, DevId::Cap,
+            DevId::Env, DevId::Cons, DevId::Cap, DevId::Virtio9p, DevId::Uart,
         ] {
             assert_eq!(DevId::from_letter(d.letter()), Some(d));
         }

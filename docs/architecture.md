@@ -129,7 +129,7 @@ ABI. The conformance suite binds all three.
 
 **THE DEVICE LETTERS ARE PLAN 9'S, AND THERE IS NO EXCEPTION.** A device exists
 here only if Plan 9 has one, means the same by it, and spells it with the same
-letter. Ten:
+letter. Eleven:
 
   | dev | why the kernel has it |
   |---|---|
@@ -143,6 +143,7 @@ letter. Ten:
   | `c` | **devcons** — all 23 of `consdir[]`. The console's line discipline is here because `port/devcons.c` keeps it there; the machine supplies only `screenputs` and the keyboard's characters. The rest is the kernel's own state as files |
   | `¤` | **devcap** — the only way a process becomes another user: eve mints a capability, a process spends it once |
   | `9` | **devvirtio9p** — a CHANNEL to a 9P server the machine provides, and nothing else. `pc/devvirtio9p.c:1227`; its own comment is this system's situation, *"mount a host directory … with no network in the path"*. A 9legacy device, absent from `plan9-stock` |
+  | `t` | **devuart** — serial lines, `port/devuart.c`. The hardware is a `PhysUart` the host supplies (`portdat.h:899`), and its far end is the surface: the surface reaches emca with `exportfs` down it (surface.md) |
 
 **What is NOT here, and why it is not an omission.** `#i` draw and `#m` mouse
 are hardware this machine has none of, and emca is userspace entirely. Any

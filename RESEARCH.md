@@ -5184,3 +5184,74 @@ challenge and response that factotum, in the server role, completes by
 dialling the authentication server — `authdial`, over `/net`. Without
 `/net` and an auth server there is no password to check against, so `su`
 and `sudo`, defined over `auth/login`, wait for both.
+
+### 16.20 The serial line: `#t`, `qio`, and `exportfs` down it (2026-09-29)
+
+**`#t` is `port/devuart.c`, and its queues are `qio.c`'s** — so the queue
+a pipe had to itself became `kernel/src/qio.rs`, one implementation for
+every device that streams, as Plan 9 has one. Reading `qio.c` again for
+the uart found three things the pipe had not needed:
+
+- **`qconsume` passes over empty blocks** (*"n = BLEN(b); if(n > 0)
+  break;"*, `qio.c:517`). A write of nothing is an empty block, and a
+  transmitter that stopped at one would leave everything behind it queued.
+- **`qread` kicks** — `qwakeup_iunlock` calls `q->kick` when a read takes
+  a flow-controlled queue below half its limit (`qio.c:1005`). For a
+  uart's input queue that is `uartflow`, which raises RTS again.
+- **`qbwrite` kicks before it wakes** (`qio.c:1225`), and `q->noblock`
+  drops a write over the limit instead of waiting (`:1196`) — `uartctl`'s
+  `n`. Both are built, with `qsetlimit` for `q`.
+
+**Three differences, each where Plan 9's counterpart cannot exist here.**
+A host cannot interrupt this kernel, so the `PhysUart`'s interrupt handler
+— `i8250interrupt` (`uarti8250.c:463`), which feeds `uartrecv` and calls
+`uartkick` when the transmitter empties — is called from `uartclock`, the
+22ms clock routine that already stages input into the queue
+(`devuart.c:244`): the interrupt, polled. A call that sleeps keeps where it
+was per process, as every call here does. And `uartclose` sleeps in
+`uartdrainoutput` until the line has taken what is queued (`:342`), which
+a close here cannot do; it kicks once, and what the line would not take is
+freed by the `qclose` Plan 9 also does after the wait. A host line takes
+everything unless the far end sent `^S` under `x1`.
+
+**The idle loop must know about the line.** The scheduler ends the system
+when nothing can ever run again. A reader asleep on `eia0` can be woken by
+the far end, so the clock keeps running while a line is open and its
+carrier (DCD) is up — as it does for a reader of the console. A line with
+nobody on it cannot deliver, and does not hold the system up.
+
+**`exportfs -r /lib` down the line serves the tree.** `hosts/ipnx`'s test
+holds the far end: version, attach, walk, open, read and clunk, and the
+file read is `/lib/rcmain`, byte for byte. With `-r` exportfs skips its
+`chdir` handshake and takes the first four bytes as `initial`, the size of
+the first message (`exportfs.c:338`); `iounit(netfd)` is `qiomaxatomic`,
+which `uartopen` sets (`devuart.c:290`). **`c1` must be written on an open
+that stays open**: `uartenable` clears `hup_dcd` (`devuart.c:68`), so an
+`echo c1 >eia0ctl` that closes the line before exportfs opens it is lost —
+the test holds `eia0ctl` open on fd 3 around exportfs. With it, the far
+end hanging up is `qhangup`, end of file, and `fatal(nil)` — exportfs's
+clean exit (`exportfs.c:902`).
+
+**`devopen`'s permission check was missing from `#c` and `#/`.** `devopen`
+runs `devpermcheck` for every file in a device's table (`dev.c:371`), and
+refuses to open a directory for anything but reading (`:379`); `consopen`
+and `rootopen` are `devopen` (`devcons.c:696`, `devroot.c:179`). Here only
+`#s` (`devsrv.c:132`) and now `#t` ran the check. `#/` answered a write open
+with `Egreg`, which in Plan 9 is `rootwrite`'s and unreachable, since every
+file there is `0555` and eve's; the open fails `Eperm`. `devcreate`,
+`devremove` and `devwstat` are `Eperm` too (`dev.c:387`, `:426`, `:432`).
+
+**`kprint` was the log, and writable.** Plan 9's is a queue, `kprintoq`,
+made by the first open (`qopen(8*1024, Qcoalesce, 0, 0)` and `qnoblock`,
+`devcons.c:708`): while it is open, console output goes to it *instead of*
+the screen (`putstrn0`, `:166`), a read is `qread` — it waits, and takes as
+many whole writes as fit (`Qcoalesce`, `qio.c:1097`) — and the close hangs
+it up and gives the screen back. Ours read `kmesg` by offset and let
+`conswrite` append to both; `conswrite` has no case for either, and its
+default is `Egreg` (`devcons.c:1129`). The check at the open now refuses a
+write to them in any case: both are `0440`.
+
+**`/profile/start.rc`'s device loop is termrc's list** (`termrc:12`): `f t
+m v L P u U '$' Σ κ`. It had been `p d`, which termrc does not bind — `#p`
+and `#d` are `/proc` and `/fd` (`lib/namespace:8`, `:10`). A letter this
+kernel lacks fails silently, as on a terminal without the hardware.

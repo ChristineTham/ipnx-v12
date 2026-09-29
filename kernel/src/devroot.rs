@@ -125,8 +125,12 @@ impl Root {
     }
 }
 
-/// `Egreg` — Plan 9's own error for writing where writing makes no sense.
+/// `Egreg` — Plan 9's own error for writing where writing makes no sense;
+/// `rootwrite`'s (`devroot.c:237`).
 const EGREG: &str = "it's a mystery to me";
+
+/// `Eperm` — `devopen`'s, `devcreate`'s, `devremove`'s and `devwstat`'s.
+const EPERM: &str = "permission denied";
 
 impl Dev for Root {
     fn seteve(&mut self, eve: Eve) {
@@ -167,16 +171,25 @@ impl Dev for Root {
         Ok(self.files.iter().find(|e| e.name == name).map(|e| c.walked(name, e.qid)))
     }
 
+    /// `rootopen` is `devopen` (`devroot.c:179`). Every file here is eve's
+    /// and `0555` (`addbootfile`, `addrootdir`), so `devpermcheck`
+    /// (`dev.c:371`) grants reading and executing to everyone and writing
+    /// to nobody, whoever asks; and a directory opens only to read
+    /// (`dev.c:379`).
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
+        if c.qid.is_dir() && mode & !crate::chan::mode::OCEXEC != crate::chan::mode::OREAD {
+            return Err(EPERM.into());
+        }
         if mode & 3 != crate::chan::mode::OREAD && mode & 3 != crate::chan::mode::OEXEC {
-            return Err(EGREG.into());
+            return Err(EPERM.into());
         }
         c.mode = mode;
         Ok(c)
     }
 
+    /// `devcreate` (`dev.c:387`).
     fn create(&mut self, _c: &mut Chan, _n: &str, _m: u16, _p: u32) -> Result<(), String> {
-        Err(EGREG.into())
+        Err(EPERM.into())
     }
 
     fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
@@ -211,12 +224,14 @@ impl Dev for Root {
         Ok(crate::dev::devdir(c, qid, name, len, &self.eve.borrow(), &self.eve.borrow(), perm).conv_d2m())
     }
 
+    /// `devwstat` (`dev.c:432`).
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
-        Err(EGREG.into())
+        Err(EPERM.into())
     }
 
+    /// `devremove` (`dev.c:426`).
     fn remove(&mut self, _c: &mut Chan) -> Result<(), String> {
-        Err(EGREG.into())
+        Err(EPERM.into())
     }
 
     fn close(&mut self, _c: &mut Chan) {}

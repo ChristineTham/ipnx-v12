@@ -17,6 +17,7 @@ use crate::chan::Chan;
 use crate::dev::{Dev, DevId};
 use crate::ninep::{Qid, QTDIR, QTEXCL};
 use crate::proc::{NoteFlag, Pid, Rid, Up, EINTR};
+use crate::qio::{self, Qid3, Queue};
 #[cfg(test)]
 use crate::proc::Procs;
 use std::cell::RefCell;
@@ -82,6 +83,13 @@ pub trait Console {
     fn config(&mut self) -> String;
     /// `/dev/reboot`: `halt`, or `reboot <path>`.
     fn reboot(&mut self, cmd: &str) -> Result<(), String>;
+
+    /// `physuart[]`, each one's `pnp` called (`uartreset`, `devuart.c:171`)
+    /// — the serial lines the machine has, each with its hardware, for
+    /// `#t`. Asked once, at boot. A machine without any has none.
+    fn physuart(&mut self) -> Vec<(crate::devuart::Uart, Box<dyn crate::devuart::PhysUart>)> {
+        Vec::new()
+    }
 }
 
 /// The device's own state — what Plan 9 keeps in globals beside `devcons.c`:
@@ -99,6 +107,12 @@ pub struct Cons {
     /// `kprintinuse` (`devcons.c`) — the one-reader lock `consopen` takes
     /// with `tas` and `consclose` releases.
     kprintinuse: bool,
+    /// `kprintoq` (`devcons.c:17`) — *"console output, for /dev/kprint"*:
+    /// made by the first open, and while it is open what would reach the
+    /// screen goes here instead (`putstrn0`, `devcons.c:166`).
+    kprintoq: Option<Queue>,
+    /// Where each reader of `kprint` is in `qread`.
+    kprintat: std::collections::HashMap<Pid, qio::At>,
     /// The device letters this kernel carries, for `/dev/drivers`. The names
     /// come from [`DevId::name`], so there is one list and not two.
     letters: Vec<DevId>,
@@ -234,6 +248,11 @@ const EPERM: &str = "permission denied";
 /// `Einuse` (`error.h`) — *"device or object already in use"*.
 const EINUSE: &str = "device or object already in use";
 const EBADARG: &str = "bad arg in system call";
+/// `Egreg` — `conswrite`'s answer for a file it has no case for.
+const EGREG: &str = "it's a mystery to me";
+
+/// Which of `#c`'s queues a [`Rid::Rr`] names: `kbdq` is 0.
+const KPRINTQ: usize = 1;
 
 impl Cons {
     pub fn new(
@@ -249,6 +268,8 @@ impl Cons {
             sysname: String::new(),
             kmesg: Vec::new(),
             kprintinuse: false,
+            kprintoq: None,
+            kprintat: std::collections::HashMap::new(),
             letters,
             up,
             host,
@@ -256,12 +277,23 @@ impl Cons {
     }
 
     /// `putstrn0` (`devcons.c:144`) — every route a console write takes.
-    /// `kmesgputs` first, so the kernel's log holds it, then the screen.
+    /// `kmesgputs` first, so the kernel's log holds it, then `kprint` if
+    /// someone is reading it, and the screen if not.
     fn putstrn(&mut self, s: &[u8]) {
         // `kmesgputs(str, n)` (`devcons.c:155`) — the kernel's log holds
         // everything that reaches the console, which is why `/dev/kmesg`
         // survives a screen that was not there to read.
         self.kmesg.extend_from_slice(s);
+        // *"if someone is reading /dev/kprint, put the message there"*
+        // (`devcons.c:166`). The queue does not block (`qnoblock`), so
+        // what does not fit is dropped, as `qiwrite` drops it.
+        if let Some(q) = self.kprintoq.as_mut().filter(|q| !q.closed) {
+            if let Ok(true) = q.produce(s) {
+                let procs = self.up.borrow().procs.clone();
+                procs.borrow_mut().wakeup(Rid::Rr(DevId::Cons, 0, KPRINTQ));
+            }
+            return;
+        }
         // Plan 9 copies through a 256-byte buffer *"Can't page fault in
         // putstrn"* (`conswrite`, `devcons.c:993`). There are no page faults
         // here and no reason to chop the bytes up.
@@ -500,6 +532,18 @@ impl Dev for Cons {
 
     /// `consopen` (`devcons.c:692`) — one file needs to know it was opened.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
+        // `consopen` is `devopen` (`devcons.c:696`): the permission of the
+        // file in `consdir[]`, checked for the caller — each is eve's
+        // (`devgen`, `dev.c:106`) — and a directory is opened only to read
+        // (`dev.c:379`).
+        if c.qid.is_dir() {
+            if mode & !crate::chan::mode::OCEXEC != crate::chan::mode::OREAD {
+                return Err(EPERM.into());
+            }
+        } else if let Some(e) = CONSDIR.iter().find(|e| e.1 as u64 == c.qid.path) {
+            let eve = self.eve.borrow().clone();
+            crate::dev::permcheck(&self.user(), &eve, &eve, e.3, mode)?;
+        }
         // `devopen`'s tail (`dev.c`): *"c->offset = 0; c->mode =
         // openmode(omode); c->flag |= COPEN;"*. `close` acts on that bit,
         // so a device that does not set it has a `close` that never fires.
@@ -520,6 +564,17 @@ impl Dev for Cons {
                     return Err(EINUSE.into());
                 }
                 self.kprintinuse = true;
+                // *"kprintoq = qopen(8*1024, Qcoalesce, 0, 0); …
+                // qnoblock(kprintoq, 1);"* — or `qreopen` of the one there.
+                match self.kprintoq.as_mut() {
+                    None => {
+                        let mut q = Queue::new(8 * 1024).coalescing();
+                        q.noblock(true);
+                        self.kprintoq = Some(q);
+                    }
+                    Some(q) => q.reopen(),
+                }
+                c.iounit = qio::MAXATOMIC as u32;
             }
             _ => {}
         }
@@ -577,7 +632,18 @@ impl Dev for Cons {
             // the kernel itself
             Q::Sysname => Self::readstr(&self.sysname.clone(), n, off),
             Q::Osversion => Self::readstr("2000", n, off),
-            Q::Kmesg | Q::Kprint => {
+            // *"return qread(kprintoq, buf, n);"* (`devcons.c:841`).
+            Q::Kprint => {
+                let (pid, procs) = {
+                    let up = self.up.borrow();
+                    (up.pid, up.procs.clone())
+                };
+                let mut procs = procs.borrow_mut();
+                let q = self.kprintoq.as_mut().ok_or(EBADARG)?;
+                let id = Qid3 { dev: DevId::Cons, devno: 0, which: KPRINTQ };
+                return qio::qread(q, &mut self.kprintat, &mut procs, pid, id, n, &mut |_, _| {});
+            }
+            Q::Kmesg => {
                 let off = off as usize;
                 if off >= self.kmesg.len() {
                     Vec::new()
@@ -762,7 +828,6 @@ impl Dev for Cons {
                 }
                 self.host.reboot(&s)?;
             }
-            Q::Kmesg | Q::Kprint => self.kmesg.extend_from_slice(data),
             // `/dev/null` swallows, and that is its whole job.
             Q::Null => {}
             // `conswrite`'s `Qsysstat` zeroes the counters (`devcons.c:1082`).
@@ -780,7 +845,10 @@ impl Dev for Cons {
                 let s = String::from_utf8_lossy(data).to_string();
                 self.consctl(&s);
             }
-            _ => return Err(EPERM.into()),
+            // *"case Qconfig: error(Eperm);"*.
+            Q::Config => return Err(EPERM.into()),
+            // *"print("conswrite: %#llux\n", c->qid.path); error(Egreg);"*
+            _ => return Err(EGREG.into()),
         }
         Ok(data.len())
     }
@@ -820,7 +888,14 @@ impl Dev for Cons {
             }
             // `consclose`: *"case Qkprint: if(c->flag & COPEN){ kprintinuse
             // = 0; ... }"*. The next open gets it.
-            Some(Q::Kprint) => self.kprintinuse = false,
+            Some(Q::Kprint) => {
+                self.kprintinuse = false;
+                if let Some(q) = self.kprintoq.as_mut() {
+                    q.hangup();
+                }
+                let procs = self.up.borrow().procs.clone();
+                procs.borrow_mut().wakeup(Rid::Rr(DevId::Cons, 0, KPRINTQ));
+            }
             _ => {}
         }
     }
@@ -829,7 +904,7 @@ impl Dev for Cons {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::chan::mode::{OREAD, OWRITE};
+    use crate::chan::mode::{OREAD, ORDWR, OWRITE};
     use crate::dev::DevId;
 
     /// The machine's terminal, as a test can inspect it: what the kernel put
@@ -895,6 +970,8 @@ mod tests {
     /// A console whose terminal the test still holds.
     fn cons_term(keys: &[&str]) -> (Cons, FakeHost) {
         let procs = Rc::new(RefCell::new(Procs::new(Chan::attach(DevId::Root, 0))));
+        // The console is eve's, `0660` (`consdir[]`, `devcons.c:609`).
+        procs.borrow_mut().get_mut(1).unwrap().user = "eve".into();
         let up = Rc::new(RefCell::new(Up { pid: 1, procs }));
         let host = FakeHost::default();
         host.0.borrow_mut().keys = keys.iter().map(|k| k.as_bytes().to_vec()).collect();
@@ -935,8 +1012,11 @@ mod tests {
         got
     }
 
+    /// Open and write: a refusal at either is the answer.
     fn write(d: &mut Cons, name: &str, s: &str) -> Result<usize, String> {
-        let mut c = open(d, name, OWRITE);
+        let dir = d.attach("").unwrap();
+        let c = d.walk(&dir, name).unwrap().expect(name);
+        let mut c = d.open(c, OWRITE)?;
         let got = d.write(&mut c, s.as_bytes(), 0);
         d.close(&mut c);
         got
@@ -1054,6 +1134,25 @@ mod tests {
         }
     }
 
+    /// **`consopen` is `devopen`** (`devcons.c:696`): the file's mode in
+    /// `consdir[]` is checked for the caller at the open (`dev.c:371`). The
+    /// console is eve's `0660`, so another user cannot open it at all; a
+    /// `0666` file anyone may; and `#c` itself opens only to read.
+    #[test]
+    fn an_open_is_checked_against_the_files_mode() {
+        let (mut d, procs) = cons();
+        procs.borrow_mut().get_mut(1).unwrap().user = "none".into();
+        let dir = d.attach("").unwrap();
+        for (f, mode, ok) in [("cons", OREAD, false), ("reboot", OWRITE, false), ("kmesg", OREAD, false), ("null", ORDWR, true), ("pid", OREAD, true), ("pid", OWRITE, false)] {
+            let c = d.walk(&dir, f).unwrap().unwrap();
+            assert_eq!(d.open(c, mode).is_ok(), ok, "{f} {mode}");
+        }
+        assert!(d.open(dir.clone(), OWRITE).is_err(), "a directory opens only to read");
+        procs.borrow_mut().get_mut(1).unwrap().user = "eve".into();
+        let c = d.walk(&dir, "cons").unwrap().unwrap();
+        assert!(d.open(c, ORDWR).is_ok(), "eve owns it");
+    }
+
     #[test]
     fn reboot_reaches_the_host_and_only_for_eve() {
         let (mut d, _) = cons();
@@ -1093,12 +1192,34 @@ mod tests {
         assert!(d.open(c, OREAD).is_ok(), "and the next one gets it");
     }
 
+    /// The kernel's log is everything that reached the console
+    /// (`kmesgputs`, `devcons.c:155`); it is `0440`, and not written.
     #[test]
     fn kmesg_accumulates_and_reads_back() {
         let (mut d, _) = cons();
-        write(&mut d, "kprint", "boot\n").unwrap();
-        write(&mut d, "kprint", "ready\n").unwrap();
+        write(&mut d, "cons", "boot\n").unwrap();
+        write(&mut d, "cons", "ready\n").unwrap();
         assert_eq!(read(&mut d, "kmesg"), "boot\nready\n");
+        assert!(write(&mut d, "kmesg", "x").is_err());
+        assert!(write(&mut d, "kprint", "x").is_err());
+    }
+
+    /// **While `kprint` is open, console output goes there and not to the
+    /// screen** (`putstrn0`, `devcons.c:166`); a read of it is `qread`,
+    /// which waits for output and takes what has come, coalesced; and the
+    /// close gives the screen back.
+    #[test]
+    fn kprint_takes_the_console_while_it_is_open() {
+        let (mut d, host) = cons_term(&[]);
+        let mut k = open(&mut d, "kprint", OREAD);
+        write(&mut d, "cons", "one ").unwrap();
+        write(&mut d, "cons", "two\n").unwrap();
+        assert_eq!(d.read(&mut k, 64, 0).unwrap(), b"one two\n", "both writes, in one read");
+        assert!(host.0.borrow().out.is_empty(), "the screen saw none of it");
+        d.close(&mut k);
+        write(&mut d, "cons", "back\n").unwrap();
+        assert_eq!(host.0.borrow().out, b"back\n");
+        assert!(read(&mut d, "kmesg").ends_with("one two\nback\n"), "the log has all of it");
     }
 
     /// `/dev/pgrpid` is the NAMESPACE group's number, not a Unix process
