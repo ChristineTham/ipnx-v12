@@ -43,7 +43,7 @@ the same way rio does not reach inside acme's columns.
 |---|---|
 | **a requested rectangle** | rio takes `-r minx miny maxx maxy`, or `-dx`/`-dy` for a size (`wctl.c:68`). There is no separate minimum-and-natural negotiation in Plan 9 |
 | **a status line** | what the window reports about itself. The manager says *what*; the surface decides *how* it is drawn |
-| **verbs** | what the toolbar offers. **The MANAGER declares these, not the type** — `look` and `edit` are the same type and must differ, since Save and Undo are meaningless under `look` ([type.md](type.md)) |
+| **verbs** | what the toolbar offers. The type's `verbs` file declares them (type.md, *The design*, 2026-09-18); the manager writes to `/dev/window/verbs` the ones its role serves — `look` and `edit` are the same type and must differ, since Save and Undo are meaningless under `look` |
 | **dirty state** | whether unsaved work exists |
 
 ## The controls — Plan 9's, at `wctl`
@@ -78,6 +78,11 @@ Mapping the four controls this document once named:
 So two of the four are Plan 9's under other names, and two are inventions. A
 manager that wants maximise or duplicate builds it from `resize` and `new`,
 in userspace, like any other program.
+
+**Proposed, because the tiled implementation needs what rio has not:**
+re-parenting a window — dropped onto another window, it becomes a tab of that
+window's parent (emca.md) — and `leaves <n>`, the root's column count
+(type.md, *breakpoints*). Each is added only because something needs it.
 
 **What the implementation renders is still the implementation's.** rio draws
 none of these as buttons; the verbs are a file you write to. A surface that
@@ -202,8 +207,6 @@ and canvas.
     rect      read  x y w h — the CONTENT rectangle, chrome already subtracted.
               A blocking read returns when it changes: that IS resize, and the
               cause is never reported
-    size      write minw minh natw nath — what the implementation needs to lay
-              you out, tiled or floating alike
     verbs     write the toolbar, one per line, same grammar as /type/*/verbs
     status    write the status line's text
     dirty     write 0 or 1
@@ -212,11 +215,10 @@ and canvas.
     title     read  the window's title. emca OWNS it; the manager may look
     events    read  input not consumed by the surface — the manager owns the
               keyboard inside its rectangle
-    wctl      write rio's verbs (`rio/wctl.c:35`: new resize move scroll
-              noscroll set top bottom current hide unhide delete), as
-              type.md's design has it (2026-09-18) — close is `delete`,
-              minimise is `hide` — and the two the window controls need that
-              rio has not: `maximise`, `duplicate`
+    body      read, write — the window's content; every window has one
+    wctl      write rio's twelve verbs (`rio/wctl.c:35`) with its parameters
+              — a size is asked for with `resize -r` or `-dx`/`-dy`, as
+              above, not negotiated
 ```
 
 > **RESOLVED (Christine, 2026-09-02): the window's content is ALWAYS a file.**

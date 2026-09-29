@@ -45,9 +45,8 @@
 > type means → **`/type`**, read by both sides. All of it 9P; these are
 > conventions, not protocols.
 >
-> **The text below is v0 AS BUILT and is retained as the record**, not as
-> the target. It still describes what runs today, and the 151 depend on
-> it; it is superseded in scope, not yet in code.
+> **The text below is v0, the retired proof of concept's, retained as the
+> record** — not the target.
 
 
 The contract for the 2026-08-30 canvas decision (archive/design-log-claude-written.md: six kinds, four
@@ -244,8 +243,8 @@ consume the same tree over their bridges.
 > **These belong on `/dev/window`, not here** (decision log, 2026-08-31).
 > They were specified while canvas was still believed to be the display
 > protocol; under the narrowing, structure roles, window type and the
-> chrome vocabulary are `/dev/window`'s, and `type` is a path component
-> there rather than an attribute. Retained because the *needs* they name
+> chrome vocabulary are `/dev/window`'s, and `type` is a file there,
+> `/dev/window/type`, rather than an attribute. Retained because the *needs* they name
 > are real and carry forward unchanged — a surface must be able to
 > recognise a window, know its type, know which verbs apply, and be
 > asked to show something.

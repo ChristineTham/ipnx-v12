@@ -427,3 +427,8 @@ On building P7, and on names:
   <br>— cited in `docs/when.md`
 - *"do item 1, then P8"* — P7 steps 3–6 as proposed on 2026-09-26
   <br>— cited in `docs/packages.md`
+- *"Fix all the inconsistencies based on what I have already said, otherwise plan 9 as a reference."*
+  <br>— cited in the design documents' banners (`docs/emca.md`, `docs/window.md`, `docs/type.md` …)
+- *"I have already told you to ignore the poc"*
+- *"Our aim to to reach the same functionality as the poc but using the new design"*
+  <br>— P8's target

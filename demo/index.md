@@ -34,7 +34,7 @@ It also adheres to the principles set by the designers of *Plan 9 from Bell Labs
 
 **Saranos is a symbiosis of host and WASM, and neither half can exist without the other.** The kernel is WebAssembly and cannot run without a host to give it workers, memory and a screen; the host has nothing to do without the kernel. That is why Saranos has its own name: IPNX describes only the kernel and userspace — the WASM side — while Saranos is both sides together, which is what makes it an operating system rather than a runtime.
 
-The underlying kernel and userspace of Saranos is IPNX v12 - with a reimplementation of the Plan 9 kernel on Rust, compiled to WASM, but with a Unix v10 personality. *(Status, 2026-09-03: the personality is userspace — the kernel is being cut to a strict subset of Plan 9's, measured against its source; see docs/design.md.)* The userspace supports a combination of Plan 9 and Unix v10 utilities, plus modern language toolchains and packages such as Rust, Python and Go — Python and Go run today — and it fully interoperates with WASI binaries.
+The underlying kernel and userspace of Saranos is IPNX v12 - with a reimplementation of the Plan 9 kernel on Rust, compiled to WASM, but with a Unix v10 personality. The personality is userspace; the kernel is a strict subset of Plan 9's, measured against its source. The userspace supports a combination of Plan 9 and Unix v10 utilities, plus modern language toolchains and packages such as Rust, Python and Go — Python and Go run today — and it fully interoperates with WASI binaries.
 
 The windowing system and user interface is an evolution of *acme*, Bell Labs' "user interface for programmers". We generalise the concepts behind acme into a user interface that we call **emca** ("acme" reversed).
 
@@ -62,9 +62,9 @@ What boots below is the whole system, in this tab. Nothing installs, nothing you
 
 **emca** — the interface, and the whole page is it. There is no desktop behind it and no application in front of it.
 
-A **window** is a rectangle with a tag, holding either a body or other windows. A column is a window too, which is why closing one closes what it holds, and why every window can divide itself again without limit. What you will see at boot is your home directory listed on the left, `/etc/motd`, `/rc/tour` and your `README` open as tabs, and `rc` in the row below — every one of them an ordinary window.
+A **window** is a rectangle with a tag, holding either a body or other windows. A column is a window too, which is why closing one closes what it holds, and why every window can divide itself again without limit. What you will see at boot is your home directory listed on the left, `/etc/motd`, `/bin/tour` and your `README` open as tabs, and `rc` in the row below — every one of them an ordinary window.
 
-Each carries the same parts: a title you can edit, a row of the verbs its **type** allows, a tag line where a command runs in that window's own directory, and a body. The type comes from `/type`, which is itself a directory of small files — so adding a manager to the system is adding a file, not writing a program. That is why the buttons along the top open `/proc`, `/pkg`, `/usr` and `/type` as ordinary windows and no process-manager exists anywhere.
+Each carries the same parts: a title you can edit, a row of the verbs its **type** allows, a tag line where a command runs in that window's own directory, and a body. The type comes from `/type`, which is itself a directory of small files — so adding a manager to the system is adding a file, not writing a program. That is why `/proc`, `/pkg`, `/usr` and `/type` open as ordinary windows — Open any of them — and no process-manager exists anywhere.
 
 The display really is files. From the shell, `ls /dev/wsys` lists the windows, `cat /dev/wsys/2/verbs` reads one's verbs, and a window manager is a program that reads and writes them — emca, a user program, serves each window's files as rio does (`/dev/window` for a window's own, `/dev/wsys/<n>` for all of them). Your ⌘C/⌘X/⌘V are snarf: `cat /dev/snarf` reads what you last copied.
 
@@ -87,13 +87,9 @@ The same system runs native — full JIT under wasmtime, real windows, your real
 ```
 git clone https://github.com/ChristineTham/ipnx-v12 && cd ipnx-v12
 bash userspace/mk.sh                                      # build the guest world
-cargo run --release -p host -- userspace/rootfs           # headless: init runs the suite
-cargo run --release -p host -- userspace/rootfs --app -i  # windows: con, acme, canvas
-cargo run --release -p host -- userspace/rootfs --live    # writes persist to the rootfs dir
-bash hosts/macos/mkapp.sh                                 # wrap it as IPNX.app
+cargo run -p ipnx                                         # boot to rc on this terminal
+cargo run -p ipnx -- echo hello                           # boot; init runs a command
 ```
-
-Under `--app` the canvas renders natively; `/dev/snarf` *is* the Mac pasteboard (`echo hi > /dev/snarf` then paste anywhere), served by the host; and the versioning layer runs everywhere — a snapshot freezes the filesystem and a `bind` of it is the rollback, with twenty whole-system snapshots costing nine megabytes.
 
 Once the prompt appears, take the guided tour:
 
@@ -107,4 +103,4 @@ Heritage is one command away: `font=/lib/font/bit/go/regular.13.font win acme9 &
 
 ---
 
-Everything runs in your browser — nothing you type leaves this tab, and reloading forgets it all unless you chose a persistent home. **Measured green in Chromium (Chrome, Edge, Brave, Arc) and in Safari** — the full conformance suite (164 tests today; the floor is 131) passes in both. *(164 measured in Chromium on the Rust kernel core, 2026-09-04 — the site as deployed still shows an earlier build; Safari was last measured at that deploy.)* (Safari needed real engineering: WebKit deterministically fails concurrent module-worker loads through a service worker — minimal repro and file-ready report in the repository under `demo/webkit-repro/` — so this page serializes worker startup.) Firefox is untested. The whole system — kernel, sources, the conformance suite, and the documents that argue for it — is at [github.com/ChristineTham/ipnx-v12](https://github.com/ChristineTham/ipnx-v12). Third-party licences: [NOTICES](NOTICES.html).
+Everything runs in your browser — nothing you type leaves this tab, and reloading forgets it all unless you chose a persistent home. What is built, and what passes, is `docs/when.md`. The whole system — kernel, sources, the conformance suite, and the documents that argue for it — is at [github.com/ChristineTham/ipnx-v12](https://github.com/ChristineTham/ipnx-v12). Third-party licences: [NOTICES](NOTICES.html).

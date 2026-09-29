@@ -25,7 +25,8 @@ nothing above it needs to know. The contract it serves is
 ```
 Saranos              the app the user launches. ONLY Saranos knows about the host
   emca-host          a "Kit" inside it — macOS SwiftUI, the browser page, iPadOS
-    emca-IPNX        a process the kernel launched; speaks 9P to emca-host
+    emca-IPNX        a userspace service, started at login by
+                     /service/emca/start.rc; speaks 9P to emca-host
 ```
 
 **There is exactly one emca-host.** Nested emcas are IPNX-side processes, and
@@ -92,7 +93,8 @@ for.
 - **The toolbars split without ambiguity:** the **global toolbar or menu bar**
   carries the *system's* verbs — `Halt`, `Reboot`, `New Shell` — because the
   outermost window's content is the system; the **sidebar's own toolbar**
-  carries the *listing's*, because that window's content is `/`'s entries.
+  carries the *listing's*, because that window's content is the user's home,
+  `/home` — the first entry of the root's `layout` (type.md).
 
 **The exception is the outermost surface, not the type** — a nested emca gets
 ordinary emca chrome ([window.md](window.md)).
@@ -114,7 +116,7 @@ The surface therefore owns:
 
 ### The declaration must stay semantic
 
-Because the surface decides appearance, a type's `window` file declares a
+Because the surface decides appearance, a type's `verbs` file declares a
 **label and an action** and never anything presentational. The place
 presentation will try to leak in is **icons** — macOS wants an SF Symbol, iOS
 its own, the browser neither. The rule that fits every target: **a type names a

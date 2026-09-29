@@ -1,8 +1,8 @@
 # The tiled compositor — one implementation of the window manager
 
 > **MIXED.** **Decided**, in Christine's words (quoted below): the
-> recursion — every window a compositor, the screen one window of type
-> root; the root window as genuinely special; duplicate as three buttons in
+> recursion — every window a compositor; the root window `/`, of type
+> `inode/system`, contained by the surface and genuinely special; duplicate as three buttons in
 > this implementation; and a new window opening as a tab by default
 > (2026-09-01, 2026-09-02). **Allocation, sizing and the rest are
 > proposed**: Claude wrote them, and they approve no deviation from Plan 9.
@@ -27,7 +27,8 @@ below, from a window someone dragged, or from a grouping gesture.
 
 ## Where this departs from acme, and on whose word
 
-**acme has exactly two levels, fixed.** `struct Row` holds columns
+**acme has exactly three levels, fixed** — one row, its columns, their
+windows. `struct Row` holds columns
 (`acme/dat.h:317`), `struct Column` holds `Window **w` (`dat.h:295`). A window
 never contains a column. rio is one level of overlapping windows. **Neither
 recurses.**
@@ -56,10 +57,12 @@ axis, allocating rectangles to some children and leaving the rest as
 tabs; each allocated child then does the same. The recursion has no
 floor and no ceiling.
 
-THE ROOT WINDOW IS THE SCREEN. The whole browser page — or the macOS
-window, or the iPad screen — is one window of type root. It is not a
-frame around the windows; it IS a window, and everything visible is
-its descendants. So "the layout" is not a thing the surface owns with
+THE ROOT WINDOW FILLS THE SCREEN. The surface — the browser page, the
+macOS window, the iPad screen — CONTAINS the root window, `/`, of type
+`inode/system`; the surface is not itself an emca window (emca.md, the
+endorsed baseline), and *"the '/' type and the screen is genuinely
+special, it is not a normal window"* (Christine, 2026-09-02). Everything
+visible inside it is the root window's descendants. So "the layout" is not a thing the surface owns with
 windows sitting inside it: the layout is what the root window decided
 when it composited itself.
 
@@ -78,12 +81,11 @@ THE CORRECTION THAT MATTERS MOST, and the one whose absence produced
 the names "rail" and "transcript": panes are not special. They are
 ordinary windows.
 
-The root window creates them as a LAYOUT CONVENTION and then forgets
-they were ever special. Given room it divides into three columns — a
-left pane, a main window, a right pane — and the main window divides
-itself into two rows. Every one of those is a window: four components,
-three controls, closeable, minimisable, maximisable, tabbable and
-divisible, and nothing in the system records that it was created by a
+The root window creates them from its type's `layout` file (type.md) and
+then forgets they were ever special — the user's home listed on the left,
+the tabs, and rc — dividing into as many columns as its `breakpoints` file
+gives the width. Every one of those is a window: its four controls,
+closeable, minimisable, maximisable, duplicable and divisible, and nothing in the system records that it was created by a
 convention rather than by a person.
 
 So there is no pane type, no PANES table, no reserved names. A "pane"
@@ -283,8 +285,9 @@ overridden and re-derive.
 
 ```
 FIT     keep the structure, drop the SIZE overrides in this window's
-        subtree, re-run the allocation. Non-destructive. On every
-        window's toolbar, and OPERAND DETERMINES SURFACE scopes it
+        subtree, re-run the allocation. Non-destructive. A control of
+        this implementation on every window — not the toolbar, which
+        is the manager's — and OPERAND DETERMINES SURFACE scopes it
         for free: press it on a column and that column's rows
         re-fit, press it on the root and everything does, press it
         on a childless window and it drops that window's own
@@ -296,7 +299,7 @@ RESET   discard the STRUCTURE too and rebuild from the convention.
         core set, because only the root has a default to return to —
         an arbitrary column has no canonical arrangement, so Reset
         on it would either mean nothing or mean Fit. Type verbs are
-        the type's; this is one, exactly as Kill belongs to proc.
+        the type's; this is one, exactly as Interrupt belongs to the shell role.
 ```
 
 Two things these buy beyond the obvious. They make the automatic rule
@@ -322,9 +325,11 @@ breakpoint   the root window divides itself into
 ----------   -----------------------------------------------
 small        one column; one child allocated, the rest tabs
 medium       two columns, or one column of two
-large        THREE COLUMNS — and the middle one divides itself
-             into two rows
+large        three columns, as `breakpoints` gives them
 xlarge       three or more columns, each dividing further
+
+The numbers are `/type/inode/system/breakpoints`' (type.md), which is
+data, not this table.
 ```
 
 At large this is the arrangement people will recognise: a column
@@ -402,7 +407,9 @@ informing ITS parent.
 Her direction (2026-08-31), which is the split taken to its
 conclusion: "emca doesn't really need to implement a WYSIWYG editor on
 the IPNX side. It can implement sam, a batch editor. The job of emca
-is to push a file into a window via /dev/canvas. The host side can
+is to push a file into a window via /dev/canvas [superseded: the content
+is a file the host renders, and /dev/canvas is drawing only — Christine,
+2026-09-02 and 2026-09-03]. The host side can
 display and scroll the file, and more importantly edit it using Monaco
 or TextEdit or similar." And then, extending it: "selecting, copying,
 pasting can all be host side operations, with sync to /dev/snarf" —
@@ -420,8 +427,8 @@ IPNX KEEPS                     THE SURFACE TAKES
 ----------------------------   ---------------------------------
 the buffer (authoritative,     the caret, the selection, insertion
   shadowed from events)        and deletion, keystroke undo
-the file: Get, Put             syntax highlighting, folding,
-commands, +Errors, | < >         multi-cursor, find-in-file
+the file: Save, Revert        syntax highlighting, folding,
+commands, /output/<n>, | < >     multi-cursor, find-in-file
 SAM'S STRUCTURAL LANGUAGE:     IME, autocorrect, spell-check,
   x y g v, s//, addresses        dictation, accessibility
 context (the directory)        the clipboard, synced to /dev/snarf
@@ -486,10 +493,11 @@ system: tapping a filename in a listing to open it.
 TYPE DRIVES INTERACTIVITY, and that is what buys the tap back:
 
 ```
-dir, errors, shell, proc,        every LINE is a look target;
-pkg, project, usr, net, type     one tap (role=look on the line)
-tag bar, toolbar                 words are buttons; one tap
-file, scratch                    select-then-tap; two acts
+inode/directory, /output/<n>,    every LINE is a look target;
+the shell role, process and      one tap
+package tables
+tag line, toolbar                words are buttons; one tap
+text/plain                       select-then-tap; two acts
 ```
 
 The split is honest: structured output is one tap, arbitrary prose is
@@ -501,32 +509,30 @@ Keyboard-complete is a stated law (WCAG 2.1.1, the input convention),
 and iPad-with-keyboard and Mac are primary surfaces.
 
 ```
-THE RULE: every floating-bar verb and every toolbar button has a
+THE RULE: every tag-line verb and every toolbar button has a
 shortcut, and Tab reaches everything. No verb is keyboard-
 unreachable.
 
 cut / copy / paste            ⌘X ⌘C ⌘V
 undo / redo                   ⌘Z ⌘⇧Z
-Put / Putall                  ⌘S ⌘⌥S
-Del                           ⌘W
-New / split                   ⌘N ⌘\
+Save / Save All               ⌘S ⌘⌥S
+Close                         ⌘W
+New / duplicate               ⌘N ⌘\
 search                        ⌘F
 EXECUTE selection or word     ⌘↵    (the input convention's acme
                                      tempo, already decided)
 LOOK selection or word        ⌘⇧↵   (symmetric — the two acme
                                      verbs paired)
-pin the selection             ⌘⌥↵
 focus the tag bar             ⌘T
 focus the global tag          ⌘⇧T
-toggle rail / bottom / right  ⌘B ⌘J ⌘⌥B
-nth window in leaf            ⌘1..9
-next window / next leaf       ⌃⇥  ⌘⌥→ ←
+nth tab                       ⌘1..9
+next window / next column     ⌃⇥  ⌘⌥→ ←
 ```
 
 On iPad, hold-⌘ shows the HUD.
 
 ### Focus
-One focused window per workspace; its leaf is the focused leaf. Focus
+One focused window per workspace. Focus
 follows EXPLICIT interaction only — tap, click, keyboard. Never
 hover. Never the app, except through a show request, and even then
 the surface decides whether to take the keyboard. That is the

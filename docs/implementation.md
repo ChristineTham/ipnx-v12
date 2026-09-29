@@ -202,7 +202,7 @@ already, because `rfork` acts on them. They are that state shown as files.
 
 | | |
 |---|---|
-| **builds** | `/namespace`, the instance's own configuration, read by the embedding because it owns the storage; `/rc/bin/termrc`, the rc half, which starts the servers — Plan 9's own name at Plan 9's own location; the root itself a file server |
+| **builds** | `/namespace`, the instance's own configuration, read by the embedding because it owns the storage; `/rc/bin/termrc`, the rc half, which starts the servers — Plan 9's own name at Plan 9's own location, until P7 moved it to `/profile/start.rc` and retired `/rc`; the root itself a file server |
 | **depends on** | P4 |
 | **acceptance** | **the CLI.** Typing `ipnx` boots to `rc` on the terminal; `ls`, `cat /etc/motd` and the demo's commands run |
 | **exposes** | the scheduler, then packages — `/pkg`, `/profile` — and emca |
@@ -258,7 +258,7 @@ one before:
 | | |
 |---|---|
 | **builds** | emca in userspace: it mints windows and serves the contract of [window.md](window.md) as files. Then the browser embedding, and the surface that **reads emca's files** and renders natively |
-| **depends on** | P6 — the browser host is a worker per process, which is P6's machine boundary on that surface |
+| **depends on** | P6 — the browser host is a worker per process, which is P6's machine boundary on that surface — and P7, because emca is a service (`/service/emca/start.rc`) and a project is a window type |
 | **acceptance** | **the website.** The site shows the listing, the three tabs and `rc`, to spec |
 | **exposes** | the other targets |
 

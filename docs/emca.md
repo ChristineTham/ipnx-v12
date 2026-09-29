@@ -88,7 +88,8 @@ status line
 
 **6. A type `x` is fully specified in `/type/x`** — a folder of configuration
 files, plus an associated **manager**. The manager **may live on both the host
-and the IPNX side**, and is responsible for rendering the content, editing the
+and the IPNX side**, and is responsible for rendering the content — through
+its host half, which renders (type.md, *The host half*) — editing the
 content, providing toolbar buttons, and supplying the semantics of the standard
 buttons — Edit, Find and the rest. See [type.md](type.md).
 
@@ -101,11 +102,12 @@ that are not text, that's why we need a manager"* — so there is nothing to
 check it against.
 
 **Decided 2026-09-18** and specified in [type.md](type.md): a type is a plumb
-rule, a manager is a file server on a plumb port, one manager per window, the
+rule, a manager is a file server on a plumb port, posted in
+`/srv/<manager>.<user>.<pid>`, one manager per window, the
 host half inside the Saranos app, the root window with a manager like any
 other, and a declared `verbs` list. The individual types were accepted on
-2026-09-02 — `inode/system` (the root), `inode/directory` (a listing), `shell`
-— and `output` is not a type but `text/plain` under a path convention; the
+2026-09-02 — `inode/system` (the root), `inode/directory` (a listing), and
+`shell` as a role — and `output` is not a type but `text/plain` under a path convention; the
 pkg, template and project types are P7's (docs/packages.md). What
 `text/plain` *is* remains the open work.
 
@@ -176,7 +178,8 @@ passphrase) — the surface's.
 
 ### The half that lives in IPNX
 ```
-- the buffers and their text; every edit, every undo record
+- the buffers and their text, and every edit — the mirror buffer (type.md,
+  *The host half*); keystroke undo is the surface's (compositor.md)
 - the window set: which windows exist, their names, their types
 - the tag, as ONE string per window
 - context: each window's directory, and every name resolved
@@ -301,11 +304,13 @@ that already exist.
 /net       network connections
 /srv       posted services
 /env       environment
-/usr       users: /home/{profile,home,credentials,project}
+/usr       users: /usr/<name>, bound per process as /home —
+           /home/{profile,credentials,project,…}
 /pkg       packages: toolchains, commands, libraries
-/project   project templates and workspaces
+/template  templates; /project/<x> is a user's project, bound per
+           user or process (projects.md)
 /type      window types — the registry emca reads
-/lib /bin /tmp /mnt /etc /rc      as they are
+/lib /bin /tmp /mnt /etc    as they are
 ```
 
 Note on /usr: this is PLAN 9's /usr — home directories, /usr/glenda —
@@ -439,8 +444,9 @@ buttons will consume what they just typed. It is
 operand-determines-surface made visible inside a single row.
 
 ```
-ID        unique, and it is a PATH: /dev/window/shell/1. The type is
-          in the path, so the id names the kind and the instance.
+ID        unique, and it is a PATH: /dev/wsys/1, as rio numbers
+          its windows; the window's own files are /dev/window/, and
+          its type is the file /dev/window/type.
 
 TITLE     designed to LOOK LIKE AN ORDINARY GUI TITLE BAR — coloured
           control buttons, then the name. Three behaviours:
@@ -462,8 +468,9 @@ TITLE     designed to LOOK LIKE AN ORDINARY GUI TITLE BAR — coloured
 CONTROLS  and the WINDOW OPERATIONS, which belong here rather than
           on the toolbar because their operand is the window as a
           thing in a layout — not what it holds. Close, Minimise,
-          Maximise, New column, New row, New tab, Fit; listed in
-          full below. ALL OF THEM INFORM THE PARENT.
+          Maximise, Duplicate (three buttons here: as column, as
+          row, as tab); listed in full below, with Fit, which is
+          the tiled implementation's. ALL OF THEM INFORM THE PARENT.
           A child never resizes or removes itself; it asks. That is
           what makes the recursion work, because a parent owns the
           layout of its children and nothing else does.
@@ -587,9 +594,9 @@ Del             Close
 Delcol          Close           the same verb; the operand differs,
                                 which is the whole point
 Exit            Close           the ROOT window's close
-Newcol / New    New column /    and they duplicate this window in
-                New row         that direction (see below)
-Zerox           New column      subsumed: duplicating IS what it did
+Newcol / New    Duplicate as    and they duplicate this window in
+                column / as row that direction (see below)
+Zerox           Duplicate       subsumed: duplicating IS what it did
 Look            Open / Find /   look was never one operation. It is
                 Plumb           a DISPATCHER over four, and emca
                                 shows them — with jump and search
@@ -645,7 +652,7 @@ shortcut to the same verbs and not a fifth thing.
 ### The window operations
 Their operand is the window AS A THING IN A LAYOUT, not what it holds,
 which is why they sit with the controls and the title rather than on
-the toolbar. Every window has all seven.
+the toolbar. Every window has all four — the contract's (window.md):
 
 ```
 Close        closes the window cleanly and the underlying command
@@ -653,13 +660,18 @@ Close        closes the window cleanly and the underlying command
              container closes what it holds — acme's colcloseall().
 Minimise     move out of the parent's allocation. Reversible.
 Maximise     move every sibling out. Reversible.
-New column   duplicate this window into a new column beside it
-New row      duplicate this window into a new row below it
-New tab      duplicate this window as a TAB — the same operation with
-             the allocation bit flipped, since a tab is a child the
-             parent has given no rectangle to. Not a fourth concept.
-Fit          drop the size overrides in this subtree, re-derive
+Duplicate    three buttons in the tiled implementation (Christine,
+             2026-09-02: "duplicate is three buttons on our current
+             emca implementation but may change"):
+               as column   into a new column beside it
+               as row      into a new row below it
+               as tab      the same operation with the allocation
+                           bit flipped, since a tab is a child the
+                           parent has given no rectangle to
 ```
+
+Fit — drop the size overrides in a subtree and re-derive — is the tiled
+implementation's, not the contract's (compositor.md).
 
 ROWS AND COLUMNS ARE ONLY EVER CREATED BY A USER. Hers, and it corrects
 a rule this document briefly held — that a new window should be
@@ -668,11 +680,11 @@ GESTURE DO DIFFERENT THINGS AT DIFFERENT WINDOW SIZES, which is
 inference of the kind the rest of this design removes, and it let the
 machine restructure a workspace nobody asked it to touch.
 
-So OPEN, RUN AND PIPE ALWAYS MAKE A TAB. Predictable, identical
+So OPEN AND RUN — with `|`, `<` and `>` too — ALWAYS MAKE A TAB. Predictable, identical
 everywhere, and non-destructive of structure — the safest thing a verb
 can do to a layout it did not build. The user has two ways to create a
-split and the machine has none: the New column and New row buttons,
-and dragging a window onto an edge.
+split and the machine has none: duplicate as column or as row, and
+dragging a window onto an edge.
 
 And a consequence that is not an extra rule but the model showing
 through: AN UNALLOCATED WINDOW HAS NO RECTANGLE, so there is nothing to
@@ -692,8 +704,9 @@ onto an edge    become a new row or column there
 
 The second is the other way a user creates a split, which keeps "only a
 user creates rows and columns" true while leaving two roads to it.
-Kernel-side it is one wctl verb — re-parent to a given window at a
-given index; the gesture is the surface's.
+On the IPNX side it is a `wctl` write to emca: rio's `move` places a
+window, and re-parenting to a given window at a given index is
+**proposed** as an addition (window.md). The gesture is the surface's.
 
 Move and resize are otherwise NOT buttons. They are direct
 manipulation — drag a divider, drag a title — and acme filed them the
@@ -706,12 +719,12 @@ subset. Edit, and Run with `|`, `<` or `>`, operate on the subset. What an ITEM 
 type's — and that is the only thing that varies.
 
 ```
-type     an item is        an item's text is
-------   ---------------   ---------------------
-edit     a text range      the range itself
-ls       a file            its name
-shell    a line of output  the line
-root     a child window    its title
+type or role        an item is        an item's text is
+-----------------   ---------------   ---------------------
+text/plain          a text range      the range itself
+inode/directory     a file            its name
+the shell role      a line of output  the line
+inode/system        a child window    its title
 ```
 
 This is sam's structural model — an address selects, a command
@@ -792,10 +805,10 @@ Edit   apply the text as a SAM COMMAND to each selected item's TEXT.
        one semantic, with the type supplying only what an item's
        text IS:
 
-         edit    the range      -> changes the buffer
-         ls      the filename   -> RENAMES
-         root    the title      -> RETARGETS, because titles do
-         shell   an output line -> changes the scrollback
+         text/plain        the range      -> changes the buffer
+         inode/directory   the filename   -> RENAMES
+         inode/system      the title      -> RETARGETS, because titles do
+         the shell role    an output line -> changes the scrollback
 
        The root row falls out rather than being designed: select
        every window under /old/branch/, apply s|/old/|/new/|, and
@@ -899,19 +912,8 @@ a mirrored tree cannot do.
 A real path: it cats, greps, pipes and retargets like anything else.
 Nothing is written to disk, so nothing dangles and nothing persists
 behind your back. The basename is the command, so the title bar reads
-"mk all" with "/output/home/project/ipnx/" dimmed before it — the same
-two-element rendering every other window gets, and the dimmed half
-happens to say where it ran.
-
-MIRRORING EARNS ITS KEEP TWICE. It resolves the collision — `mk all`
-in two projects is two paths, so two windows, and reuse still gives one
-window per command per directory. And IT REMOVES AN EXCEPTION rather
-than accommodating one: an earlier draft had the output type STORE the
-command's directory, because context normally comes from the title and
-/output would have been the wrong context. With the mirror, the context
-is DERIVED from the title after all — strip the /output prefix — so it
-is deterministic, visible in the path, and no type has to keep a
-private field.
+"mk all" with "/output/3/" dimmed before it — the same two-element
+rendering every other window gets.
 
 A parallel tree indexed by path is the house shape: `/n/` does it for
 mounted worlds, and a snapshot server does it for versions. /output does it for what
@@ -964,7 +966,7 @@ hides and touch cannot.
 
 TESTABILITY SURVIVES, and improves. A bespoke bar was testable because
 it was our own DOM; a native callout is not drivable from a headless
-test. But the `ui` file already declares what the surface rendered, so
+test. But the `verbs` file already declares what the surface rendered, so
 the suite asserts THE VERB SET WAS DECLARED AND IS KEYBOARD-REACHABLE
 — the property that actually matters — and that holds identically
 whether the surface drew a popover, a menu, or nothing.
@@ -1000,7 +1002,9 @@ person who wants it — `Add` writes it to /type/<x>/verbs, which their
 /home/type binds over — and the type carries only what it needs.
 
 ```
-root     Save All        write every descendant with unsaved changes
+inode/system                               (its own, beyond the listing's:
+                                           Halt, Reboot, New Shell — type.md)
+         Save All        write every descendant with unsaved changes
          Reset           rebuild the default arrangement
          Save Layout     the window set, to a file
          Restore Layout
@@ -1008,24 +1012,28 @@ root     Save All        write every descendant with unsaved changes
                          browser storage, or a granted local folder
                          (a granted directory IS a bind)
 
-ls       Revert          re-read the directory
+inode/directory
+         Revert          re-read the directory
 
          And nothing else. Open covers both creations — a name for a
-         file, a name with a trailing slash for a directory — so ls
-         carries exactly one verb of its own.
+         file, a name with a trailing slash for a directory — so the
+         listing carries exactly one verb of its own.
 
-edit     Save            only while there are unsaved changes, and
+text/plain
+         Save            only while there are unsaved changes, and
                          its appearance IS the dirty indicator
-                         (acme's rule, kept — acme.c:383)
+                         (acme's rule, kept — wind.c:477-481)
          Revert
          Undo  Redo      here and nowhere else
 
-shell    Interrupt       stop the running command
-         Clear
+the shell role
+         Interrupt       stop the running command — and nothing else:
+                         Clear would truncate the log, which is content
+                         (type.md, *The window*)
 ```
 
 Two that were considered and REFUSED, because the design already
-covers them: `Up` on ls — the title is editable and its directory
+covers them: `Up` on a listing — the title is editable and its directory
 segment is tappable, and that IS navigation — and `Wrap` on edit,
 which is a view mode and therefore the surface's, not a verb that
 crosses.
@@ -1046,7 +1054,7 @@ tag line (6)      New, Open, Run, Find, Edit, Add — ALWAYS these six,
                   syntax within Run (there is no Pipe button); : and
                   # are syntax within Find
 the selection     Cut, Copy and Paste, plus whatever the manager
-                  offers. The tag line's five reach the selection
+                  offers. The tag line's six reach the selection
                   when the tag line is empty. Where any of them
                   appear is the surface's
 toolbar           the per-type lists above
@@ -1054,10 +1062,13 @@ status bar        id, and the running command with Interrupt
 ```
 
 Two acme builtins disappear as BUTTONS because something else already
-does the work: Zerox (New column duplicates) and ID (it is state, so
-it belongs in the status bar). New disappears too — Open a name that
-does not exist, and Open a name ending in `/` for a directory, so
-neither "New File" nor "New Folder" is a verb anywhere. And `jump` and
+does the work: Zerox (Duplicate does it) and ID (it is state, so
+it belongs in the status bar). "New File" and "New Folder" disappear
+too — Open a name that does not exist, and Open a name ending in `/`
+for a directory. `New` itself stays, and is the manager's: in a
+listing, a new thing of that kind here; on a template, instantiate it
+— *"one of its buttons is New that instantiates a process with that
+recipe"* (Christine, 2026-08-31). And `jump` and
 `search` become ONE button, Find, because the notation distinguishes
 them.
 
@@ -1104,7 +1115,7 @@ is no minimised strip too narrow for three controls, no title that
 cannot be edited because it is rotated, no close button made
 unreachable by lack of room.
 
-And the new-tab button on every toolbar is the same mechanism once
+And duplicate-as-tab, on every window, is the same mechanism once
 more: add a child, unallocated.
 
 MINIMISING A CONTAINER takes its contents with it, without needing to
@@ -1121,8 +1132,8 @@ The model keeps acme's single tag string:
 
 It stays one string because the 9P tag file exposes it as one buffer
 and the behaviour suite reads and writes it. THE SPLIT INTO TITLE /
-TOOLBAR / TAG LINE IS PRESENTATIONAL. rebuildauto()'s tracked
-auto-block (acme.c:383) survives unchanged.
+TOOLBAR / TAG LINE IS PRESENTATIONAL. acme's automatic part of the tag,
+which `winsettag1` rebuilds (wind.c:467-496), survives unchanged.
 
 What the split fixes: acme's conflation of methods with subprocesses.
 Del and mk are typographically identical in acme and behave completely
@@ -1142,10 +1153,11 @@ manager reads its `layout` file and opens what it names (docs/type.md,
 *The layout file*):
 
 ```
-motd            an editor window, main area
-a listing       the user's home, left pane
-an rc           bottom pane, shell type
-the top toolbar the system's managers
+/home           the user's home, a listing, left pane
+tabs            /etc/motd, /bin/tour, /home/README, the main area
+/bin/rc         a shell window, bottom
+the global      inode/system's own verbs — Halt, Reboot, New Shell
+toolbar
 ```
 
 Consequences:

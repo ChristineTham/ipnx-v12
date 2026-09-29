@@ -108,7 +108,7 @@ Four things it settles that were being designed around:
 | | |
 |---|---|
 | **`#¤` is bound into `/dev`** | `bind -a #¤ /dev` — which is how `/dev/capuse` gets its path. Identity needs no special plumbing |
-| **`/bin` is a union** | `bind /$cputype/bin /bin` then `bind -a /rc/bin /bin` — compiled binaries and rc scripts in one directory, per architecture |
+| **`/bin` is a union** | `bind /$cputype/bin /bin` then `bind -a /rc/bin /bin` — compiled binaries and rc scripts in one directory, per architecture. Here `/rc` is retired and both are the `system` package's (`/profile/start.ns`, docs/packages.md) |
 | **`/tmp` is a bind of your own** | `bind -c /usr/$user/tmp /tmp`. Not a seeded scratch wiped per boot |
 | **customisation is three sourced files** | `/lib/namespace.local`, `/lib/namespace.$sysname`, `/cfg/$sysname/namespace`. That is Plan 9's answer to "where do my overrides go" |
 
@@ -127,23 +127,24 @@ ramfs device letter to invent.
 by the identity of the channel mounted upon, and `namec` checks at every
 component.
 
-**Designed 2026-09-02, not yet in `/lib/namespace`** (decision log):
+**Designed 2026-09-02** (decision log); the namespace itself is `/profile/start.ns` (docs/packages.md):
 
 | path | served by | contents |
 |---|---|---|
 | `/home` | **bind**, per-process | **the user's home, and it means "mine"** — bound to `/usr/<whoever this process is>` — the person's whole tree. **A bind, never a symlink**: a symlink stores its target, so `/home → /usr/kitty` would mean *kitty* for every process that walked it. An agent's `/home` is the agent's, and an agent's namespace need not contain `/usr` at all |
-| `/home/project` | seed | the person's projects. **`New` on a template creates one here**, named from the tag line. Each carries the `template` it was instantiated from |
-| `/home/bin` `/home/lib` `/home/rc` `/home/type` `/home/template` `/home/pkg` `/home/profile` `/home/credentials` | seed | **your own version of any system root**, bound `-b` over it so yours come first — one rule, Plan 9's own practice (`bind $home/bin/rc /bin`) generalised. **This is the configuration mechanism; there is no other**, which is why no dotfile, `XDG_` variable or per-application config directory exists here. `ls /template` shows both concatenated, a collision resolves to yours, and **creates land here** because the MCREATE element is yours — so `Promote` writes to `/template/<name>` and it lands in `/home/template/<name>` without knowing there are two |
+| `/home/project` | seed | the person's projects' files. **`New` on a template creates one here**, named from the tag line. Each carries the `template` it was instantiated from, and is bound at **`/project/<x>`** per user or process — *"Projects live in /project/x but the binding is user/process specific"* (Christine, 2026-09-24; docs/projects.md) |
+| `/home/bin` `/home/lib` `/home/type` `/home/template` `/home/pkg` `/home/credentials` | seed | **your own version of any system root**, bound `-b` over it so yours come first — one rule, Plan 9's own practice (`bind $home/bin/rc /bin`) generalised. **This is the configuration mechanism; there is no other**, which is why no dotfile, `XDG_` variable or per-application config directory exists here. `ls /template` shows both concatenated, a collision resolves to yours, and **creates land here** because the MCREATE element is yours — so `Promote` writes to `/template/<name>` and it lands in `/home/template/<name>` without knowing there are two |
 | `/credentials` | **union** | the system's — CA roots, host identity, service keys — plus **`/home/credentials`**. A **listing** of what keys exist — never plaintext, and never the mechanism: a program uses a key by writing a challenge and reading a response, so secrets stay in the agent. Also a union: system credentials — CA roots, host identity, service keys — plus **`/home/credentials`** |
-| `/profile` | **union** | the system's base (`/lib/namespace` today) plus **`/home/profile`**. A tree: namespace fragments, services, key references. **A union like every other root** — the system's base (`/lib/namespace` today) plus **`/home/profile`**. No special case: your half lives at `/home/<x>` exactly as `/home/bin` does |
+| `/profile` | seed | **the system's configuration** — `start.ns`, `start.rc`, the lists of what is installed (docs/packages.md). **Not a union**: the user's is **`/home/profile`**, applied after the system's at login, so the user's binds come last (P7, 2026-09-24) |
 | `/home/document` | seed | and whatever else a person makes. **This is where a person is allowed to be messy**, which is why it is not the root |
-| `/usr/<name>` | seed or mount | **where an identity's files live — a directory NAMED AFTER an identity, not an identity**. Holds your work, your overrides of system roots, `credentials` (a *listing*, never plaintext — the keys stay in the agent), `profile`. Separating what you *are* from what you *own* makes permissions natural: someone may read `/usr/mimmy/home/project/foo` and never `/usr/mimmy/credentials`. The **durable, addressable** name — `/usr/kitty`, `/usr/mimmy` — readable subject to permission. `/usr` holds **files belonging to identities, not logins**: a mount of another person's system (per-attach identity enforced at the attach), or a resident role or agent |
+| `/usr/<name>` | seed or mount | **where an identity's files live — a directory NAMED AFTER an identity, not an identity**. Holds your work, your overrides of system roots, `credentials` (a *listing*, never plaintext — the keys stay in the agent), `profile`. Separating what you *are* from what you *own* makes permissions natural: someone may read `/usr/mimmy/project/foo` and never `/usr/mimmy/credentials`. The **durable, addressable** name — `/usr/kitty`, `/usr/mimmy` — readable subject to permission. `/usr` holds **files belonging to identities, not logins**: a mount of another person's system (per-attach identity enforced at the attach), or a resident role or agent |
 | `/template` | seed + union | the **system's** declarations, with `/home/template` bound over them. Declarations — each a text file that inherits another and binds packages, files and commands into a namespace. Instantiating one produces a workspace, whose own declaration is a **`project`** file — a *different* object, specific where a template is generic. `Promote` **generalises** a `project` into a template here. **`New` on a template creates the project at `/home/project/<name>`** — the name from the tag line, or a default |
 
 **One rule, no exceptions.** `/home` binds to `/usr/<me>` — the person's whole
 tree — and **every other root is a union of the system's and yours**, with your
-half at `/home/<x>`. `/bin`, `/lib`, `/type`, `/template`, `/pkg`, `/profile`
-and `/credentials` all work the same way; `/home/project` and `/home/document`
+half at `/home/<x>`. `/bin`, `/lib`, `/type`, `/template`, `/pkg` and
+`/credentials` all work the same way — `/profile` excepted, whose user half is
+applied after it rather than bound over it; `/home/project` and `/home/document`
 are simply work, with no system twin. An agent's are its own, because the bind
 is per-process.
 
@@ -154,8 +155,8 @@ templates contain, portable across every instance; `/usr/kitty/...` is what
 another system says when it needs to name your files specifically. Same pattern
 as `/n/` and `/mnt/`.
 
-Where the pieces live in the **repository** is the tree in
-[implementation.md](implementation.md) — one copy, there.
+Where the pieces live in the **repository** is *The tree* in CLAUDE.md —
+one copy, there.
 
 ## The deployment review ledger
 

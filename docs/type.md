@@ -4,7 +4,7 @@
 > open questions on 2026-09-18. **Also decided**, in her acceptance of every
 > proposal then open (*"accept your proposals"*, 2026-09-02): the `/type` file
 > syntax, `properties`, the pkg, template and project shapes, `inode/system`
-> and its layout file, the `shell` type, `inode/directory`'s listing, the
+> and its layout file, the `shell` role, `inode/directory`'s listing, the
 > status line and `emcaopen`. **Still open**: what *Open — what remains*
 > lists, and `text/plain`'s content model. Where Christine has said nothing,
 > Plan 9 is the reference (2026-09-29). What is built is [when.md](when.md).
@@ -61,7 +61,7 @@ from acme, where the tag is editable text and any word is executable. It exists
 because a toolbar must be drawn from something. The tag stays editable
 alongside it.
 
-### The manager — acme's shape, one per window
+### The manager — acme's shape, plus `status`, one per window
 
 **A manager runs per window** (*"per window"*), not one server for many as acme
 and rio do. It serves one directory, and acme's per-window set
@@ -210,12 +210,11 @@ not a normal window. That's an unescapable fact."*
 
 ## What a type declares
 
-| file | |
-|---|---|
-| `recognise` | how files of this type are identified (see below) |
-| `managers` | the **roles** this type offers, one per line — `look`, `edit`, `properties`, `manage`, `shell`. Which resolves to what is per-type; the role name is stable everywhere, so the dropdown reads the same on every window |
-| `verbs` | toolbar bindings, one per line |
-| `README` | prose for whoever reads the registry; nothing parses it |
+**Its four files are *The design*'s** (2026-09-18): `rules`, `manager`,
+`namespace`, `verbs`. **The roles** a type offers — `look`, `edit`,
+`properties`, `manage`, `shell` (settled 2026-09-02) — are the managers its
+rules reach: *"several rules may reach different ports from the same content,
+and `dst` lets a caller name one"* (*Three consequences*, above).
 
 > **The default role is derived, not declared: writable → `edit`, not
 > writable → `look`.** So "read-only by default" is literally true rather than
@@ -250,37 +249,6 @@ Appearance is the surface's ([surface.md](surface.md)), so a type names a
 *standard verb* and each surface maps that name to its own iconography; a
 non-standard verb renders as its label. The registry never ships an image.
 
-## How a file's type is recognised
-
-**emca tests for the type and falls back to `text/plain`.** The pipeline is
-ordered by cost — and ordering by cost happens to order by certainty too:
-
-| | signal | cost | certain? |
-|---|---|---|---|
-| 1 | **the serving device** — 9P's stat carries `type` (server) and `dev` (subtype) | free | yes |
-| 2 | **the qid bits** — directory, symlink | free | yes |
-| 3 | **an exact filename** — `/etc/passwd` | hash lookup | yes |
-| 4 | **an extension** | hash lookup | a guess |
-| 5 | **magic bytes** | one short read | a good guess |
-| 6 | **fallback → `text/plain`** | — | never fails |
-
-That bounds classification at **one stat and one short read**, which is the
-answer to "emca may spend too long trying to figure out".
-
-**Step 1 is a signal no desktop system has.** `/proc`'s entries are stamped by
-the proc device in every stat, so *"not really an `inode/directory` — an
-`inode/mount-point` shaped as a proc filesystem"* is recognisable without
-sniffing anything. MIME says what content **is in form**; the serving device
-says what it **means**.
-
-### When recognition succeeds but nothing can handle it
-
-**Refused, with a prompt** — *"file type not displayable, want me to display as
-text?"* Falling through silently would show a correctly-identified PNG as
-mojibake and look like a bug; refusing outright would make a recognised file
-unopenable. The prompt is the honest middle, and it keeps `text/plain` as the
-universal escape hatch without making it a surprise.
-
 ## `shell` — a conversation, and its backends
 
 **`shell` applies to any file that can be appended to**, not only to channels.
@@ -310,15 +278,13 @@ path in the output and pressing Open stops working, which was the point of the
 transcript being a file. And **history needs no mechanism: the transcript is the
 history.**
 
-> **The unresolved cost is line discipline.** When output arrives while someone
-> is typing, something must hold the partial line, redraw it below the
-> interruption, and keep the cursor where the user thinks it is. It cannot live
-> purely on either side — the host has the keystrokes, IPNX has the writer — and
-> a model streaming token by token makes it harder than a shell emitting lines.
+**Line discipline is the surface's** — *The `shell` role*, below (accepted
+2026-09-02): only committed text crosses, as with input-method composition.
 
 ## The type is what the content *is*. The manager is what handles it
 
-> **The default type is `text`. Its manager is `edit`.**
+> **The default type is `text/plain`. Its default role is `edit`** where you
+> may write it, `look` where you may not.
 
 An earlier draft renamed the type to `edit` and lost the distinction. They are
 different things:
@@ -326,7 +292,7 @@ different things:
 | | |
 |---|---|
 | **A type** | says what a window's content **is** — text, a directory, an image, a process table. A declaration, living in `/type` as text. |
-| **A manager** | says what to **do** with it: renders the content and edits it, drives the status line, supplies the toolbar's buttons, and gives meaning to Find, Edit and selection for that kind of thing. |
+| **A manager** | says what to **do** with it: edits it — its host half renders it (*The host half*, above) — drives the status line, supplies the toolbar's buttons, and gives meaning to Find, Edit and selection for that kind of thing. |
 
 The type is the interface; the manager is the implementation.
 
@@ -337,47 +303,17 @@ a manager over a file** — a host-side one.
 
 | type | manager | side |
 |---|---|---|
-| `text` | `edit` — CodeMirror, Monaco, TextKit, whichever the surface has | host |
-| `directory` | `ls` | either |
-| image, video, PostScript | the surface's own renderers | host |
-| `proc`, `pkg`, `usr` | programs that need the namespace | guest |
+| `text/plain` | `edit` — CodeMirror, Monaco, TextKit, whichever the surface has | host |
+| `inode/directory` | `look` and `edit` over the listing | either |
+| `image/*`, `video/*`, `application/postscript` | the surface's own renderers | host |
+| process, package and user tables | programs that need the namespace | guest |
 
 Which retroactively explains two rules that had looked like special cases.
-**"Editing is the surface's"** was never a fact about text: it is that the
-`text` type's manager happens to live host-side. **"IPNX implements no
+**"Editing is the surface's"** was never a fact about text: it is that
+`text/plain`'s manager happens to live host-side. **"IPNX implements no
 renderers"** is the same fact for image and video managers. Both are one
 principle — **a manager lives wherever it can do its job** — which is the only
 rule a two-sided system permits.
-
-## What the `text` manager's interface looks like today
-
-**This is one manager's interface, not *the* manager interface** — the general
-one is undefined (see the baseline above). The `text` type's is in the code,
-built before it was named: the mirror protocol between the editor component and
-emca.
-
-- **up:** `insert`, `delete`, `select`, `dirty`, `seq <n> <hash>`
-- **down:** `content`, `toolbar`, `tag`
-- **`put`**, which notifies emca that the manager wrote the file and emca should
-  re-read — *one writer per file*, settled in [design.md](archive/design-log-claude-written.md)
-
-That is a manager over a file, declaring what it did and being told what to
-show.
-
-> **SUPERSEDED 2026-09-02.** This was fenced as an undesigned extrapolation
-> until the **file interface** was designed and accepted: emca serves one
-> directory per window at `/dev/window/`, and a manager reads and writes files
-> in it ([window.md](window.md)). What follows is the earlier sketch, kept only
-> because it names what a non-text manager needs — each item now has a file.
-
-The sketch's candidates, and where each landed:
-
-| | |
-|---|---|
-| **kind** | what the content is, so the surface knows how to render it and emca knows whether it has items at all |
-| **items** | what Find selects and Run's `>` feeds — byte ranges for text, files for a listing, pids for `proc` |
-| **verbs** | what the toolbar offers, which `window` already carries |
-| **size** | intrinsic dimensions for the kinds with an aspect ratio rather than a line count — already the `size` event |
 
 ### Managers may have interfaces, not merely verbs
 
@@ -400,7 +336,7 @@ reader is not left wondering whether they were forgotten.*
 
 | the question | |
 |---|---|
-| **Can one type have several managers?** | **CLOSED.** Yes — that is what the five **roles** are, chosen per window from the title bar's dropdown, with the default derived from permissions |
+| **Can one type have several managers?** | **CLOSED.** Yes — that is what the five **roles** are, with the default derived from permissions. How a person chooses one — a dropdown in the title bar or otherwise — is the surface's |
 | **`ns` as executable text** | **CLOSED.** `ns` is retired; a type declares bindings in its declaration and nothing in the registry is `eval`'d |
 | **Per-verb invocation, or long-running?** | **CLOSED.** A manager runs per window and is a file server posted in `/srv` (*The design*, 2026-09-18): long-running for its window's life |
 | **How much interface may a manager declare?** | **OPEN.** The toolbar generalised — fields, toggles, lists — needs a vocabulary, and that vocabulary is the part most likely to grow without discipline. The file interface bounds it for now: whatever is not a file in `/dev/window/` cannot be declared |
@@ -409,23 +345,11 @@ reader is not left wondering whether they were forgotten.*
 
 ## The `/type` file syntax
 
-*Reviewed and endorsed by Christine, 2026-09-02.*
+*Reviewed and endorsed by Christine, 2026-09-02; `recognise` and `managers`
+superseded by The design, 2026-09-18 — the plumber's `rules` recognise, and
+the roles are the ports they reach.* What remains is `verbs`:
 
 ```
-/type/text/plain/recognise
-    # one rule per line, tried in pipeline order. First match wins.
-    device  #c              # signal 1: the serving device, from 9P's stat
-    qid     dir             # signal 2: the qid bits — dir, symlink, stream
-    name    /etc/passwd     # signal 3: an exact path
-    ext     .txt            # signal 4: an extension
-    magic   0 "%PDF-"       # signal 5: bytes at an offset
-    fallback                # signal 6: claims anything unclaimed. text/plain only
-
-/type/text/plain/managers
-    look                    # the roles this type offers. First is NOT the
-    edit                    # default — the default derives from writability
-    properties
-
 /type/text/plain/verbs
     # <label>  <action>, in exactly three forms
     Revert     manager:revert      # ask the manager
@@ -433,16 +357,9 @@ reader is not left wondering whether they were forgotten.*
     Archive    run:tar cf $file.tar $file   # run a command
 ```
 
-**A `recognise` file carrying `qid stream` also means "never sniff me"** — the
-pipeline must stop after signal 2 for channels, or classifying would consume
-the first bytes of a conversation.
-
-**Settled since this was written (archive/design-log-claude-written.md):** `run:` substitutes
-**environment variables**, not a templating syntax — emca sets `$file`, `$dir`
-and `$window`, and the selection needs none because `|` already pipes it.
-
-> **STILL OPEN:** whether `magic` needs more than
-offset-and-literal.
+`run:` substitutes **environment variables**, not a templating syntax — emca
+sets `$file`, `$dir` and `$window`, and the selection needs none because `|`
+already pipes it.
 
 ## `properties` as `edit` over a synthetic file
 
@@ -497,7 +414,8 @@ opens its own `/` with the same manager and ordinary emca chrome.
 **And its manager owns a writable window as well as the composition.** A
 container's manager renders by arranging, but this one also needs somewhere to
 write, so it opens **one ordinary child** and writes there — conventionally the
-first entry in `layout`, `/` itself, listing the root. The surface renders that
+first entry in `layout`, `/home`, listing the user's home — *"home is a
+workspace"* (Christine, 2026-09-02). The surface renders that
 child natively: a **left pane** in the browser, a **collapsible sidebar** on
 macOS and iPadOS. Collapsing it is `minimise` on that window.
 
@@ -549,7 +467,9 @@ preference store and no new location.
 
 **Resize needs no new mechanism.** The manager does a blocking read on
 `/dev/window/rect`; when it returns, it consults `breakpoints`, and if the
-column count should change it writes `leaves <n>` to `/dev/window/wctl`. emca
+column count should change it writes `leaves <n>` to `/dev/window/wctl` —
+**proposed**: `leaves` is not one of rio's verbs, and is added only because
+breakpoints need it (*"add nothing until something needs it"*). emca
 re-divides the root and reallocates. `Reset` is the same act performed on
 demand.
 
@@ -562,7 +482,7 @@ the window manager.
 > resize touches nothing but the column count. The second is simpler and matches what
 > M15e built.
 
-## The `shell` type — and where line discipline lives
+## The `shell` role — and where line discipline lives
 
 *Accepted by Christine, 2026-09-02.*
 

@@ -166,7 +166,7 @@ https://9p.io/sys/doc/acme/acme.html):
 
 The idea is substrate-neutral BY DEMONSTRATION — realised once in a
 language, once in an operating system. A third realisation, in a
-canvas protocol, breaks no fidelity claim, because there is none to
+file interface, breaks no fidelity claim, because there is none to
 break. And on what acme added to Oberon:
 
 ```
@@ -182,18 +182,18 @@ Three of acme's four original contributions are substrate; the fourth
 is a mouse button. Acme's best invention is the one thing it named
 after hardware — which is the conflation this document exists to undo.
 
-Provenance for the measurements below: the paper as cited, and
-userspace/cmd/acme.c as built (line references are to that file).
+Provenance for the measurements below: the paper as cited, and Plan 9's
+acme, `plan9/sys/src/cmd/acme/`, at file and line.
 
 ### Layer 1 — tiled window management
 Three levels, each carrying a tag:
 
 ```
-root                 tag: Newcol Kill Putall Dump Exit   (acme.c:2171)
+root                 tag: Newcol Kill Putall Dump Exit   (rows.c:36)
   column             tag: New Cut Paste Snarf Sort
-                          Zerox Delcol                    (acme.c:782)
-    window           tag: <name> Del Snarf Get Look
-                          Edit |                     (acme.c:851,854)
+                          Zerox Delcol                    (cols.c:34)
+    window           tag: <name> Del Snarf [Undo] [Redo]
+                          [Put] [Get] | [Look]       (wind.c:467-496)
       tag            one line, editable
       body           the text
 ```
@@ -214,9 +214,10 @@ point.
 inferred kind   rule                    consequence
 -------------   ---------------------   ---------------------------
 directory       name ends in '/'        body is a listing; the tag
-                                        omits Edit (acme.c:851)
-file            name resolves to a      the tag carries Edit
-                file                    (acme.c:854)
+                                        carries Get, never Put
+                                        (wind.c:478, :485)
+file            name resolves to a      the tag carries Put while
+                file                    dirty (wind.c:477-481)
 command output  name ends '+Errors'     append-only in practice,
                                         ordinary editable text in
                                         fact
@@ -246,8 +247,8 @@ fixed builtins     the window's method set       the app, at
                                                  creation
 dynamic builtins   Put while dirty; Undo/Redo     the app,
                    while they have work          continuously —
-                                                 rebuildauto(),
-                                                 acme.c:383
+                                                 winsettag1(),
+                                                 wind.c:467-496
 bar '|'            separator                     convention only
 scratch            the user's own commands and   THE USER; persists
                    arguments                     per window
@@ -343,7 +344,7 @@ exit, kill, dump, load, id                            all named
 ### The census, and it is the finding
 ```
 38   operations in total
-26   already carry a name — a word, measured in acme.c: Cut Del
+26   already carry a name — a word, measured in acme's exec.c: Cut Del
      Delcol Delete Dump Edit Exit Get ID Kill Load Look New Newcol
      Paste Put Putall Redo Snarf Sort Undo Zerox (22 builtins),
      plus the three filters | < > and run-external (the command

@@ -174,7 +174,7 @@ goes stale there — that is how four different test counts came to exist.
 | `docs/window.md` | **the window manager CONTRACT** — emca gives a manager a rectangle and a namespace, and stops. Every implementation honours this and nothing more |
 | `docs/compositor.md` | **the tiled implementation** — allocation, alternation, tabs, sizing. Replaceable without touching managers or types |
 | `docs/surface.md` | **the host half** — chrome, theming, placement, and the devices Saranos serves |
-| `docs/type.md` | the type system: a type is a folder of text files; a MANAGER renders and edits it |
+| `docs/type.md` | the type system: a type is a plumb rule and four files in `/type/<name>/`; a MANAGER, one per window, posted in `/srv`, handles it; the host renders |
 | `docs/canvas.md` | `/dev/canvas`, narrowed 2026-08-31 to genuine drawing |
 | `docs/acme.md` | the acme port — Bell Labs' program fitted into emca, functionality preserved |
 | `docs/userland.md` | the userland's shape; the heritage exhibit's scope |
