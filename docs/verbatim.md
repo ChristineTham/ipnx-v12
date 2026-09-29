@@ -423,3 +423,7 @@ On building P7, and on names:
 - *"I hit my usage limit while you were working, but it has reset now. Please continue from where you left off."*
 - Answering how this machine gives Plan 9's programs `fork` and libthread's coroutines: *"Asyncify (Recommended)"*; and whether `RFMEM` is wasm shared memory: *"Yes, shared memory (Recommended)"*
   <br>— cited in `docs/implementation.md`, `RESEARCH.md`
+- *"that's fine skip them. anything else before we move to p8?"* — `syscall` and `aux/vmware` left out
+  <br>— cited in `docs/when.md`
+- *"do item 1, then P8"* — P7 steps 3–6 as proposed on 2026-09-26
+  <br>— cited in `docs/packages.md`

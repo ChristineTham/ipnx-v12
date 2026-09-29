@@ -23,3 +23,9 @@ if (~ $#sysname 0 || ~ $sysname '') {
 
 # parallelism for mk (`termrc:11`)
 NPROC = 1
+
+# the system's services (docs/packages.md): each named in /profile/service
+# without Plan 9's leading `!`, as `cpurc` starts the daemons it lists
+if(test -r /profile/service)
+	for(s in `{sed '/^[!#]/d' /profile/service})
+		service start -s $s

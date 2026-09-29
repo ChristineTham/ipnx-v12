@@ -66,7 +66,13 @@ CFLAGS="--target=wasm32-unknown-unknown -nostdlib -nostdinc -fno-builtin -fms-ex
 # *"#define USTKSIZE (16*1024*1024)"*), and the machine copies only what a
 # stack is using, so the size costs nothing that is not used. The argument
 # block is at its top, under the `Tos`, as `sysexec` puts it.
-LDFLAGS="--no-entry --export=_start --import-memory --export-memory --shared-memory --max-memory=4294967296 --export=__stack_pointer --export-table --stack-first -z stack-size=16777216 --allow-multiple-definition"
+# **A function pointer is never a small number**: on the 386 the text starts
+# at 4096+32 (`8l/obj.c:183`, INITTEXT for Plan 9's format), and code relies
+# on it — rc's `codefree` (`rc/code.c:480`) walks compiled code comparing
+# each word with function pointers, `Xifnot`'s jump target among them. Here
+# a function pointer is an index into the table, which wasm-ld starts at 1,
+# so the table starts where the 386's text does.
+LDFLAGS="--table-base=4128 --no-entry --export=_start --import-memory --export-memory --shared-memory --max-memory=4294967296 --export=__stack_pointer --export-table --stack-first -z stack-size=16777216 --allow-multiple-definition"
 
 # The rootfs: the programs in ONE package, `system` — Plan 9's userland as
 # this machine runs it, its commands and rc (docs/packages.md) — at
@@ -179,6 +185,14 @@ cp -a "$here/rc/bin" "$pkg/rc/"
 rm -rf "$pkg/rc/bin/termrc" "$pkg/rc/bin/termrc.local" "$pkg/rc/bin/cpurc" \
 	"$pkg/rc/bin/cpurc.local" "$pkg/rc/bin/service" "$pkg/rc/bin/service.auth"
 cp -f "$here/pkg/system/pkg.cfg" "$pkg/pkg.cfg"
+# and the commands written in rc that are not Plan 9's — `pkg`, `service`,
+# `template`, `su`, `sudo` (docs/packages.md), in `cmd/`
+for c in pkg service template su sudo; do
+	if [ -f "$here/cmd/$c" ]; then cp -f "$here/cmd/$c" "$pkg/rc/bin/$c"; chmod 755 "$pkg/rc/bin/$c"; fi
+done
+# where a repository is mounted (`/profile/repository`), and where the
+# system's services and templates are
+mkdir -p "$root/n/pkg" "$root/service" "$root/template"
 # what is installed to the system (docs/packages.md): `ndb`, one tuple each
 echo "pkg=system version=$VERSION" >"$root/profile/pkg"
 

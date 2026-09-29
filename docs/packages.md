@@ -305,6 +305,54 @@ RESEARCH §16.2). A store addressed by content is needed only where one
 version can exist several times, built against different dependencies —
 not the case here.
 
+## The forms — decided 2026-09-29
+
+What the design above left open, proposed on 2026-09-26 and approved by
+Christine on 2026-09-29 (*"do item 1"*). Built; `when.md` says how far.
+
+1. **A package file is `disk/mkfs -a`'s archive** — Plan 9's own
+   distribution format: each file's header line (`mkfs.c:477`, *"%q %luo %q
+   %q %lud %lld"*: name, mode, owner, group, mtime, length) and its bytes,
+   ending *"end of archive"*, read back by `disk/mkext` (`mkext.c:71`). It
+   is named `<name>-<version>.mkfs`; the package's `pkg.cfg`, `install.rc`
+   and `remove.rc` are at its top.
+2. **The index is ndb**, `index` at the repository's root, one entry per
+   package version: `pkg=<name> version=<v> sha256=<hex> file=<name>-<v>.mkfs`,
+   with `depend=<name>` (or `<name>>=<v>`) and `breaks=<name>` lines under
+   it — `depend=`, as `pkg.cfg` spells it above. `ndb/query -a` reads it;
+   the hash is `sha1sum -2 256` (`sha1sum.c:78`), Plan 9's, so no new
+   command.
+3. **A repository is a line of `/profile/repository`** (the user's
+   `/home/profile/repository` after it): a namespace line that puts the
+   repository at `/n/pkg` — `mount -c /srv/pkgsrv /n/pkg`, `bind
+   /usr/kitty/repo /n/pkg` — applied by `auth/newns -a -n`, newns's own
+   parser, in a namespace of its own (`newns.c`: *"rfork(RFNAMEG)"*).
+4. **`pkg`** is an rc script in the `system` package:
+   `pkg install [-s|-u|-n] name[=version]`, `pkg remove [-s|-u|-n] [-p]
+   name`, `pkg list [-s|-u]`, `pkg prune`. `=` is not a word character in
+   rc, so `'name=version'` is quoted as any such word is. The scopes are
+   those above; the binds are made in the namespace `pkg` shares with the
+   shell that ran it, as `bind`'s are, so a package is usable at once.
+   **Where the binds go**: `/profile/pkg.ns` (the user's
+   `/home/profile/pkg.ns`), one block for each package, written by `pkg`
+   and included by `start.ns` with `.`; a scope's list stays
+   `/profile/pkg`. **What is bound** is taken from the package's layout,
+   which is the root's: `$objtype/bin` and `rc/bin` onto `/bin`, as
+   `start.ns` binds the system's, every other top-level directory onto the
+   root's of that name, and inside each any directory the root already
+   has, since a union shows only the first of two directories of one name
+   — each `bind -a`, after what is there.
+5. **`service.cfg` is ndb too** — `service=<name> packages=<p> user=none
+   namespace=<file>` — and the four acts are one script, `service
+   enable|disable|start|stop [-s|-u] name`, which edits `/profile/service`'s
+   leading `!` and runs `start.rc` or `stop.rc`: as `none` through
+   `auth/none` when `user=none`, as the caller otherwise.
+6. **`su` and `sudo` are rc scripts over `auth/login`**, as the identity
+   design says. **Not built — blocked**: `auth/login` checks the password
+   with `auth_userpasswd`, a p9cr exchange that factotum completes only by
+   reaching an authentication server (`libauth/auth_userpasswd.c:37`), and
+   that is over `/net`, which this system does not have.
+
 ## Decided
 
 **Verification** — the Plan 9 way (Christine, 2026-09-24: *"plan 9 way"*),

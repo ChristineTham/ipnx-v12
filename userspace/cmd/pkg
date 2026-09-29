@@ -1,0 +1,385 @@
+#!/bin/rc
+# pkg — install and remove packages (docs/packages.md).
+#
+# A package is a `disk/mkfs -a` archive in a repository, listed in the
+# repository's ndb `index` with its SHA-256. Installing copies it into the
+# store, `/pkg/<name>/<version>/`, only if its hash matches the index, and
+# binds its directories onto the root's; removing unbinds them and leaves
+# the files, which only `pkg prune` takes.
+#
+#	pkg install [-s|-u|-n] name[=version] ...
+#	pkg remove [-s|-u|-n] [-p] name ...
+#	pkg list [-s|-u]
+#	pkg prune
+#
+# -s is the system's scope (`/pkg`, listed in `/profile/pkg`, bound by
+# `/profile/pkg.ns`), -u the user's (`/home/pkg`, `/home/profile/pkg`,
+# `/home/profile/pkg.ns`), -n this namespace alone, listed nowhere. The
+# host owner installs to the system unless told otherwise, anyone else to
+# their own. The binds are made in the namespace `pkg` shares with the
+# shell that ran it, as `bind` makes them.
+
+rfork e
+
+fn usage {
+	echo 'usage: pkg install [-s|-u|-n] name[=version] ...' >[1=2]
+	echo '       pkg remove [-s|-u|-n] [-p] name ...' >[1=2]
+	echo '       pkg list [-s|-u]' >[1=2]
+	echo '       pkg prune' >[1=2]
+	exit usage
+}
+
+fn fail {
+	echo pkg: $* >[1=2]
+	rm -f /tmp/pkg.$pid.*
+	exit $"*
+}
+
+if(~ $#* 0)
+	usage
+verb=$1
+shift
+
+hostowner=`{cat /dev/hostowner}
+if(~ $user $hostowner)
+	scope=s
+if not
+	scope=u
+purge=()
+while(~ $1 -*){
+	switch($1){
+	case -s
+		scope=s
+	case -u
+		scope=u
+	case -n
+		scope=n
+	case -p
+		purge=1
+	case *
+		usage
+	}
+	shift
+}
+
+# where a scope's packages are, what lists them, and the namespace file
+# that binds them
+fn where {
+	switch($1){
+	case s
+		store=/pkg
+		list=/profile/pkg
+		nsf=/profile/pkg.ns
+	case u
+		store=/home/pkg
+		list=/home/profile/pkg
+		nsf=/home/profile/pkg.ns
+	case n
+		if(~ $user $hostowner)
+			store=/pkg
+		if not
+			store=/home/pkg
+		list=()
+		nsf=()
+	}
+}
+where $scope
+
+nl='
+'
+
+# the value of attribute $1 in the ndb entries on standard input, one line
+# each as `ndb/query -a` prints them
+fn attr {
+	awk -v a'='$1 '{
+		for(i = 1; i <= NF; i++){
+			j = index($i, "=")
+			if(substr($i, 1, j-1) == a)
+				print substr($i, j+1)
+		}
+	}'
+}
+
+# the entry of the newest version of package $2 in index $1, or of version
+# $3 if one is given — versions compared a number at a time
+fn pick {
+	want=$3
+	ndb/query -a -f $1 pkg $2 | awk -v 'want='^$"want '
+	function newer(a, b,	x, y, i, n, m) {
+		n = split(a, x, ".")
+		m = split(b, y, ".")
+		for(i = 1; i <= n || i <= m; i++){
+			if(x[i]+0 > y[i]+0)
+				return 1
+			if(x[i]+0 < y[i]+0)
+				return 0
+		}
+		return 0
+	}
+	{
+		v = ""
+		for(i = 1; i <= NF; i++)
+			if(substr($i, 1, 8) == "version=")
+				v = substr($i, 9)
+		if(want != "" && v != want)
+			next
+		if(best == "" || newer(v, bestv)){
+			best = $0
+			bestv = v
+		}
+	}
+	END {
+		if(best != "")
+			print best
+	}'
+}
+
+# the binds a package's directory $1 makes onto the root's $2: the
+# directory after what is there, and each directory inside it that the
+# root already has, since a union shows only the first of two directories
+# of one name
+fn binds {
+	echo bind -a $1 $2
+	for(d in `{ls -p $1}){
+		if(test -d $1/$d && test -d $2/$d)
+			binds $1/$d $2/$d
+	}
+}
+
+# the binds of the package in $1: its `$objtype/bin` and `rc/bin` onto
+# /bin, as /profile/start.ns binds the system's, and each other directory
+# onto the root's of the same name (docs/packages.md)
+fn pkgbinds {
+	for(t in `{ls -p $1}){
+		if(test -d $1/$t){
+			if(~ $t $objtype rc){
+				if(test -d $1/$t/bin)
+					binds $1/$t/bin /bin
+				for(u in `{ls -p $1/$t}){
+					if(! ~ $u bin && test -d $1/$t/$u && test -d /$t/$u)
+						binds $1/$t/$u /$t/$u
+				}
+			}
+			if not if(test -d /$t)
+				binds $1/$t /$t
+		}
+	}
+}
+
+# make the binds in `bind` lines, or undo them
+fn dobinds {
+	ifs=$nl {
+		for(l in `{cat $1}){
+			ifs=' 	'^$nl {
+				w=`{echo $l}
+			}
+			switch($2){
+			case on
+				bind $w(2) $w(3) $w(4)
+			case off
+				unmount $w(3) $w(4)
+			}
+		}
+	}
+}
+
+# the block of namespace file $1 that package $2 wrote
+fn block {
+	awk -v 'n=# pkg='$2 '
+	/^# pkg=/ {
+		split($0, w, " ")
+		inb = (w[1] " " w[2] == n)
+		next
+	}
+	inb && /^bind/' $1 >[2]/dev/null
+}
+
+# namespace file $1 without package $2's block
+fn noblock {
+	awk -v 'n=# pkg='$2 '
+	/^# pkg=/ {
+		split($0, w, " ")
+		inb = (w[1] " " w[2] == n)
+	}
+	!inb' $1 >[2]/dev/null
+}
+
+# the repositories: namespace lines, the system's then the user's
+# (`/profile/repository`, `/home/profile/repository`), which mount or bind
+# one at /n/pkg
+fn fetch {
+	cat /profile/repository /home/profile/repository >/tmp/pkg.$pid.ns >[2]/dev/null
+	auth/newns -a -n /tmp/pkg.$pid.ns cp $1 $2
+}
+
+# install package $1 (name or name=version — quoted, as any `=` in an rc
+# word is); $2 is `auto` for a package installed only because another
+# needed it. rc's variables are the script's, not the function's, so what
+# calls `install` or `remove` again does it in a subshell, which shares
+# the namespace and copies the variables
+fn install {
+	n=`{echo $1 | sed 's/=.*//'}
+	v=`{echo $1 | sed -n 's/^[^=]*=//p'}
+	if(! test -f /tmp/pkg.$pid.index && ! fetch /n/pkg/index /tmp/pkg.$pid.index)
+		fail no repository index
+	e=`{pick /tmp/pkg.$pid.index $n $v}
+	if(~ $#e 0)
+		fail $n^': not in the repository'
+	v=`{echo $e | attr version}
+	sum=`{echo $e | attr sha256}
+	file=`{echo $e | attr file}
+	# already so: nothing to do (rc has no `return`)
+	if(! ~ $#list 0 && test -f $list && grep -s '^pkg='^$n^' version='^$v^' ' $list)
+		echo pkg: $n $v already installed
+	if not {
+		# what it breaks may not be installed
+		for(b in `{echo $e | attr breaks}){
+			if(! ~ $#list 0 && grep -s '^pkg='^$b^' ' $list >[2]/dev/null)
+				fail $n^' breaks '^$b
+		}
+		# what it depends on first — `name` or `name>=version`
+		for(d in `{echo $e | attr depend}){
+			dn=`{echo $d | sed 's/[<>=].*//'}
+			if(~ $#list 0 || ! grep -s '^pkg='^$dn^' ' $list >[2]/dev/null)
+				@{ install $dn auto } || fail $n^': needs '^$dn
+		}
+		dir=$store/$n/$v
+		# the store: copied in only if the hash matches the index, and never
+		# changed after (`replica`'s `applylog.c:1055` refuses so)
+		if(! test -d $dir){
+			fetch /n/pkg/$file /tmp/pkg.$pid.mkfs || fail $file^': cannot fetch'
+			got=`{sha1sum -2 256 /tmp/pkg.$pid.mkfs}
+			if(! ~ $got(1) $sum)
+				fail $file^': SHA-256 is '^$got(1)^', the index says '^$sum
+			mkdir -p $dir || fail $dir^': cannot make'
+			disk/mkext -d $dir </tmp/pkg.$pid.mkfs >/dev/null >[2=1] || {
+				rm -rf $dir
+				fail $file^': cannot unpack'
+			}
+			rm -f /tmp/pkg.$pid.mkfs
+		}
+		# a different version in this scope goes first
+		if(! ~ $#list 0 && grep -s '^pkg='^$n^' ' $list >[2]/dev/null)
+			@{ remove $n }
+		# its script, in its directory, told the scope
+		if(test -f $dir/install.rc)
+			@{ cd $dir; scope=$scope rc ./install.rc } || fail $n^': install.rc failed'
+		pkgbinds $dir >/tmp/pkg.$pid.b
+		if(! ~ $#list 0){
+			a=()
+			if(~ $2 auto)
+				a='auto=1'
+			{ grep -v '^pkg='^$n^' ' $list >[2]/dev/null; echo pkg'='$n version'='$v sha256'='$sum $a } >/tmp/pkg.$pid.l
+			cp /tmp/pkg.$pid.l $list
+			{ noblock $nsf $n; echo '# pkg='^$n^' version='^$v; cat /tmp/pkg.$pid.b } >/tmp/pkg.$pid.l
+			cp /tmp/pkg.$pid.l $nsf
+		}
+		dobinds /tmp/pkg.$pid.b on
+		echo pkg: $n $v installed
+	}
+}
+
+# remove package $1: its script, then its binds; its files stay
+fn remove {
+	n=$1
+	if(~ $#list 0){
+		# this namespace's: whatever version is bound
+		for(d in `{ls -p $store/$n >[2]/dev/null}){
+			pkgbinds $store/$n/$d >/tmp/pkg.$pid.b
+			dobinds /tmp/pkg.$pid.b off >[2]/dev/null
+		}
+		echo pkg: $n removed
+	}
+	if not
+		removelisted $n
+}
+
+# remove package $1 from the list of this scope
+fn removelisted {
+	n=$1
+	e=`{ndb/query -a -f $list pkg $n >[2]/dev/null}
+	if(~ $#e 0)
+		fail $n^': not installed'
+	v=`{echo $e | attr version}
+	dir=$store/$n/$v
+	if(test -f $dir/remove.rc)
+		@{ cd $dir; scope=$scope rc ./remove.rc }
+	block $nsf $n >/tmp/pkg.$pid.b
+	dobinds /tmp/pkg.$pid.b off >[2]/dev/null
+	noblock $nsf $n >/tmp/pkg.$pid.l
+	cp /tmp/pkg.$pid.l $nsf
+	grep -v '^pkg='^$n^' ' $list >/tmp/pkg.$pid.l
+	cp /tmp/pkg.$pid.l $list
+	# configuration it wrote stays, unless purged (dpkg's `conffiles`)
+	if(~ $purge 1)
+		rm -f `{ndb/query -a -f $dir/pkg.cfg pkg $n conffile >[2]/dev/null}
+	echo pkg: $n $v removed
+}
+
+switch($verb){
+case install
+	if(~ $#* 0)
+		usage
+	for(p in $*)
+		install $p
+case remove
+	if(~ $#* 0)
+		usage
+	for(p in $*)
+		remove $p
+case list
+	if(~ $scope n)
+		usage
+	test -f $list && awk '/^pkg=/ {
+		for(i = 1; i <= NF; i++){
+			j = index($i, "=")
+			f[substr($i, 1, j-1)] = substr($i, j+1)
+		}
+		printf "%s %s%s\n", f["pkg"], f["version"], (f["auto"] == 1 ? " auto" : "")
+		delete f
+	}' $list
+case prune
+	# a package installed only for another, which nothing listed needs
+	# now, is unlisted (apt's marking); then a version in a store that no
+	# list names is deleted (*"the store must be prunable"*)
+	for(s in s u){
+		where $s
+		if(test -f $list){
+			more=1
+			while(~ $more 1){
+				more=0
+				need=()
+				for(e in `{awk '/^pkg=/ {print $1 "/" $2}' $list | sed 's/pkg=//; s/version=//'})
+					need=($need `{ndb/query -a -f $store/$e/pkg.cfg pkg `{echo $e | sed 's,/.*,,'} depend >[2]/dev/null | sed 's/[<>=].*//'})
+				gone=()
+				for(a in `{grep 'auto=1' $list | sed 's/^pkg=([^ ]*) .*/\1/'}){
+					if(! ~ $a $need)
+						gone=($gone $a)
+				}
+				for(a in $gone){
+					@{ remove $a }
+					more=1
+				}
+			}
+		}
+	}
+	for(s in s u){
+		where $s
+		if(! ~ $s s || ~ $user $hostowner){
+			for(n in `{ls -p $store >[2]/dev/null}){
+				for(v in `{ls -p $store/$n}){
+					if(! ~ $n system && ! grep -s '^pkg='^$n^' version='^$v^' ' /profile/pkg /home/profile/pkg >[2]/dev/null){
+						rm -rf $store/$n/$v
+						echo pkg: $store/$n/$v pruned
+					}
+				}
+				# and the name, once it holds no version
+				rm $store/$n >[2]/dev/null
+			}
+		}
+	}
+case *
+	usage
+}
+rm -f /tmp/pkg.$pid.*
+exit ''

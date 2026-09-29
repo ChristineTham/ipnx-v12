@@ -2,3 +2,8 @@
 # /profile/stop.rc — run when the system shuts down (docs/packages.md), after
 # the user's /home/profile/stop.rc. Plan 9 has no counterpart: its terminal is
 # switched off. Nothing needs stopping yet.
+
+# the system's services, stopped as they were started
+if(test -r /profile/service)
+	for(s in `{sed '/^[!#]/d' /profile/service})
+		service stop -s $s

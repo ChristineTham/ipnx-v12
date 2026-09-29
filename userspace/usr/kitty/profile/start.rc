@@ -3,3 +3,9 @@
 # system's /profile/start.rc (docs/packages.md). Theirs to change. Plan 9's
 # counterpart is `$home/lib/profile`, which init runs the same way
 # (`plan9/sys/src/cmd/init.c:178`).
+
+# kitty's services (docs/packages.md): each named in /home/profile/service
+# without a leading `!`, started at login
+if(test -r /home/profile/service)
+	for(s in `{sed '/^[!#]/d' /home/profile/service})
+		service start -u $s

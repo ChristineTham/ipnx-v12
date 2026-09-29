@@ -593,6 +593,23 @@ mod userspace {
         assert!(out.contains("still here"), "{out}");
     }
 
+    /// **`if not` in a script** — rc's `codefree` (`rc/code.c:480`) walks
+    /// compiled code comparing each word with function pointers, and the
+    /// jump target after `Xifnot` is a small number: a function pointer must
+    /// never be one, as on the 386, whose text starts at 4096+32
+    /// (`8l/obj.c:183`). With the table starting at 1, rc freed a word it
+    /// took for a string and died.
+    #[test]
+    fn if_not_in_a_script() {
+        let out = typing(
+            "echo 'if(~ x y) s=1' >/tmp/ifnot.rc\n\
+             echo 'if not s=2' >>/tmp/ifnot.rc\n\
+             echo 'echo s is $s' >>/tmp/ifnot.rc\n\
+             rc /tmp/ifnot.rc\n",
+        );
+        assert!(out.contains("s is 2"), "{out}");
+    }
+
     /// **A process's stack is Plan 9's size** (`pc/mem.h:51`, 16M): rc parses
     /// a list of 5,000 words, which recurses once a word, where the old 64K
     /// stack and wasmtime's 512K call stack each ran out near 1,500.
@@ -849,6 +866,116 @@ mod storage {
         typing_at("echo on the disk > /tmp/thing\n", s.path());
         let real = std::fs::read_to_string(s.path().join("tmp/thing")).expect("a real file");
         assert_eq!(real, "on the disk\n");
+    }
+
+    /// **P7's acceptance** (docs/implementation.md): a package installs as a
+    /// bind, `pkg remove` unbinds it, and its files survive. The package is
+    /// made on the system as a repository makes one — `disk/mkfs -a` over a
+    /// proto, `sha1sum -2 256` into the ndb index — and the install lasts
+    /// across a boot, because its binds are in `/profile/pkg.ns`.
+    #[test]
+    fn a_package_installs_as_a_bind_and_removes_as_an_unbind() {
+        let s = Scratch::new("pkg");
+        let src = s.path().join("usr/kitty/repo/src/hello");
+        std::fs::create_dir_all(src.join("wasm/bin")).unwrap();
+        std::fs::write(src.join("wasm/bin/hello"), "#!/bin/rc\necho hello from a package\n").unwrap();
+        std::fs::write(src.join("pkg.cfg"), "pkg=hello version=1.0\n\tdescription=\"says hello\"\n").unwrap();
+        std::fs::write(
+            s.path().join("usr/kitty/repo/proto"),
+            "+\n\tpkg.cfg\n\twasm\n\t\tbin\n\t\t\thello\n",
+        )
+        .unwrap();
+        let first = typing_at(
+            "cd /usr/kitty/repo\n\
+             disk/mkfs -a -s src/hello proto >hello-1.0.mkfs >[2]/dev/null\n\
+             sum=`{sha1sum -2 256 hello-1.0.mkfs}\n\
+             echo 'pkg=hello version=1.0 sha256='$sum(1)' file=hello-1.0.mkfs' >index\n\
+             echo 'bind /usr/kitty/repo /n/pkg' >/profile/repository\n\
+             cd /\n\
+             pkg install hello\n\
+             hello\n",
+            s.path(),
+        );
+        assert!(first.contains("pkg: hello 1.0 installed"), "{first}");
+        assert!(first.contains("hello from a package"), "{first}");
+        // a second boot: the binds are the profile's now
+        let second = typing_at("hello\npkg list\npkg remove hello\nhello\nls /pkg/hello/1.0/wasm/bin\n", s.path());
+        assert!(second.contains("hello from a package"), "{second}");
+        assert!(second.contains("hello 1.0"), "{second}");
+        assert!(second.contains("pkg: hello 1.0 removed"), "{second}");
+        assert!(second.contains("hello: file does not exist"), "{second}");
+        assert!(second.contains("/pkg/hello/1.0/wasm/bin/hello"), "the files survive: {second}");
+        assert!(s.path().join("pkg/hello/1.0/wasm/bin/hello").is_file());
+    }
+
+    /// **A service** (docs/packages.md): enabled in `/profile/service`, it
+    /// starts at the next boot — its `start.rc` posts its server in /srv —
+    /// and stops at shutdown; disabled, it does neither.
+    #[test]
+    fn an_enabled_service_starts_at_boot_and_stops_at_shutdown() {
+        let s = Scratch::new("service");
+        let d = s.path().join("service/ramtest");
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("service.cfg"), "service=ramtest\n").unwrap();
+        std::fs::write(d.join("start.rc"), "ramfs -S ramtest\n").unwrap();
+        std::fs::write(d.join("stop.rc"), "rm -f /srv/ramtest\n").unwrap();
+        let first = typing_at("service enable ramtest\nls /srv\n", s.path());
+        assert!(!first.contains("/srv/ramtest"), "not started until it is: {first}");
+        let second = typing_at("ls /srv\n", s.path());
+        assert!(second.contains("service: ramtest started"), "{second}");
+        assert!(second.contains("/srv/ramtest"), "{second}");
+        assert!(second.contains("service: ramtest stopped"), "at shutdown: {second}");
+        typing_at("service disable ramtest\n", s.path());
+        let fourth = typing_at("ls /srv\n", s.path());
+        assert!(!fourth.contains("ramtest"), "disabled: {fourth}");
+    }
+
+    /// **A template makes a project** (docs/projects.md): a template it
+    /// includes first, the scaffolding copied, its packages and services
+    /// written into `project.cfg`, its `install.rc` run in the project — and
+    /// the project is promoted into a package by its own `pkg.rc`, which
+    /// `pkg` then installs.
+    #[test]
+    fn a_template_makes_a_project_and_the_project_a_package() {
+        let s = Scratch::new("template");
+        let t = s.path().join("template");
+        std::fs::create_dir_all(t.join("base")).unwrap();
+        std::fs::create_dir_all(t.join("hello/wasm/bin")).unwrap();
+        std::fs::write(t.join("base/template.cfg"), "template=base version=1\n").unwrap();
+        std::fs::write(t.join("base/README"), "a project\n").unwrap();
+        std::fs::write(
+            t.join("hello/template.cfg"),
+            "template=hello version=1\n\tinclude=base\n\tpackages=lib1\n\tservices=web\n",
+        )
+        .unwrap();
+        std::fs::write(t.join("hello/wasm/bin/hello"), "#!/bin/rc\necho hello from a project\n").unwrap();
+        std::fs::write(t.join("hello/pkg.cfg"), "pkg=hello version=1.0\n").unwrap();
+        std::fs::write(t.join("hello/proto"), "+\n\tpkg.cfg\n\twasm\n\t\tbin\n\t\t\thello\n").unwrap();
+        std::fs::write(t.join("hello/install.rc"), "echo installed in `{pwd}\n").unwrap();
+        std::fs::write(
+            t.join("hello/pkg.rc"),
+            "disk/mkfs -a -s . proto >$1/hello-1.0.mkfs >[2]/dev/null\n\
+             sum=`{sha1sum -2 256 $1/hello-1.0.mkfs}\n\
+             echo 'pkg=hello version=1.0 sha256='$sum(1)' file=hello-1.0.mkfs' >>$1/index\n",
+        )
+        .unwrap();
+        let out = typing_at(
+            "template instantiate hello /usr/kitty/proj\n\
+             cat /usr/kitty/proj/project.cfg /usr/kitty/proj/README\n\
+             mkdir /usr/kitty/repo\n\
+             cd /usr/kitty/proj; rc pkg.rc /usr/kitty/repo; cd /\n\
+             echo 'bind /usr/kitty/repo /n/pkg' >/profile/repository\n\
+             pkg install hello\n\
+             hello\n",
+            s.path(),
+        );
+        assert!(out.contains("template: /usr/kitty/proj made from base"), "{out}");
+        assert!(out.contains("installed in /usr/kitty/proj"), "{out}");
+        for want in ["project=proj version=0.1", "template=base", "template=hello", "packages=lib1", "services=web", "a project"] {
+            assert!(out.contains(want), "{want}: {out}");
+        }
+        assert!(!s.path().join("usr/kitty/proj/template.cfg").exists(), "the template's own file stays its own");
+        assert!(out.contains("hello from a project"), "{out}");
     }
 
     /// A directory made through the mount is a directory on the machine.

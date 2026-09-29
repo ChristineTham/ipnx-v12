@@ -1,0 +1,4 @@
+# /profile/repository — the system's package repositories: namespace lines,
+# in namespace(6)'s form, that put a repository at /n/pkg — `mount -c
+# /srv/pkgsrv /n/pkg`, `bind /usr/kitty/repo /n/pkg` (docs/packages.md).
+# The user's, in /home/profile/repository, come after these.

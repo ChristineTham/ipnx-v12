@@ -1,0 +1,3 @@
+# /profile/service — the system services installed, one name a line;
+# a leading `!` disables one, as Plan 9 names a disabled listener
+# (docs/packages.md). Written by `service enable` and `service disable`.

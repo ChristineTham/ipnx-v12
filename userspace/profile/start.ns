@@ -34,3 +34,6 @@ bind -a /pkg/system/2026.09.24/lib /lib
 # the user's home: /home is /usr/$user (docs/packages.md), where the user's
 # profile is, at /home/profile
 bind -c /usr/$user /home
+
+# the packages installed to the system, as `pkg` binds them
+. /profile/pkg.ns

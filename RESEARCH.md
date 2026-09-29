@@ -5141,3 +5141,46 @@ start ghostscript; optimised, 13 s.
 recur with a process in a loop of no calls (awk, rc), of reads through the
 mount driver, of 1-byte reads (`dd -bs 1`), or with `startsyscall` after
 it. `stop_stops_a_process_in_a_tight_loop` is the test.
+
+### 16.19 A function pointer is never a small number; P7's commands in Plan 9's rc (2026-09-29)
+
+**rc died reading `if not` from a file** — *"out of bounds memory access"*
+at `0xfffffff4`, in `poolfree` under `codefree` under `Xreturn`.
+`codefree` (`rc/code.c:480`, the same as Plan 9's) walks a block of
+compiled code comparing every word with function pointers — `Xappend`,
+`Xword`, `Xfn` … — to know which words are operands to skip or strings to
+free, and it does not list `Xif` or `Xifnot`, whose operand is a jump
+target: a small index into the block. On the 386 that cannot be mistaken
+for a function, because the text starts at 4096+32 (`8l/obj.c:183`,
+*"INITTEXT = 4096+32"* for Plan 9's format). Here a function pointer is an
+index into the function table, which wasm-ld starts at 1, so the jump
+target after `Xifnot` equalled some function's index and `codefree` freed
+the next word as a string. **Every image is linked `--table-base=4128`**,
+so no function pointer is below where the 386's text begins. Inline, the
+same `if not` ran, because `-c`'s code block had other numbers in it.
+
+**Plan 9's rc has no `return` and no `break`** — Byron Rakitzis's rc has
+both; Plan 9's builtins are `. builtin cd eval exec exit flag rfork shift
+wait whatis ~`. Nor does `$"3` join a positional parameter; `$"name` joins
+a named one. And **rc's variables are the script's**, not a function's: a
+function that calls itself, or another that sets the same names, overwrites
+its caller's. `pkg` installs a dependency and removes an old version in a
+subshell, `@{…}`, which copies the variables and shares the namespace.
+
+**A command's binds reach the shell that ran it.** rc forks a command with
+`RFFDG|RFREND|RFPROC` (`havefork.c`), not `RFNAMEG`, so `pkg`, like
+`bind` itself, binds in the namespace of the shell that typed it.
+
+**`auth/newns -a -n file` copies the namespace first** (`newns.c`,
+*"rfork(RFNAMEG)"*), so a repository mounted by it stays in its own
+namespace.
+
+**A `ramfs` run as `none` refuses its caller's writes**: its root is
+`none`'s, as on Plan 9. A service that serves its user runs as that user.
+
+**Identity is blocked on the network.** `auth/login` checks the password
+with `auth_userpasswd` (`libauth/auth_userpasswd.c:37`): a `p9cr`
+challenge and response that factotum, in the server role, completes by
+dialling the authentication server — `authdial`, over `/net`. Without
+`/net` and an auth server there is no password to check against, so `su`
+and `sudo`, defined over `auth/login`, wait for both.

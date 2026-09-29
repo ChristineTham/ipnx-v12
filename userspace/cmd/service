@@ -1,0 +1,112 @@
+#!/bin/rc
+# service — enable, disable, start and stop services (docs/packages.md).
+#
+#	service enable|disable|start|stop [-s|-u] name ...
+#
+# A service is a directory, `/service/<name>/` (the user's in
+# `/home/service/<name>/`): `service.cfg`, in ndb — `service=<name>
+# packages=<p> user=none namespace=<file>` — and `start.rc`, which starts
+# its server and posts it in /srv, `stop.rc`, and the settings `start.rc`
+# reads, `start.env`. What is installed is listed in `/profile/service`
+# (the user's in `/home/profile/service`), one name a line; a disabled one
+# has Plan 9's leading `!` (`!tcp515`, `/rc/bin/service`). The system's
+# enabled services start at boot and stop at shutdown (`/profile/start.rc`,
+# `stop.rc`); the user's at login and logout. Nothing restarts a service
+# that dies, as neither Plan 9's startup nor Debian's init scripts do.
+
+rfork e
+
+fn usage {
+	echo 'usage: service enable|disable|start|stop [-s|-u] name ...' >[1=2]
+	exit usage
+}
+
+fn fail {
+	echo service: $* >[1=2]
+	exit $"*
+}
+
+if(~ $#* 0)
+	usage
+verb=$1
+shift
+
+hostowner=`{cat /dev/hostowner}
+if(~ $user $hostowner)
+	scope=s
+if not
+	scope=u
+while(~ $1 -*){
+	switch($1){
+	case -s
+		scope=s
+	case -u
+		scope=u
+	case *
+		usage
+	}
+	shift
+}
+if(~ $#* 0)
+	usage
+switch($scope){
+case s
+	dir=/service
+	list=/profile/service
+case u
+	dir=/home/service
+	list=/home/profile/service
+}
+
+# the list without service $1, enabled or not
+fn without {
+	grep -v '^!?'^$1^'$' $list >[2]/dev/null
+}
+
+# run script $2 of service $1 — its `start.env` first — as the user and in
+# the namespace its `service.cfg` names: `none`, as `listen` runs a service
+# (`aux/listen.c:375`), unless it names another
+fn run {
+	d=$dir/$1
+	cfg=$d/service.cfg
+	u=`{ndb/query -f $cfg service $1 user >[2]/dev/null}
+	ns=`{ndb/query -f $cfg service $1 namespace >[2]/dev/null}
+	cmd='cd '^$d^'; if(test -r start.env) . ./start.env; . ./'^$2
+	if(~ $u none){
+		if(~ $#ns 0)
+			auth/none rc -c $cmd
+		if not
+			auth/none -n $ns rc -c $cmd
+	}
+	if not
+		@{ rc -c $cmd }
+}
+
+for(s in $*){
+	if(! test -d $dir/$s)
+		fail $s^': no '^$dir/$s
+	switch($verb){
+	case enable
+		{ without $s; echo $s } >/tmp/service.$pid
+		cp /tmp/service.$pid $list
+		rm -f /tmp/service.$pid
+	case disable
+		{ without $s; echo '!'^$s } >/tmp/service.$pid
+		cp /tmp/service.$pid $list
+		rm -f /tmp/service.$pid
+	case start
+		# the packages it needs, into the same scope (Debian's split:
+		# the service is separate from its programs' package)
+		for(p in `{ndb/query -a -f $dir/$s/service.cfg service $s packages >[2]/dev/null})
+			pkg install -$scope $p >/dev/null || fail $s^': needs '^$p
+		run $s start.rc || fail $s^': start.rc failed'
+		echo service: $s started
+	case stop
+		if(test -r $dir/$s/stop.rc)
+			run $s stop.rc
+		echo service: $s stopped
+	case *
+		usage
+	}
+}
+exit ''

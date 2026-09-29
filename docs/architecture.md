@@ -179,7 +179,9 @@ A Plan 9-dialect binary is a wasm32 module that (as built by
   for each new image, putting the `Tos` at the top of the stack and the
   argument block under it, as `sysexec` does (`sysproc.c:450`); the heap
   begins at `end`, which wasm-ld calls `__heap_base`;
-- **exports** `memory`, `__stack_pointer`, the function table,
+- **exports** `memory`, `__stack_pointer`, the function table (linked
+  from index 4128, where the 386's text starts, `8l/obj.c:183`, so no
+  function pointer is a small number — RESEARCH §16.19),
   `_start(argc, argv, tos)` (`libc/wasm/main9.c`), `__notestart`
   (where a note handler is entered), `__asyncbuf`/`__asyncbufsize`, and
   asyncify's `asyncify_*` functions;

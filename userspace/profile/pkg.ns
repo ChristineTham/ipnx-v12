@@ -1,0 +1,3 @@
+# /profile/pkg.ns — the binds of the packages installed to the system,
+# written by `pkg` and never by hand, one block for each, included by
+# /profile/start.ns (docs/packages.md). What is installed is /profile/pkg.

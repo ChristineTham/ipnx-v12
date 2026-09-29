@@ -1,0 +1,132 @@
+#!/bin/rc
+# template — make a project from a template, or remove a template
+# (docs/packages.md, docs/projects.md).
+#
+#	template instantiate [-s|-u] name dir
+#	template remove [-s|-u] name
+#
+# A template is a directory, `/template/<name>/` (the user's in
+# `/home/template/<name>/`): `template.cfg`, in ndb — `template=<name>
+# version=<v>`, with `packages=`, `services=` and `include=` lines — the
+# scaffolding, and `install.rc` and `remove.rc`. Instantiating copies the
+# scaffolding into a new project, writes the template's packages and
+# services into the project's `project.cfg`, and runs `install.rc` there; a
+# template it includes is instantiated first, as a namespace file includes
+# another with `.`. Removing runs `remove.rc` and takes the template out of
+# its directory and out of `/profile/template` (the user's
+# `/home/profile/template`). -s is the system's, -u the user's; without
+# either, the user's is found before the system's.
+
+rfork e
+
+fn usage {
+	echo 'usage: template instantiate [-s|-u] name dir' >[1=2]
+	echo '       template remove [-s|-u] name' >[1=2]
+	exit usage
+}
+
+fn fail {
+	echo template: $* >[1=2]
+	exit $"*
+}
+
+if(~ $#* 0)
+	usage
+verb=$1
+shift
+scope=()
+while(~ $1 -*){
+	switch($1){
+	case -s
+		scope=s
+	case -u
+		scope=u
+	case *
+		usage
+	}
+	shift
+}
+
+# the directory of template $1
+fn find {
+	switch($"scope){
+	case s
+		t=/template/$1
+	case u
+		t=/home/template/$1
+	case *
+		if(test -d /home/template/$1)
+			t=/home/template/$1
+		if not
+			t=/template/$1
+	}
+	if(! test -r $t/template.cfg)
+		fail $1^': no template'
+}
+
+# today, as ndb's date= is written: 2026-09-24
+fn today {
+	date | awk '{
+		m = index("JanFebMarAprMayJunJulAugSepOctNovDec", $2)
+		printf "%s-%02d-%02d\n", $6, (m + 2) / 3, $3
+	}'
+}
+
+# instantiate template $1 into directory $2
+fn instantiate {
+	find $1
+	cfg=$t/template.cfg
+	# what it includes, first
+	for(i in `{ndb/query -a -f $cfg template $1 include >[2]/dev/null})
+		@{ template instantiate $i $2 } || fail $1^': cannot include '^$i
+	mkdir -p $2 || fail $2^': cannot make'
+	# the scaffolding: all of it but the template's own files
+	@{ cd $t && tar c . } | @{ cd $2 && tar x } || fail $1^': cannot copy'
+	for(f in template.cfg install.rc remove.rc){
+		if(test -f $t/$f)
+			rm -f $2/$f
+	}
+	# the project's file: its name and date, and what the template wants
+	p=$2/project.cfg
+	if(! test -f $p){
+		name=`{basename $2}
+		echo 'project='^$name^' version=0.1 date='^`{today} >$p
+	}
+	echo '	template='^$1 >>$p
+	for(a in packages services){
+		for(v in `{ndb/query -a -f $cfg template $1 $a >[2]/dev/null})
+			echo '	'^$a^'='^$v >>$p
+	}
+	if(test -f $t/install.rc)
+		@{ cd $2; rc $t/install.rc } || fail $1^': install.rc failed'
+	echo template: $2 made from $1
+}
+
+switch($verb){
+case instantiate
+	if(! ~ $#* 2)
+		usage
+	instantiate $1 $2
+case remove
+	if(! ~ $#* 1)
+		usage
+	find $1
+	if(test -f $t/remove.rc)
+		@{ cd $t; rc ./remove.rc }
+	switch($t){
+	case /home/*
+		list=/home/profile/template
+	case *
+		list=/profile/template
+	}
+	if(test -f $list){
+		grep -v '^template='^$1^'( |$)' $list >/tmp/template.$pid
+		cp /tmp/template.$pid $list
+		rm -f /tmp/template.$pid
+	}
+	rm -rf $t
+	echo template: $1 removed
+case *
+	usage
+}
+exit ''
