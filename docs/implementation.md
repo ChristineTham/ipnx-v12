@@ -74,7 +74,7 @@ final state; design resumes after it. **Don't overengineer.**
 | | | proves |
 |---|---|---|
 | **the CLI** | typing `ipnx` in a terminal boots IPNX to `rc`; you run userspace commands | the kernel is a Plan 9 subset, boot is rc plus a namespace file, every personality is userspace, the machine is file servers |
-| **the website** | emca in the browser doing what the site does now — a listing on the left, `motd`/`tour`/`README` and `rc` as tabs — with the windows, toolbar and status line to spec | emca owns windows entirely, the contract and the types hold, the surface renders files and never pixels |
+| **the website** | emca in the browser doing what the site does now — a listing on the left, `motd`/`tour`/`README` as tabs, `rc` below them — with the windows, toolbar and status line to spec | emca owns windows entirely, the contract and the types hold, the surface renders files and never pixels |
 
 **Not in the demo:** a window on a Mac or an iPad, the raster, `/net`, git.
 **P0–P8 deliver it.**
@@ -259,7 +259,7 @@ one before:
 |---|---|
 | **builds** | emca in userspace: it mints windows and serves the contract of [window.md](window.md) as files. Then the browser embedding, and the surface that **reads emca's files** and renders natively |
 | **depends on** | P6 — the browser host is a worker per process, which is P6's machine boundary on that surface — and P7, because emca is a service (`/service/emca/start.rc`) and a project is a window type |
-| **acceptance** | **the website.** The site shows the listing and the four tabs — `motd`, `tour`, `README` and `rc` — to spec |
+| **acceptance** | **the website.** The site shows the listing, the three tabs and `rc` below them, to spec |
 | **exposes** | the other targets |
 
 ---

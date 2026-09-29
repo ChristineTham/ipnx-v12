@@ -1153,9 +1153,9 @@ manager reads its `layout` file and opens what it names (docs/type.md,
 *The layout file*):
 
 ```
-/home           the user's home, a listing, left pane
-tabs            /etc/motd, /bin/tour, /home/README and /bin/rc —
-                rc a shell window, a tab like the others
+/home           the user's home, a listing, on the left
+column          beside it: the tabs — /etc/motd, /bin/tour,
+                /home/README — above /bin/rc, a shell window
 the global      inode/system's own verbs — Halt, Reboot, New Shell
 toolbar
 ```

@@ -434,3 +434,6 @@ On building P7, and on names:
   <br>— P8's target
 - *"i don't understand why rc is not just in a window, in one of the tabs. why is rc special?"* — rc becomes a tab
   <br>— cited in `docs/type.md`
+- *"going back to rc below the tabs, I still don't understand your proposal. We already established a window can hold other windows, so there is nothing stopping rc from being under the tabs"*
+- *"It sounds like you just need to fix the layout file. In acme, any window can spit horizontally and vertically"* — the layout file's `row` and `column`
+  <br>— cited in `docs/type.md`

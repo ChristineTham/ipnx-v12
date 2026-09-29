@@ -82,8 +82,8 @@ the names "rail" and "transcript": panes are not special. They are
 ordinary windows.
 
 The root window creates them from its type's `layout` file (type.md) and
-then forgets they were ever special — the user's home listed on the left
-and the tabs, rc among them — dividing into as many columns as its `breakpoints` file
+then forgets they were ever special — the user's home listed on the left,
+and beside it the tabs above rc — dividing into as many columns as its `breakpoints` file
 gives the width. Every one of those is a window: its four controls,
 closeable, minimisable, maximisable, duplicable and divisible, and nothing in the system records that it was created by a
 convention rather than by a person.

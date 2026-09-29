@@ -628,30 +628,35 @@ turns a confirmation step into something continuously visible.
 /type/inode/system/layout
 
 /home
-tabs
-    /etc/motd
-    /bin/tour
-    /home/README
+column
+    tabs
+        /etc/motd
+        /bin/tour
+        /home/README
     /bin/rc
 ```
 
-**rc is a tab like the others** (Christine, 2026-09-29: *"why is rc special?"*):
-a shell window is what `manage` on `/bin/rc` makes, and a window opens as a tab
-by default.
+The root is a row, as acme's is: the listing and a column side by side, the
+column holding the tabs above rc. **rc is not special** (Christine,
+2026-09-29: *"why is rc special?"*): a shell window is what `manage` on
+`/bin/rc` makes, and putting it in the tab group instead is moving one line.
 
-**Three rules, and that is the whole format:**
+**Four rules, and that is the whole format:**
 
 1. **Each line is a PATH.** The type is *inferred from content* and the role
    *derived from permissions*, exactly as everywhere else — so a layout names
    things, and never says what they are.
-2. **Indentation nests.** The axis is not stated because **alternation already
-   determines it**: a container's axis is perpendicular to its parent's, so
-   depth decides row-versus-column and writing it down would only create a
-   second source of truth.
-3. **`tabs` groups.** Its children share one rectangle. This is the only
-   keyword, and it is needed because tabs are otherwise the *un-allocated
-   remainder* — an outcome of the sizing heuristic, which cannot be relied on to
-   produce a shape you asked for.
+2. **`row` and `column` split**, at any depth — *"in acme, any window can
+   split horizontally and vertically"* (Christine, 2026-09-29). A `row`'s
+   children sit side by side and a `column`'s stack top to bottom: acme's
+   `Row` and `Column` (`acme/dat.h:317`, `:295`), which are its words. The
+   root is a row. How emca stores the tree — alternation (compositor.md) —
+   is its own business; the file says what you asked for.
+3. **`tabs` groups.** Its children share one rectangle — needed because tabs
+   are otherwise the *un-allocated remainder*, an outcome of the sizing
+   heuristic, which cannot be relied on to produce a shape you asked for.
+4. **Indentation nests**, under `row`, `column` or `tabs`. A path's window
+   holds a file, so nothing is indented under a path.
 
 ### A shell window needs no special case
 
