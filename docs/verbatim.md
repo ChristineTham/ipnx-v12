@@ -437,3 +437,4 @@ On building P7, and on names:
 - *"going back to rc below the tabs, I still don't understand your proposal. We already established a window can hold other windows, so there is nothing stopping rc from being under the tabs"*
 - *"It sounds like you just need to fix the layout file. In acme, any window can spit horizontally and vertically"* — the layout file's `row` and `column`
   <br>— cited in `docs/type.md`
+- *"it sounds to me this was a question you could have answered from plan 9 rather than asking me"* — the layout's `row` and `column`; and the surface's serial line, taken from Plan 9 rather than proposed

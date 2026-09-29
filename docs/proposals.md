@@ -11,33 +11,9 @@ was in this register on 2026-09-18 turned out to be answered at file and line.
 
 ## Open
 
-**How the surface reaches emca: a serial line and `exportfs`** — proposed
-2026-09-29. The design says emca-IPNX *"speaks 9P to emca-host"* (surface.md)
-and the surface *"reads emca's files"* (implementation.md, P8) — `/dev/wsys/<n>/`
-and the content files they name — but not over what. Plan 9 answers it: a
-terminal reached a namespace over a serial line with **`exportfs`**, a
-user-level server that speaks 9P on a byte stream (`exportfs(4)`), on the
-**uart device**, `#t` (`port/devuart.c:252`), whose hardware the machine
-supplies as a `PhysUart` (`portdat.h:899`).
-
-1. **The host is the uart's far end.** Each host supplies one `PhysUart`,
-   `eia0`, whose bytes go to its surface — a byte stream, which Dis or the
-   CLR could carry as well as wasm (CLAUDE.md, the two tests). `devuart` is
-   Plan 9's, so the kernel gains a Plan 9 device and nothing invented.
-2. **emca's `start.rc` runs Plan 9's `exportfs` on it** — `exportfs -r /
-   <>/dev/eia0 >[1=0]` in emca's namespace — so the surface sees exactly
-   what emca serves and nothing else.
-3. **The surface is a 9P client** of that stream: it walks `/dev/wsys`,
-   reads each window's `type`, `title`, `verbs`, `status` and `body`, blocks
-   on `rect`, and writes `wctl` and what the person did. **9P stays the only
-   interface**, and a manager cannot tell a surface from any other client.
-
-The alternative is the network — `/net` and `aux/listen`, as a cpu server
-exports to drawterm — which needs an IP stack the system does not have.
-
 **The browser embedding** — proposed 2026-09-29, building on the decided
 *"Node wasm supervisor and browser workers"* (P6, below) and on the serial
-line above. Nothing of the retired proof of concept is reused.
+line surface.md takes from Plan 9. Nothing of the retired proof of concept is reused.
 
 1. **A host crate, `hosts/web`**, beside `hosts/ipnx`: the Rust kernel core,
    unchanged, compiled to `wasm32-unknown-unknown`, with a `Machine` whose
@@ -49,7 +25,7 @@ line above. Nothing of the retired proof of concept is reused.
    system — served over `#9` as `hosts/ipnx` serves a directory, and seeded
    on first visit from the built root shipped as a `disk/mkfs -a` archive,
    the P7 package format.
-4. **The surface is the page**: a 9P client on the uart (above) that renders
+4. **The surface is the page**: a 9P client on the uart (surface.md) that renders
    each window natively — text in the browser's own editing, a listing as a
    list — with the global toolbar carrying `inode/system`'s verbs
    (surface.md).
