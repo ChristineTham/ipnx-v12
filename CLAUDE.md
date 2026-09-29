@@ -60,9 +60,9 @@ wording, "wasm and the surfaces are the machine it runs on", had the host below
 the system rather than part of it, and that is the distinction the name exists
 to carry. **The interface between them is 9P and nothing else**
 (redesigned 2026-08-31): content is a file the host mounts and renders natively
-(so **IPNX implements no renderers**), `/dev/window/<type>/<n>` is the
-bidirectional control interface with the type in the path, `/type` is the
-registry both sides read, and `/dev/canvas` narrows to genuine drawing — the
+(so **IPNX implements no renderers**), `/dev/window/` is a window's own
+bidirectional control interface and `/dev/wsys/<n>/` every window's, as rio
+serves them (`rio/fsys.c:42`), `/type` is the registry both sides read, and `/dev/canvas` narrows to genuine drawing — the
 exception, not the rule.
 Saranos is Sanskrit *śaraṇa* (शरण), *refuge* — Christine's reading: *a refuge
 from the complexities of the modern computing environment*, a refuge for the

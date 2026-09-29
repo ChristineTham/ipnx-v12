@@ -1,8 +1,12 @@
 # The window manager contract
 
-> **PROPOSED — not reviewed.** Claude wrote this. Nothing in it is endorsed, and
-> nothing in it approves a deviation from Plan 9. What is built is
-> [when.md](when.md).
+> **MIXED.** **Decided**: the manager interface as a file interface
+> (*Reviewed and endorsed*, 2026-09-02); the path is `/dev`, not `/mnt`
+> (Christine, 2026-09-02); a window's content is always a file (2026-09-02);
+> and, by Plan 9 where she has said nothing (2026-09-29), `/dev/window/` for
+> a window's own files and `/dev/wsys/<n>/` for every window's, as rio
+> serves them. **Everything else is proposed** and approves no deviation
+> from Plan 9. What is built is [when.md](when.md).
 >
 > The device letters below are not Plan 9's: `H`, `Z` and `R` name no device;
 > `V` is the TV capture device (`plan9/sys/src/9/pc/devtv.c`) and `w` the
@@ -178,15 +182,16 @@ make a floating implementation substitutable for the tiled one.
 
 rio — not acme — is therefore the analogue: it serves `/dev/cons`,
 `/dev/mouse` and `/dev/wctl` to its clients, with the full set at
-`/dev/emca/<n>/`. This is rio's own shape: rio mounts itself at `/mnt/wsys` and binds that over
+`/dev/wsys/<n>/`, rio's own name for it (`rio/fsys.c:42`). This is rio's own shape: rio mounts itself at `/mnt/wsys` and binds that over
 `/dev` with `MBEFORE` (`rio/fsys.c:237`, `:241`), so a namespace **is** a
 window.
 
 ```
 /dev/window/      each manager's OWN window — the common case, no id in the path
-/dev/emca/<n>/    the full set: what emca serves, what a window tool reads
+/dev/wsys/<n>/    the full set: what emca serves, what a window tool reads —
+                  rio's `wsys` directory (`rio/fsys.c:42`, `:396`)
 
-A manager opens /dev/window/rect, never /dev/emca/3/rect: no window id appears
+A manager opens /dev/window/rect, never /dev/wsys/3/rect: no window id appears
 in any path a manager uses, because its namespace contains only its own window.
 It cannot reach another window's files — they are not there.
 
@@ -207,7 +212,11 @@ and canvas.
     title     read  the window's title. emca OWNS it; the manager may look
     events    read  input not consumed by the surface — the manager owns the
               keyboard inside its rectangle
-    ctl       write window-level requests: close, minimise, maximise, duplicate
+    wctl      write rio's verbs (`rio/wctl.c:35`: new resize move scroll
+              noscroll set top bottom current hide unhide delete), as
+              type.md's design has it (2026-09-18) — close is `delete`,
+              minimise is `hide` — and the two the window controls need that
+              rio has not: `maximise`, `duplicate`
 ```
 
 > **RESOLVED (Christine, 2026-09-02): the window's content is ALWAYS a file.**

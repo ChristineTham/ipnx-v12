@@ -1,9 +1,13 @@
 # Window types and their managers
 
 > **MIXED.** *The design* below is **decided** — Christine answered its five
-> open questions on 2026-09-18. Everything after it is **proposed**: Claude
-> wrote it, it is not endorsed, and it approves no deviation from Plan 9. What
-> is built is [when.md](when.md).
+> open questions on 2026-09-18. **Also decided**, in her acceptance of every
+> proposal then open (*"accept your proposals"*, 2026-09-02): the `/type` file
+> syntax, `properties`, the pkg, template and project shapes, `inode/system`
+> and its layout file, the `shell` type, `inode/directory`'s listing, the
+> status line and `emcaopen`. **Still open**: what *Open — what remains*
+> lists, and `text/plain`'s content model. Where Christine has said nothing,
+> Plan 9 is the reference (2026-09-29). What is built is [when.md](when.md).
 >
 > The device letters below are not Plan 9's: `H`, `Z` and `R` name no device;
 > `V` is the TV capture device (`plan9/sys/src/9/pc/devtv.c`) and `w` the
@@ -139,16 +143,13 @@ under a path convention; emca hardcodes exactly **two** facts — that `/` is
   non-UTF-8 content renders with escapes and opens read-only, and line endings
   are never rewritten. What it *is* — its content model, its verbs, its status
   line, what Find and Edit mean over it — is the next work.
-- **The manager interface**, though it shrank considerably once emca's job
-  became *"hand over a rectangle and a namespace, and stop"*
-  ([window.md](window.md)). What is sketched below is marked as an unreviewed
-  proposal and should not be built from.
-- **What a type declares about BINDING.** `ns` as implemented is retired
-  (decision log), but the need is real and now sharper: a manager populates its
-  window by binding, so a type must be able to say what gets bound in. Not
-  designed.
-- **Every other type** — `inode/directory`, `shell`, `pkg`, and the template
-  and project types — waits on `text/plain`.
+
+**Closed since this list was written:** the manager interface — acme's
+per-window files, one manager per window (*The design*, 2026-09-18); what a
+type declares about binding — its `namespace` file (the same); and the other
+types — `inode/system`, `shell` and `inode/directory`, accepted 2026-09-02
+(below), and the pkg, template and project types, whose forms P7 decided
+(docs/packages.md, docs/projects.md).
 
 ## Why acme has one window type, and Saranos cannot
 
@@ -374,7 +375,7 @@ The sketch's candidates, and where each landed:
 | | |
 |---|---|
 | **kind** | what the content is, so the surface knows how to render it and emca knows whether it has items at all |
-| **items** | what Find selects and Pipe feeds — byte ranges for text, files for a listing, pids for `proc` |
+| **items** | what Find selects and Run's `>` feeds — byte ranges for text, files for a listing, pids for `proc` |
 | **verbs** | what the toolbar offers, which `window` already carries |
 | **size** | intrinsic dimensions for the kinds with an aspect ratio rather than a line count — already the `size` event |
 
@@ -401,7 +402,7 @@ reader is not left wondering whether they were forgotten.*
 |---|---|
 | **Can one type have several managers?** | **CLOSED.** Yes — that is what the five **roles** are, chosen per window from the title bar's dropdown, with the default derived from permissions |
 | **`ns` as executable text** | **CLOSED.** `ns` is retired; a type declares bindings in its declaration and nothing in the registry is `eval`'d |
-| **Per-verb invocation, or long-running?** | **OPEN.** A manager writable in six lines of rc is what makes *"adding a manager is adding a file"* nearly true; a long-running one can hold state and serve a computed body. `edit` is long-running, `manage` on `/proc` need not be |
+| **Per-verb invocation, or long-running?** | **CLOSED.** A manager runs per window and is a file server posted in `/srv` (*The design*, 2026-09-18): long-running for its window's life |
 | **How much interface may a manager declare?** | **OPEN.** The toolbar generalised — fields, toggles, lists — needs a vocabulary, and that vocabulary is the part most likely to grow without discipline. The file interface bounds it for now: whatever is not a file in `/dev/window/` cannot be declared |
 | **Is the window's CONTENT a file too?** | **CLOSED.** Always — the host may *render* it as an image, a table or formatted text, but the file is the truth ([window.md](window.md)) |
 | **`emcaopen`'s interface** | **CLOSED** — one argument, everything else derived; see below |
@@ -522,11 +523,12 @@ root divides into*; emca owns what rectangles they get.
     2     144
     3     216
 
-/rc/emca                          starts emca — one line. The WINDOWS come
-                                  from `layout` above, not from here
-/profile/emca                     a person's own, if it should follow them
-                                  across devices — same convention, named for
-                                  the program on both sides
+/service/emca/start.rc            starts emca, which is a service
+                                  (docs/packages.md) — one line. The WINDOWS
+                                  come from `layout` above, not from here
+/home/profile/start.ns            a person's own layout, bound over the
+                                  system's — `bind /home/type/inode/system/layout
+                                  /type/inode/system/layout`
 ```
 
 **Breakpoints belong to the type**, because `/type/<x>/` is where a type's
@@ -542,12 +544,12 @@ preference store and no new location.
 > references). **Do not put configuration into a root that means something
 > else**, and **do not coin a name Unix already uses**. A namespaced subtree
 > under a root is fine; bare files in it are not. The startup file needs no new
-> word at all: `/rc/emca` and `/profile/emca` are named for the program, the
-> same convention on both sides.
+> word at all. Since P7 (2026-09-24) the program is a service,
+> `/service/emca/start.rc`, and `/rc` is retired.
 
 **Resize needs no new mechanism.** The manager does a blocking read on
 `/dev/window/rect`; when it returns, it consults `breakpoints`, and if the
-column count should change it writes `leaves <n>` to `/dev/window/ctl`. emca
+column count should change it writes `leaves <n>` to `/dev/window/wctl`. emca
 re-divides the root and reallocates. `Reset` is the same act performed on
 demand.
 
@@ -555,7 +557,7 @@ This keeps `leaves = cols / 72` as **data rather than code** — today it is
 `convention()` inside `emca.c`, which is a system layout decision compiled into
 the window manager.
 
-> **DECIDED at the stated lean, 2026-09-02:** whether `/rc/emca` re-runs on a large resize (it would need to
+> **DECIDED at the stated lean, 2026-09-02:** whether emca's startup re-runs on a large resize (it would need to
 > be idempotent, or the manager would have to diff), or runs only once and
 > resize touches nothing but the column count. The second is simpler and matches what
 > M15e built.
@@ -585,9 +587,9 @@ local editing. Plan 9's answer is `/dev/consctl` and the word `rawon`, and it is
 the whole of what termios provides that anything here needs:
 
 ```
-echo rawon  > /dev/window/ctl     every keystroke crosses immediately;
+echo rawon  > /dev/consctl        every keystroke crosses immediately;
                                   no local echo, no local editing
-echo rawoff > /dev/window/ctl     the surface holds the line again (default)
+echo rawoff > /dev/consctl        the surface holds the line again (default)
 ```
 
 ### The window
@@ -708,7 +710,7 @@ turns a confirmation step into something continuously visible.
 /home
 tabs
     /etc/motd
-    /rc/tour
+    /bin/tour
     /home/README
 /bin/rc
 ```
@@ -778,7 +780,7 @@ emcaopen /bin/rc manage        runs it; the window is `shell` on its channel
 That last line is the whole of "open a terminal": **`manage` on an executable
 runs it**, and no part of `emcaopen` knows what a shell is.
 
-### And `/rc/emca` shrinks to one line
+### And emca's startup is one line
 
 An earlier draft had `/rc/emca` opening the startup windows *and*
 `/type/inode/system/layout` declaring them — two sources of truth for one fact.
@@ -786,7 +788,7 @@ An earlier draft had `/rc/emca` opening the startup windows *and*
 binding. So:
 
 ```
-/rc/emca        starts emca. That is all it does.
+/service/emca/start.rc     starts emca. That is all it does.
 ```
 
 emca opens `/`, which is `inode/system`; that type's `manage` manager reads

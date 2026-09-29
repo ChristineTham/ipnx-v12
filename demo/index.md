@@ -66,7 +66,7 @@ A **window** is a rectangle with a tag, holding either a body or other windows. 
 
 Each carries the same parts: a title you can edit, a row of the verbs its **type** allows, a tag line where a command runs in that window's own directory, and a body. The type comes from `/type`, which is itself a directory of small files — so adding a manager to the system is adding a file, not writing a program. That is why the buttons along the top open `/proc`, `/pkg`, `/usr` and `/type` as ordinary windows and no process-manager exists anywhere.
 
-The display really is files. From the shell, `ls /dev/window` lists the windows, `cat /dev/window/text/2/toolbar` reads one's verbs, and `rc /rc/tile` runs a window manager written in a dozen lines of shell. *(Status, 2026-09-03: this is the site as deployed. The window system is leaving the kernel — emca, a user program, now serves each window's files at `/dev/emca` — and the page will follow when the new demo deploys.)* Your ⌘C/⌘X/⌘V are snarf: `cat /dev/snarf` reads what you last copied.
+The display really is files. From the shell, `ls /dev/wsys` lists the windows, `cat /dev/wsys/2/verbs` reads one's verbs, and a window manager is a program that reads and writes them — emca, a user program, serves each window's files as rio does (`/dev/window` for a window's own, `/dev/wsys/<n>` for all of them). Your ⌘C/⌘X/⌘V are snarf: `cat /dev/snarf` reads what you last copied.
 
 **acme**, **sam** and **con** run here too — each inherited its name by passing its ancestor's tests, and the 1993 raster originals are still one command away as `acme9` and `sam9`. acme keeps its own vocabulary: `Put`, `Get`, `Snarf`, `Zerox`, the `|` `<` `>` filters, and `mount acme /mnt/acme` so the editor is itself files.
 
@@ -98,7 +98,7 @@ Under `--app` the canvas renders natively; `/dev/snarf` *is* the Mac pasteboard 
 Once the prompt appears, take the guided tour:
 
 ```
-rc /rc/tour
+tour
 ```
 
 You boot as **kitty**, at home in `/usr/kitty`, where `hello.c`, `hello.py` and `hello.go` are waiting. With the toolchain aboard, `cc hello.c` then `./a.out` runs real clang and wasm-ld as guests, then the binary you built — Hello Kitty. It is a real `cc(1)`: flags, `-o`, `-c` and multiple files all work. Python interprets in the tab too (`python hello.py`); the real gc compiler and linker run as guests too, because they are pure Go and cross-build (`go` explains how). The tour shows everything.

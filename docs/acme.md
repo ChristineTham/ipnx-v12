@@ -1,8 +1,11 @@
 # acme — the port
 
-> **PROPOSED — not reviewed.** Claude wrote this. Nothing in it is endorsed, and
-> nothing in it approves a deviation from Plan 9. What is built is
-> [when.md](when.md).
+> **MIXED.** **Decided**: acme is Bell Labs' program, fitted into emca
+> with its functionality preserved (Christine, 2026-09-01), running under
+> emca on `/dev/draw` with its own composition (2026-09-02); the
+> decomposition in her words (2026-08-31), quoted below. **The port's
+> detail is proposed**: Claude wrote it, and it approves no deviation from
+> Plan 9. What is built is [when.md](when.md).
 
 **Role: a *what* — the acme port specification.**
 

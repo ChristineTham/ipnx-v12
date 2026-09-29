@@ -1,8 +1,10 @@
 # The platforms — where it runs, and where everything lives
 
-> **PROPOSED — not reviewed.** Claude wrote this. Nothing in it is endorsed, and
-> nothing in it approves a deviation from Plan 9. What is built is
-> [when.md](when.md).
+> **MIXED.** Christine's words, where quoted, are decided; **everything
+> else is proposed** — Claude wrote it, and it approves no deviation from
+> Plan 9. The dated ledger is history and keeps its words; its milestone
+> numbers belong to the retired proof of concept, which is not a
+> reference. What is built is [when.md](when.md).
 >
 > The device letters below are not Plan 9's: `H`, `Z` and `R` name no device;
 > `V` is the TV capture device (`plan9/sys/src/9/pc/devtv.c`) and `w` the

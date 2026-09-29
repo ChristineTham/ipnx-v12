@@ -1,8 +1,12 @@
 # /dev/canvas — the drawing device
 
-> **PROPOSED — not reviewed.** Claude wrote this. Nothing in it is endorsed, and
-> nothing in it approves a deviation from Plan 9. What is built is
-> [when.md](when.md).
+> **MIXED.** **Decided**: `/dev/canvas` narrowed to genuine drawing
+> (2026-08-31); three files after Plan 9's shape rather than one —
+> Christine, 2026-09-18, quoted below; and it is not needed for the demo —
+> *"we don't need /dev/draw for the demo … /dev/draw is only needed for
+> acme"* (2026-09-03). **The rest is proposed.** The *v0* text below
+> records the retired proof of concept and is **not a target**. What is
+> built is [when.md](when.md).
 >
 > The device letters below are not Plan 9's: `H`, `Z` and `R` name no device;
 > `V` is the TV capture device (`plan9/sys/src/9/pc/devtv.c`) and `w` the
@@ -36,7 +40,8 @@
 >
 > **Where the rest went**: content → **9P**, the host mounts the file and
 > renders it (IPNX implements no renderers); chrome and layout →
-> **`/dev/window/<type>/<n>`**, bidirectional, type in the path; what a
+> **`/dev/window/`**, bidirectional, a window's own (every window's at
+> `/dev/wsys/<n>/`, as rio serves them); what a
 > type means → **`/type`**, read by both sides. All of it 9P; these are
 > conventions, not protocols.
 >

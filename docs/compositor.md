@@ -1,8 +1,12 @@
 # The tiled compositor — one implementation of the window manager
 
-> **PROPOSED — not reviewed.** Claude wrote this. Nothing in it is endorsed, and
-> nothing in it approves a deviation from Plan 9. What is built is
-> [when.md](when.md).
+> **MIXED.** **Decided**, in Christine's words (quoted below): the
+> recursion — every window a compositor, the screen one window of type
+> root; the root window as genuinely special; duplicate as three buttons in
+> this implementation; and a new window opening as a tab by default
+> (2026-09-01, 2026-09-02). **Allocation, sizing and the rest are
+> proposed**: Claude wrote them, and they approve no deviation from Plan 9.
+> What is built is [when.md](when.md).
 
 **Role: a *what* — the tiled window manager.** How *this* implementation of
 emca arranges windows. **It is one implementation, not the contract**: the

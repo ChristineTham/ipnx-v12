@@ -1,7 +1,11 @@
 # The surface — what the host side owns
 
-> **PROPOSED — not reviewed.** Claude wrote this. Nothing in it is endorsed, and
-> nothing in it approves a deviation from Plan 9. What is built is
+> **MIXED.** **Decided**: the surface is the host half of emca (her
+> instruction, 2026-08-31), and Saranos serves the host's screen, keyboard
+> and mouse to the kernel as devices — *"I am a macOS app… I will serve
+> these as virtual devices to the IPNX kernel"* (Christine, 2026-09-02).
+> **The chrome, theming and placement detail is proposed**: Claude wrote
+> it, and it approves no deviation from Plan 9. What is built is
 > [when.md](when.md).
 >
 > The device letters below are not Plan 9's: `H`, `Z` and `R` name no device;

@@ -1,8 +1,13 @@
 # emca — the windowing system and user interface
 
-> **PROPOSED — not reviewed.** Claude wrote this. Nothing in it is endorsed, and
-> nothing in it approves a deviation from Plan 9. What is built is
-> [when.md](when.md).
+> **MIXED.** **Decided**: *the endorsed baseline* below (Christine,
+> 2026-09-02); the split into an IPNX half and a surface half (her
+> instruction, 2026-08-31); the type system, specified in type.md (decided
+> 2026-09-18); tabs — *"an open window opens a new tab by default"*
+> (2026-09-02); and emca as a service (2026-09-24). **Everything else is
+> proposed**: Claude wrote it, it is not endorsed, and it approves no
+> deviation from Plan 9. Where Christine has said nothing, Plan 9 is the
+> reference (2026-09-29). What is built is [when.md](when.md).
 >
 > The device letters below are not Plan 9's: `H`, `Z` and `R` name no device;
 > `V` is the TV capture device (`plan9/sys/src/9/pc/devtv.c`) and `w` the
@@ -98,15 +103,14 @@ check it against.
 **Decided 2026-09-18** and specified in [type.md](type.md): a type is a plumb
 rule, a manager is a file server on a plumb port, one manager per window, the
 host half inside the Saranos app, the root window with a manager like any
-other, and a declared `verbs` list. The individual types — `root`, `ls`,
-`edit`, `shell`, `output`, `pkg`, `project` — are still undesigned.
+other, and a declared `verbs` list. The individual types were accepted on
+2026-09-02 — `inode/system` (the root), `inode/directory` (a listing), `shell`
+— and `output` is not a type but `text/plain` under a path convention; the
+pkg, template and project types are P7's (docs/packages.md). What
+`text/plain` *is* remains the open work.
 
-- **The window type specification itself** — what a type declares, in what
-  files, and what a manager's interface is. The manager is agreed to be
-  necessary and its *responsibilities* are agreed; its **definition is not**.
-- **Every potential window type** — `root`, `ls`, `edit`, `shell`, `output`,
-  `pkg`, `project` are named and **all undesigned**
-  ([implementation.md](implementation.md)).
+The window type specification — what a type declares, in what files, and a
+manager's interface — is type.md's *design* (2026-09-18).
 
 ### The acceptance test
 "acme intent" stated so it can be checked. Three properties, derived
@@ -128,8 +132,11 @@ wearing the name.
 
 Property 3 degrades by viewport and that is accepted: at the smallest
 size every window's TAG stays visible though only one BODY does.
-Reduced, not abandoned. A tabbed interface would abandon it, which is
-why emca has no tabs at any size.
+Reduced, not abandoned. **Tabs keep it**, because a tab is a window
+whose tag is still shown: *"new rows and new columns should only ever
+be created by a user, so an open window opens a new tab by default…
+It is also the safest option, that does not destroy current layout"*
+(Christine, 2026-09-02). docs/compositor.md says how tabs are placed.
 
 WHY PROPERTY 1 SURVIVES A SYSTEM UI, which is the claim this whole
 design rests on: a rich system interface normally destroys it. A
@@ -178,7 +185,7 @@ passphrase) — the surface's.
   path or an address, the filters pipe dot
 - which verbs APPLY to a given range (the plumber's judgement)
 - the file interface: /dev/window (a manager's own) and
-  /dev/emca/<n>/ (the full set emca serves)
+  /dev/wsys/<n>/ (the full set emca serves, rio's name for it)
 - the running-command table (a view of /proc)
 - Dump and Load: the window set
 - THE TREE, AND THE COMPOSITION: which windows exist, how they nest,
@@ -229,10 +236,11 @@ everything is 9P; what differs is what the files mean.
                     mounts it and RENDERS IT NATIVELY — text, SVG,
                     HTML, Markdown, PostScript, images. IPNX
                     IMPLEMENTS NO RENDERERS AT ALL.
-/dev/window/        THE CONTROL INTERFACE, bidirectional, per
-  <type>/<n>/       window. IPNX declares the chrome; the host
-                    reports what the user did. The TYPE IS IN THE
-                    PATH, as /net/tcp/0 differs from /net/udp/0.
+/dev/window/        THE CONTROL INTERFACE, bidirectional, a
+                    window's own; every window's at /dev/wsys/<n>/,
+                    as rio serves them (rio/fsys.c:42). IPNX
+                    declares the chrome; the host reports what the
+                    user did. The type is a file in it, `type`.
                     Specified in docs/window.md.
 /type               the registry BOTH SIDES READ: what types exist,
                     what IPNX command drives each, what that type's
@@ -512,11 +520,13 @@ TAG LINE  free, editable text, and IT COMES FIRST IN THE ROW because
             Open    the selected text as a window
             Run     the selection as a command — which is precisely
                     acme's button-2-on-text
-            Pipe    the selection into a command
+            Run |cmd, >cmd, <cmd
+                    the selection through, into or from a command —
+                    acme's syntax (`acme/exec.c`, `run`), not a button
             Edit    a sam command over it
 
           So THE ALWAYS-VISIBLE BUTTONS ALREADY ACT ON POINTED-AT
-          TEXT, and they offer four more verbs than a selection menu
+          TEXT, and they offer more verbs than a selection menu
           ever did. Which is what lets the selection menu be
           optional (below) rather than the only road.
 
@@ -607,9 +617,10 @@ operand alone, and it is the shape the design settled into:
 group        surface           universal?     verbs
 ----------   ---------------   ------------   ---------------------
 WINDOW       the title bar     always         Close, Minimise,
-operations   row                              Maximise, New column,
-                                              New row, New tab, Fit
-TEXT         the tag line's    always         Open, Find, Run, Pipe,
+operations   row                              Maximise, Duplicate —
+                                              three buttons here: as
+                                              column, as row, as tab
+TEXT         the tag line's    always         New, Open, Run, Find,
 operations   buttons                          Edit, Add — acting on
                                               the SELECTION when the
                                               tag line is empty
@@ -622,8 +633,7 @@ operations   toolbar                          whatever Add put in the verbs file
 
 So the universals are what a window can do to ITSELF and to TEXT; the
 toolbar is the only surface that varies by window, and — because Add
-writes to the verbs file
-writes to it — the only one a person can change. Fixed rows, one
+writes to its verbs file — the only one a person can change. Fixed rows, one
 extensible row.
 
 OPERAND DETERMINES SURFACE still explains WHERE each sits: the title
@@ -692,7 +702,7 @@ same way (layer 1, not layer 3).
 ### The body is a sequence of items
 What makes the text operations universal, rather than universal by
 fiat: EVERY WINDOW'S BODY IS A SEQUENCE OF ITEMS. Find selects a
-subset. Edit and Pipe operate on the subset. What an ITEM is, is the
+subset. Edit, and Run with `|`, `<` or `>`, operate on the subset. What an ITEM is, is the
 type's — and that is the only thing that varies.
 
 ```
@@ -758,8 +768,11 @@ Find   SELECT EVERY ITEM THE TEXT NAMES, in this window. It is
 Run    execute the text as a command, in the window's directory, AND
        IGNORE DOT. Output goes to an OUTPUT WINDOW — see below.
 
-Pipe   write THE SELECTED ITEMS to a command's stdin, one per line,
-       and put the results in an OUTPUT WINDOW — see below.
+|, >, <   SYNTAX WITHIN RUN, as in acme — there is no Pipe button
+       (decided 2026-09-02). `>cmd` writes THE SELECTED ITEMS to the
+       command's stdin, one per line; `|cmd` replaces them with its
+       output; `<cmd` replaces them with a command's output. Results
+       not replacing the selection go to an OUTPUT WINDOW — see below.
 
        One semantic, no per-type behaviour: items are lines on
        stdin, always. Where a command wants arguments instead you
@@ -796,12 +809,12 @@ Add    put the tag line's text on this window's toolbar as a button.
        becomes durable.
 ```
 
-RUN, PIPE AND EDIT ARE ACME'S OWN THREE — execute, the filters, and
-Edit — named for what they do. They must stay three, and the dangerous
-merge is Run with Pipe: with three files selected, pressing Run meaning
-"build the project" must not run rm three times. RUN IGNORES DOT; PIPE
-ITERATES OVER IT, and that has to be a button rather than a heuristic,
-by the rule below.
+RUN, THE FILTERS AND EDIT ARE ACME'S OWN THREE — execute, `|` `<` `>`,
+and Edit. The dangerous merge would be Run with the filters: with three
+files selected, pressing Run meaning "build the project" must not run
+rm three times. RUN IGNORES DOT; `>cmd` ITERATES OVER IT — and the text
+says which, by its first character, so by the rule below that needs no
+button of its own.
 
 ### The rules that decided all of this
 Two, arrived at repeatedly from different directions:
@@ -819,8 +832,9 @@ OPERATION IS MEANT.
 A VERB THAT MODIFIES IS NEVER INFERRED.
 
   Find is safe by construction; Edit announces that it might change
-  things. This is also why Run and Pipe do not collapse into one
-  verb that behaves differently when something is selected.
+  things. This is also why Run never behaves differently because
+  something is selected: only a `|`, `<` or `>` the person typed
+  makes it act on the selection.
 ```
 
 AND NOTHING COMPUTES APPLICABILITY. An earlier draft had Open and Find
@@ -1120,8 +1134,12 @@ toolbar/tag-line boundary IS that distinction, made visible.
 The system boots into emca. There is no login shell that later starts
 a UI; emca IS the session, and rc is a window inside it.
 
-The default workspace is a NAMESPACE FILE — declarative, which is the
-"boot is rc plus a namespace file" refusal of systemd paying out:
+The default workspace is DECLARED, not scripted — the "boot is rc plus
+a namespace file" refusal of systemd paying out. **emca is a service**
+(Christine, 2026-09-24), started at login by `/service/emca/start.rc`
+(docs/packages.md); it opens `/`, which is `inode/system`, whose
+manager reads its `layout` file and opens what it names (docs/type.md,
+*The layout file*):
 
 ```
 motd            an editor window, main area
