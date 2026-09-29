@@ -262,6 +262,33 @@ one before:
 | **acceptance** | **the website.** The site shows the listing, the three tabs and `rc` below them, to spec |
 | **exposes** | the other targets |
 
+Built in this order, each step on the one before (planned 2026-09-29 — *"we
+already agreed this is a rewrite"*):
+
+| | |
+|---|---|
+| **1. the serial line** | `#t`, Plan 9's `port/devuart.c`, in the kernel, and a `PhysUart` from each host whose far end is the surface (surface.md, *emca-host reaches emca over a serial line*). `hosts/ipnx`'s far end is its tests: `exportfs` on `/dev/eia0`, and a 9P client in the test walking what it serves |
+| **2. emca, the IPNX half** | a userspace program in rio's shape (`rio/fsys.c`): each window's files at `/dev/window/` in its own namespace and every window's at `/dev/wsys/<n>/` (window.md); the root window `/`, reading `/type/inode/system/layout`; a window's manager found by plumbing (type.md, *The design*). Started by `/service/emca/start.rc`, which runs `exportfs` on the serial line |
+| **3. the demo's types** | `/type/inode/system`, `/type/inode/directory`, `/type/text/plain` and the `shell` role — their four files and their managers (type.md) |
+| **4. `hosts/web`** | the browser host, below |
+| **5. the surface** | the page: a 9P client of the serial line rendering each window natively, and the global toolbar (surface.md) |
+
+**The browser host, `hosts/web`**, beside `hosts/ipnx`, on the decided
+*"Node wasm supervisor and browser workers"* (P6):
+
+1. **The Rust kernel core, unchanged**, compiled to `wasm32-unknown-unknown`
+   with a `Machine` whose processes are Web Workers — one per process —
+   sharing a `SharedArrayBuffer` memory for `RFMEM`. A call is a message and
+   `Atomics.wait`; the images are the asyncified ones `mk.sh` builds.
+2. **The kernel in a worker of its own**, so nothing blocks the page.
+3. **The root file server is the page's storage** — the origin private file
+   system — served over `#9` as `hosts/ipnx` serves a directory, seeded on
+   first visit from the built root shipped as a `disk/mkfs -a` archive, P7's
+   package format.
+4. **The page is the surface**, on the serial line's far end.
+5. **What browsers require** (platforms.md, measured): COOP and COEP headers
+   for `SharedArrayBuffer`, and worker start-up serialised for WebKit.
+
 ---
 
 ## After the demo — the remaining targets

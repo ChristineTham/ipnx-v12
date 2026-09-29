@@ -11,28 +11,6 @@ was in this register on 2026-09-18 turned out to be answered at file and line.
 
 ## Open
 
-**The browser embedding** — proposed 2026-09-29, building on the decided
-*"Node wasm supervisor and browser workers"* (P6, below) and on the serial
-line surface.md takes from Plan 9. Nothing of the retired proof of concept is reused.
-
-1. **A host crate, `hosts/web`**, beside `hosts/ipnx`: the Rust kernel core,
-   unchanged, compiled to `wasm32-unknown-unknown`, with a `Machine` whose
-   processes are Web Workers — one per process, as P6 decided — sharing a
-   `SharedArrayBuffer` memory for `RFMEM`. A call is a message and
-   `Atomics.wait`; the images are the same asyncified ones `mk.sh` builds.
-2. **The kernel in a worker of its own**, so nothing blocks the page.
-3. **The root file server is the page's storage** — the origin private file
-   system — served over `#9` as `hosts/ipnx` serves a directory, and seeded
-   on first visit from the built root shipped as a `disk/mkfs -a` archive,
-   the P7 package format.
-4. **The surface is the page**: a 9P client on the uart (surface.md) that renders
-   each window natively — text in the browser's own editing, a listing as a
-   list — with the global toolbar carrying `inode/system`'s verbs
-   (surface.md).
-5. **What browsers require** (platforms.md, measured): cross-origin
-   isolation — COOP and COEP headers — for `SharedArrayBuffer`, and worker
-   start-up serialised for WebKit.
-
 **What should `boot` ask, and what answers it?** — proposed 2026-09-20,
 revised the same day (RESEARCH §13.2).
 
