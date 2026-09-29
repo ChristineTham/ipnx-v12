@@ -632,8 +632,12 @@ tabs
     /etc/motd
     /bin/tour
     /home/README
-/bin/rc
+    /bin/rc
 ```
+
+**rc is a tab like the others** (Christine, 2026-09-29: *"why is rc special?"*):
+a shell window is what `manage` on `/bin/rc` makes, and a window opens as a tab
+by default.
 
 **Three rules, and that is the whole format:**
 

@@ -432,3 +432,5 @@ On building P7, and on names:
 - *"I have already told you to ignore the poc"*
 - *"Our aim to to reach the same functionality as the poc but using the new design"*
   <br>— P8's target
+- *"i don't understand why rc is not just in a window, in one of the tabs. why is rc special?"* — rc becomes a tab
+  <br>— cited in `docs/type.md`

@@ -62,7 +62,7 @@ What boots below is the whole system, in this tab. Nothing installs, nothing you
 
 **emca** — the interface, and the whole page is it. There is no desktop behind it and no application in front of it.
 
-A **window** is a rectangle with a tag, holding either a body or other windows. A column is a window too, which is why closing one closes what it holds, and why every window can divide itself again without limit. What you will see at boot is your home directory listed on the left, `/etc/motd`, `/bin/tour` and your `README` open as tabs, and `rc` in the row below — every one of them an ordinary window.
+A **window** is a rectangle with a tag, holding either a body or other windows. A column is a window too, which is why closing one closes what it holds, and why every window can divide itself again without limit. What you will see at boot is your home directory listed on the left, and `/etc/motd`, `/bin/tour`, your `README` and `rc` open as tabs beside it — every one of them an ordinary window.
 
 Each carries the same parts: a title you can edit, a row of the verbs its **type** allows, a tag line where a command runs in that window's own directory, and a body. The type comes from `/type`, which is itself a directory of small files — so adding a manager to the system is adding a file, not writing a program. That is why `/proc`, `/pkg`, `/usr` and `/type` open as ordinary windows — Open any of them — and no process-manager exists anywhere.
 

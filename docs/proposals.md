@@ -11,48 +11,6 @@ was in this register on 2026-09-18 turned out to be answered at file and line.
 
 ## Open
 
-**The layout file cannot put rc below the tabs** — proposed 2026-09-29.
-`/type/inode/system/layout` (type.md, accepted 2026-09-02) has three rules:
-each line is a path, indentation nests with the axis set by alternation, and
-`tabs` is the only keyword. Its own example —
-
-```
-/home
-tabs
-    /etc/motd
-    /bin/tour
-    /home/README
-/bin/rc
-```
-
-— gives the root **three** children, so three columns side by side: the
-listing, the tabs, rc. The demo's arrangement — the listing on the left, the
-tabs with rc below them — needs the tabs and rc to share a column, and no line
-can say so, because a container that is not a group of tabs has no name.
-
-1. **Recommended: a line `window` for a window that only holds others** —
-   the design's own word (*"a column is a window too"*, emca.md), not a new
-   one, and it states no axis, so alternation still decides:
-
-   ```
-   /home
-   window
-       tabs
-           /etc/motd
-           /bin/tour
-           /home/README
-       /bin/rc
-   ```
-
-   The root divides into columns — `/home` and the window — and the window,
-   perpendicular, into rows: the tabs above rc.
-2. **Accept three columns** and change nothing — the listing, the tabs and
-   rc side by side.
-3. **acme's `Dump` format**, Plan 9's own layout file: column positions as
-   percentages of the row (`acme/rows.c:336`), each window's position within
-   its column. Positional rather than nested, and it names fonts and
-   coordinates, which the path-only rule was written to avoid.
-
 **How the surface reaches emca: a serial line and `exportfs`** — proposed
 2026-09-29. The design says emca-IPNX *"speaks 9P to emca-host"* (surface.md)
 and the surface *"reads emca's files"* (implementation.md, P8) — `/dev/wsys/<n>/`
