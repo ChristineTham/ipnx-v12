@@ -27,6 +27,7 @@ Saranos              the app the user launches. ONLY Saranos knows about the hos
   emca-host          a "Kit" inside it — macOS SwiftUI, the browser page, iPadOS
     emca-IPNX        a userspace service, started at login by
                      /service/emca/start.rc; speaks 9P to emca-host
+                     (over what: proposed, docs/proposals.md)
 ```
 
 **There is exactly one emca-host.** Nested emcas are IPNX-side processes, and

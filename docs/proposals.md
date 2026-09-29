@@ -11,6 +11,94 @@ was in this register on 2026-09-18 turned out to be answered at file and line.
 
 ## Open
 
+**The layout file cannot put rc below the tabs** — proposed 2026-09-29.
+`/type/inode/system/layout` (type.md, accepted 2026-09-02) has three rules:
+each line is a path, indentation nests with the axis set by alternation, and
+`tabs` is the only keyword. Its own example —
+
+```
+/home
+tabs
+    /etc/motd
+    /bin/tour
+    /home/README
+/bin/rc
+```
+
+— gives the root **three** children, so three columns side by side: the
+listing, the tabs, rc. The demo's arrangement — the listing on the left, the
+tabs with rc below them — needs the tabs and rc to share a column, and no line
+can say so, because a container that is not a group of tabs has no name.
+
+1. **Recommended: a line `window` for a window that only holds others** —
+   the design's own word (*"a column is a window too"*, emca.md), not a new
+   one, and it states no axis, so alternation still decides:
+
+   ```
+   /home
+   window
+       tabs
+           /etc/motd
+           /bin/tour
+           /home/README
+       /bin/rc
+   ```
+
+   The root divides into columns — `/home` and the window — and the window,
+   perpendicular, into rows: the tabs above rc.
+2. **Accept three columns** and change nothing — the listing, the tabs and
+   rc side by side.
+3. **acme's `Dump` format**, Plan 9's own layout file: column positions as
+   percentages of the row (`acme/rows.c:336`), each window's position within
+   its column. Positional rather than nested, and it names fonts and
+   coordinates, which the path-only rule was written to avoid.
+
+**How the surface reaches emca: a serial line and `exportfs`** — proposed
+2026-09-29. The design says emca-IPNX *"speaks 9P to emca-host"* (surface.md)
+and the surface *"reads emca's files"* (implementation.md, P8) — `/dev/wsys/<n>/`
+and the content files they name — but not over what. Plan 9 answers it: a
+terminal reached a namespace over a serial line with **`exportfs`**, a
+user-level server that speaks 9P on a byte stream (`exportfs(4)`), on the
+**uart device**, `#t` (`port/devuart.c:252`), whose hardware the machine
+supplies as a `PhysUart` (`portdat.h:899`).
+
+1. **The host is the uart's far end.** Each host supplies one `PhysUart`,
+   `eia0`, whose bytes go to its surface — a byte stream, which Dis or the
+   CLR could carry as well as wasm (CLAUDE.md, the two tests). `devuart` is
+   Plan 9's, so the kernel gains a Plan 9 device and nothing invented.
+2. **emca's `start.rc` runs Plan 9's `exportfs` on it** — `exportfs -r /
+   <>/dev/eia0 >[1=0]` in emca's namespace — so the surface sees exactly
+   what emca serves and nothing else.
+3. **The surface is a 9P client** of that stream: it walks `/dev/wsys`,
+   reads each window's `type`, `title`, `verbs`, `status` and `body`, blocks
+   on `rect`, and writes `wctl` and what the person did. **9P stays the only
+   interface**, and a manager cannot tell a surface from any other client.
+
+The alternative is the network — `/net` and `aux/listen`, as a cpu server
+exports to drawterm — which needs an IP stack the system does not have.
+
+**The browser embedding** — proposed 2026-09-29, building on the decided
+*"Node wasm supervisor and browser workers"* (P6, below) and on the serial
+line above. Nothing of the retired proof of concept is reused.
+
+1. **A host crate, `hosts/web`**, beside `hosts/ipnx`: the Rust kernel core,
+   unchanged, compiled to `wasm32-unknown-unknown`, with a `Machine` whose
+   processes are Web Workers — one per process, as P6 decided — sharing a
+   `SharedArrayBuffer` memory for `RFMEM`. A call is a message and
+   `Atomics.wait`; the images are the same asyncified ones `mk.sh` builds.
+2. **The kernel in a worker of its own**, so nothing blocks the page.
+3. **The root file server is the page's storage** — the origin private file
+   system — served over `#9` as `hosts/ipnx` serves a directory, and seeded
+   on first visit from the built root shipped as a `disk/mkfs -a` archive,
+   the P7 package format.
+4. **The surface is the page**: a 9P client on the uart (above) that renders
+   each window natively — text in the browser's own editing, a listing as a
+   list — with the global toolbar carrying `inode/system`'s verbs
+   (surface.md).
+5. **What browsers require** (platforms.md, measured): cross-origin
+   isolation — COOP and COEP headers — for `SharedArrayBuffer`, and worker
+   start-up serialised for WebKit.
+
 **What should `boot` ask, and what answers it?** — proposed 2026-09-20,
 revised the same day (RESEARCH §13.2).
 
