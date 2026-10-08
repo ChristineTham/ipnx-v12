@@ -143,7 +143,9 @@ ABI. The conformance suite binds all three.
   answers `Rc<RefCell<Chan>>`, a descriptor holds one, and `cclose` is its
   count: the device's close runs at the last reference (`chan.c:490`). A
   descriptor, `/fd/3` opened from it, and a name it was posted under are one
-  channel, offset and all.
+  channel, offset and all — and the offset is shared as Plan 9 shares it: a
+  write takes its range before the device writes (`sysfile.c:744`), a read
+  adds what it read when it ends (`:683`).
 - **A last close may wait, and the call it is made in waits with it** —
   the mount driver for `Rclunk`, as `cclose` waits in `mntclunk`. A call
   that leaves the processor keeps the rest of itself, and where a close is
@@ -163,10 +165,14 @@ ABI. The conformance suite binds all three.
   `chan.c:475`); its session ends when the wire's own last reference goes
   (*"muxclose(c->mux)"*, `:471`).
 - **What a walk makes, it closes.** Each step through a mount is a fid on
-  the server; a walk closes the channel it steps from and the one it holds
-  when it fails (`chan.c:1109`), and `namec` answers, with its channel,
-  whether the caller owns it — and so must close it — or it is the process's
-  `dot` or `slash`, or a mount's.
+  the server — up to `MAXWELEM` names to a `Twalk` (`chan.c:1006`) — and a
+  walk closes the channel it steps from and the one it holds when it fails
+  (`chan.c:1109`); `namec` answers, with its channel, whether the caller
+  owns it — and so must close it — or it is the process's `dot` or `slash`,
+  or a mount's. From the walk on, `namec`'s errors name the name as far as
+  the element they concern (`chan.c:1406`).
+- **An RPC a note interrupts is flushed**, and waits for the flush's
+  answer (`mountio`, `devmnt.c:782`).
 
 **THE DEVICE LETTERS ARE PLAN 9'S, AND THERE IS NO EXCEPTION.** A device exists
 here only if Plan 9 has one, means the same by it, and spells it with the same
