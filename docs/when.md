@@ -7,7 +7,7 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 
 ## The kernel — 20,750 lines of Rust, no dependencies
 
-11,475 of them before each file's tests.
+14,761 of them outside the test modules.
 
 | | |
 |---|---|
