@@ -435,9 +435,9 @@ fixtures, because a behaviour is reached when a person can do it.
 kernel and `eia0` on a host line, built 2026-09-29 (RESEARCH §16.20) — and
 it is **removed** (2026-10-08, RESEARCH §16.33): it emulated hardware, and
 *"This is WASM we have no hardware we do not want to emulate hardware"*.
-Step 1 is now the host's devices — its screen, keyboard and mouse served
-over 9P as the store is — and it, emca's IPNX half, the demo's types,
-`hosts/web` and the page as the surface are not built.
+Its steps are now `hosts/web`, emca in the page — a full window manager on
+the host side, text only — the files emca serves to IPNX, and the demo's
+types (Christine, 2026-10-08), and none of them is built.
 
 **P9 is not built.** Host commands are designed ([saranos.md](saranos.md),
 *The host's resources*); nothing of them — the call, its host half, `os` —

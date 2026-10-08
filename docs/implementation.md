@@ -256,26 +256,32 @@ one before:
 
 ## P8 — emca, and the browser *(the website)*
 
+**emca is a full window manager on the host side** — *"emca is not rio, it is
+a full windowing manager implemented on host side. We have already agreed on
+most of the details"* — **and P8 is text only**: *"for P8 we only need to
+implement text, not graphics - so no need for /dev/draw or /dev/canvas"*
+(Christine, 2026-10-08). The details are [emca.md](emca.md),
+[window.md](window.md), [compositor.md](compositor.md),
+[surface.md](surface.md) and [type.md](type.md).
+
 | | |
 |---|---|
-| **builds** | emca in userspace: it mints windows and serves the contract of [window.md](window.md) as files. Then the browser embedding, and the surface that **serves the devices emca uses** and renders natively |
+| **builds** | the browser host, then emca in the page — the window manager, drawing every window and the text in it — then the files emca serves to IPNX, and the demo's types |
 | **depends on** | P6 — the browser host is a worker per process, which is P6's machine boundary on that surface — and P7, because emca is a service (`/service/emca/start.rc`) and a project is a window type |
-| **acceptance** | **the website.** The site shows the listing, the three tabs and `rc` below them, to spec |
+| **acceptance** | **the website.** The page shows the listing, the three tabs and `rc` below them, to spec, and the suite's three P8 lines are reached |
 | **exposes** | the other targets |
 
-Built in this order, each step on the one before (planned 2026-09-29 — *"we
-already agreed this is a rewrite"*):
+Built in this order, each step on the one before — the host first, because
+emca is the host's:
 
 | | |
 |---|---|
-| **1. the host's devices** | the host's screen, keyboard and mouse, each a 9P server on `#9` beside the store (surface.md, *emca reaches the surface through the devices the host serves*; Christine, 2026-10-08). What files they serve is designed when this step is reached. It replaces the serial line, `#t`, which emulated hardware and is removed |
-| **2. emca, the IPNX half** | a userspace program in rio's shape (`rio/fsys.c`): each window's files at `/dev/window/` in its own namespace and every window's at `/dev/wsys/<n>/` (window.md); the root window `/`, reading `/type/inode/system/layout`; a window's manager found by plumbing (type.md, *The design*). Started by `/service/emca/start.rc`; it mounts the host's devices and uses them as rio uses the screen |
-| **3. the demo's types** | `/type/inode/system`, `/type/inode/directory`, `/type/text/plain` and the `shell` role — their four files and their managers (type.md) |
-| **4. `hosts/web`** | the browser host, below |
-| **5. the surface** | the page: the server of step 1's devices, rendering each window natively as emca writes it, and the global toolbar (surface.md) |
+| **1. `hosts/web`** | the system in the browser, booting to `rc` — below |
+| **2. emca in the page** | the window manager: the root window `/` laid out from `/type/inode/system/layout` — the listing, the tabs, `rc` below them — with `row`, `column` and `tabs`; each window's chrome, its toolbar from its type's `verbs`, its status line; the text in it, shown by `look` or edited by `edit`; a shell window holding the line until Enter (type.md) |
+| **3. the files emca serves** | to IPNX over `#9`, as the store is served: a window's `/dev/window/` and every window's `/dev/wsys/<n>/` (window.md); a shell window's console; the edits, so that emca and a manager hold mirror buffers; and `emcaopen` |
+| **4. the demo's types** | `/type/inode/system`, `/type/inode/directory`, `/type/text/plain` and the `shell` role — their four files, and their managers, posted in `/srv` and found by plumbing (type.md) |
 
-**The browser host, `hosts/web`**, beside `hosts/ipnx`, on the decided
-*"Node wasm supervisor and browser workers"* (P6):
+**The browser host, `hosts/web`**, beside `hosts/ipnx`:
 
 1. **The Rust kernel core, unchanged**, compiled to `wasm32-unknown-unknown`
    with a `Machine` whose processes are Web Workers — one per process —
@@ -286,8 +292,7 @@ already agreed this is a rewrite"*):
    system — served over `#9` as `hosts/ipnx` serves a directory, seeded on
    first visit from the built root shipped as a `disk/mkfs -a` archive, P7's
    package format.
-4. **The page is the surface**: it serves step 1's devices.
-5. **What browsers require** (platforms.md, measured): COOP and COEP headers
+4. **What browsers require** (platforms.md, measured): COOP and COEP headers
    for `SharedArrayBuffer`, and worker start-up serialised for WebKit.
 
 ## P9 — host commands *(added 2026-10-08)*

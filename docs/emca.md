@@ -4,8 +4,12 @@
 > 2026-09-02); the split into an IPNX half and a surface half (her
 > instruction, 2026-08-31); the type system, specified in type.md (decided
 > 2026-09-18); tabs — *"an open window opens a new tab by default"*
-> (2026-09-02); and emca as a service (2026-09-24). **Everything else is
-> proposed**: Claude wrote it, it is not endorsed, and it approves no
+> (2026-09-02); emca as a service (2026-09-24); and, 2026-10-08, **emca is a
+> full window manager implemented on the host side, not rio** — *"emca is not
+> rio, it is a full windowing manager implemented on host side. We have
+> already agreed on most of the details"* — and **P8 is text only**: *"for P8
+> we only need to implement text, not graphics - so no need for /dev/draw or
+> /dev/canvas"*. **Everything else is proposed**: Claude wrote it, it is not endorsed, and it approves no
 > deviation from Plan 9. Where Christine has said nothing, Plan 9 is the
 > reference (2026-09-29). What is built is [when.md](when.md).
 >
@@ -29,9 +33,10 @@ true of every implementation, and points at the rest.
 | why each shape was chosen | [design.md](archive/design-log-claude-written.md) |
 | what is built, and what is not | [when.md](when.md) |
 
-**emca does the minimum possible, like rio.** It places windows, it handles
-resizes, and it hands each manager a rectangle and a namespace. It does not
-reach inside. That minimum is what lets the windowing style be replaced —
+**emca is a full window manager, on the host side** (Christine, 2026-10-08:
+*"emca is not rio"*). It places windows, handles resizes, draws their chrome,
+toolbar and status line and the text in them, and hands each manager a
+rectangle and a namespace. It does not reach inside a manager. That minimum is what lets the windowing style be replaced —
 tiled, overlapping, Stage Manager — without changing a single manager or type.
 
 ## The agreed design

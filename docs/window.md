@@ -3,9 +3,10 @@
 > **MIXED.** **Decided**: the manager interface as a file interface
 > (*Reviewed and endorsed*, 2026-09-02); the path is `/dev`, not `/mnt`
 > (Christine, 2026-09-02); a window's content is always a file (2026-09-02);
-> and, by Plan 9 where she has said nothing (2026-09-29), `/dev/window/` for
-> a window's own files and `/dev/wsys/<n>/` for every window's, as rio
-> serves them. **Everything else is proposed** and approves no deviation
+> the paths, rio's, by Plan 9 where she has said nothing (2026-09-29) —
+> `/dev/window/` for a window's own files and `/dev/wsys/<n>/` for every
+> window's; and that emca, which serves them, **is not rio but a full window
+> manager on the host side** (2026-10-08). **Everything else is proposed** and approves no deviation
 > from Plan 9. What is built is [when.md](when.md).
 >
 > The device letters below are not Plan 9's: `H`, `Z` and `R` name no device;

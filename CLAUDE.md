@@ -61,7 +61,8 @@ the system rather than part of it, and that is the distinction the name exists
 to carry. **The interface between them is 9P, and one call**: content is a
 file the host mounts and renders natively (so **IPNX implements no
 renderers**), `/dev/window/` is a window's own bidirectional control interface
-and `/dev/wsys/<n>/` every window's, as rio serves them (`rio/fsys.c:42`),
+and `/dev/wsys/<n>/` every window's — rio's paths, but **emca is not rio**: it
+is a full window manager on the host side (Christine, 2026-10-08) —
 `/type` is the registry both sides read, and `/dev/canvas` narrows to genuine
 drawing — the exception, not the rule. The one call starts a host command,
 always typed through Inferno's `os` and never hidden under a name of ours —

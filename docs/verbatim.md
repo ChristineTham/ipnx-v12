@@ -505,3 +505,10 @@ Answering the two questions left open:
 
 - *"move README-old to archive, and add host commands to the plan"*
   <br>— `docs/archive/README-old.md`, `docs/implementation.md` P9
+
+On P8, after the triage, the same evening:
+
+- *"for P8 we only need to implement text, not graphics - so no need for /dev/draw or /dev/canvas - I have said this many times but you keep resurfacing the question. and emca is mostly implemented in the host."*
+  <br>— `docs/surface.md`, `docs/emca.md`, `docs/implementation.md` P8
+- *"emca is not rio, it is a full windowing manager implemented on host side. We have already agreed on most of the details"*
+  <br>— `docs/emca.md`, `docs/window.md`, `docs/surface.md`, `docs/saranos.md`, `CLAUDE.md`

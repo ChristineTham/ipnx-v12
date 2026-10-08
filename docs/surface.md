@@ -24,11 +24,17 @@ nothing above it needs to know. The contract it serves is
 
 ```
 Saranos              the app the user launches. ONLY Saranos knows about the host
-  emca-host          a "Kit" inside it — macOS SwiftUI, the browser page, iPadOS
-    emca-IPNX        a userspace service, started at login by
-                     /service/emca/start.rc; uses the devices emca-host
-                     serves, over 9P (below)
+  emca               the window manager — a full one, on the host side: macOS
+                     SwiftUI, the browser page, iPadOS
+    IPNX programs    reach it through the files it serves over 9P — a
+                     window's /dev/window/, every window's /dev/wsys/<n>/ —
+                     and emcaopen; a type's manager runs here (type.md)
 ```
+
+**emca is not rio** (Christine, 2026-10-08: *"emca is not rio, it is a full
+windowing manager implemented on host side. We have already agreed on most of
+the details"*). **And P8 is text only**: *"for P8 we only need to implement
+text, not graphics - so no need for /dev/draw or /dev/canvas"*.
 
 **There is exactly one emca-host.** Nested emcas are IPNX-side processes, and
 the host sees them as further windows.
@@ -46,16 +52,11 @@ hardware."*
 1. **The host provides each device as a 9P server on `#9`**, the device the
    store already arrives on (`#9/0`): a channel to a server the machine
    provides, and nothing else (`pc/devvirtio9p.c`).
-2. **emca uses them as rio uses the screen.** rio opens the display, the
-   mouse and the keyboard (`geninitdraw`, `initmouse`, `initkeyboard`,
-   `rio/rio.c:181`, `:188`, `:192`), draws, and reads what the person does;
-   emca pushes each window's content into the host's device —
-   *"The job of emca is to push a file into a window via /dev/canvas. The
-   host side can display and scroll the file, and more importantly edit it"*
-   (2026-08-31) — and reads back every edit, so that the two hold mirror
-   buffers (*"We must notify emca of every edit"*).
-3. **What files the host's devices serve is P8's to design**, and it is
-   proposed when P8 reaches it ([implementation.md](implementation.md)).
+2. **emca, being on the host, has the screen, keyboard and mouse
+   already** — it draws every window and its text natively, and reads what
+   the person does. What crosses to IPNX is text: a window's content, which is
+   always a file, the edits to it, so that the two hold mirror buffers
+   (*"We must notify emca of every edit"*), and a shell window's console.
 
 ## Saranos serves the hardware as devices
 
@@ -63,8 +64,9 @@ Saranos says, in effect: *I am a macOS app. I have a screen, a keyboard and a
 mouse. I will serve these as virtual devices to the IPNX kernel, which I am
 going to start.*
 
-So on the IPNX side `/dev/cons`, `/dev/draw` and `/dev/canvas` exist **whether
-or not emca is running**:
+So on the IPNX side `/dev/cons` exists **whether or not emca is running** —
+and, later and **not in P8**, `/dev/draw` for acme and `/dev/canvas` for
+genuine drawing:
 
 | | |
 |---|---|

@@ -29,7 +29,7 @@ its tree is the host's.
 |---|---|---|
 | macOS | **Saranos** | the operating system: **host and wasm together** |
 | Darwin | **IPNX** | the kernel and the userspace — the wasm side |
-| Aqua | **emca** | the windowing and UI system — a half on each side |
+| Aqua | **emca** | the windowing and UI system — a full window manager on the host side, reached from IPNX through the files it serves |
 
 ## Why Saranos needs a name of its own
 
