@@ -152,6 +152,35 @@ impl Devtab {
         self.get(c.dev).ok_or("no such device")?.cclone(c)
     }
 
+    /// `devtab[c->type]->walk(c, nil, names, n)` (`chan.c:1027`): several
+    /// names. The mount driver sends them in one `Twalk`; any other device
+    /// walks them in turn, as `devwalk` does (`dev.c:169`) — the first
+    /// missing is *"error(Enonexist)"*, a later one a short answer.
+    pub fn dwalkn(&mut self, c: &Chan, names: &[String]) -> Result<crate::dev::Walkqid, String> {
+        if c.dev == DevId::Mnt {
+            let (c, names) = (c.clone(), names.to_vec());
+            return self.with_mnt(|m, tab| {
+                let mut w = Wire::new(&c, m, tab)?;
+                m.walkn(&mut w, &c, &names)
+            })?;
+        }
+        let d = self.get(c.dev).ok_or("no such device")?;
+        let mut qids = Vec::new();
+        let mut at = c.clone();
+        for (j, name) in names.iter().enumerate() {
+            match d.walk(&at, name) {
+                Ok(Some(next)) => {
+                    qids.push(next.qid);
+                    at = next;
+                }
+                Ok(None) if j == 0 => return Err(ENONEXIST.into()),
+                Err(e) if j == 0 => return Err(e),
+                _ => return Ok(crate::dev::Walkqid { qids, clone: None }),
+            }
+        }
+        Ok(crate::dev::Walkqid { qids, clone: Some(at) })
+    }
+
     pub fn dwalk(&mut self, c: &Chan, name: &str) -> Result<Option<Chan>, String> {
         if c.dev == DevId::Mnt {
             let (c, name) = (c.clone(), name.to_string());
@@ -598,19 +627,33 @@ pub fn walk(
     // file on the far side of a mount is `/root/wasm/bin` rather than the
     // mount driver's `#M/wasm/bin`.
     let mut path = c.path.clone();
-    for (i, name) in names.iter().enumerate() {
+    // *"While we haven't gotten all the way down the path: 1. step through
+    // a mount point, if any 2. send a walk request for initial dotdot or
+    // initial prefix without dotdot 3. move to the first mountpoint along
+    // the way. 4. repeat."* (`chan.c:981`). `didmount`: `c` is already the
+    // mount's, where the last step stopped.
+    let mut nhave = 0;
+    let mut didmount = false;
+    let mut mh: Vec<crate::ns::Element> = Vec::new();
+    while nhave < names.len() {
         if !c.is_dir() {
             drop(tab, &mut c, owned);
-            return Err((i, ENOTDIR.into()));
+            return Err((nhave, ENOTDIR.into()));
+        }
+        // up to `MAXWELEM` at once (`fcall.h:6`), and `..` alone
+        let mut ntry = (names.len() - nhave).min(MAXWELEM);
+        let mut dotdot = false;
+        if let Some(i) = names[nhave..nhave + ntry].iter().position(|n| n == "..") {
+            dotdot = i == 0;
+            ntry = if i == 0 { 1 } else { i };
         }
         // `..` does not step onto a mount: it goes back out of one. Plan 9
         // undomounts here, which needs the mount head a channel was derived
         // from; this subset does not carry that yet, so `..` walks the device
         // and is honest about only that.
-        let mut union = Vec::new();
-        if name != ".." && !nomount {
+        if !dotdot && !nomount && !didmount {
             let was = c.clone();
-            let (first, head) = domount(tab, ns, c).map_err(|e| (i, e))?;
+            let (first, head) = domount(tab, ns, c).map_err(|e| (nhave, e))?;
             if let Some(h) = head {
                 // what the mount replaced is closed if the walk made it
                 // (`findmount`'s *"cclose(*cp)"*); the mount's channel is
@@ -618,10 +661,13 @@ pub fn walk(
                 let mut was = was;
                 drop(tab, &mut was, owned);
                 owned = false;
-                union = h.borrow().mount.clone();
+                mh = h.borrow().mount.clone();
+            } else {
+                mh = Vec::new();
             }
             c = first;
         }
+        let batch = &names[nhave..nhave + ntry];
         // **`ewalk`** (`chan.c:948`): *"if(waserror()) return nil"* — a
         // device's walk that FAILS is a miss like one that finds nothing, so
         // the union is still tried. A 9P server answers a missing first name
@@ -629,52 +675,105 @@ pub fn walk(
         // meant a union whose first element was a mounted directory never
         // reached its second (`/home` over `/usr/kitty`, with `bind -a /etc
         // /home` after it, listed `motd` and could not open it).
-        match tab.dwalk(&c, name) {
-            Ok(Some(next)) => {
-                drop(tab, &mut c, owned);
-                c = next;
-                owned = true;
-                src = None;
-            }
+        let (wq, on) = match tab.dwalkn(&c, batch) {
+            Ok(wq) => (wq, (c.dev, c.devno)),
             Err(e) if e == crate::devmnt::SLEPT => return Err((0, e)),
-            miss => {
-                let mut err = miss.err();
-                // **"try a union mount, if any"** (`chan.c:1027`). The first
-                // element is the one just walked, so this starts at the next
-                // — `for(f = (f? f->next: f); f; f = f->next)` (`:1034`).
-                // Without it a `bind -a` puts an element in a list nothing
-                // ever reaches, and a union is a word rather than a thing.
+            Err(e) => {
+                // **"try a union mount, if any"** (`chan.c:1027`). The
+                // first element is the one just walked, so this starts at
+                // the next — `for(f = (f? f->next: f); f; f = f->next)`
+                // (`:1034`). Without it a `bind -a` puts an element in a
+                // list nothing ever reaches, and a union is a word rather
+                // than a thing.
+                let mut err = e;
                 let mut found = None;
-                for alt in union.into_iter().skip(1) {
-                    match tab.dwalk(&alt.chan, name) {
-                        Ok(Some(next)) => {
-                            found = Some(next);
-                            break;
+                if !nomount {
+                    for alt in mh.iter().skip(1) {
+                        match tab.dwalkn(&alt.chan, batch) {
+                            Ok(wq) => {
+                                found = Some((wq, (alt.chan.dev, alt.chan.devno)));
+                                break;
+                            }
+                            Err(e) if e == crate::devmnt::SLEPT => return Err((0, e)),
+                            Err(e) => err = e,
                         }
-                        Ok(None) => {}
-                        Err(e) if e == crate::devmnt::SLEPT => return Err((0, e)),
-                        Err(e) => err = Some(e),
                     }
                 }
                 match found {
-                    Some(next) => {
-                        drop(tab, &mut c, owned);
-                        c = next;
-                        owned = true;
-                        src = None;
-                    }
+                    Some(f) => f,
                     // Every element missed: the error is the last device's,
                     // as `walk` returns -1 with it still set (`:1041`) —
                     // `devwalk`'s *"error(Enonexist)"* (`dev.c:230`) for a
                     // device here that answered nothing.
                     None => {
                         drop(tab, &mut c, owned);
-                        return Err((i + 1, err.unwrap_or_else(|| ENONEXIST.into())));
+                        return Err((nhave + 1, err));
                     }
                 }
             }
+        };
+        // A mount point at any qid the walk answered but the last — which
+        // the next step's `domount` or the access mode sees — is found
+        // with `findmount` (`chan.c:1067`), and ends the step there, on the
+        // mount's channel: *"stopped early, at a mount point"* (`:1094`).
+        let mut stop = None;
+        if !dotdot && !nomount {
+            for (i, q) in wq.qids.iter().enumerate().take(ntry - 1) {
+                let mut at = c.clone();
+                (at.dev, at.devno, at.qid) = (on.0, on.1, *q);
+                if let Some(h) = ns.findmount(&at) {
+                    stop = Some((i, h));
+                    break;
+                }
+            }
         }
-        path = crate::chan::addelem(&path, name);
+        let n;
+        let nc;
+        match stop {
+            None => match wq.clone {
+                Some(clone) => {
+                    n = wq.qids.len();
+                    nc = clone;
+                    didmount = false;
+                }
+                // a short walk with no mount along it: *"does not exist"*,
+                // or a file with names after it, *"not a directory"*
+                // (`chan.c:1078`)
+                None => {
+                    drop(tab, &mut c, owned);
+                    let got = wq.qids.len();
+                    return Err(if got == 0 || wq.qids[got - 1].is_dir() {
+                        (nhave + got + 1, EDOESNOTEXIST.into())
+                    } else {
+                        (nhave + got, ENOTDIR.into())
+                    });
+                }
+            },
+            Some((i, h)) => {
+                // *"if(wq->clone != nil){ cclose(wq->clone); …"*
+                if let Some(mut clone) = wq.clone {
+                    tab.dclose(&mut clone);
+                }
+                n = i + 1;
+                let m = h.borrow().mount.clone();
+                nc = (*m[0].chan).clone();
+                mh = m;
+                didmount = true;
+            }
+        }
+        for name in &names[nhave..nhave + n] {
+            path = crate::chan::addelem(&path, name);
+        }
+        drop(tab, &mut c, owned);
+        c = nc;
+        if didmount {
+            owned = false;
+            src = Some(mh[0].chan.clone());
+        } else {
+            owned = true;
+            src = None;
+        }
+        nhave += n;
     }
     // `pathclose(c->path); c->path = path;` (`chan.c`, end of `walk`).
     c.path = path;
@@ -685,6 +784,12 @@ pub fn walk(
     let _ = owned;
     Ok((c, src))
 }
+
+/// `MAXWELEM` (`fcall.h:6`) — the most names one `Twalk` carries.
+const MAXWELEM: usize = 16;
+
+/// `Edoesnotexist` (`chan.c:963`) — a walk that stopped partway.
+const EDOESNOTEXIST: &str = "does not exist";
 
 /// `namec(name, amode, omode, perm)` for every access mode but `Aopen`,
 /// which is [`open`]'s: an open answers a reference, and may answer a
@@ -1389,9 +1494,20 @@ enum Step {
     Fid(u32),
     /// A close [`Devtab::cclose`] deferred.
     Once,
-    /// One RPC: the tag it went with, whether it has gone, and its reply
-    /// once it came.
-    Rpc { tag: u16, sent: bool, reply: Option<Vec<u8>> },
+    /// One RPC: the tag it went with, whether it has gone, and how it
+    /// ended once it has — its reply, or `Eintr` for one flushed.
+    Rpc { tag: u16, sent: bool, reply: Option<Result<Vec<u8>, String>>, flush: Flush },
+}
+
+/// An RPC interrupted by a note: *"r = mntflushalloc(r, m->msize)"*
+/// (`devmnt.c:782`) — a `Tflush` for it, and another for each note after,
+/// newest last; whether the newest has gone; and the RPC's own reply, if it
+/// came first.
+#[derive(Clone, Default)]
+struct Flush {
+    tags: Vec<u16>,
+    sent: bool,
+    got: Option<Vec<u8>>,
 }
 
 /// A wire's reader and its outstanding RPCs — `m->rip`, `m->queue` and the
@@ -1412,6 +1528,18 @@ struct Mux {
 }
 
 impl Devtab {
+    /// `mntralloc`'s tag (`devmnt.c:1047`): one no RPC outstanding on the
+    /// wire has, whichever mount of the wire made it; never `NOTAG`.
+    fn newtag(&mut self, key: (DevId, u32, u64)) -> u16 {
+        let m = self.muxes.entry(key).or_default();
+        loop {
+            m.tag = m.tag.wrapping_add(1);
+            if m.tag != !0 && !m.queue.iter().any(|e| e.0 == m.tag) {
+                break m.tag;
+            }
+        }
+    }
+
     /// The process in the call.
     fn uppid(&self) -> crate::proc::Pid {
         self.up.as_ref().map_or(0, |u| u.borrow().pid)
@@ -1529,43 +1657,26 @@ impl crate::devmnt::Transport for Wire<'_> {
         }
         let key = (self.wire.dev, self.wire.devno, self.wire.qid.path);
 
-        // The record: a reply had already, or an RPC under way.
+        // The record: an RPC over, or one under way.
         let rec = self.tab.records.entry(pid).or_default();
         let at = rec.at;
         let (tag, sent) = match rec.steps.get(at) {
             Some(Step::Rpc { reply: Some(r), .. }) => {
                 let r = r.clone();
                 rec.at += 1;
-                return Ok(r);
+                return r;
             }
-            Some(Step::Rpc { tag, sent, reply: None }) => (*tag, *sent),
+            Some(Step::Rpc { tag, sent, .. }) => (*tag, *sent),
             _ => {
                 rec.steps.truncate(at);
-                // `mntralloc`'s tag: unique among the wire's outstanding
-                // RPCs, whichever mount of the wire made them. `Tversion`
-                // keeps its NOTAG.
+                // `Tversion` keeps its NOTAG; anything else is given one
+                // free on the wire
                 let asked = u16::from_le_bytes([request.get(5).copied().unwrap_or(0), request.get(6).copied().unwrap_or(0)]);
-                let tag = if asked == !0 {
-                    asked
-                } else {
-                    let m = self.tab.muxes.entry(key).or_default();
-                    loop {
-                        m.tag = m.tag.wrapping_add(1);
-                        if m.tag != !0 && !m.queue.iter().any(|e| e.0 == m.tag) {
-                            break m.tag;
-                        }
-                    }
-                };
+                let tag = if asked == !0 { asked } else { self.tab.newtag(key) };
                 let rec = self.tab.records.entry(pid).or_default();
-                rec.steps.push(Step::Rpc { tag, sent: false, reply: None });
+                rec.steps.push(Step::Rpc { tag, sent: false, reply: None, flush: Flush::default() });
                 (tag, false)
             }
-        };
-        let finish = |tab: &mut Devtab, reply: Vec<u8>| {
-            let rec = tab.records.entry(pid).or_default();
-            rec.steps[at] = Step::Rpc { tag, sent: true, reply: Some(reply.clone()) };
-            rec.at = at + 1;
-            reply
         };
 
         if !sent {
@@ -1585,10 +1696,35 @@ impl crate::devmnt::Transport for Wire<'_> {
             }
         }
 
-        loop {
-            // `mountmux` gave it to us while we slept.
+        'mountio: loop {
+            // A `Tflush` made and not yet on the wire: *"Transmit a file
+            // system rpc"* (`devmnt.c:794`), the flush being one.
+            let flush = self.flushof(pid, at);
+            if let (Some(&f), false) = (flush.tags.last(), flush.sent) {
+                let req = crate::ninep::W::new().u16(tag).frame(crate::ninep::T::Flush as u8, f);
+                let d = self.tab.get(self.wire.dev).ok_or("no such device")?;
+                if let Err(e) = d.write(&mut self.wire, &req, 0) {
+                    return self.dropped(key, pid, at, tag, e);
+                }
+                if self.tab.asleep(pid) {
+                    return Err(SLEPT.into());
+                }
+                self.flushing(pid, at, |f| f.sent = true);
+            }
+            // What `mountmux` gave it while it slept: its own reply, which
+            // ends it unless a flush is out — then it is kept — and the
+            // newest flush's, which ends it either way.
+            let flushes = self.flushof(pid, at).tags;
             if let Some(r) = self.tab.muxes.entry(key).or_default().done.remove(&tag) {
-                return Ok(finish(self.tab, r));
+                if flushes.is_empty() {
+                    return Ok(self.finish(pid, at, r));
+                }
+                self.flushing(pid, at, |f| f.got = Some(r));
+            }
+            if let Some(&f) = flushes.last() {
+                if self.tab.muxes.entry(key).or_default().done.remove(&f).is_some() {
+                    return self.flushed(key, pid, at, tag);
+                }
             }
             // `m->rip`: one reader at a time.
             let m = self.tab.muxes.entry(key).or_default();
@@ -1599,8 +1735,10 @@ impl crate::devmnt::Transport for Wire<'_> {
                         None => false,
                     };
                     if !slept {
-                        self.drop_rpc(key, tag);
-                        return Err(crate::proc::EINTR.into());
+                        // `sleep`'s *"up->notepending = 0; … error(Eintr)"*
+                        // (`proc.c:880`), and `mountio` flushes
+                        self.flush(key, pid, at);
+                        continue 'mountio;
                     }
                     return Err(SLEPT.into());
                 }
@@ -1616,8 +1754,7 @@ impl crate::devmnt::Transport for Wire<'_> {
                     4
                 };
                 if have >= 4 && size < 7 {
-                    self.drop_rpc(key, tag);
-                    return Err("short reply".into());
+                    return self.dropped(key, pid, at, tag, "short reply".into());
                 }
                 if have >= size && have >= 4 {
                     break m.inbuf.drain(..size).collect::<Vec<u8>>();
@@ -1625,28 +1762,46 @@ impl crate::devmnt::Transport for Wire<'_> {
                 let d = self.tab.get(self.wire.dev).ok_or("no such device")?;
                 let got = match d.read(&mut self.wire, size - have, 0) {
                     Ok(b) => b,
-                    Err(e) => {
-                        self.drop_rpc(key, tag);
-                        return Err(e);
+                    // *"if(m->rip == up) mntgate(m)"*, then the flush
+                    // (`devmnt.c:777`); the wire's read took the note
+                    Err(e) if e == crate::proc::EINTR => {
+                        self.tab.gate(key);
+                        self.flush(key, pid, at);
+                        continue 'mountio;
                     }
+                    Err(e) => return self.dropped(key, pid, at, tag, e),
                 };
                 if self.tab.asleep(pid) {
                     return Err(SLEPT.into());
                 }
                 if got.is_empty() {
                     // `Emountrpc` (`devmnt.c:822`): the wire is hung up.
-                    self.drop_rpc(key, tag);
-                    return Err("mount rpc error".into());
+                    return self.dropped(key, pid, at, tag, "mount rpc error".into());
                 }
                 self.tab.muxes.entry(key).or_default().inbuf.extend_from_slice(&got);
             };
-            // `mountmux` (`devmnt.c:930`): the reply goes to its RPC.
+            // `mountmux` (`devmnt.c:940`): the reply goes to its RPC.
             let rtag = u16::from_le_bytes([msg[5], msg[6]]);
             let m = self.tab.muxes.entry(key).or_default();
             let owner = m.queue.iter().position(|e| e.0 == rtag).map(|i| m.queue.remove(i));
+            let flushes = self.flushof(pid, at).tags;
             if rtag == tag {
+                if flushes.is_empty() {
+                    self.tab.gate(key);
+                    return Ok(self.finish(pid, at, msg));
+                }
+                // answered before its flush was: kept, and the flush still
+                // waited for (`mntflushfree` finds it done)
+                self.flushing(pid, at, |f| f.got = Some(msg));
+                continue;
+            }
+            if flushes.last() == Some(&rtag) {
                 self.tab.gate(key);
-                return Ok(finish(self.tab, msg));
+                return self.flushed(key, pid, at, tag);
+            }
+            // an older flush's answer: the chain's, waited for no longer
+            if flushes.contains(&rtag) {
+                continue;
             }
             // Someone else's, or nobody's — one whose process is gone,
             // which Plan 9 prints as *"unexpected reply tag"* and drops.
@@ -1658,19 +1813,80 @@ impl crate::devmnt::Transport for Wire<'_> {
             }
         }
     }
+
 }
 
 impl Wire<'_> {
-    /// An RPC that will not be waited for any more: out of the queue, and
-    /// the wire's reader leaves if it was us (`mntflushfree`, `mntgate`).
-    fn drop_rpc(&mut self, key: (DevId, u32, u64), tag: u16) {
-        let pid = self.tab.uppid();
+    /// The RPC over, with its reply.
+    fn finish(&mut self, pid: crate::proc::Pid, at: usize, reply: Vec<u8>) -> Vec<u8> {
+        let rec = self.tab.records.entry(pid).or_default();
+        if let Some(Step::Rpc { reply: r, .. }) = rec.steps.get_mut(at) {
+            *r = Some(Ok(reply.clone()));
+        }
+        rec.at = at + 1;
+        reply
+    }
+
+    fn flushof(&mut self, pid: crate::proc::Pid, at: usize) -> Flush {
+        match self.tab.records.entry(pid).or_default().steps.get(at) {
+            Some(Step::Rpc { flush, .. }) => flush.clone(),
+            _ => Flush::default(),
+        }
+    }
+
+    fn flushing(&mut self, pid: crate::proc::Pid, at: usize, f: impl FnOnce(&mut Flush)) {
+        if let Some(Step::Rpc { flush, .. }) = self.tab.records.entry(pid).or_default().steps.get_mut(at) {
+            f(flush);
+        }
+    }
+
+    /// `mntflushalloc` (`devmnt.c:980`): a `Tflush` for the RPC — its
+    /// `oldtag` the RPC's own, the first time and every time after — on the
+    /// wire's queue, to be sent.
+    fn flush(&mut self, key: (DevId, u32, u64), pid: crate::proc::Pid, at: usize) {
+        if let Some(u) = &self.tab.up {
+            u.borrow().procs.borrow_mut().interrupted(pid);
+        }
+        let f = self.tab.newtag(key);
+        self.tab.muxes.entry(key).or_default().queue.push((f, Some(pid)));
+        self.flushing(pid, at, |fl| {
+            fl.tags.push(f);
+            fl.sent = false;
+        });
+    }
+
+    /// `mntflushfree` (`devmnt.c:1004`) once the newest flush is answered:
+    /// the RPC and its flushes off the queue, and the RPC answered by its
+    /// own reply if it came, or *"case Rflush: error(Eintr)"* (`mountrpc`,
+    /// `devmnt.c:754`).
+    fn flushed(&mut self, key: (DevId, u32, u64), pid: crate::proc::Pid, at: usize, tag: u16) -> Result<Vec<u8>, String> {
+        let flush = self.flushof(pid, at);
+        let m = self.tab.muxes.entry(key).or_default();
+        m.queue.retain(|e| e.0 != tag && !flush.tags.contains(&e.0));
+        m.done.remove(&tag);
+        for f in &flush.tags {
+            m.done.remove(f);
+        }
+        let r = flush.got.ok_or_else(|| crate::proc::EINTR.to_string());
+        let rec = self.tab.records.entry(pid).or_default();
+        if let Some(Step::Rpc { reply, .. }) = rec.steps.get_mut(at) {
+            *reply = Some(r.clone());
+        }
+        rec.at = at + 1;
+        r
+    }
+
+    /// An RPC the wire failed: it, and any flush of it, off the queue —
+    /// and the wire left for the next reader.
+    fn dropped(&mut self, key: (DevId, u32, u64), pid: crate::proc::Pid, at: usize, tag: u16, e: String) -> Result<Vec<u8>, String> {
+        let flush = self.flushof(pid, at);
         if let Some(m) = self.tab.muxes.get_mut(&key) {
-            m.queue.retain(|e| e.0 != tag);
+            m.queue.retain(|q| q.0 != tag && !flush.tags.contains(&q.0));
             if m.rip == Some(pid) {
                 self.tab.gate(key);
             }
         }
+        Err(e)
     }
 }
 

@@ -493,6 +493,37 @@ impl MntDev {
         Ok(Some(nc))
     }
 
+    /// `mntwalk` (`devmnt.c:384`): one `Twalk` for several names — up to
+    /// `MAXWELEM` — and the qids the server managed. Only when it managed
+    /// them all is there a new channel, on the fid the walk named; a short
+    /// walk leaves *"newfid … unaffected"* (walk(5)), and too many qids is
+    /// *"too many QIDs returned by walk"* (`:432`).
+    pub fn walkn(&mut self, t: &mut dyn Transport, c: &Chan, names: &[String]) -> Result<crate::dev::Walkqid, String> {
+        let newfid = self.newfid(t);
+        let m = self.mnt(c)?;
+        let refs: Vec<&str> = names.iter().map(|n| n.as_str()).collect();
+        let (fid, qids) = m.walk(t, c.fid, newfid, &refs)?;
+        if qids.len() > names.len() {
+            return Err("too many QIDs returned by walk".into());
+        }
+        // *"if(r->reply.nwqid == 0){ free(wq); wq = nil; …"* (`:437`): a
+        // server that answers none without an error has walked nothing
+        if qids.is_empty() && !names.is_empty() {
+            return Err(crate::namec::ENONEXIST.into());
+        }
+        if qids.len() < names.len() {
+            return Ok(crate::dev::Walkqid { qids, clone: None });
+        }
+        let w = wirekey(&m.wire);
+        self.hold(w, fid);
+        let mut nc = c.clone();
+        for (name, q) in names.iter().zip(&qids) {
+            nc = nc.walked(name, *q);
+        }
+        nc.fid = fid;
+        Ok(crate::dev::Walkqid { qids, clone: Some(nc) })
+    }
+
     /// `cclone` — a `Twalk` with NO names, which is how 9P says *"another
     /// name for this same file"* (`cclone`, `chan.c:842`:
     /// `devtab[c->type]->walk(c, nil, nil, 0)`).

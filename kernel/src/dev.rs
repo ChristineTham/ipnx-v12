@@ -285,6 +285,14 @@ pub fn permcheck(user: &str, fileuid: &str, eve: &str, perm: u32, omode: u16) ->
 ///
 /// **The spec is not part of the path below.** It was, and `bind #ec /env`
 /// therefore attached `#e` and then walked to a file called `c`.
+/// `Walkqid` (`portdat.h:274`): what a walk of several names managed — a
+/// qid for each name walked — and the channel at the end, only if it walked
+/// them all (*"clone"*).
+pub struct Walkqid {
+    pub qids: Vec<crate::ninep::Qid>,
+    pub clone: Option<Chan>,
+}
+
 pub fn split(path: &str) -> Option<(DevId, &str, &str)> {
     let rest = path.strip_prefix('#')?;
     let mut chars = rest.char_indices();

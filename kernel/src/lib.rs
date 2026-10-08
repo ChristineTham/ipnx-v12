@@ -4233,6 +4233,7 @@ mod syscalls {
                     let q = match (at.path, r.s().unwrap()) {
                         (0, "answer") => Qid { qtype: 0, vers: 0, path: 1 },
                         (0, "sub") => Qid { qtype: QTDIR, vers: 0, path: 2 },
+                        (2, "answer") => Qid { qtype: 0, vers: 0, path: 3 },
                         _ => break,
                     };
                     qids.push(q);
@@ -5233,7 +5234,11 @@ mod syscalls {
     fn an_error_names_the_name_as_far_as_it_went() {
         let mut k = booted();
         let open = |k: &mut Kernel, p: &str| k.syscall(1, Call::Open { path: p.into(), mode: 0 });
-        assert_eq!(open(&mut k, "/boot/nothing/x"), Err("'/boot/nothing' file does not exist".into()));
+        // the first name a device cannot walk is its `Enonexist`; one
+        // further along a walk of several is `walk`'s own *"does not
+        // exist"* (`chan.c:963`)
+        assert_eq!(open(&mut k, "/nothing"), Err("'/nothing' file does not exist".into()));
+        assert_eq!(open(&mut k, "/boot/nothing/x"), Err("'/boot/nothing' does not exist".into()));
         assert_eq!(open(&mut k, "/boot/init/x"), Err("'/boot/init' not a directory".into()));
         assert_eq!(open(&mut k, "/boot/init/"), Err("'/boot/init/' not a directory".into()));
         assert_eq!(open(&mut k, "#Q"), Err("unknown device in # filename".into()), "before the walk: as it is");
@@ -5254,5 +5259,75 @@ mod syscalls {
             k.syscall(1, Call::Create { path: "#e/x.".into(), mode: excl, perm: 0o666 }),
             Err("'#e/x.' file already exists".into())
         );
+    }
+
+    /// The next `n` requests a server has been sent — one a read, as a
+    /// pipe gives back each write whole.
+    fn requests(k: &mut Kernel, server: Pid, fd: Fd, n: usize) -> Vec<Vec<u8>> {
+        (0..n)
+            .map(|_| match k.syscall(server, Call::Pread { fd, n: 8192, off: -1 }) {
+                Ok(Ret::Data(b)) => b,
+                r => panic!("nothing sent: {r:?}"),
+            })
+            .collect()
+    }
+
+    /// **An interrupted RPC is flushed** — `mountio`'s *"r =
+    /// mntflushalloc(r, m->msize)"* (`devmnt.c:782`): a `Tflush` naming its
+    /// tag, and the process waits for the answer to that. `Rflush` alone
+    /// is *"error(Eintr)"* (`mountrpc`); the server has let the read go,
+    /// and a later answer to it is nobody's.
+    #[test]
+    fn an_interrupted_rpc_is_flushed_and_waits_for_the_flush() {
+        let mut k = booted();
+        let (server, end, fd) = mounted(&mut k);
+        assert_eq!(k.syscall(1, Call::Pread { fd, n: 64, off: 0 }), Ok(Ret::Sched), "the read goes out");
+        assert!(k.procs.borrow_mut().postnote(1, "interrupt", proc::NoteFlag::NUser));
+        assert_eq!(k.resume(1), Ok(Ret::Sched), "flushed, and waiting for Rflush");
+        let sent = requests(&mut k, server, end, 2);
+        let (read, flush) = (ninep::unframe(&sent[0]).unwrap(), ninep::unframe(&sent[1]).unwrap());
+        assert_eq!((read.ty, flush.ty), (ninep::T::Read as u8, ninep::T::Flush as u8));
+        assert_eq!(u16::from_le_bytes([flush.body[0], flush.body[1]]), read.tag, "oldtag is the read's");
+        let rflush = ninep::W::new().frame(ninep::T::Flush.reply(), flush.tag);
+        k.syscall(server, Call::Pwrite { fd: end, data: rflush, off: -1 }).unwrap();
+        assert_eq!(k.resume(1), Err(proc::EINTR.into()));
+    }
+
+    /// A reply that comes before its flush's is the RPC's answer: the flush
+    /// is still waited for, and `mntflushfree` finds the RPC done
+    /// (`devmnt.c:1004`).
+    #[test]
+    fn a_reply_before_the_flush_is_the_answer() {
+        let mut k = booted();
+        let (server, end, fd) = mounted(&mut k);
+        assert_eq!(k.syscall(1, Call::Pread { fd, n: 64, off: 0 }), Ok(Ret::Sched));
+        assert!(k.procs.borrow_mut().postnote(1, "interrupt", proc::NoteFlag::NUser));
+        assert_eq!(k.resume(1), Ok(Ret::Sched));
+        let sent = requests(&mut k, server, end, 2);
+        let flush = ninep::unframe(&sent[1]).unwrap();
+        let mut answers = serve9p(&sent[0]);
+        answers.extend(ninep::W::new().frame(ninep::T::Flush.reply(), flush.tag));
+        k.syscall(server, Call::Pwrite { fd: end, data: answers, off: -1 }).unwrap();
+        assert_eq!(k.resume(1), Ok(Ret::Data(b"served over 9P".to_vec())));
+    }
+
+    /// `walk` sends up to `MAXWELEM` names in one `Twalk` (`chan.c:1006`),
+    /// where this sent one a name: `/sub/answer` through a mount is one
+    /// walk of two names, then the open.
+    #[test]
+    fn a_walk_through_a_mount_is_one_twalk_of_its_names() {
+        let mut k = booted();
+        let (server, end, _fd) = mounted(&mut k);
+        let mut r = k.syscall(1, Call::Open { path: "/sub/answer".into(), mode: 0 });
+        let mut walks = Vec::new();
+        while r == Ok(Ret::Sched) {
+            let req = answer(&mut k, server, end);
+            if req[4] == ninep::T::Walk as u8 {
+                walks.push(u16::from_le_bytes([req[15], req[16]]));
+            }
+            r = k.resume(1);
+        }
+        assert!(matches!(r, Ok(Ret::Fd(_))), "{r:?}");
+        assert_eq!(walks, vec![2], "one Twalk, of two names");
     }
 }

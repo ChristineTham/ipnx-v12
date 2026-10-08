@@ -5,9 +5,9 @@ other document carries it.
 
 Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 
-## The kernel — 20,316 lines of Rust, no dependencies
+## The kernel — 20,646 lines of Rust, no dependencies
 
-11,326 of them before each file's tests.
+11,470 of them before each file's tests.
 
 | | |
 |---|---|
@@ -19,7 +19,7 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed. Each end is a `qio` queue: a read of an empty pipe **sleeps** on `q->rr` until a write wakes it, and the last close of an end hangs up the other (`pipeclose`, `devpipe.c:247`), which is end of file once what was queued is read. Eve may change both ends' mode (`pipewstat`, `devpipe.c:181`) |
 | `devproc.rs` | `#p` — the process table as files: **twelve of `procdir[]`'s eighteen** (`devproc.c:79`), and the table says why each of the other six is absent. Each file's mode is `procgen`'s — `ctl`, `note` and `notepg` take the process's `procmode`, `0640` — checked at the open (`devproc.c:471`), and changed by `procwstat`. `ns` prints the bind lines that rebuild the namespace — paths, `int2flag`'s letters, and `mount <flag> <server> <on> <spec>` with `srvname`. `ctl` is `lookupcmd` over `proccmd[]` (`devproc.c:102`); the real-time scheduler's messages are not built |
 | `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user. Eve removing `caphash` hides it for good (`capremove`, `devcap.c:64`) |
-| `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, and a clunk that waits for `Rclunk`. A walk the server refuses leaves no fid to clunk (`devmnt.c:410`). Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
+| `devmnt.rs` | `#M` — the 9P client: version, attach, a walk of up to `MAXWELEM` names, open, read and write in a loop, and a clunk that waits for `Rclunk`; an RPC a note interrupts is flushed (`mountio`, `devmnt.c:782`). A walk the server refuses leaves no fid to clunk (`devmnt.c:410`). Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
 | `devsrv.rs` | `#s` — post a file descriptor's NUMBER (`strtoul`'s), and an open of the name answers the posted channel itself, shared with the poster (`devsrv.c:135`). Its owner or eve renames it (`srvwstat`); it is removed by `srvremove`'s rules, and removing it closes what was posted |
 | `devuart.rs` | `#t` — serial lines, `port/devuart.c`: `eia%d`, `eia%dctl` and `eia%dstatus` for each; input staged and `qproduce`d by `uartclock` every 22ms, output `qconsume`d by the transmitter; all of `uartctl`'s commands, with the ones that wait for output to drain sleeping on the uart's `Rendez`. The hardware is a `PhysUart` the host supplies; its interrupt handler is called at clock time (RESEARCH §16.20). The last close waits for the output to drain, and a note ends the wait (`uartclose`, `devuart.c:319`) |
@@ -34,7 +34,7 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 31 calls, `exec`, and `unionread` |
 
-286 kernel tests, and 67 in `hosts/ipnx`.
+289 kernel tests, and 67 in `hosts/ipnx`.
 
 ## The host — `hosts/ipnx`, five files
 
@@ -499,3 +499,10 @@ is `parsename`'s: `create("x.")` makes `x.` (it made `x`), and a name
 ending in `/` must be a directory. `create` is `Acreate`'s: `OEXCL` on what
 exists is `Eexist`, and a failed create walks again and opens what is
 there.
+
+**`Tflush`, and several names to a `Twalk`** (2026-10-08; RESEARCH §16.28).
+An RPC a note interrupts sends `Tflush` and waits for its answer, then is
+`Eintr` — or its own reply, if that came first — as `mountio` does; a
+server is never left answering a read nobody waits for. A walk sends up to
+`MAXWELEM` names in one `Twalk`, stops at a mount point among the qids,
+and says *"does not exist"* for a name lost partway, as `walk` does.

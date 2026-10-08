@@ -5706,3 +5706,34 @@ all (*"goto Open"*); and a create that fails, unless `OEXCL`, walks again
 and opens what another create made — *"The create/create race is quite
 common"* (`:1566`) — or reports its own error. The walk of the last element
 honours a `#` name's `nomount`.
+
+### 16.28 An interrupted RPC is flushed; a walk is one `Twalk` of its names (2026-10-08)
+
+**`Tflush`.** `mountio` meets a note's `Eintr` by *"r = mntflushalloc(r,
+m->msize)"* (`devmnt.c:782`): a `Tflush` whose `oldtag` is the RPC's, sent
+and waited for like any RPC, and another for each note after, each with the
+same `oldtag` (`:980`). When the newest is answered, `mntflushfree`
+(`:1004`) takes the RPC off the queue, and `mountrpc` answers it — with its
+own reply if that came first, or *"case Rflush: error(Eintr)"* (`:754`).
+Here an interrupted RPC was dropped from the queue and forgotten: the
+server, never told, answered it later to nobody, and a plumb port's next
+message, read for a reader a note had interrupted, was lost. The record of
+a call now keeps an RPC's flushes with it, so a call that sleeps waiting
+for `Rflush` takes up where it was.
+
+**Several names to a `Twalk`.** `walk` sends a run of up to `MAXWELEM`
+(`fcall.h:6`) names at once, `..` alone (`chan.c:1006`), and then looks
+for a mount point at each qid the server answered but the last
+(`:1067`): one found ends the step there, on the mount's channel, and the
+next step carries on from it without stepping onto it again
+(`didmount`). A short answer with no mount along it is `walk`'s own
+*"does not exist"* (`:963`, `:1081`) — or *"not a directory"* past a file —
+where the first name a device cannot walk is the device's error. Here
+each name was a `Twalk` and a fid, and a lost name was always the
+device's word: `'/boot/nothing' does not exist` is Plan 9's for
+`/boot/nothing/x`, and `'/nothing' file does not exist` for `/nothing`.
+Every device walks several names now — the mount driver in one message,
+the rest one name after another, as `devwalk` does (`dev.c:169`).
+
+**What remains of §16.24's list:** nothing. The register keeps the serial
+line's interrupt taken at clock time, a design for review.
