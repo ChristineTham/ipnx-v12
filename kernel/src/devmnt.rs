@@ -276,7 +276,24 @@ pub struct MntDev {
     /// **Each wire's session** — the msize and version `mntversion`
     /// agreed, kept where Plan 9 keeps them: on the wire, `c->mux`
     /// (`devmnt.c:245`). A wire is named here by what identifies it.
-    sessions: std::collections::HashMap<(DevId, u32, u64), (u32, String)>,
+    sessions: std::collections::HashMap<WireKey, (u32, String)>,
+    /// **What holds each wire**: *"The channel to the server … has one
+    /// reference for every Chan open on the server"* (`devmnt.c:9`) — every
+    /// channel derived from a mount, each with its own fid, *"increfs/decrefs
+    /// mchan"* (`:14`). So the fids the server holds for this kernel are the
+    /// wire's references. A set, so a call made again from its record (see
+    /// [`crate::namec::Record`]) counts each fid once.
+    held: std::collections::HashMap<WireKey, std::collections::HashSet<u32>>,
+    /// The wires whose last fid has gone, for the kernel to let go of
+    /// (`chanfree`'s *"cclose(c->mchan)"*, `chan.c:475`).
+    released: Vec<WireKey>,
+}
+
+/// A wire, by what identifies it.
+pub type WireKey = (DevId, u32, u64);
+
+fn wirekey(w: &Chan) -> WireKey {
+    (w.dev, w.devno, w.qid.path)
 }
 
 impl MntDev {
@@ -289,6 +306,40 @@ impl MntDev {
         let f = t.fid(self.fid + 1);
         self.fid = self.fid.max(f);
         f
+    }
+
+    /// A channel the server now knows by `fid`: one more reference on its
+    /// wire (*"c->mchan = m->c; incref(m->c)"*, `devmnt.c:288`, `:354`,
+    /// `:448`).
+    fn hold(&mut self, w: WireKey, fid: u32) {
+        self.held.entry(w).or_default().insert(fid);
+    }
+
+    /// The server has let `fid` go — a clunk or a remove, which clunks
+    /// whether or not it removes — and if that was the wire's last, the
+    /// wire is let go of (`chanfree`, `chan.c:475`).
+    fn letgo(&mut self, c: &Chan, r: &Result<(), String>) {
+        if r.as_ref().err().is_some_and(|e| e == SLEPT) {
+            return;
+        }
+        let Some(w) = self.mounts.get(c.devno as usize).map(|m| wirekey(&m.wire)) else { return };
+        let Some(fids) = self.held.get_mut(&w) else { return };
+        if fids.remove(&c.fid) && fids.is_empty() {
+            self.held.remove(&w);
+            self.released.push(w);
+        }
+    }
+
+    /// The wires let go of since this was last asked.
+    pub fn released(&mut self) -> Vec<WireKey> {
+        std::mem::take(&mut self.released)
+    }
+
+    /// `muxclose` (`devmnt.c:567`), from the wire's own last close: its
+    /// session is over.
+    pub fn muxclose(&mut self, w: WireKey) {
+        self.sessions.remove(&w);
+        self.held.remove(&w);
     }
 
     /// `mntattach` (`devmnt.c:303`). The channel handed in **is the wire**.
@@ -355,6 +406,7 @@ impl MntDev {
         }
         let aqid = Qid::read(&mut R::new(m.body)).ok_or("short Rauth")?;
         self.begin(&mnt.wire, new);
+        self.hold(wirekey(&mnt.wire), afid);
         let mut c = Chan::attach(DevId::Mnt, 0);
         c.qid = aqid;
         c.fid = afid;
@@ -392,6 +444,7 @@ impl MntDev {
         let fid = self.newfid(t);
         let (m, mut c) = Mnt::attach(wire.clone(), msize, t, uname, aname, fid, afid)?;
         self.begin(&wire, new);
+        self.hold(wirekey(&wire), fid);
         self.mounts.push(m);
         c.devno = (self.mounts.len() - 1) as u32;
         c.mux = joined.or(Some(c.devno));
@@ -433,6 +486,8 @@ impl MntDev {
         if qids.is_empty() {
             return Ok(None);
         }
+        let w = wirekey(&m.wire);
+        self.hold(w, fid);
         let mut nc = c.walked(name, qids[0]);
         nc.fid = fid;
         Ok(Some(nc))
@@ -445,6 +500,8 @@ impl MntDev {
         let newfid = self.newfid(t);
         let m = self.mnt(c)?;
         let (fid, _) = m.walk(t, c.fid, newfid, &[])?;
+        let w = wirekey(&m.wire);
+        self.hold(w, fid);
         let mut nc = c.clone();
         nc.fid = fid;
         Ok(nc)
@@ -521,9 +578,13 @@ impl MntDev {
         Ok(())
     }
 
+    /// `Tremove`, which *"clunks the fid"* whether the remove succeeds or
+    /// not (`sysfile.c:1162`; remove(5)).
     pub fn remove(&mut self, t: &mut dyn Transport, c: &mut Chan) -> Result<(), String> {
         let fid = c.fid;
-        self.mnt(c)?.remove(t, fid)
+        let r = self.mnt(c)?.remove(t, fid);
+        self.letgo(c, &r);
+        r
     }
 
     /// Clunking is not optional bookkeeping: the server holds the fid until it
@@ -531,7 +592,8 @@ impl MntDev {
     pub fn close(&mut self, t: &mut dyn Transport, c: &mut Chan) {
         let fid = c.fid;
         if let Ok(m) = self.mnt(c) {
-            let _ = m.clunk(t, fid);
+            let r = m.clunk(t, fid);
+            self.letgo(c, &r);
         }
     }
 }

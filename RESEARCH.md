@@ -5627,3 +5627,51 @@ they are walk(5)'s now.
   is resolved; `bindmount` resolves the first before it checks the second
   (`sysfile.c:1038`–`:1048`), so the two orders differ only in which error a
   call with two bad names reports.
+
+### 16.26 A wire let go with its last channel; the serial line drains (2026-10-08)
+
+**A mount's wire is let go when the last channel through it goes.**
+*"The channel to the server … has one reference for every Chan open on the
+server … Each channel derived from the mount point has mchan set to c, and
+increfs/decrefs mchan"* (`devmnt.c:9`–`:16`), and `chanfree` closes it
+(*"cclose(c->mchan)"*, `chan.c:475`); when the wire's own last reference
+goes, *"muxclose(c->mux)"* (`:471`) ends the session. Here the kernel held
+every wire it had ever mounted, for good (§16.25). Every channel through a
+mount has a fid of its own, so the fids the server holds are the wire's
+references: the driver keeps them per wire — a set, so a call run again
+from its record counts each once — and when the last is clunked or removed
+the kernel lets the wire go. An unmount of a private server's last mount
+now hangs its pipe up, and the server reads end of file; a session that
+began over a wire ends with it. `fversion` held the wire too, where
+*"Mnts have no reference count; they go away when c goes away"*
+(`devmnt.c:12`); it holds nothing now.
+
+**A close is made where what is left of it can be kept.** Plan 9's
+`cclose` may wait anywhere — inside another close (`chanfree`'s own
+`cclose`s, `chan.c:453`), inside any call — on the process's kernel stack.
+Here a waiting close keeps the rest of itself only in a closing loop
+(§16.24); in a call that runs again from the top, a device whose close
+changes it as it goes — a serial line's open count, `#s`'s table — would
+be changed twice, or left waiting for a close nothing makes again. So
+`cclose`, at a last reference, does not close: it hands the channel to the
+loop it is inside, which closes it next, or to the call's end, which
+closes it before the call returns — Plan 9's order, kept. A call run again
+hands it over once: the record has a step for it.
+
+**The serial line's last close drains** (the register's item since
+2026-09-29, now gone). `uartclose` (`devuart.c:319`) takes `qlock(p)`,
+closes the input, hangs the output up and waits in `uartdrainoutput`
+(`:304`) for the line to take what is queued; a note ends the wait —
+*"p->drain = 0; nexterror();"* — and `uartclose`'s `waserror` swallows it;
+then `qclose(p->oq)` and the line disabled. Built so, with where a close
+waits kept per process as the line's writes already keep theirs.
+
+**A kill during `exits` queued the close it was waiting on.**
+`forceclosefgrp` hands the close queue what is still in the descriptor
+table (`pgrp.c:245`), and the close in progress is not: *"f->fd[i] = nil;
+cclose(c)"* (`:225`) took it out first, so it goes on in the killed
+process. §16.24's queued it with the rest — a second clunk of a fid
+already clunked. Now only the closes not begun are queued.
+
+**What remains:** `Tflush` for an interrupted RPC, and several names to a
+`Twalk` (§16.24).

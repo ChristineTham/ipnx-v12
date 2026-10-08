@@ -5,9 +5,9 @@ other document carries it.
 
 Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 
-## The kernel — 19,853 lines of Rust, no dependencies
+## The kernel — 20,139 lines of Rust, no dependencies
 
-11,049 of them before each file's tests.
+11,195 of them before each file's tests.
 
 | | |
 |---|---|
@@ -22,7 +22,7 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 | `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, and a clunk that waits for `Rclunk`. A walk the server refuses leaves no fid to clunk (`devmnt.c:410`). Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
 | `devsrv.rs` | `#s` — post a file descriptor's NUMBER (`strtoul`'s), and an open of the name answers the posted channel itself, shared with the poster (`devsrv.c:135`). Its owner or eve renames it (`srvwstat`); it is removed by `srvremove`'s rules, and removing it closes what was posted |
-| `devuart.rs` | `#t` — serial lines, `port/devuart.c`: `eia%d`, `eia%dctl` and `eia%dstatus` for each; input staged and `qproduce`d by `uartclock` every 22ms, output `qconsume`d by the transmitter; all of `uartctl`'s commands, with the ones that wait for output to drain sleeping on the uart's `Rendez`. The hardware is a `PhysUart` the host supplies; its interrupt handler is called at clock time, and a last close cannot wait for output to drain (RESEARCH §16.20) |
+| `devuart.rs` | `#t` — serial lines, `port/devuart.c`: `eia%d`, `eia%dctl` and `eia%dstatus` for each; input staged and `qproduce`d by `uartclock` every 22ms, output `qconsume`d by the transmitter; all of `uartctl`'s commands, with the ones that wait for output to drain sleeping on the uart's `Rendez`. The hardware is a `PhysUart` the host supplies; its interrupt handler is called at clock time (RESEARCH §16.20). The last close waits for the output to drain, and a note ends the wait (`uartclose`, `devuart.c:319`) |
 | `devvirtio9p.rs` | `#9` — a channel to a 9P server the MACHINE provides. It marshals nothing: `#M` writes a T-message down it and reads the R-message back, as it would down a TCP connection |
 | `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` answers the channel fd 3 holds — the same one, offset and all — in the mode it is open in (`devdup.c:86`), so a dup IS an open. A ctl file reads as the descriptor's `/proc/n/fd` line |
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares; and `#ec`, the kernel configuration group, which nothing fills yet |
@@ -34,7 +34,7 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 31 calls, `exec`, and `unionread` |
 
-279 kernel tests, and 67 in `hosts/ipnx`.
+283 kernel tests, and 67 in `hosts/ipnx`.
 
 ## The host — `hosts/ipnx`, five files
 
@@ -478,3 +478,16 @@ a walk the server refuses no longer clunks a fid it never had. Not built:
 the wire's release when the last channel through its mount goes (`chanfree`,
 `chan.c:475`), `Tflush` for an interrupted RPC, several names to a `Twalk`,
 and the uart's drain.
+
+**A wire let go with its last channel; the uart's drain** (2026-10-08;
+RESEARCH §16.26). The mount driver holds a wire for as long as the server
+holds a fid for one of its channels, and lets it go with the last
+(`chanfree`'s *"cclose(c->mchan)"*): an unmount of a private server's last
+mount hangs its pipe up, and the server reads end of file. `fversion` takes
+no hold. A close made where it cannot wait — inside another close, or in a
+call that may run again from the top — is made next by the loop or the
+call's end, once. The uart's last close waits for the line to drain, as
+`uartclose` does, and a note ends the wait; the register's item for it is
+gone. A kill during `exits` lets the close in progress finish and queues
+only the rest. Not built: `Tflush` for an interrupted RPC, and several
+names to a `Twalk`.

@@ -1219,6 +1219,9 @@ fn closeproc_close(k: &mut Kernel, me: Pid, c: Chan) -> bool {
         return false;
     }
     k.tab.endcall(me);
+    // what that close let go of in turn, closed next
+    let more = k.tab.deferred(me);
+    k.procs.borrow_mut().clunkq.splice(0..0, more);
     true
 }
 
@@ -1455,6 +1458,14 @@ impl Kernel {
         if self.procs.borrow_mut().take_setlabel(up) {
             return Ok(Ret::Sched);
         }
+        // **The closes the call left to make** ([`namec::Devtab::cclose`]),
+        // made before it returns, as Plan 9's are made inside it — each of
+        // which may wait.
+        let deferred = self.tab.deferred(up);
+        if !deferred.is_empty() {
+            let r = self.closethen(up, deferred, Box::new(move |_, _| r));
+            return self.syscall_tail(up, r);
+        }
         // The call is over, and what it did on the wires is forgotten.
         self.tab.endcall(up);
         // **A clock interrupt that fell due during the call.** This kernel
@@ -1578,6 +1589,9 @@ impl Kernel {
     /// is entered again.
     fn closethen(&mut self, up: Pid, cs: Vec<Chan>, then: Label) -> Result<Ret, String> {
         self.tab.endcall(up);
+        // what the call already let go of comes first
+        let mut cs = cs;
+        cs.splice(0..0, self.tab.deferred(up));
         self.closing(up, cs, then)
     }
 
@@ -1591,6 +1605,8 @@ impl Kernel {
             }
             cs.remove(0);
             self.tab.endcall(up);
+            // what that close let go of in turn, closed before the rest
+            cs.splice(0..0, self.tab.deferred(up));
         }
         then(self, up)
     }
@@ -1698,6 +1714,8 @@ impl Kernel {
     /// (`:222`) around the closes, then `then`.
     fn closefgrp(&mut self, up: Pid, cs: Vec<Chan>, then: Label) -> Result<Ret, String> {
         self.tab.endcall(up);
+        let mut cs = cs;
+        cs.splice(0..0, self.tab.deferred(up));
         if let Some(p) = self.procs.borrow_mut().get_mut(up) {
             p.closingfgrp = true;
         }
@@ -1713,26 +1731,40 @@ impl Kernel {
     /// *"Called from sleep because up is in the middle of closefgrp and
     /// just got a kill ctl message … To break free, hand the unclosed
     /// channels to the close queue"* (`pgrp.c:234`).
-    fn closingfgrp(&mut self, up: Pid, mut cs: Vec<Chan>, then: Label) -> Result<Ret, String> {
+    ///
+    /// The close being made when the kill comes is not one of those: it
+    /// goes on — `forceclosefgrp` takes only what is still in the table,
+    /// and the close in progress was taken out of it first (*"f->fd[i] =
+    /// nil; cclose(c)"*, `pgrp.c:225`). `begun` says one is.
+    fn closingfgrp(&mut self, up: Pid, cs: Vec<Chan>, then: Label) -> Result<Ret, String> {
+        self.closingfgrp_(up, cs, then, false)
+    }
+
+    fn closingfgrp_(&mut self, up: Pid, mut cs: Vec<Chan>, then: Label, begun: bool) -> Result<Ret, String> {
+        let mut begun = begun;
         while !cs.is_empty() {
             let killed = self.procs.borrow().get(up).is_some_and(|p| p.procctl == Some(proc::Procctl::Exitme));
             if killed {
                 let mut procs = self.procs.borrow_mut();
-                for c in cs.drain(..) {
+                for c in cs.drain(usize::from(begun)..) {
                     if !procs.ccloseq(c) {
                         procs.closeproc = true;
                     }
                 }
-                break;
+                if cs.is_empty() {
+                    break;
+                }
             }
             let mut c = cs[0].clone();
             self.tab.dclose(&mut c);
             if self.procs.borrow().get(up).is_some_and(|p| p.setlabel) {
-                self.setlabel(up, Box::new(move |k, up| k.closingfgrp(up, cs, then)));
+                self.setlabel(up, Box::new(move |k, up| k.closingfgrp_(up, cs, then, true)));
                 return Ok(Ret::Ok);
             }
             cs.remove(0);
+            begun = false;
             self.tab.endcall(up);
+            cs.splice(0..0, self.tab.deferred(up));
         }
         then(self, up)
     }
@@ -2295,14 +2327,16 @@ impl Kernel {
             // the caller's buffer, and its length.
             //
             // *"c = fdtochan(arg[0], ORDWR, 0, 1)"* (`auth.c:36`), and the
-            // channel is a mount's from here (`devmnt.c:239`).
+            // channel is a mount's from here (`devmnt.c:239`). The session
+            // is the wire's, and holds no reference to it: *"Mnts have no
+            // reference count; they go away when c goes away"*
+            // (`devmnt.c:12`).
             Call::Fversion { fd, msize, version } => {
                 let cell = self.fdtochan(up, fd, Some(chan::mode::ORDWR), false)?;
                 let mut wire = cell.borrow().clone();
                 wire.flag |= chan::flag::CMSG;
                 let v = self.tab.dfversion(wire, msize, &version)?;
                 cell.borrow_mut().flag |= chan::flag::CMSG;
-                self.tab.keepwire(cell);
                 Ok(Ret::Str(v))
             }
             // `sysfauth` (`auth.c:62`): `mntauth`, a descriptor on the new
@@ -5149,5 +5183,45 @@ mod syscalls {
             k.syscall(1, Call::Wstat { path: "/boot/init".into(), edir: rename }),
             Err("'/boot/init' is a mount point".into())
         );
+    }
+
+    /// **A mount's wire is let go with its last channel** — `chanfree`'s
+    /// *"cclose(c->mchan)"* (`chan.c:475`) — and with nothing else holding
+    /// it, a server on a pipe reads end of file. Until then it is held,
+    /// though `mount` closed the descriptor that named it: the unmount
+    /// below is answered over it.
+    #[test]
+    fn a_wire_is_let_go_with_the_last_channel_through_its_mount() {
+        let mut k = booted();
+        let (server, end, fd) = mounted(&mut k);
+        assert_eq!(served_t(&mut k, 1, server, end, Call::Close { fd }).0, Ok(Ret::Ok));
+        let (r, ts) = served_t(&mut k, 1, server, end, Call::Unmount { name: None, old: "/".into() });
+        assert_eq!((r, clunks(&ts)), (Ok(Ret::Ok), 1), "the mount's root, its last");
+        assert_eq!(
+            k.syscall(server, Call::Pread { fd: end, n: 1, off: -1 }),
+            Ok(Ret::Data(Vec::new())),
+            "the server reads end of file"
+        );
+    }
+
+    /// A kill while `exits` waits on a close lets that close finish —
+    /// `forceclosefgrp` hands the queue only what is still in the table
+    /// (`pgrp.c:245`), and the close in progress was taken out first
+    /// (`:225`) — and queues the rest. It queued the one in progress too:
+    /// a second clunk of a fid already clunked.
+    #[test]
+    fn a_kill_in_exits_queues_only_the_closes_not_begun() {
+        let mut k = booted();
+        let (server, end, fd) = mounted(&mut k);
+        let Ret::Pid(child) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::FDG }).unwrap() else { panic!() };
+        let (r, _) = served_t(&mut k, child, server, end, Call::Open { path: "/answer".into(), mode: 0 });
+        assert!(matches!(r, Ok(Ret::Fd(_))), "{r:?}");
+        assert_eq!(k.syscall(1, Call::Close { fd }), Ok(Ret::Ok), "the child holds it");
+        assert_eq!(k.syscall(child, Call::Exits { status: String::new() }), Ok(Ret::Sched), "waits for Rclunk");
+        k.procs.borrow_mut().get_mut(child).unwrap().procctl = Some(proc::Procctl::Exitme);
+        assert_eq!(answer(&mut k, server, end)[4], ninep::T::Clunk as u8);
+        assert_eq!(k.resume(child), Ok(Ret::Ok));
+        assert_eq!(k.procs.borrow().clunkq.len(), 1, "only the close not begun");
+        assert_eq!(k.procs.borrow().state(child), proc::State::Moribund);
     }
 }

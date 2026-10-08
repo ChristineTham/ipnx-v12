@@ -153,6 +153,15 @@ ABI. The conformance suite binds all three.
   leaves them nil — so `#p/<n>/ns` of a process that has exited is
   `Eprocdied` (`devproc.c:958`). `rfork` without `RFPROC` closes the tables
   it replaces (`sysproc.c:61`, `:70`), and `chdir` the `dot` it leaves.
+  **A last close is made only where what is left of it can be kept**: one
+  reached inside another close, or in a call that may run again from the
+  top, is handed to the closing loop it is inside, or to the call's end,
+  and made there next — once. A serial line's last close waits for its
+  output to drain (`uartclose`, `devuart.c:319`).
+- **A mount's wire is held while the server holds a fid for any channel
+  through it**, and let go with the last (`chanfree`'s *"cclose(c->mchan)"*,
+  `chan.c:475`); its session ends when the wire's own last reference goes
+  (*"muxclose(c->mux)"*, `:471`).
 - **What a walk makes, it closes.** Each step through a mount is a fid on
   the server; a walk closes the channel it steps from and the one it holds
   when it fails (`chan.c:1109`), and `namec` answers, with its channel,

@@ -48,15 +48,6 @@ from eve — and one answer: **the default user is `kitty`** (Christine,
 `pc/main.c:285`); Plan 9's fallback, `"glenda"`, is kept for a
 configuration that names none.
 
-**The serial line's last close does not drain** — proposed 2026-09-29
-(RESEARCH §16.20). Built, and awaiting review. `uartclose` waits for the
-line to take what is queued (`uartdrainoutput`, `devuart.c:342`); here the
-line is kicked once and what it would not take is freed by the `qclose`
-Plan 9 also does after the wait. A program sees it as a close that returns
-before the line has sent its output. The mount driver's clunk, which this
-item first named, waits now (§16.24), and a last close may wait anywhere it
-is made; the alternative here is the drain built on that.
-
 **The serial line's interrupt, taken at clock time** — proposed 2026-09-29
 (RESEARCH §16.20). Built, and awaiting review. `i8250interrupt`
 (`uarti8250.c:463`) runs when the hardware interrupts; here the host's line

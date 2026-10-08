@@ -60,11 +60,19 @@ pub struct Devtab {
     muxes: HashMap<(DevId, u32, u64), Mux>,
     /// What each process's call has done on the wires so far: see [`Record`].
     records: HashMap<crate::proc::Pid, Record>,
-    /// **Each mounted wire, held** — the `Mnt`'s `m->c`, a reference of its
-    /// own (`devmnt.c:355`, *"incref(m->c)"*), so that the process which
-    /// mounted it may close its descriptor — `plumber` does, `fsys.c:221` —
-    /// without hanging the server up.
+    /// **Each mounted wire, held** — one reference for all the channels
+    /// derived from its mounts, each of which holds one in Plan 9
+    /// (`devmnt.c:355`, *"incref(m->c)"*), so that the process which mounted
+    /// it may close its descriptor — `plumber` does, `fsys.c:221` — without
+    /// hanging the server up. Let go of when the last of those channels is
+    /// closed ([`Devtab::unwire`]).
     wires: HashMap<(DevId, u32, u64), std::rc::Rc<std::cell::RefCell<Chan>>>,
+    /// **Closes to make next**, by process: a channel whose last reference
+    /// went where its close could not be made — inside another close
+    /// (`chanfree`'s own `cclose`s, `chan.c:453`), or in a call that may run
+    /// again from the top — for the closing loop or the call's end to close
+    /// before anything else ([`Devtab::cclose`]).
+    deferred: HashMap<crate::proc::Pid, Vec<Chan>>,
     /// `char *eve` (`auth.c:10`) — kernel-wide, and handed to every device
     /// as it joins. It starts EMPTY, as `userinit` leaves it
     /// (`pc/main.c:285`); `boot` names the host owner by writing
@@ -186,12 +194,40 @@ impl Devtab {
     }
 
     /// `cclose` (`chan.c:490`): one reference fewer — *"if(decref(c))
-    /// return;"* — and at the last, the device's close.
+    /// return;"* — and at the last, the device's close, **made next by
+    /// whatever can wait for it**: the closing loop this is inside, or the
+    /// end of the call ([`Devtab::deferred`]). A device's close may wait —
+    /// the mount driver for `Rclunk`, a serial line for its output — and
+    /// may change the device as it goes, so it is made where what is left
+    /// of it is kept, never in the middle of something that runs again
+    /// from the top. A call that does run again defers it once: the record
+    /// says it already has.
     pub fn cclose(&mut self, c: Rc<RefCell<Chan>>) {
         if let Ok(cell) = Rc::try_unwrap(c) {
-            let mut c = cell.into_inner();
-            self.dclose(&mut c);
+            let pid = self.uppid();
+            if self.once(pid) {
+                self.deferred.entry(pid).or_default().push(cell.into_inner());
+            }
         }
+    }
+
+    /// The closes [`Devtab::cclose`] left for this process to make.
+    pub fn deferred(&mut self, pid: crate::proc::Pid) -> Vec<Chan> {
+        self.deferred.remove(&pid).unwrap_or_default()
+    }
+
+    /// Whether this step of the call is reached for the first time, or
+    /// again in a call made again from its record.
+    fn once(&mut self, pid: crate::proc::Pid) -> bool {
+        let r = self.records.entry(pid).or_default();
+        if let Some(Step::Once) = r.steps.get(r.at) {
+            r.at += 1;
+            return false;
+        }
+        r.steps.truncate(r.at);
+        r.steps.push(Step::Once);
+        r.at += 1;
+        true
     }
 
     /// What `srvremove` let go of, closed here because the device cannot
@@ -256,10 +292,12 @@ impl Devtab {
     pub fn dremove(&mut self, c: &mut Chan) -> Result<(), String> {
         if c.dev == DevId::Mnt {
             let mut cc = c.clone();
-            return self.with_mnt(|m, tab| {
+            let r = self.with_mnt(|m, tab| {
                 let mut w = Wire::new(&cc, m, tab)?;
                 m.remove(&mut w, &mut cc)
             })?;
+            self.unwire();
+            return r;
         }
         let r = self.get(c.dev).ok_or("no such device")?.remove(c);
         if c.dev == DevId::Srv {
@@ -288,8 +326,18 @@ impl Devtab {
                 }
                 Ok::<(), String>(())
             });
+            self.unwire();
         } else if let Some(d) = self.get(c.dev) {
             d.close(c)
+        }
+        // A mount's message channel at its last reference: *"if(c->mux !=
+        // nil){ muxclose(c->mux); …"* (`chanfree`, `chan.c:471`) — the
+        // session is over, and a wire made later with the same name begins
+        // its own.
+        if c.flag & crate::chan::flag::CMSG != 0 {
+            let w = (c.dev, c.devno, c.qid.path);
+            self.muxes.remove(&w);
+            let _ = self.with_mnt(|m, _| m.muxclose(w));
         }
         // `srvclose` of a name opened `ORCLOSE` is `srvremove`.
         if c.dev == DevId::Srv {
@@ -1193,6 +1241,8 @@ pub struct Record {
 enum Step {
     /// `++chanalloc.fid`'s answer.
     Fid(u32),
+    /// A close [`Devtab::cclose`] deferred.
+    Once,
     /// One RPC: the tag it went with, whether it has gone, and its reply
     /// once it came.
     Rpc { tag: u16, sent: bool, reply: Option<Vec<u8>> },
@@ -1237,6 +1287,19 @@ impl Devtab {
             (w.dev, w.devno, w.qid.path)
         };
         self.wires.entry(key).or_insert(cell);
+    }
+
+    /// Let go of each wire whose last channel the mount driver has just
+    /// closed — *"if(c->mchan != nil){ cclose(c->mchan); …"* (`chanfree`,
+    /// `chan.c:475`) — which, if nothing else holds it, closes it: a pipe's
+    /// server reads end of file.
+    fn unwire(&mut self) {
+        let gone = self.with_mnt(|m, _| m.released()).unwrap_or_default();
+        for w in gone {
+            if let Some(cell) = self.wires.remove(&w) {
+                self.cclose(cell);
+            }
+        }
     }
 
     /// A call entered again: its record is given back from the start.

@@ -13,7 +13,7 @@
 //! as it supplies the console behind `#c`, and its far end is the surface
 //! (docs/surface.md).
 //!
-//! **Where this differs, and why.** Three places, each because Plan 9's
+//! **Where this differs, and why.** Two places, each because Plan 9's
 //! counterpart cannot exist here:
 //!
 //! * *No interrupts.* A host cannot interrupt this kernel, so the
@@ -25,12 +25,10 @@
 //! * *No kernel stack.* A call that sleeps runs again from the top when the
 //!   process is entered again, so where it was is kept per process
 //!   ([`Held`], and [`qio::At`] for the queues).
-//! * *A close cannot sleep.* `uartclose` waits in `uartdrainoutput` for the
-//!   line to take what is queued (`devuart.c:342`); a close here returns
-//!   nothing and cannot leave the processor. It kicks the transmitter once,
-//!   and whatever the line would not take is freed by the `qclose` that
-//!   follows the wait in Plan 9 too. A host line takes everything it is
-//!   given unless the far end has sent `^S` with `x1` set.
+//!
+//! A close that waits — `uartclose` in `qlock(p)` and in
+//! `uartdrainoutput` (`devuart.c:342`) — keeps where it was the same way,
+//! and the kernel makes the close again when the process is entered again.
 
 use crate::chan::{flag::COPEN, mode, Chan};
 use crate::dev::{Dev, DevId, Eve};
@@ -292,6 +290,11 @@ enum Held {
     /// In `uartctl`, asleep in `uartdrainoutput` before the command at
     /// `field`.
     Drain { field: usize },
+    /// In `uartclose`, queued on `qlock(p)`.
+    CloseLock,
+    /// In `uartclose`, asleep in `uartdrainoutput`: the line is closed but
+    /// for its output, which is going.
+    CloseDrain,
 }
 
 pub struct UartDev {
@@ -667,7 +670,7 @@ impl UartDev {
                 }
             }
             Some(Held::Lock) | Some(Held::Data) => {}
-            Some(Held::Drain { .. }) => unreachable!("a process is in one call"),
+            Some(Held::Drain { .. } | Held::CloseLock | Held::CloseDrain) => unreachable!("a process is in one call"),
         }
         let dev = self.uart[i].dev;
         let mut oq = self.uart[i].oq.take().ok_or(EBADARG)?;
@@ -722,7 +725,7 @@ impl UartDev {
                     }
                     (field, Some(field))
                 }
-                Some(Held::Data) => unreachable!("a process is in one call"),
+                Some(Held::Data | Held::CloseLock | Held::CloseDrain) => unreachable!("a process is in one call"),
             }
         };
         let cmd = String::from_utf8_lossy(data);
@@ -907,9 +910,13 @@ impl Dev for UartDev {
         Err(EPERM.into())
     }
 
-    /// `uartclose` (`devuart.c:319`): the last close of a line's data or
-    /// ctl file closes its input, hangs up and drains its output, and
-    /// disables it. The drain cannot wait here — see the module's comment.
+    /// `uartclose` (`devuart.c:319`): under `qlock(p)`, the last close of
+    /// a line's data or ctl file closes its input, hangs its output up and
+    /// **waits for the line to take what is queued** — `uartdrainoutput`,
+    /// which a note ends, and whose error `uartclose` swallows — then frees
+    /// what is left and disables the line. Where it waits is kept
+    /// ([`Held`]); the kernel makes the close again when the process is
+    /// entered again.
     fn close(&mut self, c: &mut Chan) {
         if c.qid.is_dir() || c.flag & COPEN == 0 {
             return;
@@ -918,23 +925,51 @@ impl Dev for UartDev {
             return;
         }
         let Ok(i) = self.index(c) else { return };
-        let u = &mut self.uart[i];
-        u.opens = u.opens.saturating_sub(1);
-        if u.opens > 0 {
+        let (pid, procs) = self.up();
+        let mut procs = procs.borrow_mut();
+        let draining = match self.held.remove(&pid) {
+            None => {
+                if !procs.qlock(&mut self.uart[i].qlock, pid) {
+                    self.held.insert(pid, Held::CloseLock);
+                    return;
+                }
+                false
+            }
+            Some(Held::CloseLock) => false,
+            Some(Held::CloseDrain) => true,
+            Some(Held::Lock | Held::Data | Held::Drain { .. }) => unreachable!("a process is in one call"),
+        };
+        if !draining {
+            let u = &mut self.uart[i];
+            // *"if(--(p->opens) == 0)"*
+            u.opens = u.opens.saturating_sub(1);
+            if u.opens > 0 {
+                procs.qunlock(&mut self.uart[i].qlock);
+                return;
+            }
+            if let Some(q) = u.iq.as_mut() {
+                q.close();
+            }
+            // *"p->ir = p->iw = p->istage"*
+            if let Some(s) = u.istage.as_mut() {
+                s.clear();
+            }
+            if let Some(q) = u.oq.as_mut() {
+                q.hangup();
+            }
+            let dev = u.dev;
+            wakeall(&mut procs, dev);
+        }
+        // *"if(!waserror()){ uartdrainoutput(p); poperror(); }"* — the
+        // drain's `sleep` ended by a note is `Eintr`, and the close goes on
+        // without it: *"p->drain = 0; nexterror();"*.
+        let interrupted = draining && procs.interrupted(pid);
+        if interrupted {
+            self.uart[i].drain = false;
+        } else if let Ok(false) = self.drainoutput(i, pid, &mut procs) {
+            self.held.insert(pid, Held::CloseDrain);
             return;
         }
-        let procs = self.up.borrow().procs.clone();
-        let mut procs = procs.borrow_mut();
-        if let Some(q) = u.iq.as_mut() {
-            q.close();
-        }
-        if let Some(s) = u.istage.as_mut() {
-            s.clear();
-        }
-        if let Some(q) = u.oq.as_mut() {
-            q.hangup();
-        }
-        self.uartkick(i, &mut procs);
         let u = &mut self.uart[i];
         if let Some(q) = u.oq.as_mut() {
             q.close();
@@ -946,6 +981,7 @@ impl Dev for UartDev {
         u.dcd = false;
         u.dsr = false;
         u.dohup = false;
+        procs.qunlock(&mut self.uart[i].qlock);
     }
 }
 
@@ -1198,5 +1234,56 @@ mod tests {
         wire.lock().unwrap().wire.extend_from_slice(b"new");
         d.uartclock(100_000_000);
         assert_eq!(d.read(&mut c, 64, 0).unwrap(), b"new", "what was queued went with the close");
+    }
+
+    /// **The last close waits for the line to take what is queued**
+    /// (`uartdrainoutput`, `devuart.c:342`): held by `^S`, the close leaves
+    /// the processor with the line still enabled; once `^Q` lets the
+    /// output go, the closer is woken, and its close made again ends it.
+    #[test]
+    fn the_last_close_waits_for_the_output_to_drain() {
+        let (mut d, wire, procs) = uart();
+        let pid = procs.borrow_mut().rfork(1, crate::proc::rf::PROC).unwrap();
+        by(&d, pid);
+        let mut ctl = open(&mut d, "eia0ctl", ORDWR);
+        d.write(&mut ctl, b"x1", 0).unwrap();
+        d.close(&mut ctl);
+        let mut c = open(&mut d, "eia0", ORDWR);
+        wire.lock().unwrap().wire.push(CTLS);
+        d.uartclock(1);
+        d.write(&mut c, b"held", 0).unwrap();
+        d.close(&mut c);
+        assert_eq!(procs.borrow().state(pid), State::Wakeme, "asleep in uartdrainoutput");
+        assert!(d.uart[0].enabled, "not yet closed");
+        wire.lock().unwrap().wire.push(CTLQ);
+        d.uartclock(100_000_000);
+        d.uartclock(200_000_000);
+        assert_eq!(wire.lock().unwrap().out, b"held", "the output went");
+        assert_eq!(procs.borrow().state(pid), State::Ready, "drained: woken");
+        d.close(&mut c);
+        assert!(!d.uart[0].enabled, "and the close is over");
+    }
+
+    /// A note ends the drain's wait, and the close goes on without it:
+    /// *"p->drain = 0; nexterror();"*, which `uartclose`'s `waserror`
+    /// swallows — what the line had not taken is freed with the queue.
+    #[test]
+    fn a_note_ends_the_drain_and_the_close_goes_on() {
+        let (mut d, wire, procs) = uart();
+        let pid = procs.borrow_mut().rfork(1, crate::proc::rf::PROC).unwrap();
+        by(&d, pid);
+        let mut ctl = open(&mut d, "eia0ctl", ORDWR);
+        d.write(&mut ctl, b"x1", 0).unwrap();
+        d.close(&mut ctl);
+        let mut c = open(&mut d, "eia0", ORDWR);
+        wire.lock().unwrap().wire.push(CTLS);
+        d.uartclock(1);
+        d.write(&mut c, b"held", 0).unwrap();
+        d.close(&mut c);
+        assert_eq!(procs.borrow().state(pid), State::Wakeme);
+        assert!(procs.borrow_mut().postnote(pid, "interrupt", crate::proc::NoteFlag::NUser));
+        d.close(&mut c);
+        assert!(!d.uart[0].enabled, "closed");
+        assert!(wire.lock().unwrap().out.is_empty(), "without the output");
     }
 }
