@@ -233,10 +233,15 @@ impl Devtab {
     /// says it already has.
     pub fn cclose(&mut self, c: Rc<RefCell<Chan>>) {
         if let Ok(cell) = Rc::try_unwrap(c) {
-            let pid = self.uppid();
-            if self.once(pid) {
-                self.deferred.entry(pid).or_default().push(cell.into_inner());
-            }
+            self.defer(cell.into_inner());
+        }
+    }
+
+    /// The same, of a channel that is already the caller's alone.
+    pub fn defer(&mut self, c: Chan) {
+        let pid = self.uppid();
+        if self.once(pid) {
+            self.deferred.entry(pid).or_default().push(c);
         }
     }
 

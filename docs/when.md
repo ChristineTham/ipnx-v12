@@ -5,9 +5,9 @@ other document carries it.
 
 Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 
-## The kernel — 20,646 lines of Rust, no dependencies
+## The kernel — 20,750 lines of Rust, no dependencies
 
-11,470 of them before each file's tests.
+11,475 of them before each file's tests.
 
 | | |
 |---|---|
@@ -34,7 +34,7 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 31 calls, `exec`, and `unionread` |
 
-289 kernel tests, and 67 in `hosts/ipnx`.
+291 kernel tests, and 67 in `hosts/ipnx`.
 
 ## The host — `hosts/ipnx`, five files
 
@@ -506,3 +506,10 @@ An RPC a note interrupts sends `Tflush` and waits for its answer, then is
 server is never left answering a read nobody waits for. A walk sends up to
 `MAXWELEM` names in one `Twalk`, stops at a mount point among the qids,
 and says *"does not exist"* for a name lost partway, as `walk` does.
+
+**`read` and `write` on a shared channel** (2026-10-08; RESEARCH §16.29). A
+write takes its range of the offset before the device writes and gives
+back what it did not write, so two writers on one descriptor never write
+the same bytes; a read adds to the offset as it is when it ends. A read at
+0 rewinds a directory and its union, a directory is read only where its
+channel is (`Edirseek`), and an offset below 0 but `~0` is `Enegoff`.

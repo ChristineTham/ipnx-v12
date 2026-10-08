@@ -5737,3 +5737,23 @@ the rest one name after another, as `devwalk` does (`dev.c:169`).
 
 **What remains of §16.24's list:** nothing. The register keeps the serial
 line's interrupt taken at clock time, a design for review.
+
+### 16.29 `read` and `write` on a shared channel (2026-10-08)
+
+**A write takes its range before the device writes.** *"lock(c); off =
+c->offset; c->offset += n; unlock(c);"* (`sysfile.c:744`), and what the
+device did not write is given back after (`:757`) — all of it on an error
+(`:729`). So two processes writing through one descriptor write different
+bytes, whichever finishes first. Here a write began at the offset it saw,
+and put the whole channel back when it was done: two writers whose writes
+slept on a server wrote the same bytes, and the descriptor moved by one of
+them. A read's offset is added to as it is when the read ends, *"lock(c);
+… c->offset += nnn"* (`:683`), not set to what it was when it began.
+
+**`read`'s own rules, which were not here:** an offset below 0 but `~0` is
+`Enegoff` (`:657`; `~0` is the channel's own, `syspread`, `:713`); a read
+at 0 rewinds a directory and its union — `unionrewind`, which closes the
+element a read had open (`:660`); a directory not a union is read only
+where its channel is, *"if(off != c->offset) error(Edirseek)"* (`:675`);
+and a directory's offset moves whichever read it was (`:683`). A write to a
+directory is `Eisdir` (`:739`).

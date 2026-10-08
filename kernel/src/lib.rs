@@ -1619,7 +1619,7 @@ impl Kernel {
         }
     }
 
-    /// `sysread` → `read` (`sysfile.c:672`) on a channel.
+    /// `sysread` → `read` (`sysfile.c:627`) on a channel.
     ///
     /// **Taken out and put back, not held.** Plan 9 hands the device the
     /// `Chan*` an fd holds and nothing minds that the device may reach the
@@ -1628,49 +1628,104 @@ impl Kernel {
     /// /dev` does when `#d` is in its union. Holding the borrow across the
     /// call makes that a panic; copying only the offset back loses `dri`
     /// and `uri`, which is how a directory read came to start over every
-    /// time. The whole channel goes back.
+    /// time. What the device changed goes back — and the offset is added
+    /// to as it is then, *"lock(c); … c->offset += nnn"* (`:683`), not put
+    /// back as it was when the read began: another process on the same
+    /// descriptor may have moved it while this one slept.
     ///
     /// **A device may leave in the middle** — `qread` on an empty pipe
     /// sleeps. The rest of the read is then this again, on the same
     /// channel: the device knows where it was.
     fn pread(&mut self, up: Pid, cell: std::rc::Rc<std::cell::RefCell<chan::Chan>>, n: usize, off: i64) -> Result<Ret, String> {
+        // `~0` is the channel's own offset (`syspread`, `sysfile.c:713`);
+        // any other below 0 is *"error(Enegoff)"* (`:657`)
+        if off < -1 {
+            return Err(ENEGOFF.into());
+        }
         let mut c = cell.borrow().clone();
-        let at = if off < 0 { c.offset } else { off as u64 };
+        let at = if off == -1 { c.offset } else { off as u64 };
+        // *"if(off == 0){ /* rewind to the beginning of the directory */"*
+        // (`:660`): the channel's offset, if it is the one read at, and
+        // the union's place — `unionrewind`, which closes the element open.
+        if at == 0 {
+            if off == -1 {
+                cell.borrow_mut().offset = 0;
+                c.offset = 0;
+                c.dri = 0;
+            }
+            c.uri = 0;
+            if let Some(u) = c.umc.take() {
+                self.tab.defer(*u);
+            }
+        }
         // `read` (`sysfile.c:672`): **a directory reached through a union is
         // read from every element**, one after another. Without this `ls /`
         // shows whichever element answered the walk and nothing else —
         // which, once `/` is a union of the kernel's root and a file server,
-        // is most of the system missing.
+        // is most of the system missing. Any other directory is read where
+        // its channel is: *"if(off != c->offset) error(Edirseek)"* (`:675`).
         let d = if c.is_dir() && c.umh.is_some() {
             self.unionread(&mut c, n)?
         } else {
+            if c.is_dir() && at != c.offset {
+                return Err(EDIRSEEK.into());
+            }
             self.tab.dread(&mut c, n, at)?
         };
         if self.procs.borrow().get(up).is_some_and(|p| p.setlabel) {
             self.setlabel(up, Box::new(move |k, up| k.pread(up, cell, n, off)));
             return Ok(Ret::Ok);
         }
-        if off < 0 {
-            c.offset += d.len() as u64;
-        }
-        *cell.borrow_mut() = c;
+        // *"if(c->qid.type & QTDIR || offp == nil)"* (`:683`): a directory's
+        // offset moves whichever read it was
+        let mut cur = cell.borrow_mut();
+        let now = cur.offset;
+        let advance = c.is_dir() || off == -1;
+        *cur = c;
+        cur.offset = if advance { now + d.len() as u64 } else { now };
         Ok(Ret::Data(d))
     }
 
-    /// `syswrite` → `write` (`sysfile.c`), the same way.
+    /// `syswrite` → `write` (`sysfile.c:722`). **The range is taken before
+    /// the device writes** — *"lock(c); off = c->offset; c->offset += n;
+    /// unlock(c);"* (`:744`) — so two processes writing through one
+    /// descriptor never write the same bytes, and what the device did not
+    /// write is given back after (`:757`, and all of it on an error,
+    /// `:729`).
     fn pwrite(&mut self, up: Pid, cell: std::rc::Rc<std::cell::RefCell<chan::Chan>>, data: Vec<u8>, off: i64) -> Result<Ret, String> {
+        if cell.borrow().is_dir() {
+            return Err(EISDIR.into());
+        }
+        if off < -1 {
+            return Err(ENEGOFF.into());
+        }
+        let taken = off == -1;
+        let at = if taken {
+            let mut c = cell.borrow_mut();
+            let at = c.offset;
+            c.offset += data.len() as u64;
+            at
+        } else {
+            off as u64
+        };
+        self.pwriteat(up, cell, data, at, taken)
+    }
+
+    /// The write itself, at the offset taken — and again, at the same one,
+    /// when the device has left the processor in the middle.
+    fn pwriteat(&mut self, up: Pid, cell: std::rc::Rc<std::cell::RefCell<chan::Chan>>, data: Vec<u8>, at: u64, taken: bool) -> Result<Ret, String> {
         let mut c = cell.borrow().clone();
-        let at = if off < 0 { c.offset } else { off as u64 };
-        let n = self.tab.dwrite(&mut c, &data, at)?;
+        let r = self.tab.dwrite(&mut c, &data, at);
         if self.procs.borrow().get(up).is_some_and(|p| p.setlabel) {
-            self.setlabel(up, Box::new(move |k, up| k.pwrite(up, cell, data, off)));
+            self.setlabel(up, Box::new(move |k, up| k.pwriteat(up, cell, data, at, taken)));
             return Ok(Ret::Ok);
         }
-        if off < 0 {
-            c.offset += n as u64;
-        }
-        *cell.borrow_mut() = c;
-        Ok(Ret::N(n))
+        let m = *r.as_ref().unwrap_or(&0);
+        let mut cur = cell.borrow_mut();
+        let now = cur.offset;
+        *cur = c;
+        cur.offset = if taken { now - (data.len() - m) as u64 } else { now };
+        r.map(Ret::N)
     }
 
     /// `pexit(exitstr, freemem)` (`proc.c:1123`), where it needs the
@@ -2154,7 +2209,7 @@ impl Kernel {
                     _ => return Err(proc::Procs::EBADARG.into()),
                 };
                 if new < 0 {
-                    return Err("negative i/o offset".into());
+                    return Err(ENEGOFF.into());
                 }
                 let new = new as u64;
                 let umc = {
@@ -3270,6 +3325,10 @@ impl Kernel {
 
 /// `Eisdir` (`error.h`) — *"file is a directory"*.
 const EISDIR: &str = "file is a directory";
+/// `Enegoff` (`error.h:50`).
+const ENEGOFF: &str = "negative i/o offset";
+/// `Edirseek` (`error.h:53`).
+const EDIRSEEK: &str = "seek in directory";
 const EBADFD: &str = "fd out of range or not open";
 const ENODEV: &str = "no such device";
 /// `Enofd` (`error.h:32`).
@@ -4281,6 +4340,10 @@ mod syscalls {
                 let end = (off + count as usize).min(data.len());
                 let slice = if off >= data.len() { &[][..] } else { &data[off..end] };
                 W::new().u32(slice.len() as u32).raw(slice).frame(T::Read.reply(), m.tag)
+            }
+            x if x == T::Write as u8 => {
+                let (_fid, _off, count) = (r.u32().unwrap(), r.u64().unwrap(), r.u32().unwrap());
+                W::new().u32(count).frame(T::Write.reply(), m.tag)
             }
             x if x == T::Clunk as u8 => {
                 let fid = r.u32().unwrap();
@@ -5329,5 +5392,41 @@ mod syscalls {
         }
         assert!(matches!(r, Ok(Ret::Fd(_))), "{r:?}");
         assert_eq!(walks, vec![2], "one Twalk, of two names");
+    }
+
+    /// `write` takes its range before the device writes (`sysfile.c:744`):
+    /// two processes writing through one descriptor, the first still
+    /// waiting on the server, write at 0 and at 4 — not both at 0 — and
+    /// the descriptor ends past both.
+    #[test]
+    fn writers_on_one_descriptor_take_their_own_ranges() {
+        let mut k = booted();
+        let (server, end, _fd) = mounted(&mut k);
+        let w = fd_(served(&mut k, 1, server, end, Call::Open { path: "/answer".into(), mode: 1 }));
+        let Ret::Pid(child) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        assert_eq!(k.syscall(1, Call::Pwrite { fd: w, data: b"aaaa".to_vec(), off: -1 }), Ok(Ret::Sched));
+        assert_eq!(k.syscall(child, Call::Pwrite { fd: w, data: b"bb".to_vec(), off: -1 }), Ok(Ret::Sched));
+        let sent = requests(&mut k, server, end, 2);
+        let offset = |m: &[u8]| u64::from_le_bytes(m[11..19].try_into().unwrap());
+        assert_eq!((offset(&sent[0]), offset(&sent[1])), (0, 4));
+        for m in &sent {
+            k.syscall(server, Call::Pwrite { fd: end, data: serve9p(m), off: -1 }).unwrap();
+        }
+        assert_eq!(k.resume(1), Ok(Ret::N(4)));
+        assert_eq!(k.resume(child), Ok(Ret::N(2)));
+        assert_eq!(k.syscall(1, Call::Seek { fd: w, off: 0, whence: 1 }), Ok(Ret::N(6)));
+    }
+
+    /// `read`'s checks (`sysfile.c:657`, `:675`): an offset below 0 but
+    /// `~0` is `Enegoff`, and a directory is read only where its channel
+    /// is.
+    #[test]
+    fn a_read_refuses_a_negative_offset_and_a_seek_in_a_directory() {
+        let mut k = booted();
+        let f = fd(k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }));
+        assert_eq!(k.syscall(1, Call::Pread { fd: f, n: 4, off: -2 }), Err(ENEGOFF.into()));
+        let d = fd(k.syscall(1, Call::Open { path: "/boot".into(), mode: 0 }));
+        assert_eq!(k.syscall(1, Call::Pread { fd: d, n: 512, off: 5 }), Err(EDIRSEEK.into()));
+        assert!(matches!(k.syscall(1, Call::Pread { fd: d, n: 512, off: 0 }), Ok(Ret::Data(_))));
     }
 }
