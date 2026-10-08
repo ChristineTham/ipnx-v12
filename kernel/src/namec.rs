@@ -388,7 +388,78 @@ pub struct Start {
     /// or `dot`. `None` is a `#` name's attach, which the walk made and must
     /// close when it is done with it.
     pub src: Option<Rc<Chan>>,
+    /// `Elemlist` (`chan.c:26`), as `parsename` makes it (`:1196`): the
+    /// elements, where each ends in the name — for an error to show the
+    /// name as far as the one it concerns — and whether the name ends in
+    /// `/` or `/.`.
+    pub elems: Vec<String>,
+    ends: Vec<usize>,
+    pub mustbedir: bool,
 }
+
+/// `parsename` (`chan.c:1196`) of `aname` after its first `prefix` bytes:
+/// each element's span, what `skipslash` (`:1671`) leaves between slashes
+/// — `/` and `.` skipped — and whether it ran out after a slash or a `.`,
+/// `mustbedir`.
+fn parsename(aname: &str, prefix: usize) -> (Vec<std::ops::Range<usize>>, bool) {
+    let b = aname.as_bytes();
+    let mut spans = Vec::new();
+    let mut i = prefix;
+    loop {
+        // *"while(name[0]=='/' || (name[0]=='.' && (name[1]==0 ||
+        // name[1]=='/'))) name++;"*
+        while i < b.len() && (b[i] == b'/' || (b[i] == b'.' && (i + 1 == b.len() || b[i + 1] == b'/'))) {
+            i += 1;
+        }
+        if i >= b.len() {
+            return (spans, true);
+        }
+        let end = b[i..].iter().position(|&c| c == b'/').map_or(b.len(), |p| i + p);
+        spans.push(i..end);
+        if end == b.len() {
+            return (spans, false);
+        }
+        i = end;
+    }
+}
+
+/// What a name's errors need of it: the name, and where each element ends.
+struct Named<'a> {
+    aname: &'a str,
+    ends: Vec<usize>,
+}
+
+impl Named<'_> {
+    /// *"Prepare nice error, showing first e.nerror elements of name"*
+    /// (`chan.c:1406`): from the walk on, an error in `namec` shows the
+    /// name as far as the element it concerns, as `namelenerror` writes
+    /// it — the whole of it once every element is walked (`:1131`). None
+    /// is the error as it was; a call that has left the processor has no
+    /// error at all.
+    fn err(&self, nerror: usize, e: String) -> String {
+        if nerror == 0 || e == crate::devmnt::SLEPT {
+            return e;
+        }
+        let shown = if nerror >= self.ends.len() { self.aname } else { &self.aname[..self.ends[nerror - 1]] };
+        nameerror(shown, &e)
+    }
+
+    /// The same, of every element: an error after the walk.
+    fn all(&self, e: String) -> String {
+        self.err(self.ends.len(), e)
+    }
+}
+
+impl Start {
+    fn named<'a>(&self, aname: &'a str) -> Named<'a> {
+        Named { aname, ends: self.ends.clone() }
+    }
+}
+
+/// `Enonexist` (`error.h:9`).
+pub const ENONEXIST: &str = "file does not exist";
+/// `Eexist` (`error.h:10`).
+pub const EEXIST: &str = "file already exists";
 
 /// Step 1: the starting point.
 ///
@@ -401,7 +472,7 @@ pub fn start(
     name: &str,
     slash: &Rc<Chan>,
     dot: &Rc<Chan>,
-) -> Result<(Start, Vec<String>), String> {
+) -> Result<Start, String> {
     if name.is_empty() {
         return Err("empty file name".into());
     }
@@ -430,16 +501,29 @@ pub fn start(
         }
         let d = tab.get(id).ok_or(EBADSHARP)?;
         let chan = d.attach(spec)?;
-        return Ok((Start { chan, nomount: true, src: None }, elems(below)));
+        // *"while(*name != '\0' && (*name != '/' || n < 2))"* (`chan.c:1351`):
+        // the `#`, the letter and the spec are the starting point, and the
+        // elements begin after them
+        let _ = below;
+        let prefix = 1 + id.letter().len_utf8() + spec.len();
+        return Ok(start_at(chan, true, None, name, prefix));
     }
-    if let Some(rest) = name.strip_prefix('/') {
-        return Ok((Start { chan: (**slash).clone(), nomount: false, src: Some(slash.clone()) }, elems(rest)));
+    if name.starts_with('/') {
+        return Ok(start_at((**slash).clone(), false, Some(slash.clone()), name, 0));
     }
-    Ok((Start { chan: (**dot).clone(), nomount: false, src: Some(dot.clone()) }, elems(name)))
+    Ok(start_at((**dot).clone(), false, Some(dot.clone()), name, 0))
 }
 
-fn elems(path: &str) -> Vec<String> {
-    path.split('/').filter(|s| !s.is_empty() && *s != ".").map(|s| s.to_string()).collect()
+fn start_at(chan: Chan, nomount: bool, src: Option<Rc<Chan>>, name: &str, prefix: usize) -> Start {
+    let (spans, mustbedir) = parsename(name, prefix);
+    Start {
+        chan,
+        nomount,
+        src,
+        elems: spans.iter().map(|r| name[r.clone()].to_string()).collect(),
+        ends: spans.iter().map(|r| r.end).collect(),
+        mustbedir,
+    }
 }
 
 /// `domount`: if something is mounted on this channel, step onto it.
@@ -488,7 +572,12 @@ pub fn walk(
     src: Option<Rc<Chan>>,
     names: &[String],
     nomount: bool,
-) -> Result<(Chan, Option<Rc<Chan>>), String> {
+) -> Result<(Chan, Option<Rc<Chan>>), (usize, String)> {
+    // The error comes with `nerror`, *"the number of names to display in an
+    // error message"* (`chan.c:961`): those walked, for a file that is not
+    // a directory (`:997`); with the one that failed, for one not found
+    // (`:1047`).
+    //
     // **A channel the walk made is the walk's to close** when it steps past
     // it — *"cclose(c); c = nc"* (`chan.c:1109`) — or fails: through a
     // mount, each step is a fid the server holds until it is clunked. The
@@ -509,10 +598,10 @@ pub fn walk(
     // file on the far side of a mount is `/root/wasm/bin` rather than the
     // mount driver's `#M/wasm/bin`.
     let mut path = c.path.clone();
-    for name in names {
+    for (i, name) in names.iter().enumerate() {
         if !c.is_dir() {
             drop(tab, &mut c, owned);
-            return Err("not a directory".into());
+            return Err((i, ENOTDIR.into()));
         }
         // `..` does not step onto a mount: it goes back out of one. Plan 9
         // undomounts here, which needs the mount head a channel was derived
@@ -521,7 +610,7 @@ pub fn walk(
         let mut union = Vec::new();
         if name != ".." && !nomount {
             let was = c.clone();
-            let (first, head) = domount(tab, ns, c)?;
+            let (first, head) = domount(tab, ns, c).map_err(|e| (i, e))?;
             if let Some(h) = head {
                 // what the mount replaced is closed if the walk made it
                 // (`findmount`'s *"cclose(*cp)"*); the mount's channel is
@@ -547,7 +636,7 @@ pub fn walk(
                 owned = true;
                 src = None;
             }
-            Err(e) if e == crate::devmnt::SLEPT => return Err(e),
+            Err(e) if e == crate::devmnt::SLEPT => return Err((0, e)),
             miss => {
                 let mut err = miss.err();
                 // **"try a union mount, if any"** (`chan.c:1027`). The first
@@ -563,7 +652,7 @@ pub fn walk(
                             break;
                         }
                         Ok(None) => {}
-                        Err(e) if e == crate::devmnt::SLEPT => return Err(e),
+                        Err(e) if e == crate::devmnt::SLEPT => return Err((0, e)),
                         Err(e) => err = Some(e),
                     }
                 }
@@ -575,10 +664,12 @@ pub fn walk(
                         src = None;
                     }
                     // Every element missed: the error is the last device's,
-                    // as `walk` returns -1 with it still set (`:1041`).
+                    // as `walk` returns -1 with it still set (`:1041`) —
+                    // `devwalk`'s *"error(Enonexist)"* (`dev.c:230`) for a
+                    // device here that answered nothing.
                     None => {
                         drop(tab, &mut c, owned);
-                        return Err(err.unwrap_or_else(|| format!("'{}' does not exist", name)));
+                        return Err((i + 1, err.unwrap_or_else(|| ENONEXIST.into())));
                     }
                 }
             }
@@ -614,7 +705,7 @@ pub fn namec(
     if matches!(amode, A::Open) {
         return Err("Aopen goes through `open`, which answers a reference".into());
     }
-    resolve(tab, ns, slash, dot, name, amode, omode)
+    resolve(tab, ns, slash, dot, name, amode, omode).map(|(c, src, _)| (c, src))
 }
 
 /// `namec(name, Aopen, omode, 0)`: resolve, then *"c =
@@ -630,10 +721,15 @@ pub fn open(
     name: &str,
     omode: u16,
 ) -> Result<Rc<RefCell<Chan>>, String> {
-    let (c, src) = resolve(tab, ns, slash, dot, name, A::Open, omode)?;
-    // close-on-exec is the channel's business, not the device's, and a 9P
-    // server is never sent it. An open that fails leaves the walked channel
-    // to be closed — *"if(waserror()){ cclose(c); nexterror(); }"*.
+    let (c, src, named) = resolve(tab, ns, slash, dot, name, A::Open, omode)?;
+    openit(tab, c, src, omode).map_err(|e| named.all(e))
+}
+
+/// The open itself: close-on-exec is the channel's business, not the
+/// device's, and a 9P server is never sent it. An open that fails leaves
+/// the walked channel to be closed — *"if(waserror()){ cclose(c);
+/// nexterror(); }"*.
+fn openit(tab: &mut Devtab, c: Chan, src: Option<Rc<Chan>>, omode: u16) -> Result<Rc<RefCell<Chan>>, String> {
     let keep = c.clone();
     let c = match tab.dopen(c, omode & !crate::chan::mode::OCEXEC) {
         Ok(c) => c,
@@ -650,21 +746,69 @@ pub fn open(
 }
 
 /// `namec` up to the access mode's own work: the walk, the mount the last
-/// element steps onto, and `cunique`.
-fn resolve(
+/// element steps onto, and `cunique` — and what an error after them needs
+/// to name the name.
+fn resolve<'a>(
     tab: &mut Devtab,
     ns: &Ns,
     slash: &Rc<Chan>,
     dot: &Rc<Chan>,
-    name: &str,
+    name: &'a str,
     amode: A,
     omode: u16,
-) -> Result<(Chan, Option<Rc<Chan>>), String> {
-    let (s, names) = start(tab, ns, name, slash, dot)?;
+) -> Result<(Chan, Option<Rc<Chan>>, Named<'a>), String> {
+    let s = start(tab, ns, name, slash, dot)?;
+    let named = s.named(name);
     // A walk of one element or more answers a channel of its own; none
     // answers the namespace's own `dot` or `slash`, which `cunique` below
     // must copy before anything opens or removes it.
-    let (mut c, mut src) = walk(tab, ns, s.chan, s.src, &names, s.nomount)?;
+    let (c, src) = walk(tab, ns, s.chan, s.src, &s.elems, s.nomount).map_err(|(n, e)| named.err(n, e))?;
+    let refuse = |tab: &mut Devtab, mut c: Chan, owned: bool, e: &str| {
+        if owned {
+            tab.dclose(&mut c);
+        }
+        Err(named.all(e.to_string()))
+    };
+    // *"if(e.mustbedir && !(c->qid.type&QTDIR)) error("not a directory")"*
+    // (`chan.c:1450`): `/etc/motd/` is not `/etc/motd`.
+    if s.mustbedir && !c.is_dir() {
+        return refuse(tab, c, src.is_none(), ENOTDIR);
+    }
+    // `chan.c:1453`: exec of a directory is refused here rather than by
+    // the device, because only `namec` knows the caller asked for `OEXEC`.
+    if matches!(amode, A::Open) && omode & 3 == crate::chan::mode::OEXEC && c.is_dir() {
+        return refuse(tab, c, src.is_none(), "cannot exec directory");
+    }
+    let (c, src) = mounted(tab, ns, c, src, s.nomount, amode).map_err(|e| named.all(e))?;
+    match amode {
+        // `Aaccess`, `Abind`, `Amount` and `Aremove` resolve and stop.
+        // **None requires a directory** — which is why `bind` can put a file
+        // over a file, and why using `Atodir` for bind's sides was wrong.
+        A::Access | A::Bind | A::Mount | A::Remove | A::Open => {}
+        // *"case Atodir: … if(!(c->qid.type & QTDIR)) error(Enotdir)"*
+        A::Todir => {
+            if !c.is_dir() {
+                return refuse(tab, c, src.is_none(), ENOTDIR);
+            }
+        }
+        A::Create => {
+            return refuse(tab, c, src.is_none(), "Acreate goes through `create`, which walks the parent");
+        }
+    }
+    Ok((c, src, named))
+}
+
+/// `namec`'s switch on the access mode, up to its own work: whether the
+/// last element steps onto what is mounted there, the mount head kept,
+/// and `cunique`.
+fn mounted(
+    tab: &mut Devtab,
+    ns: &Ns,
+    mut c: Chan,
+    mut src: Option<Rc<Chan>>,
+    nomount: bool,
+    amode: A,
+) -> Result<(Chan, Option<Rc<Chan>>), String> {
     // Whether the LAST element steps onto what is mounted there, per access
     // mode (`chan.c:1456`). Two say no, and each says why:
     //
@@ -675,7 +819,7 @@ fn resolve(
     //   can never have more than one element.
     // * **`Atodir`** — *"Directories (e.g. for cd) are left before the mount
     //   point, so one may mount on / or . and see the effect"* (`:1522`).
-    if !s.nomount && !matches!(amode, A::Mount | A::Todir) {
+    if !nomount && !matches!(amode, A::Mount | A::Todir) {
         // *"save&update the name; domount might change c"* (`chan.c:1470`),
         // and after `cunique`: *"now it's our copy anyway, we can put the
         // name back"* — `pathclose(c->path); c->path = path`. `Abind` is the
@@ -725,35 +869,6 @@ fn resolve(
         c.path = path;
         src = None;
     }
-    let refuse = |tab: &mut Devtab, mut c: Chan, owned: bool, e: &str| {
-        if owned {
-            tab.dclose(&mut c);
-        }
-        Err(e.to_string())
-    };
-    match amode {
-        // `Aaccess`, `Abind`, `Amount` and `Aremove` resolve and stop.
-        // **None requires a directory** — which is why `bind` can put a file
-        // over a file, and why using `Atodir` for bind's sides was wrong.
-        A::Access | A::Bind | A::Mount | A::Remove => {}
-        A::Todir => {
-            if !c.is_dir() {
-                return refuse(tab, c, src.is_none(), "not a directory");
-            }
-        }
-        A::Create => {
-            return refuse(tab, c, src.is_none(), "Acreate goes through `create`, which walks the parent");
-        }
-        // The open itself is [`open`]'s.
-        A::Open => {
-            // `chan.c:1454`: exec of a directory is refused here rather than
-            // by the device, because only `namec` knows the caller asked
-            // for `OEXEC`.
-            if omode & 3 == crate::chan::mode::OEXEC && c.is_dir() {
-                return refuse(tab, c, src.is_none(), "cannot exec directory");
-            }
-        }
-    }
     Ok((c, src))
 }
 
@@ -772,11 +887,11 @@ fn opened(c: &mut Chan, omode: u16) {
 /// `Enocreate` (`port/error.h:8`).
 const ENOCREATE: &str = "mounted directory forbids creation";
 
-/// `namec(..., Acreate, ...)`: walk the parent, then create in the union's
-/// **create element** — the one bound with `MCREATE`. Plan 9 resolves the
-/// last element's parent and creates there (`chan.c`, `namec`'s `Acreate`
-/// case), which is why a create can land in a different file server from the
-/// one a read of the same directory would answer.
+/// `namec(..., Acreate, ...)` (`chan.c:1540`): walk all but the last
+/// element, then create it in the union's **create element** — the one
+/// bound with `MCREATE` (`createdir`) — which is why a create can land in a
+/// different file server from the one a read of the same directory would
+/// answer.
 pub fn create(
     tab: &mut Devtab,
     ns: &Ns,
@@ -786,26 +901,32 @@ pub fn create(
     omode: u16,
     perm: u32,
 ) -> Result<Rc<RefCell<Chan>>, String> {
-    // `Acreate`'s own checks (`chan.c`), before anything is walked:
-    // a name ending in `/` or `/.` must be created with `DMDIR`, and creating
-    // the root itself is `Eexist`.
-    let mustbedir = name.ends_with('/') || name.ends_with("/.");
-    if mustbedir && perm & crate::ninep::DMDIR == 0 {
-        return Err("create without DMDIR".into());
-    }
-    let name = name.trim_end_matches('.').trim_end_matches('/');
-    if name.is_empty() || name == "#" {
-        return Err("file already exists".into());
-    }
-    let (dir, last) = match name.rfind('/') {
-        Some(i) => (&name[..i.max(1)], &name[i + 1..]),
-        None => (".", name),
+    let s = start(tab, ns, name, slash, dot)?;
+    let named = s.named(name);
+    let n = s.elems.len();
+    let attach = |tab: &mut Devtab, s: &Start| {
+        if s.src.is_none() {
+            let mut c = s.chan.clone();
+            tab.dclose(&mut c);
+        }
     };
-    if last.is_empty() || last == "." || last == ".." {
-        return Err("bad create name".into());
+    // *"perm must have DMDIR if last element is / or /."* (`chan.c:1430`),
+    // with every element named; and *"don't try to walk the last path
+    // element just yet"* — a name with none is `Eexist` (`:1436`).
+    if s.mustbedir && perm & crate::ninep::DMDIR == 0 {
+        attach(tab, &s);
+        return Err(named.err(n, "create without DMDIR".into()));
     }
-    let (parent, psrc) = namec(tab, ns, slash, dot, dir, A::Todir, 0)?;
+    if n == 0 {
+        attach(tab, &s);
+        return Err(EEXIST.into());
+    }
+    let last = s.elems[n - 1].clone();
+    let (parent, psrc) = walk(tab, ns, s.chan, s.src, &s.elems[..n - 1], s.nomount).map_err(|(k, e)| named.err(k, e))?;
     let powned = psrc.is_none();
+    // From here every error names the whole name: *"e.nelems++;
+    // e.nerror++"* (`chan.c:1546`).
+    let fail = |e: String| named.all(e);
     // What the walk made is closed once it is done with (`chan.c:1109`); a
     // close is skipped only when the call has left the processor, since it
     // runs again from the top and the record gives the closes back then.
@@ -815,44 +936,38 @@ pub fn create(
             tab.dclose(&mut c);
         }
     };
-
-    // **`create(2)` of a name that already exists is an OPEN with `OTRUNC`**
-    // (`chan.c:1540`): namec walks the last element first, and if it is
-    // there, opens it truncated — unless `OEXCL`, which is the only way to
-    // reach `create(5)`'s own semantics, where an existing name fails.
+    // The last element walked from the parent, which the walk leaves for
+    // this to close: *"walk(&c, e.elems+e.nelems-1, 1, nomount, nil)"*.
+    let lookup = |tab: &mut Devtab| {
+        let held = Some(psrc.clone().unwrap_or_else(|| Rc::new(parent.clone())));
+        walk(tab, ns, parent.clone(), held, std::slice::from_ref(&last), s.nomount)
+    };
+    // **`create(2)` of a name that already exists is an OPEN with
+    // `OTRUNC`** (`chan.c:1548`) — *"goto Open"*, `Aopen`'s, `OCEXEC` and
+    // all — unless `OEXCL`, which is `Eexist`: the only way to reach
+    // `create(5)`'s own semantics.
     //
     // Plan 9's comment names the very case that found this: *"The
     // create/create race is quite common. For example, it happens when two rc
     // subshells simultaneously update the same environment variable."* Here
     // it was not even a race — one rc, writing `/env/status` twice, told it
     // could not create what it had just created.
-    //
-    // *"omode |= OTRUNC; goto Open"* (`chan.c:1550`): the open is `Aopen`'s,
-    // `OCEXEC` and all.
-    if omode & crate::chan::mode::OEXCL == 0 {
-        // walked from a reference, so the walk leaves the parent for this to
-        // close
-        let held = Some(psrc.clone().unwrap_or_else(|| Rc::new(parent.clone())));
-        match walk(tab, ns, parent.clone(), held, &[last.to_string()], false) {
-            Ok((existing, esrc)) => {
-                let eowned = esrc.is_none();
-                close(tab, &parent, powned);
-                let omode = omode | crate::chan::mode::OTRUNC;
-                let keep = existing.clone();
-                return match tab.dopen(existing, omode & !crate::chan::mode::OCEXEC) {
-                    Ok(c) => {
-                        opened(&mut c.borrow_mut(), omode);
-                        Ok(c)
-                    }
-                    Err(e) => {
-                        close(tab, &keep, eowned && e != crate::devmnt::SLEPT);
-                        Err(e)
-                    }
-                };
+    let truncated = |tab: &mut Devtab, existing: Chan, esrc: Option<Rc<Chan>>| {
+        let omode = omode | crate::chan::mode::OTRUNC;
+        let (c, src) = mounted(tab, ns, existing, esrc, s.nomount, A::Open)?;
+        openit(tab, c, src, omode)
+    };
+    match lookup(tab) {
+        Ok((existing, esrc)) => {
+            close(tab, &parent, powned);
+            if omode & crate::chan::mode::OEXCL != 0 {
+                close(tab, &existing, esrc.is_none());
+                return Err(fail(EEXIST.into()));
             }
-            Err(e) if e == crate::devmnt::SLEPT => return Err(e),
-            Err(_) => {}
+            return truncated(tab, existing, esrc).map_err(fail);
         }
+        Err((_, e)) if e == crate::devmnt::SLEPT => return Err(e),
+        Err(_) => {}
     }
 
     // **A directory mounted upon is created in through `createdir`**
@@ -865,7 +980,7 @@ pub fn create(
             Some(e) => (*e.chan).clone(),
             None => {
                 close(tab, &parent, powned);
-                return Err(ENOCREATE.into());
+                return Err(fail(ENOCREATE.into()));
             }
         },
         None => parent.clone(),
@@ -879,21 +994,37 @@ pub fn create(
         Ok(t) => t,
         Err(e) => {
             close(tab, &parent, powned && e != crate::devmnt::SLEPT);
-            return Err(e);
+            return Err(fail(e));
         }
     };
     target.path = parent.path.clone();
-    close(tab, &parent, powned);
     // *"devtab[cnew->type]->create(cnew, …, omode&~(OEXCL|OCEXEC), perm)"*
     // (`chan.c:1613`), and then the flags, as an open has them.
     let mode = omode & !(crate::chan::mode::OEXCL | crate::chan::mode::OCEXEC);
-    if let Err(e) = tab.dcreate(&mut target, last, mode, perm) {
+    if let Err(e) = tab.dcreate(&mut target, &last, mode, perm) {
         close(tab, &target, e != crate::devmnt::SLEPT);
-        return Err(e);
+        if e == crate::devmnt::SLEPT || omode & crate::chan::mode::OEXCL != 0 {
+            close(tab, &parent, powned && e != crate::devmnt::SLEPT);
+            return Err(fail(e));
+        }
+        // *"create failed"* (`chan.c:1630`): someone else's create may
+        // have got there first, so the walk is made again, and what it
+        // finds opened `OTRUNC`; if nothing, *"report true error"*.
+        let again = lookup(tab);
+        close(tab, &parent, powned);
+        return match again {
+            Ok((existing, esrc)) => truncated(tab, existing, esrc).map_err(fail),
+            Err((_, w)) if w == crate::devmnt::SLEPT => Err(w),
+            Err(_) => Err(fail(e)),
+        };
     }
+    close(tab, &parent, powned);
     opened(&mut target, omode);
     Ok(Rc::new(RefCell::new(target)))
 }
+
+/// `Enotdir` (`error.h:12`).
+pub const ENOTDIR: &str = "not a directory";
 
 #[cfg(test)]
 mod tests {
@@ -1179,7 +1310,7 @@ mod tests {
         let mut ns = Ns::new();
         ns.mount(&slash, Element::new(refuses), Bind::After);
         let e = create(&mut tab, &ns, &slash, &slash, "/new", crate::chan::mode::OWRITE, 0o666).unwrap_err();
-        assert_eq!(e, ENOCREATE);
+        assert_eq!(e, format!("'/new' {ENOCREATE}"));
     }
 
     #[test]
@@ -1187,7 +1318,7 @@ mod tests {
         let (mut tab, slash) = tab_with_root();
         let ns = Ns::new();
         let e = open(&mut tab, &ns, &slash, &slash, "/boot/init", crate::chan::mode::OWRITE);
-        assert_eq!(e.unwrap_err(), "permission denied", "devopen's Eperm: every file in #/ is 0555");
+        assert_eq!(e.unwrap_err(), "'/boot/init' permission denied", "devopen's Eperm: every file in #/ is 0555");
     }
 
     /// `namelenerror` (`chan.c:1250`): a short name whole and quoted; a
@@ -1200,6 +1331,21 @@ mod tests {
         let e = nameerror(&long, EISMTPT);
         assert!(e.starts_with("'.../") && e.ends_with("/end' is a mount point"), "{e}");
         assert!(e.len() < crate::proc::ERRMAX);
+    }
+    /// `parsename` (`chan.c:1196`): `/` and `.` are skipped, `..` and `x.`
+    /// are elements, and a name ending in `/` or `/.` must be a directory.
+    #[test]
+    fn a_name_parses_as_parsename_parses_it() {
+        fn elems(n: &str) -> (Vec<&str>, bool) {
+            let (spans, dir) = parsename(n, 0);
+            (spans.into_iter().map(|r| &n[r]).collect(), dir)
+        }
+        assert_eq!(elems("/a/./b//c"), (vec!["a", "b", "c"], false));
+        assert_eq!(elems("x."), (vec!["x."], false));
+        assert_eq!(elems("/tmp/.."), (vec!["tmp", ".."], false));
+        assert_eq!(elems("a/b/."), (vec!["a", "b"], true));
+        assert_eq!(elems("/"), (Vec::<&str>::new(), true));
+        assert_eq!(elems("."), (Vec::<&str>::new(), true));
     }
 }
 

@@ -5,9 +5,9 @@ other document carries it.
 
 Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 
-## The kernel — 20,139 lines of Rust, no dependencies
+## The kernel — 20,316 lines of Rust, no dependencies
 
-11,195 of them before each file's tests.
+11,326 of them before each file's tests.
 
 | | |
 |---|---|
@@ -34,7 +34,7 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 31 calls, `exec`, and `unionread` |
 
-283 kernel tests, and 67 in `hosts/ipnx`.
+286 kernel tests, and 67 in `hosts/ipnx`.
 
 ## The host — `hosts/ipnx`, five files
 
@@ -491,3 +491,11 @@ call's end, once. The uart's last close waits for the line to drain, as
 gone. A kill during `exits` lets the close in progress finish and queues
 only the rest. Not built: `Tflush` for an interrupted RPC, and several
 names to a `Twalk`.
+
+**A name in its errors** (2026-10-08; RESEARCH §16.27). From the walk on,
+`namec`'s errors name the name as far as the element they concern —
+`ls: /rc: '/rc' file does not exist` — as `namelenerror` writes it. A name
+is `parsename`'s: `create("x.")` makes `x.` (it made `x`), and a name
+ending in `/` must be a directory. `create` is `Acreate`'s: `OEXCL` on what
+exists is `Eexist`, and a failed create walks again and opens what is
+there.

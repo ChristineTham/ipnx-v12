@@ -3617,7 +3617,7 @@ mod syscalls {
         assert_eq!(k.resume(1), Ok(Ret::Sched));
         assert_eq!(k.procs.borrow().state(1), proc::State::Stopped);
         let t = trace(&k, 1).unwrap();
-        assert!(t.starts_with(" = -1 'nothing' does not exist ") && t.ends_with('\n'), "{t:?}");
+        assert!(t.starts_with(" = -1 '/nothing' file does not exist ") && t.ends_with('\n'), "{t:?}");
         // `start`: the call ends as it would have, and the trace is gone.
         k.procs.borrow_mut().ready(1);
         assert!(k.resume(1).is_err());
@@ -4658,7 +4658,7 @@ mod syscalls {
         let r = fd(k.syscall(1, Call::Open { path: "#e/x".into(), mode: 0 }));
         assert_eq!(
             k.syscall(1, Call::Open { path: format!("#d/{r}"), mode: 1 }),
-            Err(chan::EBADUSEFD.into()),
+            Err(format!("'#d/{r}' {}", chan::EBADUSEFD)),
         );
         let again = fd(k.syscall(1, Call::Open { path: format!("#d/{r}"), mode: 0 }));
         assert!(k.syscall(1, Call::Pwrite { fd: again, data: b"z".to_vec(), off: 0 }).is_err());
@@ -5223,5 +5223,36 @@ mod syscalls {
         assert_eq!(k.resume(child), Ok(Ret::Ok));
         assert_eq!(k.procs.borrow().clunkq.len(), 1, "only the close not begun");
         assert_eq!(k.procs.borrow().state(child), proc::State::Moribund);
+    }
+
+    /// `namec`'s errors name the name as far as the element they concern
+    /// (`chan.c:1406`): the one not found, the file that is not a
+    /// directory, the whole name for what follows the walk — and a name
+    /// ending in `/` must be a directory (`:1450`).
+    #[test]
+    fn an_error_names_the_name_as_far_as_it_went() {
+        let mut k = booted();
+        let open = |k: &mut Kernel, p: &str| k.syscall(1, Call::Open { path: p.into(), mode: 0 });
+        assert_eq!(open(&mut k, "/boot/nothing/x"), Err("'/boot/nothing' file does not exist".into()));
+        assert_eq!(open(&mut k, "/boot/init/x"), Err("'/boot/init' not a directory".into()));
+        assert_eq!(open(&mut k, "/boot/init/"), Err("'/boot/init/' not a directory".into()));
+        assert_eq!(open(&mut k, "#Q"), Err("unknown device in # filename".into()), "before the walk: as it is");
+    }
+
+    /// `parsename` keeps every byte of an element but `/` (`chan.c:1196`):
+    /// `x.` is a name, and creating it creates it — the trailing dots were
+    /// trimmed, so `x.` made `x` — and `OEXCL` on one that exists is
+    /// `Eexist`, without asking the device (`:1550`).
+    #[test]
+    fn a_create_makes_the_name_it_is_given() {
+        let mut k = booted();
+        fd(k.syscall(1, Call::Create { path: "#e/x.".into(), mode: 1, perm: 0o666 }));
+        assert!(k.syscall(1, Call::Stat { path: "#e/x.".into() }).is_ok());
+        assert!(k.syscall(1, Call::Stat { path: "#e/x".into() }).is_err());
+        let excl = chan::mode::OWRITE as i32 | chan::mode::OEXCL as i32;
+        assert_eq!(
+            k.syscall(1, Call::Create { path: "#e/x.".into(), mode: excl, perm: 0o666 }),
+            Err("'#e/x.' file already exists".into())
+        );
     }
 }

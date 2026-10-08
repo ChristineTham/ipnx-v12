@@ -951,7 +951,7 @@ mod storage {
         assert!(second.contains("hello from a package"), "{second}");
         assert!(second.contains("hello 1.0"), "{second}");
         assert!(second.contains("pkg: hello 1.0 removed"), "{second}");
-        assert!(second.contains("hello: file does not exist"), "{second}");
+        assert!(second.contains("hello: '/bin/hello' file does not exist"), "{second}");
         assert!(second.contains("/pkg/hello/1.0/wasm/bin/hello"), "the files survive: {second}");
         assert!(s.path().join("pkg/hello/1.0/wasm/bin/hello").is_file());
     }
@@ -1112,8 +1112,8 @@ mod profiles {
     /// `/usr/$user` with the user's in it, and `/rc` is gone.
     #[test]
     fn the_profiles_are_where_the_design_puts_them() {
-        // Each directory on its own: this `ls` prints bare names, where
-        // Plan 9's would prefix them (`ls.c:115`).
+        // Each directory on its own, its names prefixed with it, as `ls`
+        // prints a directory it is given by name (`ls.c:83`, `:115`).
         let out = typing("ls /profile\necho --\nls /home/profile\nls /rc\n");
         let (system, user) = out.split_once("--\n").expect(&out);
         for name in ["start.ns", "start.env", "start.rc", "shell.env", "shell.rc", "stop.env", "stop.rc"] {
@@ -1122,7 +1122,8 @@ mod profiles {
         for name in ["start.ns", "start.env", "start.rc", "shell.env", "shell.rc", "stop.env", "stop.rc"] {
             assert!(user.contains(&format!("{name}\n")), "no /home/profile/{name}: {out:?}");
         }
-        assert!(out.contains("/rc: file does not exist"), "/rc is retired: {out:?}");
+        // `namec` names the name in the error (`chan.c:1406`)
+        assert!(out.contains("ls: /rc: '/rc' file does not exist"), "/rc is retired: {out:?}");
         assert!(!out.contains("unknown fid"), "{out:?}");
     }
 

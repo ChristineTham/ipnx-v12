@@ -5675,3 +5675,34 @@ already clunked. Now only the closes not begun are queued.
 
 **What remains:** `Tflush` for an interrupted RPC, and several names to a
 `Twalk` (§16.24).
+
+### 16.27 A name in its errors, and a name as `parsename` reads it (2026-10-08)
+
+**`namec`'s errors name the name.** *"Prepare nice error, showing first
+e.nerror elements of name"* (`chan.c:1406`): from the walk on, an error in
+`namec` is `namelenerror`'s *"%#q %s"* (`:1289`) of the name as far as the
+element it concerns, and the error. `walk` sets how far (`nerror`): to the
+element not found (`:1047`), to the last walked when the next is not a
+directory (`:997`), and to every element when it succeeds (`:1131`) — so an
+open the device refuses is `'/adm/keys' permission denied`, and `ls /rc` says
+`ls: /rc: '/rc' file does not exist`. Here the errors were the device's
+alone, or a sentence of our own for a name not found (*"'rc' does not
+exist"*); a device that finds nothing is `devwalk`'s `Enonexist` now
+(`dev.c:230`). What comes before the walk — `#M`, an unknown `#` letter, an
+attach — is as it was, as there.
+
+**A name is `parsename`'s** (`chan.c:1196`), its elements what `skipslash`
+(`:1671`) leaves between slashes. `create` had trimmed trailing dots and
+slashes from the whole name, so `create("x.")` made `x`, and
+`create("/tmp/..")` made `/tmp`; it creates `x.` now, and `..` is walked.
+A name that ends in `/` or `/.` must reach a directory — *"if(e.mustbedir
+&& !(c->qid.type&QTDIR)) error("not a directory")"* (`:1450`) — and
+`/etc/motd/` opened `/etc/motd`.
+
+**`create` is `Acreate` as written** (`chan.c:1540`): `OEXCL` on a name
+that exists is `Eexist`, without the device being asked (`:1550`); a
+name that exists is opened `OTRUNC` through `Aopen`'s own path, mount and
+all (*"goto Open"*); and a create that fails, unless `OEXCL`, walks again
+and opens what another create made — *"The create/create race is quite
+common"* (`:1566`) — or reports its own error. The walk of the last element
+honours a `#` name's `nomount`.
