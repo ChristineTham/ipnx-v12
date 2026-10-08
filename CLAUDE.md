@@ -58,12 +58,15 @@ substrate. The kernel is wasm and cannot run without a host to give it workers,
 memory and a screen; the host has nothing to do without the kernel. The earlier
 wording, "wasm and the surfaces are the machine it runs on", had the host below
 the system rather than part of it, and that is the distinction the name exists
-to carry. **The interface between them is 9P and nothing else**
-(redesigned 2026-08-31): content is a file the host mounts and renders natively
-(so **IPNX implements no renderers**), `/dev/window/` is a window's own
-bidirectional control interface and `/dev/wsys/<n>/` every window's, as rio
-serves them (`rio/fsys.c:42`), `/type` is the registry both sides read, and `/dev/canvas` narrows to genuine drawing — the
-exception, not the rule.
+to carry. **The interface between them is 9P, and one call**: content is a
+file the host mounts and renders natively (so **IPNX implements no
+renderers**), `/dev/window/` is a window's own bidirectional control interface
+and `/dev/wsys/<n>/` every window's, as rio serves them (`rio/fsys.c:42`),
+`/type` is the registry both sides read, and `/dev/canvas` narrows to genuine
+drawing — the exception, not the rule. The one call starts a host command,
+always typed through Inferno's `os` and never hidden under a name of ours —
+some toolchains depend on the host, and the system says so (Christine,
+2026-10-08; [docs/saranos.md](docs/saranos.md), *The host's resources*).
 Saranos is Sanskrit *śaraṇa* (शरण), *refuge* — Christine's reading: *a refuge
 from the complexities of the modern computing environment*, a refuge for the
 person, which is why it names the system someone uses and not the kernel

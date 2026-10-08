@@ -488,3 +488,10 @@ Answering the three questions put to her that afternoon — whether a host binar
 - selected *"A call to the host"* — not `exec`: a wasm program asks the host to start a host command, gets its input, output and error back as descriptors, and carries on; one call beside the system calls
   <br>— `docs/saranos.md`
 - selected *"Yes, now"* — rewrite the documents' guest framing: architecture.md's trust contract, and "guest" wherever it describes the system
+
+On the open questions, and the README, the same evening:
+
+- *"Use inferno's os command as a guideline to resolve your issues. Also rewrite README"*
+  <br>— `docs/saranos.md`, `RESEARCH.md` §16.36, `README.md`
+- *"I think host commands should be explicit rather than invisible. We should be explicitly acknowledging that some toolchains depend on the hsot"*
+  <br>— `docs/saranos.md`, `README.md`, the conformance suite

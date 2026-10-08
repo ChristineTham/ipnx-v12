@@ -5984,9 +5984,11 @@ better"* and *"No I don't want a WASM toolchain, I want our wasm binary to
 be able to instantiate and run a host command"*. Asked the same day, she
 chose **a call to the host** over running a host binary by `exec`; the host
 running the binary from its own file rather than a copy of its bytes; and the
-host's environment with `/env` laid over it. The decided design is in
-`docs/saranos.md`, what is open in `docs/proposals.md`; what they rest on is
-here.
+host's environment with `/env` laid over it. Then *"Use inferno's os command
+as a guideline to resolve your issues"*, and *"I think host commands should be
+explicit rather than invisible. We should be explicitly acknowledging that
+some toolchains depend on the hsot"*. The design is in `docs/saranos.md`;
+what it rests on is here.
 
 **Measured: Go's toolchain built as WASI programs cannot build**, which is
 why the toolchain is the host's. go1.24.7's `cmd/go`, `cmd/compile` and
@@ -6040,3 +6042,35 @@ with `os(1)` copying between them and its own descriptors (*"Os copies the
 standard input to the remote command's standard input"*). The device is the
 model she rejected; the copying is what any way of running a host program
 has to do.
+
+**Inferno's `os`, read whole** (`appl/cmd/os.b`, 168 lines; the emulator's
+half, `emu/port/devcmd.c` and `emu/MacOSX/cmd.c`):
+
+- **Options** `-d dir`, `-m mount`, `-n`, `-N level`, `-b` (`os.b:37`–`:53`).
+  It binds `#C` if `/cmd/clone` is missing (`:61`–`:66`), opens `clone` and
+  reads its conversation's number (`:68`–`:76`), and opens `wait` before
+  anything runs (`:78`).
+- **Setting up** is three `ctl` writes and an `exec`: `nice`, `dir`, and —
+  unless `-b` — `killonclose`; then `exec` with the arguments quoted
+  (`:79`–`:89`).
+- **Running**: unless `-b`, it opens `data` for writing and for reading and
+  `stderr` for reading, and copies in three processes — its input to the
+  command, the command's error to its own, the command's output to its own
+  (`:91`–`:108`); it waits for the output to end, then kills the other two
+  (`:116`–`:118`).
+- **Ending**: it reads the wait record, *"pid user sys real status"*, and if
+  the status is not empty it fails with `host: ` and the status
+  (`:121`–`:136`).
+- **The emulator** makes four host pipes — input, output, error, and one
+  closed on `exec` *"to give end of file on success"* (`cmd.c:101`–`:103`);
+  the child takes a process group of its own (`:124`), lowers its priority if
+  asked (`:126`), changes to the directory or reports *"can't chdir to %s"*
+  (`:72`–`:73`), and `execvp`s the first argument (`:79`), reporting *"exec
+  failed"* (`:82`). Killing is `SIGTERM` to the group (`:183`); the status is
+  `''`, `exit: N`, `killed` or `signal: N` (`:198`–`:207`). Without `dir` a
+  command runs in the emulator's root (`devcmd.c:291`); closing a
+  conversation's last file kills it, and so does closing `ctl` when
+  `killonclose` is set (`devcmd.c:343`).
+- **The environment** is not passed: `oscmd` takes the arguments, the
+  priority, the directory and the descriptors and nothing else (`cmd.c:88`),
+  so the command gets the emulator's own.

@@ -89,9 +89,9 @@ opens a window whose namespace has the project's packages bound.
      `StartProcess` returns `ENOSYS`). A program built with Go or C is one
      standalone file, and runs; Go's toolchain built for WASI cannot build
      one, because `go` starts `compile` and `link` (RESEARCH §16.36). The
-     host's own toolchain builds, run as a host command — *"There no need to
+     host's own toolchain builds, typed through `os` — *"There no need to
      port the go and c toolchain to WASM when the host can do it so much
-     better"* (Christine) — below, *Running host commands*.
+     better"* (Christine); [saranos.md](saranos.md), *The host's resources*.
    - `pip install` cannot reach the network: WASI preview 1 has no outbound
      sockets.
 
@@ -109,54 +109,6 @@ opens a window whose namespace has the project's packages bound.
       (recommended)?
    2. Which browser engine: `@bjorn3/browser_wasi_shim` (recommended, for
       its one-to-one `Fd`) or `@tybys/wasm-util`?
-
-**Running host commands** — what is open, proposed 2026-10-08 (RESEARCH
-§16.36). Decided the same day, and now in [saranos.md](saranos.md), *The
-host's resources*: a call to the host starts a host command; the program gets
-its input, output and error back as descriptors and carries on; the host runs
-the binary from its own file; its environment is the host's with `/env` laid
-over it.
-
-1. **A command is named as `execvp` names one**: a bare name the host finds
-   on its `PATH` — the overlaid environment's, so the host's own unless the
-   program sets one — and a name with a `/` in it resolved in the program's
-   namespace, the kernel handing the host that file rather than its bytes.
-2. **Its exit status, and stopping it, through a fourth descriptor.** Reading
-   it waits for the command to end and gives its status, a non-zero code as
-   its number, as APE does (`ape/lib/ap/plan9/_exit.c:27`–`:28`); writing a
-   note to it signals the command, `interrupt` as `SIGINT` and `kill` as
-   `SIGKILL` (APE's table, `signal.c:16`–`:36`). A Plan 9 process has the
-   same two: its `wait` file, *"read to recover records from the exiting
-   children"*, and its `note` file, whose strings are *"posted as a note to
-   the process"* (`man/3/proc:163`, `:202`).
-3. **Its directory is the program's current one**, which the kernel hands
-   the host as it hands a binary. A directory the host does not serve has no
-   host path, and there the call fails, saying so.
-4. **rc's way in is Inferno's `os`**: `os [-d dir] cmd [arg …]` makes the
-   call and copies between its own descriptors and the command's, as
-   Inferno's does (*"Os copies the standard input to the remote command's
-   standard input"*, `man/1/os`), and exits with the command's status. So
-   `os go build | grep error` and `cat x | os sort` are ordinary rc, and rc
-   does not change.
-
-*What does not work, or not yet:*
-- **How the host fills the descriptors** is to be built: the only host input
-  the kernel takes today is the console's, at clock time (`kbdputcclock`,
-  `devcons.c:556`).
-- **No terminal.** The command's input and output are pipes, so one that
-  wants a terminal — `vi`, `top`, Python's prompt — has none.
-- **A WASI program cannot make the call**: unmodified, it knows only WASI's
-  calls, and WASI has none that starts a process, so Python's `subprocess`
-  fails under WASI (*Go and Python*, above).
-- **The browser, the iPad and the iPhone have no host commands**: a page
-  cannot start a process, and iOS does not let an app. There the call fails.
-
-*The questions:*
-1. Naming as `execvp` does — a bare name on the host's `PATH`, a path in the
-   namespace handed over as the file — yes?
-2. Exit status and stopping it through a fourth descriptor, read for the
-   status and written with a note — yes?
-3. Inferno's `os` as rc's way in — yes?
 
 **The wasm32 `Ureg`, and APE's signal trampoline** — proposed 2026-09-25.
 Built, and awaiting review, because each is a machine-dependent file Plan 9

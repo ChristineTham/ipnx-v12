@@ -48,22 +48,58 @@ We are in symbiosis with the host. Our wasm binaries can access host resources
 and invoke host binaries"*; *"That's why I said we are not creating or
 emulating devices."*
 
-**A host command is started by a call to the host** — one call beside the
-system calls, chosen the same day over running it by `exec`:
+**Host commands are explicit, and some toolchains depend on the host**
+(Christine, 2026-10-08: *"I think host commands should be explicit rather
+than invisible. We should be explicitly acknowledging that some toolchains
+depend on the hsot"*). A host command is always typed through `os` — `os go
+build`, `os cc -c x.c` — and never under a name of ours: no host directory is
+bound into `/bin`, and `go` and `cc` are not wrapped. Go's and C's toolchains
+are the host's, so they are there where the host runs commands — the terminal,
+the Mac — and not in the browser, on the iPad or on the iPhone.
 
-- the program names the command and its arguments, and the host starts it as
-  a host process;
-- the program gets the command's standard input, output and error back as
-  descriptors — to read, to write and to pass on, so a pipeline runs through
-  it — and carries on;
-- the host runs the binary from its own file, never a copy of its bytes,
-  because a host program finds its files from where it is;
-- its environment is the host's own with the process's `/env` laid over it
+**`os` is Inferno's** (*"Use inferno's os command as a guideline"*):
+`os [-b] [-d dir] [-n] [-N level] cmd [arg …]` (`inferno-os`, `man/1/os`,
+`appl/cmd/os.b`), without `-m mountpoint`, which names the device Inferno's
+uses; here `os` makes a call to the host.
+
+- **The call** — one, beside the system calls, decided the same day over
+  running a host binary by `exec`. The host starts `cmd` as Inferno's emulator
+  does, with `execvp` (`emu/MacOSX/cmd.c:79`): a bare name found on the host's
+  `PATH`, or a path on the host — so the binary is always the host's own file,
+  never a copy of its bytes. It runs in `dir`, a host directory — *"an error
+  results and the command will not run if dir does not exist or is
+  inaccessible"* (`man/1/os`) — or without `-d` in the host directory the root
+  is served from, as Inferno's runs in emu's root (`emu/port/devcmd.c:291`).
+  `-n` and `-N` lower its priority. The program gets the command's standard
+  input, output and error back as descriptors, and a fourth that reads its
+  status when it ends, as Inferno's `wait` file does, and carries on.
+- **Its environment** is the host's own with the process's `/env` laid over it
   (*"yes (overlay)"*), each variable as APE makes one
-  (`ape/lib/ap/plan9/_envsetup.c:15`).
+  (`ape/lib/ap/plan9/_envsetup.c:15`). Here this departs from Inferno, whose
+  command gets the emulator's environment.
+- **Pipes run through it.** `os` copies its standard input to the command's
+  and the command's output and error to its own (`os.b:99`–`:108`), so
+  `cat x | os sort | wc` is ordinary rc. A command that takes no input is
+  given `/dev/null`, as Inferno's page says: *"redirect os's input to
+  /dev/null if there is no input to the command"* (`man/1/os`).
+- **Its status is the command's.** `os` ends when the command's output does
+  and exits with nothing when it succeeded, otherwise `host: ` and what the
+  host reports — `exit: 1`, `killed`, `signal: 11` (`os.b:121`–`:136`;
+  `oscmdwait`, `emu/MacOSX/cmd.c:198`–`:207`).
+- **Stopping it**: *"If the os command is killed or exits … the host's own
+  process control operations are used to (attempt to) kill cmd, if it is still
+  running"* (`man/1/os`) — `SIGTERM` to its process group (`cmd.c:183`). So an
+  interrupt that kills `os` kills the command. `-b` suppresses that, and leaves
+  the command's input and output unconnected (`os.b:85`, `:91`).
+- **No terminal**: the command's input and output are pipes, as they are in
+  Inferno, so a program that wants a terminal — `vi`, `top`, Python's prompt —
+  has none.
+- **A WASI program cannot make the call**: unmodified, it knows only WASI's
+  calls, and WASI has none that starts a process.
 
-Not built. What is still open is in [proposals.md](proposals.md), *Running
-host commands*. The browser, the iPad and the iPhone have no host commands.
+Not built. To be built with it: a way for the host to fill the descriptors —
+the only host input the kernel takes today is the console's, at clock time
+(`kbdputcclock`, `devcons.c:556`).
 
 ## The names
 
