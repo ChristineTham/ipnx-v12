@@ -394,10 +394,6 @@ pub enum Rid {
     /// process waits for its reply while another reads the wire. It has at
     /// most one outstanding, so it is named by the process.
     Mntrpc(Pid),
-    /// `&p->r`, the `Rendez` in a `Uart` (`portdat.h:982`) — where
-    /// `uartdrainoutput` waits for the line to take what is queued
-    /// (`devuart.c:314`). Named by the uart's number.
-    Uart(u32),
 }
 
 /// `struct Sema` (`portdat.h:438`) — one process waiting in `semacquire`,
@@ -647,8 +643,8 @@ impl Proc {
             // The first process is eve's — `kstrdup(&p->user, eve)`
             // (`pc/main.c:287`) — and **`eve` is the empty string at that
             // point** (`:285`). So pid 1 starts with no name, `iseve()`
-            // compares two empty strings and is true, and `boot` can write
-            // `#c/hostowner` once. It was `"eve"`, a constant, which is the
+            // compares two empty strings and is true, and the host can write
+            // `#c/hostowner` once, as Plan 9's boot does. It was `"eve"`, a constant, which is the
             // role's name rather than anybody's.
             user: String::new(),
             procmode: 0o640,

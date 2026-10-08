@@ -75,8 +75,8 @@ pub struct Devtab {
     deferred: HashMap<crate::proc::Pid, Vec<Chan>>,
     /// `char *eve` (`auth.c:10`) — kernel-wide, and handed to every device
     /// as it joins. It starts EMPTY, as `userinit` leaves it
-    /// (`pc/main.c:285`); `boot` names the host owner by writing
-    /// `#c/hostowner`.
+    /// (`pc/main.c:285`); the host names the host owner by writing
+    /// `#c/hostowner`, as Plan 9's boot does (`bootauth.c:56`).
     eve: crate::dev::Eve,
 }
 
@@ -92,7 +92,7 @@ impl Devtab {
         self.devs.insert(d.id(), d);
     }
 
-    /// The kernel-wide `eve`, for whoever else needs it — the boot, and a
+    /// The kernel-wide `eve`, for whoever else needs it — the host, and a
     /// test that wants to know who the host owner is.
     pub fn eve(&self) -> crate::dev::Eve {
         self.eve.clone()
@@ -226,7 +226,7 @@ impl Devtab {
     /// return;"* — and at the last, the device's close, **made next by
     /// whatever can wait for it**: the closing loop this is inside, or the
     /// end of the call ([`Devtab::deferred`]). A device's close may wait —
-    /// the mount driver for `Rclunk`, a serial line for its output — and
+    /// the mount driver for `Rclunk` — and
     /// may change the device as it goes, so it is made where what is left
     /// of it is kept, never in the middle of something that runs again
     /// from the top. A call that does run again defers it once: the record
@@ -1145,7 +1145,6 @@ mod tests {
     fn tab_with_root() -> (Devtab, Rc<Chan>) {
         let mut tab = Devtab::new();
         let mut r = Root::new();
-        r.addbootfile("init", b"the image".to_vec());
         let slash = Rc::new(r.attach("").unwrap());
         tab.add(Box::new(r));
         (tab, slash)
@@ -1155,8 +1154,8 @@ mod tests {
     fn a_rooted_name_resolves_from_the_processs_root_channel() {
         let (mut tab, slash) = tab_with_root();
         let ns = Ns::new();
-        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap().0;
-        assert_eq!(c.path, "#/boot/init", "the root device is `#/`, so the name joins without doubling");
+        let c = namec(&mut tab, &ns, &slash, &slash, "/dev", A::Access, 0).unwrap().0;
+        assert_eq!(c.path, "#/dev", "the root device is `#/`, so the name joins without doubling");
     }
 
     #[test]
@@ -1196,7 +1195,6 @@ mod tests {
         // underneath — which a bare is_ok() cannot tell apart.
         let mut tab = Devtab::new();
         let mut r = Root::new();
-        r.addbootfile("init", b"under".to_vec());
         let slash = Rc::new(r.attach("").unwrap());
         tab.add(Box::new(r));
 
@@ -1207,7 +1205,7 @@ mod tests {
         let mut ns = Ns::new();
         ns.mount(&slash, Element::new(over), Bind::Replace);
 
-        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).expect("resolve").0;
+        let c = namec(&mut tab, &ns, &slash, &slash, "/dev", A::Access, 0).expect("resolve").0;
         assert_eq!(
             c.dev,
             DevId::Srv,
@@ -1222,25 +1220,22 @@ mod tests {
     fn the_mount_is_checked_at_every_component_not_only_the_first() {
         let mut tab = Devtab::new();
         let mut r = Root::new();
-        r.addbootfile("init", b"under".to_vec());
         let slash = Rc::new(r.attach("").unwrap());
         tab.add(Box::new(r));
 
-        // the channel for /init — reached by a walk, not the starting point
-        let on = namec(&mut tab, &Ns::new(), &slash, &slash, "/boot/init", A::Access, 0).unwrap().0;
+        // the channel for /dev — reached by a walk, not the starting point
+        let on = namec(&mut tab, &Ns::new(), &slash, &slash, "/dev", A::Access, 0).unwrap().0;
         assert_eq!(on.dev, DevId::Root);
 
-        // a file over a file: `cmount` refuses a directory over one
-        // (`chan.c:654`)
+        // a directory over a directory, as `cmount` allows (`chan.c:654`)
         let mut other = Other::new();
-        let mut over = other.attach("").unwrap();
-        over.qid.qtype = 0;
+        let over = other.attach("").unwrap();
         tab.add(Box::new(other));
 
         let mut ns = Ns::new();
         ns.mount(&on, Element::new(over), Bind::Replace);
 
-        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap().0;
+        let c = namec(&mut tab, &ns, &slash, &slash, "/dev", A::Access, 0).unwrap().0;
         assert_eq!(
             c.dev,
             DevId::Srv,
@@ -1255,7 +1250,6 @@ mod tests {
     fn noattach_permits_exactly_pipe_dup_env_cons_and_proc() {
         let mut tab = Devtab::new();
         let mut r = Root::new();
-        r.addbootfile("init", b"x".to_vec());
         let slash = Rc::new(r.attach("").unwrap());
         tab.add(Box::new(r));
         tab.add(Box::new(Other::new()));
@@ -1286,13 +1280,12 @@ mod tests {
     fn a_relative_name_resolves_from_dot() {
         let mut tab = Devtab::new();
         let mut r = Root::new();
-        r.addbootfile("init", b"an image".to_vec());
         let slash = Rc::new(r.attach("").unwrap());
         tab.add(Box::new(r));
         let ns = Ns::new();
 
-        let rooted = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap().0;
-        let relative = namec(&mut tab, &ns, &slash, &slash, "boot/init", A::Access, 0)
+        let rooted = namec(&mut tab, &ns, &slash, &slash, "/dev", A::Access, 0).unwrap().0;
+        let relative = namec(&mut tab, &ns, &slash, &slash, "dev", A::Access, 0)
             .expect("a relative name must resolve from dot").0;
         assert_eq!(rooted.qid, relative.qid);
     }
@@ -1402,8 +1395,8 @@ mod tests {
         ns.mount(&slash, Element::new(first), Bind::Replace);
         ns.mount(&slash, Element::shared(slash.clone(), crate::ns::mflag::MAFTER, ""), Bind::After);
 
-        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0)
-            .expect("the second element has /boot/init").0;
+        let c = namec(&mut tab, &ns, &slash, &slash, "/dev", A::Access, 0)
+            .expect("the second element has /dev").0;
         assert_eq!(c.dev, DevId::Root);
         let e = namec(&mut tab, &ns, &slash, &slash, "/nothing", A::Access, 0).unwrap_err();
         assert!(e.contains("does not exist"), "{e}");
@@ -1427,8 +1420,8 @@ mod tests {
     fn opening_for_writing_is_refused_by_the_root() {
         let (mut tab, slash) = tab_with_root();
         let ns = Ns::new();
-        let e = open(&mut tab, &ns, &slash, &slash, "/boot/init", crate::chan::mode::OWRITE);
-        assert_eq!(e.unwrap_err(), "'/boot/init' permission denied", "devopen's Eperm: every file in #/ is 0555");
+        let e = open(&mut tab, &ns, &slash, &slash, "/dev", crate::chan::mode::OWRITE);
+        assert_eq!(e.unwrap_err(), "'/dev' permission denied", "devopen's Eperm: a directory opens only to read (`dev.c:379`)");
     }
 
     /// `namelenerror` (`chan.c:1250`): a short name whole and quoted; a

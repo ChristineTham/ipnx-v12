@@ -17,6 +17,9 @@ pub enum T {
     Version = 100,
     Auth = 102,
     Attach = 104,
+    /// `Rerror` (`fcall.h:99`) — a reply itself, sent as `T::Error as u8`.
+    /// `Terror`, 106, is illegal, so `reply()` is not for this one: it would
+    /// give 108, `Tflush`.
     Error = 107,
     Flush = 108,
     Walk = 110,

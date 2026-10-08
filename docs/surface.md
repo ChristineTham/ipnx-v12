@@ -26,34 +26,36 @@ nothing above it needs to know. The contract it serves is
 Saranos              the app the user launches. ONLY Saranos knows about the host
   emca-host          a "Kit" inside it — macOS SwiftUI, the browser page, iPadOS
     emca-IPNX        a userspace service, started at login by
-                     /service/emca/start.rc; speaks 9P to emca-host
-                     over a serial line (below)
+                     /service/emca/start.rc; uses the devices emca-host
+                     serves, over 9P (below)
 ```
 
 **There is exactly one emca-host.** Nested emcas are IPNX-side processes, and
 the host sees them as further windows.
 
-## emca-host reaches emca over a serial line — Plan 9's answer
+## emca reaches the surface through the devices the host serves
 
-Plan 9 answers how the surface *"reads emca's files"*: a terminal reached a
-namespace over a serial line with **`exportfs`**, a user-level server that
-speaks 9P on a byte stream (`exportfs(4)`), on the **uart device**, `#t`
-(`port/devuart.c:252`), whose hardware the machine supplies as a `PhysUart`
-(`portdat.h:899`). So:
+**Decided** (Christine, 2026-10-08, choosing it over the serial line this
+section described before): **the host serves its screen, keyboard and mouse
+over 9P as it already serves the store, and emca uses them as rio uses the
+screen.** It is her rule of 2026-09-02 — *"I will serve these as virtual
+devices to the IPNX kernel"* — and there is **no serial line and no hardware
+emulated**: *"This is WASM we have no hardware we do not want to emulate
+hardware."*
 
-1. **The host is the uart's far end** — one `PhysUart`, `eia0`, whose bytes
-   go to the surface: a byte stream, which Dis or the CLR could carry as well
-   as wasm. `devuart` is Plan 9's, so the kernel gains a Plan 9 device.
-2. **emca's `start.rc` runs `exportfs` on it** — `exportfs -r /
-   <>/dev/eia0 >[1=0]` in emca's namespace — so the surface sees exactly what
-   emca serves.
-3. **The surface is a 9P client** of that stream: it walks `/dev/wsys`, reads
-   each window's `type`, `title`, `verbs`, `status` and `body`, blocks on
-   `rect`, and writes `wctl` and what the person did. 9P stays the only
-   interface, and a manager cannot tell the surface from any other client.
-
-The other Plan 9 road — `/net` and `aux/listen`, as a cpu server exports to
-drawterm — needs an IP stack this system does not have.
+1. **The host provides each device as a 9P server on `#9`**, the device the
+   store already arrives on (`#9/0`): a channel to a server the machine
+   provides, and nothing else (`pc/devvirtio9p.c`).
+2. **emca uses them as rio uses the screen.** rio opens the display, the
+   mouse and the keyboard (`geninitdraw`, `initmouse`, `initkeyboard`,
+   `rio/rio.c:181`, `:188`, `:192`), draws, and reads what the person does;
+   emca pushes each window's content into the host's device —
+   *"The job of emca is to push a file into a window via /dev/canvas. The
+   host side can display and scroll the file, and more importantly edit it"*
+   (2026-08-31) — and reads back every edit, so that the two hold mirror
+   buffers (*"We must notify emca of every edit"*).
+3. **What files the host's devices serve is P8's to design**, and it is
+   proposed when P8 reaches it ([implementation.md](implementation.md)).
 
 ## Saranos serves the hardware as devices
 

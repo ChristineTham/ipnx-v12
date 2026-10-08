@@ -317,8 +317,10 @@ vendored whole from `plan9/` and committed, 2026-09-24), each architecture's
 this machine's own beside them: `wasm/include/u.h`, `wasm/mkfile`, and
 `sys/src/libc/wasm/` (the machine-dependent half of libc, as `libc/386` is
 386's). Where a vendored file had to change, the change is in place and
-listed in `docs/when.md`. `cmd/` holds the two programs that are not Plan
-9's — `boot` and a test's `args`. The build is `mk.sh`, which runs
+listed in `docs/when.md`. `cmd/` holds what is not Plan 9's — a test's
+`args`, and `pkg`, `service` and `template`, written in rc. There is no
+`boot`: the host attaches the root before the first program runs. The build
+is `mk.sh`, which runs
 `mkfile.py` (Plan 9's own mkfiles, read and built) over `kencc.py` (Plan 9's
 C, derived into what clang compiles with the same meaning); `weaken.py`
 beside them. `userspace/build/` and `userspace/root/` are generated. Work is

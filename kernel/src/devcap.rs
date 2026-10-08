@@ -238,9 +238,10 @@ mod tests {
 
     fn cap() -> (CapDev, Rc<RefCell<Procs>>) {
         let procs = Rc::new(RefCell::new(Procs::new(Chan::attach(DevId::Root, 0))));
-        // The running system starts `eve` empty (`pc/main.c:285`) and has
-        // `boot` name the host owner by writing `#c/hostowner`
-        // (`bootauth.c:56`). A unit test has no boot, so it names one.
+        // The running system starts `eve` empty (`pc/main.c:285`), and the
+        // host names the host owner by writing `#c/hostowner`, as Plan 9's
+        // boot does (`bootauth.c:56`). A unit test has no host, so it names
+        // one.
         procs.borrow_mut().get_mut(1).unwrap().user = "eve".into();
         let up = Rc::new(RefCell::new(Up { pid: 1, procs: procs.clone() }));
         let mut d = CapDev::new(up);

@@ -4,13 +4,14 @@
 # `newns()` which init calls. Every line is a bind, a mount, a cd or a `.` — and the file is the
 # reason a boot is configuration rather than code.
 #
-# The lines boot has already run are here too, because `newns` starts from an
-# EMPTY namespace: `rfork(RFCNAMEG)` clears it and this file rebuilds it. That
-# is why the root is mounted from `#s/boot` — boot posted it there precisely
-# so it could be mounted again without knowing where it came from.
+# The lines the host has already run are here too, because `newns` starts
+# from an EMPTY namespace: `rfork(RFCNAMEG)` clears it and this file rebuilds
+# it. That is why the root is mounted from `#s/root` — the host posted it
+# there before the first program ran, as Plan 9's boot posts `#s/boot`,
+# precisely so it could be mounted again without knowing where it came from.
 
 # root
-mount -aC #s/boot /root
+mount -aC #s/root /root
 bind -a /root /
 bind -c /root/mnt /mnt
 

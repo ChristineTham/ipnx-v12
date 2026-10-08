@@ -139,7 +139,7 @@ fn stat2qid(md: &Metadata) -> Qid {
 
 /// `Rerror` — a server refuses by answering, never by failing the transport.
 fn err(msg: &str, tag: u16) -> Vec<u8> {
-    W::new().s(msg).frame(T::Error as u8 + 1, tag)
+    W::new().s(msg).frame(T::Error as u8, tag)
 }
 
 impl Nineserver for Store {

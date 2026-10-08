@@ -1,12 +1,21 @@
 //! `#/` — devroot, the root the kernel carries.
 //!
-//! Plan 9's `devroot.c`: a small read-only directory compiled into the kernel,
-//! holding the files boot needs before any file server exists. `addbootfile`
-//! puts one in; `rootwrite` is `error(Egreg)` — it cannot be written, ever.
+//! Plan 9's `devroot.c`: a small read-only directory compiled into the
+//! kernel. `#/` holds the directories `rootreset` adds (`devroot.c:95`) for
+//! a first process to bind onto, and nothing else.
+//!
+//! **Where this differs, and why.** Plan 9's `rootdir[]` has a second entry,
+//! `boot` (`devroot.c:27`), holding what a first program needs before any
+//! file server exists — `addbootfile` puts one in (`:80`) and
+//! `initcode` runs `/boot/boot` from it (`initcode.c:11`). Here there is no
+//! such program: **the host attaches the root file server before the first
+//! program runs** and starts `init` from it (Christine, 2026-10-08: *"The
+//! host does it"*), so the kernel carries no files, and the name `boot`,
+//! which Unix gives the bootloader, is not used (2026-09-04: *"we can't call
+//! something /boot and refer to something other than a bootloader"*).
 //!
 //! This is the answer to *"How does plan9 handle the root filesystem if ramfs
-//! is userspace?"*: it does not have one. It carries just enough to start the
-//! first process, and that process mounts the real thing.
+//! is userspace?"*: it does not have one. The root is a file server.
 
 use crate::chan::Chan;
 use crate::dev::{Dev, DevId, Eve};
@@ -16,19 +25,16 @@ use crate::ninep::{Qid, QTDIR};
 struct Entry {
     name: String,
     qid: Qid,
-    data: Vec<u8>,
     perm: u32,
 }
 
-/// `rootdir[]`'s two static entries (`devroot.c:27`): `#/` and `boot`.
+/// `rootdir[]`'s static entry (`devroot.c:27`): `#/`.
 const QROOT: u64 = 0;
-const QBOOT: u64 = 0x1000;
 
 /// `rootreset` (`devroot.c:95`) — the ten directories every Plan 9 root has,
 /// in that order. They are EMPTY and they are the point: `/bin`, `/dev`,
 /// `/env`, `/srv` and the rest exist so that the first process has somewhere
-/// to bind onto. Without them a boot script's very first `bind #/boot /bin`
-/// fails, which is how their absence was found here.
+/// to bind onto.
 const ROOTDIRS: [&str; 10] = [
     "bin", "dev", "env", "fd", "mnt", "net", "net.alt", "proc", "root", "srv",
 ];
@@ -38,11 +44,8 @@ pub struct Root {
     /// copied, because writing `#c/hostowner` renames it for everyone.
     eve: Eve,
 
-    files: Vec<Entry>,
-    /// The empty directories of `rootlist`, which is a different list from
-    /// `bootlist`: `addrootdir` adds here, `addbootfile` adds there.
+    /// The empty directories of `rootlist` that `addrootdir` adds.
     dirs: Vec<Entry>,
-    next_qid: u64,
 }
 
 impl Default for Root {
@@ -53,84 +56,39 @@ impl Default for Root {
 
 impl Root {
     pub fn new() -> Root {
-        let mut r = Root { files: Vec::new(), dirs: Vec::new(), next_qid: 1, eve: Eve::default() };
+        let mut r = Root { dirs: Vec::new(), eve: Eve::default() };
         // `rootreset` — `reset` is one of `struct Dev`'s seventeen, and this
         // is the whole of devroot's.
         for (i, name) in ROOTDIRS.iter().enumerate() {
             r.dirs.push(Entry {
                 name: (*name).to_string(),
                 // `addlist`: `d->qid.path = ++l->ndir + l->base`, and
-                // rootlist's base is 0. The two static entries are already
-                // counted, so these start at 3.
-                qid: Qid { qtype: QTDIR, vers: 0, path: (i + 3) as u64 },
-                data: Vec::new(),
+                // rootlist's base is 0. Its static entry, `#/`, is counted
+                // already, so these start at 2.
+                qid: Qid { qtype: QTDIR, vers: 0, path: (i + 2) as u64 },
                 perm: crate::ninep::DMDIR | 0o555,
             });
         }
         r
     }
 
-    /// `addbootfile`. The only way anything gets in here, and it happens before
-    /// the kernel starts running processes.
-    /// `addbootfile` (`devroot.c:80`) adds to `bootlist`, whose base is
-    /// `Qboot` — so a boot file is at **`#/boot/<name>`**, not `#/<name>`.
-    /// `rootdir[]` is two entries, `#/` and `boot`, and both are directories
-    /// (`devroot.c:27`).
-    pub fn addbootfile(&mut self, name: &str, contents: Vec<u8>) {
-        let qid = Qid { qtype: 0, vers: 0, path: self.next_qid };
-        self.next_qid += 1;
-        self.files.push(Entry {
-            name: name.to_string(),
-            qid,
-            data: contents,
-            perm: 0o555,
-        });
-    }
-
-    /// `rootgen` (`devroot.c:116`) — what each of the two directories holds.
-    /// `#/` lists `boot` and the ten `rootreset` made; `boot` lists the files
-    /// `addbootfile` put there.
+    /// `rootgen` (`devroot.c:116`) — what `#/` holds: the ten `rootreset`
+    /// made. **They are EMPTY**: they exist to be bound over, and `rootgen`
+    /// generates nothing for them.
     fn entries(&mut self, c: &Chan) -> Vec<crate::ninep::Dir> {
-        // **The ten `rootreset` directories are EMPTY.** They exist to be
-        // bound over, and `rootgen` generates nothing for them
-        // (`devroot.c:116` switches on `Qdir` and `Qboot` and nothing else).
-        // Treating every directory that is not `#/` as `boot` made each of
-        // them list the boot files — so `ls /` showed them twice, once for
-        // `#/` and once for `#/root` in the union.
-        if c.qid.path != QROOT && c.qid.path != QBOOT {
+        if c.qid.path != QROOT {
             return Vec::new();
         }
-        let list: Vec<(&str, Qid, u64, u32)> = if c.qid.path == QROOT {
-            std::iter::once((
-                "boot",
-                Qid { qtype: QTDIR, vers: 0, path: QBOOT },
-                0,
-                crate::ninep::DMDIR | 0o555,
-            ))
-            .chain(self.dirs.iter().map(|e| (e.name.as_str(), e.qid, 0, e.perm)))
+        self.dirs
+            .iter()
+            .map(|e| crate::dev::devdir(c, e.qid, &e.name, 0, &self.eve.borrow(), &self.eve.borrow(), e.perm))
             .collect()
-        } else {
-            self.files
-                .iter()
-                .map(|e| (e.name.as_str(), e.qid, e.data.len() as u64, e.perm))
-                .collect()
-        };
-        list.into_iter()
-            .map(|(name, qid, len, perm)| crate::dev::devdir(c, qid, name, len, &self.eve.borrow(), &self.eve.borrow(), perm))
-            .collect()
-    }
-
-    fn find(&self, qid: Qid) -> Option<&Entry> {
-        self.files.iter().chain(self.dirs.iter()).find(|e| e.qid == qid)
     }
 }
 
 /// `Egreg` (`error.h:44`) — Plan 9's own error for writing where writing
 /// makes no sense; `rootwrite`'s (`devroot.c:237`).
 const EGREG: &str = "jmk added reentrancy for threads";
-
-/// `Enonexist` (`error.h:9`).
-const ENONEXIST: &str = "file does not exist";
 
 /// `Eperm` — `devopen`'s, `devcreate`'s, `devremove`'s and `devwstat`'s.
 const EPERM: &str = "permission denied";
@@ -157,28 +115,19 @@ impl Dev for Root {
             return Err("not a directory".into());
         }
         if name == ".." || name == "." {
-            // Two levels, and `..` from either lands at `#/`, as `/..` is `/`.
+            // `..` from any of them lands at `#/`, as `/..` is `/`.
             return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: QROOT })));
         }
-        // At `#/` the only name is `boot`; the files are inside it.
-        if c.qid.path == QROOT {
-            if name == "boot" {
-                return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: QBOOT })));
-            }
-            return Ok(self
-                .dirs
-                .iter()
-                .find(|e| e.name == name)
-                .map(|e| c.walked(name, e.qid)));
+        if c.qid.path != QROOT {
+            return Ok(None);
         }
-        Ok(self.files.iter().find(|e| e.name == name).map(|e| c.walked(name, e.qid)))
+        Ok(self.dirs.iter().find(|e| e.name == name).map(|e| c.walked(name, e.qid)))
     }
 
-    /// `rootopen` is `devopen` (`devroot.c:179`). Every file here is eve's
-    /// and `0555` (`addbootfile`, `addrootdir`), so `devpermcheck`
-    /// (`dev.c:371`) grants reading and executing to everyone and writing
-    /// to nobody, whoever asks; and a directory opens only to read
-    /// (`dev.c:379`).
+    /// `rootopen` is `devopen` (`devroot.c:179`). Every entry here is eve's
+    /// and `0555` (`addrootdir`), so `devpermcheck` (`dev.c:371`) grants
+    /// reading to everyone and writing to nobody, whoever asks; and a
+    /// directory opens only to read (`dev.c:379`).
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
         if c.qid.is_dir() && mode != crate::chan::mode::OREAD {
             return Err(EPERM.into());
@@ -196,33 +145,19 @@ impl Dev for Root {
         Err(EPERM.into())
     }
 
-    fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
-        if c.qid.is_dir() {
-            let entries = self.entries(c);
-            return Ok(crate::dev::devdirread(c, n, &entries));
-        }
-        let e = self.find(c.qid).ok_or(ENONEXIST)?;
-        let data = &e.data;
-        let off = off as usize;
-        if off >= data.len() {
-            return Ok(Vec::new());
-        }
-        Ok(data[off..(off + n).min(data.len())].to_vec())
+    fn read(&mut self, c: &mut Chan, n: usize, _off: u64) -> Result<Vec<u8>, String> {
+        let entries = self.entries(c);
+        Ok(crate::dev::devdirread(c, n, &entries))
     }
 
     fn write(&mut self, _c: &mut Chan, _d: &[u8], _o: u64) -> Result<usize, String> {
         Err(EGREG.into())
     }
 
+    /// `rootstat` is `devstat` over `rootgen` (`devroot.c:171`); every
+    /// entry is a directory, which `devstat` names from the path.
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
-        // `rootstat` is `devstat` over `rootgen` (`devroot.c:171`): `#/` and
-        // `boot` are directories, which `devstat` names from the path.
-        if matches!(c.qid.path, QROOT | QBOOT) {
-            return Ok(crate::dev::devstatdir(c, &self.eve.borrow()).conv_d2m());
-        }
-        let e = self.find(c.qid).ok_or(ENONEXIST)?;
-        let (name, qid, len, perm) = (e.name.as_str(), e.qid, e.data.len() as u64, e.perm);
-        Ok(crate::dev::devdir(c, qid, name, len, &self.eve.borrow(), &self.eve.borrow(), perm).conv_d2m())
+        Ok(crate::dev::devstatdir(c, &self.eve.borrow()).conv_d2m())
     }
 
     /// `devwstat` (`dev.c:432`).
@@ -242,26 +177,10 @@ impl Dev for Root {
 mod tests {
     use super::*;
 
-    #[test]
-    /// `addbootfile` puts a file in `boot`, not at the root — `bootlist`'s
-    /// base is `Qboot` (`devroot.c:80`), and `rootdir[]` is `#/` and `boot`,
-    /// both directories (`:27`).
-    fn a_boot_file_can_be_walked_to_and_read() {
-        let mut r = Root::new();
-        r.addbootfile("init", b"the image".to_vec());
-        let c = r.attach("").unwrap();
-        assert!(r.walk(&c, "init").unwrap().is_none(), "not at the root");
-        let b = r.walk(&c, "boot").unwrap().expect("#/boot");
-        let f = r.walk(&b, "init").unwrap().expect("#/boot/init");
-        let mut f = r.open(f, crate::chan::mode::OEXEC).unwrap();
-        assert_eq!(r.read(&mut f, 100, 0).unwrap(), b"the image");
-    }
-
     /// `rootreset` (`devroot.c:95`) adds ten empty directories, and they are
-    /// what a first process binds onto. `bind #/boot /bin` is the first thing
-    /// any boot does, and before this it failed with "'bin' does not exist".
+    /// what a first process binds onto — and they are all `#/` holds.
     #[test]
-    fn the_root_carries_the_ten_directories_rootreset_adds() {
+    fn the_root_carries_the_ten_directories_rootreset_adds_and_nothing_else() {
         let mut r = Root::new();
         let c = r.attach("").unwrap();
         for name in ROOTDIRS {
@@ -270,26 +189,27 @@ mod tests {
         }
         let mut c = r.open(c, crate::chan::mode::OREAD).unwrap();
         let b = r.read(&mut c, 4096, 0).unwrap();
-        let mut names = Vec::new();
-        let mut at = 0;
-        while at < b.len() {
-            let d = crate::ninep::Dir::conv_m2d(&b[at..]).expect("an entry");
-            at += 2 + u16::from_le_bytes([b[at], b[at + 1]]) as usize;
-            names.push(d.name);
-        }
-        assert_eq!(names.len(), 11, "boot, and the ten: {names:?}");
-        assert_eq!(names[0], "boot");
+        let names: Vec<String> = crate::ninep::Dir::parse_all(&b).into_iter().map(|d| d.name).collect();
+        assert_eq!(names, ROOTDIRS.to_vec(), "the ten, in rootreset's order");
     }
 
-    /// `rootreset`'s ten are empty, and `rootgen` (`devroot.c:116`) knows
-    /// only `Qdir` and `Qboot`. Reading one of them as though it were `boot`
-    /// listed every boot file under every one of them.
+    /// There is no `boot`: the host attaches the root before the first
+    /// program runs (Christine, 2026-10-08), so nothing is carried for one.
+    #[test]
+    fn there_is_no_boot_directory() {
+        let mut r = Root::new();
+        let c = r.attach("").unwrap();
+        assert_eq!(r.walk(&c, "boot").unwrap(), None);
+    }
+
+    /// `rootreset`'s ten are empty: `rootgen` (`devroot.c:116`) generates
+    /// nothing for them.
     #[test]
     fn the_empty_root_directories_are_empty() {
         let mut r = Root::new();
-        r.addbootfile("init", b"the image".to_vec());
         let c = r.attach("").unwrap();
         let mnt = r.walk(&c, "mnt").unwrap().expect("#/mnt");
+        assert_eq!(r.walk(&mnt, "anything").unwrap(), None);
         let mut mnt = r.open(mnt, crate::chan::mode::OREAD).unwrap();
         assert!(r.read(&mut mnt, 4096, 0).unwrap().is_empty());
     }

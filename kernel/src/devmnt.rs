@@ -729,7 +729,7 @@ mod tests {
             let mut r = R::new(m.body);
             let ty = m.ty;
             let tag = m.tag;
-            let err = |e: &str| W::new().s(e).frame(T::Error.reply(), tag);
+            let err = |e: &str| W::new().s(e).frame(T::Error as u8, tag);
 
             match ty {
                 x if x == T::Version as u8 => {
@@ -875,8 +875,8 @@ mod tests {
     /// handed out twice across them (`chan.c:250`, *"c->fid =
     /// ++chanalloc.fid"*). With a counter per mount both began at 1: a clunk
     /// through the first took the second's file away, and `newns`'s `/home`
-    /// answered *"unknown fid"* because `boot`'s mount of the same wire had
-    /// closed a channel.
+    /// answered *"unknown fid"* because the root's first mount of the same
+    /// wire had closed a channel.
     #[test]
     fn two_mounts_of_one_wire_never_share_a_fid() {
         let (mut d, mut t, a, _) = mounted(MAXRPC);

@@ -5820,3 +5820,66 @@ window's shell a copy (`winshell`, `rio/wind.c:1355`:
 (`termrc:6`), mounted on `/n` (`lib/namespace:20`), so `9fs` can mount on
 `/n/anything` without creating it (`mntgen(4)`). This system's `start.ns`
 does not run it.
+
+### 16.32 No `boot`: the host attaches the root; an `Rerror` is 107 (2026-10-08)
+
+**Christine: *"why are you asking about boot. We already said don't use it
+because it gets confused with Unix bootloader"*** — the ruling of 2026-09-04
+(*"we can't call something /boot and refer to something other than a
+bootloader"*), which the rebuild of 2026-09-17 did not apply: it took Plan
+9's `/boot/boot`, `#/boot` and `#s/boot` with the rest of `plan9/`. Asked
+where the program's job goes, she chose *"The host does it"*, and *"#s/root"*
+for the posted channel.
+
+**What Plan 9's `boot` does, in its order** (`boot/boot.c:284`–`:296`):
+`doauth` — with no factotum, `glenda()`, which writes `$user` or `"glenda"`
+to `#c/hostowner` (`bootauth.c:56`); `rfork(RFNAMEG)`; `connectroot` —
+connect, `fversion`, `srvcreate("boot", fd)` (`:125`, `:144`); `nsinit` —
+`bind / / MREPL`, `fauth` and `auth_proxy`, `mount(fd, afd, "/root",
+MREPL|MCREATE, rp)`, then `$rootdir` (`/root`, which `mkboot` writes,
+`boot/mkboot:65`) bound after `/`, retried under `/root` (`:152`–`:196`);
+`close(fd)`, though the mount has closed it (`bindmount`'s *"fdclose(fd,
+0)"*, `sysfile.c:1061`); `settime`; `swapproc`; `execinit` — `$init`
+`tokenize`d, or *"/%s/init -%s%s"* (`:202`). The host now makes those calls
+as pid 1 (`hosts/ipnx/src/lib.rs`: `authentication`, `connectroot`,
+`nsinit`, `execinit`), posting `#s/root`. Not carried, each for a reason:
+`rfork(RFNAMEG)` leaves nothing behind when nothing has run; `settime`'s
+clock is the host's; `swapproc`, `usbinit`, `kbmap` and the `#æ` and `#S`
+binds are hardware; and `auth_proxy` needs a factotum nothing has started,
+so the mount goes ahead as boot's does when that fails (`:169`) — the
+host's server asks for none (`u9fs`'s `authnone`).
+
+**`#/` carries nothing now.** `rootdir[]` loses `boot` (`devroot.c:27`) and
+`addbootfile` (`:80`) goes with it, so the qids `addrootdir` gives start at 2.
+`srvremove`'s *"No one can remove #s/boot"* (`devsrv.c:209`) guards
+`#s/root`. An image from `#/` runs at `PriRoot` (`sysproc.c:564`), and none
+can now come from there. The kernel's tests stand on a root served from
+memory over `#9/0` (`kernel/src/testfs.rs`) and mounted by those same calls,
+not on files compiled into `#/`.
+
+**An `Rerror` is 107** (`fcall.h:99`: *"Terror = 106, /\* illegal \*/
+Rerror,"*). The host's store and two test servers framed theirs as
+`T::Error.reply()` — 108, `Tflush` — and nothing noticed, because the mount
+driver takes any reply not of the expected type as an error. A client that
+read the type would have seen a flush.
+
+### 16.33 No serial line: the host serves its devices (2026-10-08)
+
+**Christine: *"I also don't understand why you are asking about serial line?
+This is WASM we have no hardware we do not want to emulate hardware"***. The
+serial line (§16.20) was P8's first step: Plan 9's `devuart.c` with a
+`PhysUart` the host supplied, its interrupt taken at clock time, so that the
+surface could reach emca with `exportfs` down `eia0`. It is removed — `#t`,
+the host's line, `uartclock` and the uart's `Rendez`, and with them the
+drain on the last close (§16.26) — and `#t` joins `#i` and `#m` as hardware
+this machine has none of. `qio`'s flow control and `kick` stay, as Plan 9's
+queue has them; the pipe uses the queue and not those.
+
+**What the surface uses instead, chosen the same day:** *"Host serves
+devices"* — the host serves its screen, keyboard and mouse over 9P as it
+already serves the store, on `#9`, and emca uses them as rio uses the screen
+(`geninitdraw`, `initmouse`, `initkeyboard`, `rio/rio.c:181`, `:188`,
+`:192`). It is her rule of 2026-09-02, *"I will serve these as virtual
+devices to the IPNX kernel"*, and of 2026-08-31, *"The job of emca is to
+push a file into a window via /dev/canvas"*. The serial line had the
+direction the other way: the surface a client of emca's files.

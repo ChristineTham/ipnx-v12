@@ -54,8 +54,9 @@ pub mod ninep;
 pub mod ns;
 pub mod proc;
 pub mod qio;
-pub mod devuart;
 pub mod sha1;
+#[cfg(test)]
+pub(crate) mod testfs;
 
 pub use chan::Chan;
 pub use proc::{Fd, Pid};
@@ -503,7 +504,7 @@ impl Kernel {
             }
             // *"if(up) { up->mach = nil; updatecpu(up); up = nil; }"*
             // (`proc.c:105`) — whoever was `up` is not any more, including
-            // on the first entry, where it is whoever the boot ran as.
+            // on the first entry, where it is pid 1, whoever the host started.
             {
                 let mut procs = self.procs.borrow_mut();
                 if let Some(up) = procs.up.take() {
@@ -535,14 +536,7 @@ impl Kernel {
                     .get(dev::DevId::Cons)
                     .and_then(|d| d.as_any().downcast_mut::<devcons::Cons>())
                     .is_some_and(|c| c.waiting());
-                // An open serial line with someone at the far end: input
-                // is coming, and `uartclock` takes it in.
-                let line = self
-                    .tab
-                    .get(dev::DevId::Uart)
-                    .and_then(|d| d.as_any().downcast_mut::<devuart::UartDev>())
-                    .is_some_and(|u| u.waiting());
-                let Some(alarm) = alarm.or(if keyboard || line { hz } else { None }) else {
+                let Some(alarm) = alarm.or(if keyboard { hz } else { None }) else {
                     return Ok(());
                 };
                 let when = hz.map_or(alarm, |h| h.min(alarm));
@@ -600,10 +594,6 @@ impl Kernel {
         if let Some(c) = self.tab.get(dev::DevId::Cons).and_then(|d| d.as_any().downcast_mut::<devcons::Cons>()) {
             c.kbdputcclock(now);
         }
-        // `addclock0link(uartclock, 22)` (`devuart.c:244`).
-        if let Some(u) = self.tab.get(dev::DevId::Uart).and_then(|d| d.as_any().downcast_mut::<devuart::UartDev>()) {
-            u.uartclock(now);
-        }
         let mut procs = self.procs.borrow_mut();
         // `intrtime`: the time spent in the handler, taken out of the idle
         // time if the processor was idle (*"if(up == nil && m->perf.inidle
@@ -631,7 +621,7 @@ impl Kernel {
     /// **Through the dispatcher, not at the device.** `sysexec` reads the
     /// image with `c->dev->read` reached from `devtab` (`sysproc.c:310`),
     /// which for a mounted file is the mount driver. Reaching the device
-    /// directly worked for as long as every binary was in `#/boot`, and
+    /// directly worked for as long as every binary was carried in `#/`, and
     /// stopped the moment the commands moved onto a file server — which is
     /// what `/bin` IS on Plan 9.
     pub fn exec_image(&mut self, pid: Pid, path: &str) -> Result<Vec<u8>, String> {
@@ -749,20 +739,43 @@ mod tests {
         }
     }
 
-    /// A kernel with one boot file, and the log its machine writes to.
+    /// **A kernel standing on a file server, as the system's does**: `init`
+    /// and `files` served from memory ([`crate::testfs`]) over `#9/0`, and
+    /// mounted by pid 1 as the host mounts the store before the first
+    /// program runs — Plan 9's `connectroot` and `nsinit` (`boot.c:124`,
+    /// `:151`): the version, `/` made a union of its own, the server on
+    /// `/root`, and `/root` after `/`. So `/init` is the server's `init`.
+    pub(crate) fn rooted(machine: Rc<dyn machine::Machine>, files: &[(&str, &[u8])]) -> Kernel {
+        use crate::ns::mflag::{MAFTER, MCREATE, MREPL};
+        let mut all: Vec<(&str, &[u8])> = vec![("init", b"an image")];
+        all.extend_from_slice(files);
+        let mut k = Kernel::new(devroot::Root::new(), machine).unwrap();
+        k.tab.add(Box::new(devmnt::MntDev::new()));
+        let mut v9 = devvirtio9p::Virtio9p::new();
+        v9.add(Box::new(testfs::Files::new(&all)));
+        k.tab.add(Box::new(v9));
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "#9/0".into(), mode: 2 }).unwrap() else {
+            panic!("#9/0")
+        };
+        k.syscall(1, Call::Fversion { fd, msize: 0, version: String::new() }).unwrap();
+        k.syscall(1, Call::Bind { name: "/".into(), old: "/".into(), flag: MREPL }).unwrap();
+        let mount = Call::Mount { fd, afd: -1, old: "/root".into(), flag: MREPL | MCREATE, aname: String::new() };
+        k.syscall(1, mount).unwrap();
+        k.syscall(1, Call::Bind { name: "/root".into(), old: "/".into(), flag: MAFTER | MCREATE }).unwrap();
+        // no `close(fd)`: the mount has closed it (`bindmount`'s *"fdclose(fd,
+        // 0)"*, `sysfile.c:1061`)
+        k
+    }
+
+    /// A kernel on a root holding `init`, and the log its machine writes to.
     pub(crate) fn watched() -> (Kernel, Rc<RefCell<Log>>) {
         watched_with(&[])
     }
 
-    /// The same, with more boot files.
+    /// The same, with more files in the root.
     pub(crate) fn watched_with(files: &[(&str, &[u8])]) -> (Kernel, Rc<RefCell<Log>>) {
         let log = Rc::new(RefCell::new(Log::default()));
-        let mut root = devroot::Root::new();
-        root.addbootfile("init", b"an image".to_vec());
-        for (name, b) in files {
-            root.addbootfile(name, b.to_vec());
-        }
-        let k = Kernel::new(root, Rc::new(Recorder(log.clone()))).unwrap();
+        let k = rooted(Rc::new(Recorder(log.clone())), files);
         (k, log)
     }
 
@@ -773,11 +786,11 @@ mod tests {
     /// is called by the script's name, not the interpreter's.
     #[test]
     fn a_script_runs_its_interpreter_with_the_script_as_an_argument() {
-        let (mut k, log) = watched_with(&[("s", b"#!/boot/init -x\tyz\necho body\n")]);
-        k.exec(1, "/boot/s", &["called".into(), "a".into(), "b".into()]).unwrap();
+        let (mut k, log) = watched_with(&[("s", b"#!/init -x\tyz\necho body\n")]);
+        k.exec(1, "/s", &["called".into(), "a".into(), "b".into()]).unwrap();
         let l = log.borrow();
         assert_eq!(l.ran, vec![(1, b"an image".to_vec())], "the interpreter's image");
-        assert_eq!(l.args, vec![vec!["s", "-x", "yz", "/boot/s", "a", "b"]]);
+        assert_eq!(l.args, vec![vec!["s", "-x", "yz", "/s", "a", "b"]]);
         assert_eq!(k.procs.borrow().get(1).unwrap().text, "s");
     }
 
@@ -788,26 +801,24 @@ mod tests {
     /// own error. The machine is never asked.
     #[test]
     fn what_a_script_cannot_be() {
-        let long = format!("#!/boot/init {}\n", "x".repeat(40));
+        let long = format!("#!/init {}\n", "x".repeat(40));
         let (mut k, log) = watched_with(&[
             ("one", b"#"),
             ("long", long.as_bytes()),
             ("blank", b"#!  \t\n"),
-            ("inner", b"#!/boot/blank\n"),
-            ("outer", b"#!/boot/inner\n"),
-            ("nowhere", b"#!/boot/nothing\n"),
+            ("inner", b"#!/blank\n"),
+            ("outer", b"#!/inner\n"),
+            ("nowhere", b"#!/nothing\n"),
         ]);
         for name in ["one", "long", "blank", "outer"] {
-            assert_eq!(k.exec(1, &format!("/boot/{name}"), &[name.into()]), Err(EBADEXEC.into()), "{name}");
+            assert_eq!(k.exec(1, &format!("/{name}"), &[name.into()]), Err(EBADEXEC.into()), "{name}");
         }
-        assert!(k.exec(1, "/boot/nowhere", &["nowhere".into()]).unwrap_err().contains("does not exist"));
+        assert!(k.exec(1, "/nowhere", &["nowhere".into()]).unwrap_err().contains("does not exist"));
         assert!(log.borrow().ran.is_empty());
     }
 
     fn booted() -> Kernel {
-        let mut root = devroot::Root::new();
-        root.addbootfile("init", b"an image".to_vec());
-        Kernel::new(root, Rc::new(Recorder::silent())).unwrap()
+        rooted(Rc::new(Recorder::silent()), &[])
     }
 
     impl Recorder {
@@ -824,7 +835,7 @@ mod tests {
     #[test]
     fn exec_resolves_through_the_namespace_and_reads_the_image() {
         let mut k = booted();
-        assert_eq!(k.exec_image(1, "/boot/init").unwrap(), b"an image");
+        assert_eq!(k.exec_image(1, "/init").unwrap(), b"an image");
     }
 
     /// `exec` must hand the machine the bytes it resolved. Asserting only on
@@ -834,7 +845,7 @@ mod tests {
     #[test]
     fn exec_runs_the_image_it_resolved() {
         let (mut k, log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         assert_eq!(log.borrow().ran, vec![(1, b"an image".to_vec())]);
     }
 
@@ -843,7 +854,7 @@ mod tests {
     #[test]
     fn procsetup_runs_before_touser() {
         let (mut k, log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         assert_eq!(log.borrow().order, vec!["procsetup", "touser"]);
     }
 
@@ -1576,8 +1587,7 @@ impl Kernel {
 
     /// **Last closes that wait, then the rest of the call.** `cclose`
     /// (`chan.c:490`) of each channel in turn, and a close may leave the
-    /// processor — the mount driver waiting for `Rclunk` (`mntclunk`), a line
-    /// for what is queued to go (`uartdrainoutput`, `devuart.c:342`). Plan 9
+    /// processor — the mount driver waiting for `Rclunk` (`mntclunk`). Plan 9
     /// waits there on the process's kernel stack and goes on from the line;
     /// here what is kept is the closes not yet finished and `then`, the rest
     /// of the call (`p->sched`). It is for a close made where the call could
@@ -3376,10 +3386,16 @@ mod syscalls {
     use crate::proc::rf;
 
     fn booted() -> Kernel {
-        let mut root = devroot::Root::new();
-        root.addbootfile("init", b"an image".to_vec());
-        root.addbootfile("hello", b"greetings".to_vec());
-        let mut k = Kernel::new(root, std::rc::Rc::new(tests::Recorder::silent())).unwrap();
+        let mut k = tests::rooted(std::rc::Rc::new(tests::Recorder::silent()), &[("hello", b"greetings")]);
+        k.tab.add(Box::new(devpipe::PipeDev::new(k.up.clone())));
+        k.tab.add(Box::new(devenv::EnvDev::new(k.up.clone())));
+        k
+    }
+
+    /// A kernel with no root mounted — `#/` alone — for a test whose own
+    /// server must be the machine's first, `#9/0`.
+    fn bare() -> Kernel {
+        let mut k = Kernel::new(devroot::Root::new(), std::rc::Rc::new(tests::Recorder::silent())).unwrap();
         k.tab.add(Box::new(devpipe::PipeDev::new(k.up.clone())));
         k.tab.add(Box::new(devenv::EnvDev::new(k.up.clone())));
         k
@@ -3429,7 +3445,7 @@ mod syscalls {
     #[test]
     fn a_process_can_open_a_file_and_read_it() {
         let mut k = booted();
-        let fd = match k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap() {
+        let fd = match k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap() {
             Ret::Fd(fd) => fd,
             r => panic!("{r:?}"),
         };
@@ -3445,7 +3461,7 @@ mod syscalls {
     #[test]
     fn reading_at_minus_one_advances_the_channel() {
         let mut k = booted();
-        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap()
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap()
         else {
             panic!()
         };
@@ -3531,7 +3547,7 @@ mod syscalls {
             me.delaysched = 1;
             me.state = proc::State::Running;
         }
-        let r = k.syscall(1, Call::Open { path: "/boot/hello".into(), mode: 0 });
+        let r = k.syscall(1, Call::Open { path: "/hello".into(), mode: 0 });
         assert_eq!(r, Ok(Ret::Sched), "it leaves");
         k.procs.borrow_mut().get_mut(1).unwrap().delaysched = 0;
         assert!(matches!(k.resume(1), Ok(Ret::Fd(_))), "and then answers");
@@ -3663,7 +3679,7 @@ mod syscalls {
     #[test]
     fn a_traced_call_stops_on_the_way_in_and_out() {
         let (mut k, log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         poke(&log, 0x40, "/nothing");
         k.procs.borrow_mut().get_mut(1).unwrap().procctl = Some(proc::Procctl::Tracesyscall);
         let open = Call::Open { path: "/nothing".into(), mode: 0 };
@@ -3692,7 +3708,7 @@ mod syscalls {
     #[test]
     fn syscallfmt_shows_the_arguments_as_the_process_passed_them() {
         let (mut k, log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         poke(&log, 0x80, "new");
         poke(&log, 0x90, "old");
         let cases: Vec<(Call, [u64; 5], &str)> = vec![
@@ -3756,7 +3772,7 @@ mod syscalls {
     #[test]
     fn a_traced_call_with_a_bad_string_fails() {
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         k.procs.borrow_mut().get_mut(1).unwrap().procctl = Some(proc::Procctl::Tracesyscall);
         let r = trap(&mut k, 1, Call::Chdir { path: "x".into() }, [0x20000, 0, 0, 0, 0]);
         assert_eq!(r, Err(proc::Procs::EBADARG.into()));
@@ -3769,7 +3785,7 @@ mod syscalls {
     #[test]
     fn startsyscall_after_a_stop_traces_the_next_call() {
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         k.procs.borrow_mut().get_mut(1).unwrap().procctl = Some(proc::Procctl::Stopme);
         assert_eq!(trap(&mut k, 1, Call::Sleep { ms: 0 }, [0; 5]), Ok(Ret::Sched));
         assert_eq!(k.procs.borrow().state(1), proc::State::Stopped);
@@ -3786,7 +3802,7 @@ mod syscalls {
     #[test]
     fn traceme_stops_at_the_next_note() {
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         k.procs.borrow_mut().get_mut(1).unwrap().procctl = Some(proc::Procctl::Traceme);
         assert_eq!(k.syscall(1, Call::Sleep { ms: 0 }), Ok(Ret::Ok), "no note: it runs on");
         k.procs.borrow_mut().postnote(1, "interrupt", proc::NoteFlag::NUser);
@@ -3800,10 +3816,10 @@ mod syscalls {
     #[test]
     fn processes_running_the_same_image_share_its_text() {
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         let Ret::Pid(c) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
         let Ret::Pid(d) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
-        k.exec(d, "/boot/init", &[]).unwrap();
+        k.exec(d, "/init", &[]).unwrap();
         let p = k.procs.borrow();
         let t = |pid| p.get(pid).unwrap().tseg.clone().unwrap();
         assert!(std::rc::Rc::ptr_eq(&t(1), &t(c)), "rfork shares it");
@@ -3817,7 +3833,7 @@ mod syscalls {
     #[test]
     fn profclock_charges_the_text_at_the_pc() {
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         let tseg = k.procs.borrow().get(1).unwrap().tseg.clone().unwrap();
         tseg.borrow_mut().profile = Some(vec![0; 1]);
         k.procs.borrow_mut().timersinit(0);
@@ -3837,7 +3853,7 @@ mod syscalls {
     #[test]
     fn a_semaphore_counts() {
         let (mut k, log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         assert_eq!(k.syscall(1, Call::Semrelease { addr: 64, delta: 2 }), Ok(Ret::N(2)));
         assert_eq!(k.syscall(1, Call::Semacquire { addr: 64, block: true }), Ok(Ret::N(1)));
         assert_eq!(k.syscall(1, Call::Semacquire { addr: 64, block: false }), Ok(Ret::N(1)));
@@ -3854,7 +3870,7 @@ mod syscalls {
     #[test]
     fn semrelease_wakes_the_oldest_waiter_in_the_segment() {
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         let Ret::Pid(a) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::MEM }).unwrap() else { panic!() };
         let Ret::Pid(b) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::MEM }).unwrap() else { panic!() };
         let Ret::Pid(other) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
@@ -3876,7 +3892,7 @@ mod syscalls {
     #[test]
     fn a_woken_waiter_that_does_not_take_it_passes_the_wakeup_on() {
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         let Ret::Pid(a) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::MEM }).unwrap() else { panic!() };
         let Ret::Pid(b) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::MEM }).unwrap() else { panic!() };
         k.syscall(a, Call::Semacquire { addr: 8, block: true }).unwrap();
@@ -3894,7 +3910,7 @@ mod syscalls {
     #[test]
     fn tsemacquire_times_out() {
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         let now = k.machine.todget().nsec;
         k.procs.borrow_mut().timersinit(now);
         assert_eq!(k.syscall(1, Call::Tsemacquire { addr: 8, ms: 30 }), Ok(Ret::Sched));
@@ -3923,7 +3939,7 @@ mod syscalls {
             (Call::Semrelease { addr: 20, delta: -1 }, None),
         ] {
             let (mut k, log) = tests::watched();
-            k.exec(1, "/boot/init", &[]).unwrap();
+            k.exec(1, "/init", &[]).unwrap();
             log.borrow_mut().mem.insert(16, -1);
             let s = match call {
                 Call::Semacquire { addr, block } => [addr as u64, block as u64, 0, 0, 0],
@@ -3956,15 +3972,15 @@ mod syscalls {
                 l.borrow_mut().mem.insert(0xfff8, 0x6161_6161);
                 l.borrow_mut().mem.insert(0xfffc, 0x6161_6161);
             }),
-            (Call::Exec { path: "/boot/init".into(), args: vec![] }, [0x40, 0x80, 0, 0, 0], |l| {
-                poke(l, 0x40, "/boot/init");
+            (Call::Exec { path: "/init".into(), args: vec![] }, [0x40, 0x80, 0, 0, 0], |l| {
+                poke(l, 0x40, "/init");
                 l.borrow_mut().mem.insert(0x80, 0x30000);
             }),
             (Call::Pipe, [0xfffc, 0, 0, 0, 0], |_| {}),
         ];
         for (call, s, setup) in cases {
             let (mut k, log) = tests::watched();
-            k.exec(1, "/boot/init", &[]).unwrap();
+            k.exec(1, "/init", &[]).unwrap();
             setup(&log);
             let ran = log.borrow().args.len();
             assert_eq!(trap(&mut k, 1, call.clone(), s), bad, "{call:?}");
@@ -3979,11 +3995,11 @@ mod syscalls {
     #[test]
     fn misaligned_and_empty_arguments() {
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         assert_eq!(trap(&mut k, 1, Call::Pipe, [0x42, 0, 0, 0, 0]), Err(proc::Procs::EBADARG.into()));
         assert_eq!(notes_of(&k, 1), vec!["sys: odd address"]);
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         assert_eq!(trap(&mut k, 1, Call::Errstr { buf: String::new() }, [0x40, 0, 0, 0, 0]), Err(proc::Procs::EBADARG.into()));
         assert!(notes_of(&k, 1).is_empty());
     }
@@ -3993,7 +4009,7 @@ mod syscalls {
     #[test]
     fn exits_with_a_bad_status_is_an_invalid_exit_string() {
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         let _ = trap(&mut k, 1, Call::Exits { status: String::new() }, [0x20000, 0, 0, 0, 0]);
         assert_eq!(k.procs.borrow().status(1).as_deref(), Some("init 1: invalid exit string"));
     }
@@ -4005,8 +4021,8 @@ mod syscalls {
     #[test]
     fn what_is_not_checked() {
         let (mut k, _log) = tests::watched();
-        k.exec(1, "/boot/init", &[]).unwrap();
-        assert!(k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).is_ok());
+        k.exec(1, "/init", &[]).unwrap();
+        assert!(k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).is_ok());
         assert_eq!(trap(&mut k, 1, Call::Notify { f: 0x7fff_0000 }, [0x7fff_0000, 0, 0, 0, 0]), Ok(Ret::Ok));
         assert!(notes_of(&k, 1).is_empty());
     }
@@ -4089,7 +4105,7 @@ mod syscalls {
         else {
             panic!()
         };
-        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap()
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap()
         else {
             panic!()
         };
@@ -4103,7 +4119,7 @@ mod syscalls {
     #[test]
     fn dup_shares_the_offset_through_the_call_interface() {
         let mut k = booted();
-        let Ret::Fd(a) = k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap()
+        let Ret::Fd(a) = k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap()
         else {
             panic!()
         };
@@ -4118,7 +4134,7 @@ mod syscalls {
     fn chdir_moves_dot_and_a_relative_name_follows_it() {
         let mut k = booted();
         assert_eq!(k.syscall(1, Call::Chdir { path: "/".into() }).unwrap(), Ret::Ok);
-        let r = k.syscall(1, Call::Open { path: "boot/init".into(), mode: 0 }).unwrap();
+        let r = k.syscall(1, Call::Open { path: "init".into(), mode: 0 }).unwrap();
         assert!(matches!(r, Ret::Fd(_)), "{r:?}");
     }
 
@@ -4150,10 +4166,10 @@ mod syscalls {
     #[test]
     fn the_kernel_counts_the_calls_it_answers() {
         let mut k = booted();
-        assert_eq!(k.procs.borrow().m.syscall, 0);
+        let before = k.procs.borrow().m.syscall;
         let _ = k.syscall(1, Call::Errstr { buf: String::new() });
         let _ = k.syscall(1, Call::Open { path: "/nothing".into(), mode: 0 });
-        assert_eq!(k.procs.borrow().m.syscall, 2, "a failed call is still a call");
+        assert_eq!(k.procs.borrow().m.syscall - before, 2, "a failed call is still a call");
     }
 
     /// **A directory seeks only to 0** (`sysfile.c:820`, `Eisdir`), and a
@@ -4163,7 +4179,7 @@ mod syscalls {
     #[test]
     fn a_directory_seeks_only_to_the_beginning() {
         let mut k = booted();
-        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/boot".into(), mode: 0 }).unwrap()
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/root".into(), mode: 0 }).unwrap()
         else {
             panic!()
         };
@@ -4192,14 +4208,14 @@ mod syscalls {
     #[test]
     fn seek_from_the_end_is_the_length_stat_gives() {
         let mut k = booted();
-        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap() else {
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap() else {
             panic!()
         };
         assert_eq!(k.syscall(1, Call::Seek { fd, off: 0, whence: 2 }), Ok(Ret::N(b"an image".len())));
         assert_eq!(k.syscall(1, Call::Seek { fd, off: -2, whence: 2 }), Ok(Ret::N(6)));
         assert_eq!(k.syscall(1, Call::Seek { fd, off: -20, whence: 2 }), Err("negative i/o offset".into()));
         assert_eq!(k.syscall(1, Call::Seek { fd, off: 0, whence: 3 }), Err(proc::Procs::EBADARG.into()));
-        let Ret::Fd(d) = k.syscall(1, Call::Open { path: "/boot".into(), mode: 0 }).unwrap() else { panic!() };
+        let Ret::Fd(d) = k.syscall(1, Call::Open { path: "/root".into(), mode: 0 }).unwrap() else { panic!() };
         assert_eq!(k.syscall(1, Call::Seek { fd: d, off: 0, whence: 2 }), Err(EISDIR.into()));
         let Ret::Two(p, _) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
         assert_eq!(k.syscall(1, Call::Seek { fd: p, off: 0, whence: 0 }), Err("seek on a stream".into()));
@@ -4266,7 +4282,7 @@ mod syscalls {
         let root = Qid { qtype: QTDIR, vers: 0, path: 0 };
         let m = unframe(req).expect("malformed");
         let mut r = R::new(m.body);
-        let error = |e: &str| W::new().s(e).frame(T::Error.reply(), m.tag);
+        let error = |e: &str| W::new().s(e).frame(T::Error as u8, m.tag);
         match m.ty {
             x if x == T::Version as u8 => {
                 let msize = r.u32().unwrap();
@@ -4394,7 +4410,6 @@ mod syscalls {
         let mut k = booted();
         k.tab.add(Box::new(Server9P::default()));
         k.tab.add(Box::new(devsrv::SrvDev::new(k.up.clone())));
-        k.tab.add(Box::new(devmnt::MntDev::new()));
 
         // a server opens its own channel and posts it at #s/store
         let Ret::Fd(wire) = k.syscall(1, Call::Open { path: "#e".into(), mode: 2 }).unwrap()
@@ -4443,10 +4458,10 @@ mod syscalls {
         let mut k = booted();
         k.tab.add(Box::new(devenv::EnvDev::new(k.up.clone())));
 
-        // `#e` has `x`; `#/` has `boot`. Bind both onto `/mnt`, in order.
-        // (`#/` and not `#/boot`: everything between the device letter and
-        // the first `/` is the ATTACH SPEC, so `#/boot` attaches the root
-        // device with the spec `boot` — see `dev::split`.)
+        // `#e` has `x`; `#/` has `dev`. Bind both onto `/mnt`, in order.
+        // (`#/` and not `#/dev`: everything between the device letter and
+        // the first `/` is the ATTACH SPEC, so `#/dev` attaches the root
+        // device with the spec `dev` — see `dev::split`.)
         k.syscall(1, Call::Create { path: "#e/x".into(), mode: 1, perm: 0o666 }).unwrap();
         k.syscall(1, Call::Bind { name: "#e".into(), old: "/mnt".into(), flag: 0 }).unwrap();
         // `MAFTER` (`libc.h:556`) — this element answers after the ones
@@ -4460,7 +4475,7 @@ mod syscalls {
         );
         // and a name it does not have falls through to the second
         assert!(
-            k.syscall(1, Call::Open { path: "/mnt/boot/init".into(), mode: 0 }).is_ok(),
+            k.syscall(1, Call::Open { path: "/mnt/dev".into(), mode: 0 }).is_ok(),
             "the second element was never reached"
         );
         // a name in neither is still not there
@@ -4481,7 +4496,7 @@ mod syscalls {
             }
         }
 
-        let mut k = booted();
+        let mut k = bare();
         let mut d = devvirtio9p::Virtio9p::new();
         d.add(Box::new(Host9P));
         k.tab.add(Box::new(d));
@@ -4524,7 +4539,7 @@ mod syscalls {
                 Ok(Vec::new())
             }
         }
-        let mut k = booted();
+        let mut k = bare();
         let mut d = devvirtio9p::Virtio9p::new();
         d.add(Box::new(Quiet));
         k.tab.add(Box::new(d));
@@ -4552,8 +4567,8 @@ mod syscalls {
             k.syscall(
                 1,
                 Call::Bind {
-                    name: "/boot/hello".into(),
-                    old: "/boot/init".into(),
+                    name: "/hello".into(),
+                    old: "/init".into(),
                     flag: 0
                 }
             )
@@ -4562,7 +4577,7 @@ mod syscalls {
             "the mount's id, as `bind(2)` answers it"
         );
         // and the name now answers with what was bound over it
-        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap()
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }).unwrap()
         else {
             panic!()
         };
@@ -4578,7 +4593,7 @@ mod syscalls {
     #[test]
     fn a_directory_cannot_be_executed() {
         let mut k = booted();
-        let e = k.exec(1, "/boot", &[]).unwrap_err();
+        let e = k.exec(1, "/dev", &[]).unwrap_err();
         assert!(e.contains("cannot exec directory"), "{e}");
     }
 
@@ -4654,14 +4669,16 @@ mod syscalls {
     }
 
     /// `sysexec` gives a process whose image came from `#/` `PriRoot`
-    /// (`sysproc.c:564`).
+    /// (`sysproc.c:564`), and any other its parent's. `#/` carries no
+    /// images here — the host attaches the root before the first program
+    /// runs — so an image is a file server's, and runs at `PriNormal`.
     #[test]
-    fn an_image_from_the_root_device_runs_at_priroot() {
+    fn an_image_from_a_file_server_runs_at_prinormal() {
         let mut k = booted();
-        k.exec(1, "/boot/init", &[]).unwrap();
+        k.exec(1, "/init", &[]).unwrap();
         let procs = k.procs.borrow();
         let p = procs.get(1).unwrap();
-        assert_eq!((p.basepri, p.priority), (proc::pri::ROOT, proc::pri::ROOT));
+        assert_eq!((p.basepri, p.priority), (proc::pri::NORMAL, proc::pri::NORMAL));
     }
 
     /// With nothing runnable and no timer, nothing can ever make a process
@@ -4747,10 +4764,10 @@ mod syscalls {
     #[test]
     fn exec_closes_the_descriptors_opened_close_on_exec() {
         let mut k = booted();
-        let keep = fd(k.syscall(1, Call::Open { path: "/boot/hello".into(), mode: 0 }));
+        let keep = fd(k.syscall(1, Call::Open { path: "/hello".into(), mode: 0 }));
         let ocexec = (chan::mode::OREAD | chan::mode::OCEXEC) as i32;
-        let gone = fd(k.syscall(1, Call::Open { path: "/boot/hello".into(), mode: ocexec }));
-        k.exec(1, "/boot/init", &[]).unwrap();
+        let gone = fd(k.syscall(1, Call::Open { path: "/hello".into(), mode: ocexec }));
+        k.exec(1, "/init", &[]).unwrap();
         assert!(k.syscall(1, Call::Pread { fd: keep, n: 1, off: 0 }).is_ok());
         assert_eq!(k.syscall(1, Call::Pread { fd: gone, n: 1, off: 0 }), Err(EBADFD.into()), "closed by exec");
     }
@@ -4808,7 +4825,7 @@ mod syscalls {
     }
 
     /// `srvremove` (`devsrv.c:186`): an eve-owned name is eve's to remove,
-    /// `boot` nobody's, and a name others may not write its owner's or
+    /// `root` nobody's, and a name others may not write its owner's or
     /// eve's. Removing one closes what was posted — *"cclose(sp->chan)"*
     /// (`:227`) — so a pipe end nobody else holds hangs up.
     #[test]
@@ -4824,7 +4841,7 @@ mod syscalls {
         let rm = |k: &mut Kernel, name: &str| k.syscall(1, Call::Remove { path: format!("#s/{name}") });
         as_(&mut k, "kitty");
         mk(&mut k, "system", 0o666);
-        mk(&mut k, "boot", 0o666);
+        mk(&mut k, devsrv::ROOTSRV, 0o666);
         as_(&mut k, "glenda");
         mk(&mut k, "personal", 0o600);
         mk(&mut k, "shared", 0o667);
@@ -4835,7 +4852,7 @@ mod syscalls {
         as_(&mut k, "glenda");
         assert_eq!(rm(&mut k, "personal"), Ok(Ret::Ok));
         as_(&mut k, "kitty");
-        assert_eq!(rm(&mut k, "boot"), Err("permission denied".into()), "nobody's");
+        assert_eq!(rm(&mut k, devsrv::ROOTSRV), Err("permission denied".into()), "nobody's");
         assert_eq!(rm(&mut k, "system"), Ok(Ret::Ok));
 
         let Ret::Two(a, b) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
@@ -4941,7 +4958,6 @@ mod syscalls {
     /// `/answer` opened through it: the client, the server, the server's end
     /// and the descriptor.
     fn mounted(k: &mut Kernel) -> (Pid, Fd, Fd) {
-        k.tab.add(Box::new(devmnt::MntDev::new()));
         let Ret::Two(client, end) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
         let Ret::Pid(server) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
         let mount = Call::Mount { fd: client, afd: -1, old: "/".into(), flag: 1, aname: String::new() };
@@ -5057,7 +5073,7 @@ mod syscalls {
         };
         // `/` is the mount before the root, so the walk asks the server too;
         // the last thing the call waits for is the clunk.
-        let exec = Call::Exec { path: "/boot/init".into(), args: vec!["init".into()] };
+        let exec = Call::Exec { path: "/init".into(), args: vec!["init".into()] };
         let (r, ts) = served_t(&mut k, 1, server, end, exec);
         assert_eq!(r, Ok(Ret::Ok));
         assert_eq!(ts.last(), Some(&(ninep::T::Clunk as u8)), "the call ended once the server let the file go");
@@ -5090,7 +5106,7 @@ mod syscalls {
         assert_eq!(served_t(&mut k, 1, server, end, Call::Close { fd }).0, Ok(Ret::Ok));
         let flags = rf::PROC | rf::NAMEG | rf::FDG;
         let Ret::Pid(child) = k.syscall(1, Call::Rfork { flags }).unwrap() else { panic!() };
-        let bind = Call::Bind { name: "/answer".into(), old: "/boot/init".into(), flag: 0 };
+        let bind = Call::Bind { name: "/answer".into(), old: "/init".into(), flag: 0 };
         let (r, _) = served_t(&mut k, child, server, end, bind);
         assert!(matches!(r, Ok(Ret::N(_))), "{r:?}");
         let (r, ts) = served_t(&mut k, child, server, end, Call::Exits { status: String::new() });
@@ -5118,11 +5134,11 @@ mod syscalls {
     fn a_bind_that_replaces_closes_what_was_there() {
         let mut k = booted();
         let (server, end, _fd) = mounted(&mut k);
-        let bind = |name: &str| Call::Bind { name: name.into(), old: "/boot/init".into(), flag: 0 };
+        let bind = |name: &str| Call::Bind { name: name.into(), old: "/init".into(), flag: 0 };
         let (r, ts) = served_t(&mut k, 1, server, end, bind("/answer"));
         assert!(matches!(r, Ok(Ret::N(_))));
         let before = clunks(&ts);
-        let (r, ts) = served_t(&mut k, 1, server, end, bind("/boot/hello"));
+        let (r, ts) = served_t(&mut k, 1, server, end, bind("/hello"));
         assert!(matches!(r, Ok(Ret::N(_))));
         assert_eq!(clunks(&ts), before + 1, "the file the first bind put there");
     }
@@ -5134,9 +5150,9 @@ mod syscalls {
     fn unmount_refuses_what_is_not_mounted_and_closes_what_it_takes() {
         let mut k = booted();
         let (server, end, fd) = mounted(&mut k);
-        let (r, _) = served_t(&mut k, 1, server, end, Call::Unmount { name: None, old: "/boot".into() });
+        let (r, _) = served_t(&mut k, 1, server, end, Call::Unmount { name: None, old: "/dev".into() });
         assert_eq!(r, Err("not mounted".into()));
-        let un = Call::Unmount { name: Some("/boot/hello".into()), old: "/".into() };
+        let un = Call::Unmount { name: Some("/hello".into()), old: "/".into() };
         let (r, _) = served_t(&mut k, 1, server, end, un);
         assert_eq!(r, Err("not in union".into()));
         let (r, _) = served_t(&mut k, 1, server, end, Call::Close { fd });
@@ -5159,7 +5175,7 @@ mod syscalls {
         assert_eq!(r, Ok(Ret::Pid(0)));
         let (r, _) = served_t(&mut k, 1, server, end, Call::Open { path: "/answer".into(), mode: 0 });
         assert!(matches!(r, Ok(Ret::Fd(_))), "{r:?}");
-        let bind = Call::Bind { name: "/answer".into(), old: "/boot/init".into(), flag: 0 };
+        let bind = Call::Bind { name: "/answer".into(), old: "/init".into(), flag: 0 };
         let (r, _) = served_t(&mut k, 1, server, end, bind);
         assert!(matches!(r, Ok(Ret::N(_))), "{r:?}");
         let (r, ts) = served_t(&mut k, 1, server, end, Call::Rfork { flags: rf::CFDG });
@@ -5189,15 +5205,15 @@ mod syscalls {
     fn bind_checks_its_flag_and_answers_the_mounts_id() {
         let mut k = booted();
         for flag in [3, 0x100] {
-            let r = k.syscall(1, Call::Bind { name: "/boot/hello".into(), old: "/boot/init".into(), flag });
+            let r = k.syscall(1, Call::Bind { name: "/hello".into(), old: "/init".into(), flag });
             assert_eq!(r, Err(proc::Procs::EBADARG.into()), "{flag:#x}");
         }
         let id = |r| match r {
             Ok(Ret::N(id)) => id,
             r => panic!("{r:?}"),
         };
-        let a = id(k.syscall(1, Call::Bind { name: "/boot/hello".into(), old: "/boot/init".into(), flag: 0 }));
-        let b = id(k.syscall(1, Call::Bind { name: "/boot/hello".into(), old: "/boot/init".into(), flag: 0 }));
+        let a = id(k.syscall(1, Call::Bind { name: "/hello".into(), old: "/init".into(), flag: 0 }));
+        let b = id(k.syscall(1, Call::Bind { name: "/hello".into(), old: "/init".into(), flag: 0 }));
         assert!(b > a, "{a} then {b}");
     }
 
@@ -5217,8 +5233,8 @@ mod syscalls {
     #[test]
     fn a_name_with_a_control_character_is_refused() {
         let mut k = booted();
-        let r = k.syscall(1, Call::Open { path: "/boot/i\u{1}nit".into(), mode: 0 });
-        assert_eq!(r, Err("bad character in file name: '/boot/i\u{1}nit'".into()));
+        let r = k.syscall(1, Call::Open { path: "/i\u{1}nit".into(), mode: 0 });
+        assert_eq!(r, Err("bad character in file name: '/i\u{1}nit'".into()));
     }
 
     /// **Kernel processes share one namespace group** (`kpgrp`,
@@ -5240,12 +5256,12 @@ mod syscalls {
     #[test]
     fn a_mount_point_is_neither_removed_nor_renamed() {
         let mut k = booted();
-        k.syscall(1, Call::Bind { name: "/boot/hello".into(), old: "/boot/init".into(), flag: 0 }).unwrap();
-        assert_eq!(k.syscall(1, Call::Remove { path: "/boot/init".into() }), Err(namec::EISMTPT.into()));
+        k.syscall(1, Call::Bind { name: "/hello".into(), old: "/init".into(), flag: 0 }).unwrap();
+        assert_eq!(k.syscall(1, Call::Remove { path: "/init".into() }), Err(namec::EISMTPT.into()));
         let rename = ninep::Dir { name: "other".into(), mode: !0, ..Default::default() }.conv_d2m();
         assert_eq!(
-            k.syscall(1, Call::Wstat { path: "/boot/init".into(), edir: rename }),
-            Err("'/boot/init' is a mount point".into())
+            k.syscall(1, Call::Wstat { path: "/init".into(), edir: rename }),
+            Err("'/init' is a mount point".into())
         );
     }
 
@@ -5301,9 +5317,9 @@ mod syscalls {
         // further along a walk of several is `walk`'s own *"does not
         // exist"* (`chan.c:963`)
         assert_eq!(open(&mut k, "/nothing"), Err("'/nothing' file does not exist".into()));
-        assert_eq!(open(&mut k, "/boot/nothing/x"), Err("'/boot/nothing' does not exist".into()));
-        assert_eq!(open(&mut k, "/boot/init/x"), Err("'/boot/init' not a directory".into()));
-        assert_eq!(open(&mut k, "/boot/init/"), Err("'/boot/init/' not a directory".into()));
+        assert_eq!(open(&mut k, "/dev/nothing/x"), Err("'/dev/nothing' does not exist".into()));
+        assert_eq!(open(&mut k, "/init/x"), Err("'/init' not a directory".into()));
+        assert_eq!(open(&mut k, "/init/"), Err("'/init/' not a directory".into()));
         assert_eq!(open(&mut k, "#Q"), Err("unknown device in # filename".into()), "before the walk: as it is");
     }
 
@@ -5423,9 +5439,9 @@ mod syscalls {
     #[test]
     fn a_read_refuses_a_negative_offset_and_a_seek_in_a_directory() {
         let mut k = booted();
-        let f = fd(k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }));
+        let f = fd(k.syscall(1, Call::Open { path: "/init".into(), mode: 0 }));
         assert_eq!(k.syscall(1, Call::Pread { fd: f, n: 4, off: -2 }), Err(ENEGOFF.into()));
-        let d = fd(k.syscall(1, Call::Open { path: "/boot".into(), mode: 0 }));
+        let d = fd(k.syscall(1, Call::Open { path: "/root".into(), mode: 0 }));
         assert_eq!(k.syscall(1, Call::Pread { fd: d, n: 512, off: 5 }), Err(EDIRSEEK.into()));
         assert!(matches!(k.syscall(1, Call::Pread { fd: d, n: 512, off: 0 }), Ok(Ret::Data(_))));
     }

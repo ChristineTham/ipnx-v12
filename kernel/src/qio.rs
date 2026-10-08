@@ -1,9 +1,7 @@
 //! Queues — `plan9/sys/src/9/port/qio.c`.
 //!
 //! **One queue implementation for every device that streams**, as Plan 9 has
-//! one: a pipe's two ends are two of these (`devpipe.c:69`), and a uart's
-//! input and output are two more (`devuart.c`, `uartenable`). It was a
-//! pipe's private type until the uart needed it too.
+//! one: a pipe's two ends are two of these (`devpipe.c:69`).
 //!
 //! This kernel has no kernel stack per process, so a call that sleeps runs
 //! again from the top when the process is entered again; [`At`] is where in
@@ -221,7 +219,7 @@ pub struct Qid3 {
 ///
 /// `kick` is the queue's `q->kick`, which `qwakeup_iunlock` calls when a
 /// read takes a flow-controlled queue below half its limit (`qio.c:1005`)
-/// — a uart's `uartflow`, which raises RTS again.
+/// — in Plan 9, a uart's `uartflow`, which raises RTS again.
 ///
 /// **A read may leave the processor** — waiting for `q->rlock`, or in
 /// `qwait` for data (`qio.c:866`) — and then answers nothing, because the
@@ -311,8 +309,8 @@ pub fn qread(
 /// `failnote` is what the device's `waserror` posts to a writer whose write
 /// failed — a pipe's *"sys: write on closed pipe"* (`devpipe.c:349`).
 /// `kick` is the queue's `q->kick` (`qopen`'s third argument), called
-/// *"if(q->kick && (dowakeup || (q->state&Qkick)))"* (`qio.c:1226`) — a
-/// uart's `uartkick`, which starts output.
+/// *"if(q->kick && (dowakeup || (q->state&Qkick)))"* (`qio.c:1226`) — in
+/// Plan 9, a uart's `uartkick`, which starts output.
 #[allow(clippy::too_many_arguments)]
 pub fn qwrite(
     q: &mut Queue,

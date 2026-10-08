@@ -392,8 +392,8 @@ impl Dev for ProcDev {
             // is private memory.
             Q::Note => {}
             Q::Ctl | Q::Args | Q::Noteid | Q::Status | Q::Wait | Q::Syscall => self.nonone(pid)?,
-            // `Qnotepg` (`devproc.c:446`): write only, never the boot
-            // namespace group's, and the note group is remembered in the
+            // `Qnotepg` (`devproc.c:446`): write only, never the first
+            // namespace group's (`pgrpid == 1`), and the note group is remembered in the
             // channel — *"c->pgrpid.vers = p->noteid"* — so a write reaches
             // the group as it was when opened.
             Q::Notepg => {
@@ -937,7 +937,7 @@ mod tests {
     use crate::chan::mode::{OREAD, OWRITE};
     use crate::proc::{rf, Procs};
 
-    /// The root channel is named `/`, as the boot renames it
+    /// The root channel is named `/`, as the kernel renames it at start-up
     /// (`pc/main.c:242`: `pathclose(up->slash->path); up->slash->path =
     /// newpath("/")`). A fixture that leaves it `#/` tests a path the
     /// running system never has.
@@ -949,9 +949,10 @@ mod tests {
 
     fn proc() -> (ProcDev, Rc<RefCell<Procs>>) {
         let procs = Rc::new(RefCell::new(Procs::new(root())));
-        // The running system starts `eve` empty (`pc/main.c:285`) and has
-        // `boot` name the host owner by writing `#c/hostowner`
-        // (`bootauth.c:56`). A unit test has no boot, so it names one.
+        // The running system starts `eve` empty (`pc/main.c:285`), and the
+        // host names the host owner by writing `#c/hostowner`, as Plan 9's
+        // boot does (`bootauth.c:56`). A unit test has no host, so it names
+        // one.
         procs.borrow_mut().get_mut(1).unwrap().user = "eve".into();
         let up = Rc::new(RefCell::new(Up { pid: 1, procs: procs.clone() }));
         let mut d = ProcDev::new(up);
@@ -1175,12 +1176,12 @@ mod tests {
         let s = read(&mut d, 1, "ns");
         assert!(s.starts_with("mount -c #| / main\n"), "{s}");
 
-        // Posted at `#s/boot`, it is named by the name it was posted under.
+        // Posted at `#s/root`, it is named by the name it was posted under.
         let tab = crate::devsrv::Srvtab::default();
-        tab.borrow_mut().push(crate::devsrv::Srv::posted("boot", wire));
+        tab.borrow_mut().push(crate::devsrv::Srv::posted(crate::devsrv::ROOTSRV, wire));
         let (mut d, _) = (d.with_srv(tab), ());
         let s = read(&mut d, 1, "ns");
-        assert!(s.starts_with("mount -c #s/boot / main\n"), "{s}");
+        assert!(s.starts_with("mount -c #s/root / main\n"), "{s}");
     }
 
     /// `/proc/n/fd` lists the open descriptors, so `ls` of it is what `lsof`
@@ -1230,7 +1231,7 @@ mod tests {
         assert_eq!(d.read(&mut rd, 64, 0).unwrap(), b"hello\0");
         assert!(d.read(&mut rd, 64, 0).unwrap().is_empty(), "taken");
 
-        // pid 1's namespace group is the boot's, which `notepg` refuses; a
+        // pid 1's namespace group is the first, which `notepg` refuses; a
         // child with its own group can be written to.
         let g = procs.borrow_mut().rfork(1, rf::PROC | rf::NAMEG | rf::NOTEG).unwrap();
         let h = procs.borrow_mut().rfork(g, rf::PROC).unwrap();

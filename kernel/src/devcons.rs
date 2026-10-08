@@ -83,13 +83,6 @@ pub trait Console {
     fn config(&mut self) -> String;
     /// `/dev/reboot`: `halt`, or `reboot <path>`.
     fn reboot(&mut self, cmd: &str) -> Result<(), String>;
-
-    /// `physuart[]`, each one's `pnp` called (`uartreset`, `devuart.c:171`)
-    /// — the serial lines the machine has, each with its hardware, for
-    /// `#t`. Asked once, at boot. A machine without any has none.
-    fn physuart(&mut self) -> Vec<(crate::devuart::Uart, Box<dyn crate::devuart::PhysUart>)> {
-        Vec::new()
-    }
 }
 
 /// The device's own state — what Plan 9 keeps in globals beside `devcons.c`:
@@ -959,9 +952,10 @@ mod tests {
 
     fn cons() -> (Cons, Rc<RefCell<Procs>>) {
         let procs = Rc::new(RefCell::new(Procs::new(Chan::attach(DevId::Root, 0))));
-        // The running system starts `eve` empty (`pc/main.c:285`) and has
-        // `boot` name the host owner by writing `#c/hostowner`
-        // (`bootauth.c:56`). A unit test has no boot, so it names one.
+        // The running system starts `eve` empty (`pc/main.c:285`), and the
+        // host names the host owner by writing `#c/hostowner`, as Plan 9's
+        // boot does (`bootauth.c:56`). A unit test has no host, so it names
+        // one.
         procs.borrow_mut().get_mut(1).unwrap().user = "eve".into();
         let up = Rc::new(RefCell::new(Up { pid: 1, procs: procs.clone() }));
         let letters = vec![DevId::Root, DevId::Pipe, DevId::Cons];
@@ -1000,8 +994,8 @@ mod tests {
     }
 
     /// The fixture's host owner. The running system starts `eve` empty and
-    /// has `boot` write `#c/hostowner` (`bootauth.c:56`); a unit test wants
-    /// somebody there already.
+    /// the host writes `#c/hostowner`, as Plan 9's boot does
+    /// (`bootauth.c:56`); a unit test wants somebody there already.
     fn eve_() -> crate::dev::Eve {
         crate::dev::Eve::new(std::cell::RefCell::new("eve".to_string()))
     }

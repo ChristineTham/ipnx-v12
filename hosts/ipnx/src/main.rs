@@ -1,12 +1,14 @@
 //! `ipnx` — Saranos on a terminal. The binary; the system is [`ipnx`] itself.
 
-use ipnx::{plan9ini, startboot, store, Host, BOOT};
+use ipnx::{plan9ini, startboot, store, Host};
 use ipnx_kernel::devvirtio9p::Nineserver;
 
 #[cfg(test)]
 use ipnx::{boot, Term, CONFFILE};
 #[cfg(test)]
 use ipnx_kernel::devroot::Root;
+#[cfg(test)]
+use ipnx::{connectroot, nsinit};
 
 
 fn main() {
@@ -21,7 +23,6 @@ fn main() {
     // command, as `init=` in `plan9.ini` gives it one (`initcmd`). What runs
     // it is the system's own rc, in the namespace init built.
     let conf = plan9ini(&args[1..]);
-    let argv = vec![BOOT.to_string()];
 
     // The machine's filesystem. `-fsdev local` names a host directory; this
     // one is `$HOME/lib/ipnx`, and what a program writes under `/root`
@@ -41,16 +42,16 @@ fn main() {
     };
 
     Host::catch_interrupt();
-    let r = startboot(&argv, &[], &conf, Box::new(Host), store);
+    let r = startboot(&conf, Box::new(Host), store);
     Host::restore_terminal();
     match r {
         Ok(status) if status.is_empty() => {}
         Ok(status) => {
-            eprintln!("ipnx: {}: {status}", argv[0]);
+            eprintln!("ipnx: {status}");
             std::process::exit(1);
         }
         Err(e) => {
-            eprintln!("ipnx: {}: {e}", argv[0]);
+            eprintln!("ipnx: {e}");
             std::process::exit(1);
         }
     }
@@ -60,23 +61,52 @@ fn main() {
 mod tests {
     use super::*;
 
-    /// Run one module as pid 1 with `#/boot` holding whatever it should find,
-    /// and answer with the status the PROCESS set — not the one `touser`
-    /// returned, which says only that the machine came back.
-    fn run(wat: &str, files: &[(&str, &[u8])]) -> Result<String, String> {
-        let mut root = Root::new();
-        root.addbootfile("init", wat::parse_str(wat).map_err(|e| e.to_string())?);
-        for (n, b) in files {
-            root.addbootfile(n, b.to_vec());
+    /// **A root of this test's own**: `init` and `files` in a directory the
+    /// host serves, attached as `/` the way the host attaches its store
+    /// ([`connectroot`], [`nsinit`]), with `init` ready to run as pid 1 with
+    /// `argv`. The directory goes when the test does.
+    struct Rooted {
+        k: ipnx_kernel::Kernel,
+        dir: std::path::PathBuf,
+    }
+    impl Drop for Rooted {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
         }
-        let mut k = boot(root, Box::new(Term::default()), None)?;
+    }
+    fn rooted(init: &[u8], files: &[(&str, &[u8])], argv: &[&str]) -> Result<Rooted, String> {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static N: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir()
+            .join(format!("ipnx-run-{}-{}", std::process::id(), N.fetch_add(1, Ordering::Relaxed)));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
+        for (name, bytes) in std::iter::once(("init", init)).chain(files.iter().copied()) {
+            let f = dir.join(name);
+            std::fs::write(&f, bytes).map_err(|e| e.to_string())?;
+            std::fs::set_permissions(&f, std::fs::Permissions::from_mode(0o755)).map_err(|e| e.to_string())?;
+        }
+        let store = store::Store::new(&dir).map_err(|e| e.to_string())?;
+        let mut k = boot(Root::new(), Box::new(Term::default()), Some(Box::new(store)))?;
+        let fd = connectroot(&mut k)?;
+        nsinit(&mut k, fd, &[])?;
         // `exec` gives pid 1 an image; `ready` puts it on the queue; and
         // `schedinit` is what runs anything at all (`proc.c:67`). It was
         // `exec` that ran the process, which is not what `sysexec` does.
-        k.exec(1, "/boot/init", &["init".to_string()])?;
+        let argv: Vec<String> = argv.iter().map(|a| a.to_string()).collect();
+        k.exec(1, "/init", &argv)?;
         k.procs.borrow_mut().ready(1);
-        k.schedinit()?;
-        let status = k.procs.borrow().status(1);
+        Ok(Rooted { k, dir })
+    }
+
+    /// Run one module as pid 1 on a root of its own holding whatever it
+    /// should find, and answer with the status the PROCESS set — not the one
+    /// `touser` returned, which says only that the machine came back.
+    fn run(wat: &str, files: &[(&str, &[u8])]) -> Result<String, String> {
+        let mut r = rooted(&wat::parse_str(wat).map_err(|e| e.to_string())?, files, &["init"])?;
+        r.k.schedinit()?;
+        let status = r.k.procs.borrow().status(1);
         Ok(status.unwrap_or_default())
     }
 
@@ -132,7 +162,7 @@ mod tests {
   (import "sys" "stat"  (func $stat  (param i32 i32 i32) (result i32)))
   (import "sys" "exits" (func $exits (param i32)))
   (memory (export "memory") 1)
-  (data (i32.const 8) "/boot/init\00")
+  (data (i32.const 8) "/init\00")
   (data (i32.const 32) "not BIT16SZ\00")
   (data (i32.const 64) "no size\00")
   (func (export "_start") (param i32 i32 i32)
@@ -149,8 +179,8 @@ mod tests {
     /// reads what it finds, and closes it.
     ///
     /// **It exits with what it read**, so the test knows the bytes arrived.
-    /// Asserting only that the run succeeded let `/boot/` be opened in place
-    /// of `/boot/hello` — a directory, which opens fine — and the guest
+    /// Asserting only that the run succeeded let `/` be opened in place
+    /// of `/hello` — a directory, which opens fine — and the guest
     /// printed the directory listing while this test stayed green.
     #[test]
     fn a_guest_reaches_the_kernel_and_reads_a_file_by_name() {
@@ -160,7 +190,7 @@ mod tests {
   (import "sys" "pread" (func $pread (param i32 i32 i32 i64) (result i32)))
   (import "sys" "exits" (func $exits (param i32)))
   (memory (export "memory") 1)
-  (data (i32.const 8) "/boot/hello\00")
+  (data (i32.const 8) "/hello\00")
   (data (i32.const 512) "\00")
   (global $n (mut i32) (i32.const 0))
   (func (export "_start") (param i32 i32 i32)
@@ -230,19 +260,15 @@ mod tests {
   (func (export "_start") (param $argc i32) (param $argv i32) (param $tos i32)
     (call $exits (i32.load (i32.add (local.get $argv) (i32.const 4))))))
 "#;
-        let mut root = Root::new();
-        root.addbootfile("init", wat::parse_str(ARGS).unwrap());
-        let mut k = boot(root, Box::new(Term::default()), None).unwrap();
-        k.exec(1, "/boot/init", &["init".into(), "second".into()]).unwrap();
-        k.procs.borrow_mut().ready(1);
-        k.schedinit().unwrap();
-        assert_eq!(k.procs.borrow().status(1).as_deref(), Some("init 1: second"));
+        let mut r = rooted(&wat::parse_str(ARGS).unwrap(), &[], &["init", "second"]).unwrap();
+        r.k.schedinit().unwrap();
+        assert_eq!(r.k.procs.borrow().status(1).as_deref(), Some("init 1: second"));
     }
 }
 
 /// **The demo, run against the real thing.**
 ///
-/// Not a model of anything: these boot the kernel, run `boot`, `init`,
+/// Not a model of anything: these boot the kernel, attach the root, run `init`,
 /// `/profile/start.ns` and `/profile/start.rc`, and then TYPE at the console —
 /// which is the whole of what `ipnx` does.
 ///
@@ -270,7 +296,7 @@ mod userspace {
     pub(super) fn typing_marked(keys: &str, marker: &str) -> String {
         let term = Term::marked(keys, marker);
         let store = store::Store::new(&rootfs()).expect("a store");
-        match startboot(&[BOOT.to_string()], &[], &plan9ini(&[]), Box::new(term.clone()), Some(Box::new(store))) {
+        match startboot(&plan9ini(&[]), Box::new(term.clone()), Some(Box::new(store))) {
             Ok(_) => term.screen(),
             Err(e) => panic!("{e}"),
         }
@@ -314,7 +340,7 @@ mod userspace {
             let n = Rc::new(Cell::new(0));
             let term = Term::typing(&"ls /bin >/dev/null; cat /etc/motd >/dev/null\n".repeat(lines));
             let store = Counting(store::Store::new(&rootfs()).unwrap(), n.clone());
-            startboot(&[BOOT.to_string()], &[], &plan9ini(&[]), Box::new(term), Some(Box::new(store))).unwrap();
+            startboot(&plan9ini(&[]), Box::new(term), Some(Box::new(store))).unwrap();
             n.get()
         };
         assert_eq!((held(1), held(5)), (0, 0), "fids left behind");
@@ -324,13 +350,7 @@ mod userspace {
     pub(super) fn typing_at(keys: &str, store: &std::path::Path) -> String {
         let term = Term::typing(keys);
         let store = store::Store::new(store).expect("a store");
-        match startboot(
-            &[BOOT.to_string()],
-            &[],
-            &plan9ini(&[]),
-            Box::new(term.clone()),
-            Some(Box::new(store)),
-        ) {
+        match startboot(&plan9ini(&[]), Box::new(term.clone()), Some(Box::new(store))) {
             Ok(_) => term.screen(),
             Err(e) => panic!("{e}"),
         }
@@ -342,21 +362,21 @@ mod userspace {
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let term = Term::typing(keys);
         let store = store::Store::new(&rootfs()).expect("a store");
-        match startboot(&[BOOT.to_string()], &[], &plan9ini(&args), Box::new(term.clone()), Some(Box::new(store))) {
+        match startboot(&plan9ini(&args), Box::new(term.clone()), Some(Box::new(store))) {
             Ok(_) => term.screen(),
             Err(e) => panic!("{e}"),
         }
     }
 
     /// **One command from the host's command line** (`cargo run -p ipnx --
-    /// echo hello`). `boot` reads `$init` and hands it to `init`
-    /// (`boot.c:208`), which runs it with `rc -c` (`init.c:171`) in the
+    /// echo hello`). The host reads `$init` and hands it to `init`, as Plan
+    /// 9's boot does (`boot.c:202`), which runs it with `rc -c` (`init.c:171`) in the
     /// namespace it built — `$objtype` is init's own, and `/bin` is
     /// `/profile/start.ns`'s — and a word with a quote and a space in it
     /// arrives whole. Then the interactive shell, as Plan 9's `init` goes
     /// on to; with no input it ends at once.
     #[test]
-    fn a_command_on_the_host_command_line_runs_through_boot_and_init() {
+    fn a_command_on_the_host_command_line_runs_through_init() {
         let out = commanding(&["echo", "hello", "it's here"], "");
         assert!(out.contains("hello it's here\n"), "{out:?}");
         let out = commanding(&["cat", "/env/objtype"], "");
@@ -382,7 +402,7 @@ mod userspace {
     }
 
     /// **`cat /etc/motd`** — a file that exists only on the file server, read
-    /// through the union `boot` made of `/`.
+    /// through the union the host made of `/`.
     #[test]
     fn cat_etc_motd() {
         assert!(typing("cat /etc/motd\n").contains("Saranos."), "no motd");
@@ -393,7 +413,7 @@ mod userspace {
     #[test]
     fn ls_shows_both_halves_of_the_root() {
         let out = typing("ls /\n");
-        for name in ["boot", "dev", "proc", "srv"] {
+        for name in ["dev", "proc", "srv"] {
             assert!(out.contains(&format!("{name}\n")), "no {name} from #/: {out:?}");
         }
         for name in ["etc", "home", "lib", "profile", "usr", "wasm"] {
@@ -419,15 +439,18 @@ mod userspace {
         let out = typing("ls /dev\n");
         assert!(out.contains("cons\n"), "no #c: {out:?}");
         assert!(out.contains("random\n"), "no #c: {out:?}");
-        assert!(out.contains("0ctl\n"), "no #d, which start.rc binds: {out:?}");
+        // `#¤`, which `/profile/start.ns` binds after `#c`. (This asserted
+        // `0ctl` for `#d`, which is bound at `/fd`, and passed only because
+        // the uart's `eia0ctl` ended the same way.)
+        assert!(out.contains("/dev/capuse\n"), "no #¤, which start.ns binds: {out:?}");
     }
 
     /// The environment the boot set: `$objtype` from the machine
     /// (`pc/main.c:252`), `$user` from `#c/user`, `$sysname` from start.rc.
     #[test]
     fn the_environment_is_what_the_boot_put_there() {
-        // `kitty`, not `eve`: `eve` is the empty string until `boot` writes
-        // `#c/hostowner` (`bootauth.c:56`), and the name it writes is
+        // `kitty`, not `eve`: `eve` is the empty string until the host writes
+        // `#c/hostowner`, as Plan 9's boot does (`bootauth.c:56`), and the name it writes is
         // `$user` from the configuration — this system's `plan9.ini` says
         // `user=kitty` — or Plan 9's own fallback, `glenda`. `eve` is the
         // role, not a person.
@@ -457,7 +480,7 @@ mod userspace {
         let out = typing("cat /proc/1/ns\n");
         for line in [
             "bind -a /root /\n",
-            "mount -aC #s/boot /root \n",
+            "mount -aC #s/root /root \n",
             "bind  /pkg/system/2026.09.24/wasm/bin /bin\n",
             "bind -a /pkg/system/2026.09.24/lib /lib\n",
             "bind -c /usr/kitty /home\n",
@@ -1206,98 +1229,5 @@ mod profiles {
         // the shell has; a new shell would have run it once more
         let count = |w: &str| out.lines().find_map(|l| l.split(w).nth(1).map(str::to_string)).expect(&out);
         assert_eq!(count("shell "), count("fork "), "a fork is not a new shell: {out:?}");
-    }
-}
-
-/// **P8 step 1: the serial line** (docs/implementation.md). `#t`'s `eia0`
-/// on a host [`ipnx::uart::Line`], and Plan 9's own way to serve a
-/// namespace down a wire: `exportfs` with the line as its standard input.
-/// The far end is this test, speaking 9P.
-#[cfg(test)]
-mod serial {
-    use super::*;
-    use ipnx::uart::Line;
-    use ipnx_kernel::ninep::{unframe, R, T, W, NOFID};
-    use std::time::Duration;
-
-    fn rootfs() -> std::path::PathBuf {
-        ipnx::rootcopy().to_path_buf()
-    }
-
-    /// One exchange on the line: the message out, the reply read whole.
-    fn rpc(far: &Line, msg: Vec<u8>) -> Result<(u8, Vec<u8>), String> {
-        let t = Duration::from_secs(120);
-        far.send(&msg);
-        let size = far.recv(4, t);
-        if size.len() < 4 {
-            return Err("no reply".into());
-        }
-        let n = u32::from_le_bytes(size[..4].try_into().unwrap()) as usize;
-        let mut whole = size;
-        whole.extend(far.recv(n - 4, t));
-        let m = unframe(&whole).ok_or("a short reply")?;
-        if m.ty == T::Error as u8 {
-            return Err(R::new(m.body).s().unwrap_or("?").to_string());
-        }
-        Ok((m.ty, m.body.to_vec()))
-    }
-
-    /// Version, attach, walk to `rcmain`, open, read, clunk.
-    fn conversation(far: &Line) -> Result<Vec<u8>, String> {
-        let (ty, body) = rpc(far, W::new().u32(8192 + 24).s("9P2000").frame(T::Version as u8, !0))?;
-        assert_eq!(ty, T::Version.reply());
-        assert_eq!(R::new(&body[4..]).s(), Some("9P2000"));
-        let (ty, _) = rpc(far, W::new().u32(0).u32(NOFID).s(ipnx::USER).s("").frame(T::Attach as u8, 1))?;
-        assert_eq!(ty, T::Attach.reply());
-        let (ty, body) = rpc(far, W::new().u32(0).u32(1).u16(1).s("rcmain").frame(T::Walk as u8, 2))?;
-        assert_eq!(ty, T::Walk.reply());
-        assert_eq!(R::new(&body).u16(), Some(1), "one qid: the walk reached it");
-        let (ty, _) = rpc(far, W::new().u32(1).u8(0).frame(T::Open as u8, 3))?;
-        assert_eq!(ty, T::Open.reply());
-        let (ty, body) = rpc(far, W::new().u32(1).u64(0).u32(8192).frame(T::Read as u8, 4))?;
-        assert_eq!(ty, T::Read.reply());
-        let mut r = R::new(&body);
-        let n = r.u32().unwrap() as usize;
-        let data = r.rest()[..n].to_vec();
-        for (tag, fid) in [(5, 1), (6, 0)] {
-            let (ty, _) = rpc(far, W::new().u32(fid).frame(T::Clunk as u8, tag))?;
-            assert_eq!(ty, T::Clunk.reply());
-        }
-        Ok(data)
-    }
-
-    /// `/profile/start.rc` binds `#t` onto `/dev` in termrc's loop
-    /// (`termrc:12`), and the status file reads as `i8250status` does.
-    #[test]
-    fn the_line_is_in_dev_after_boot() {
-        let out = super::userspace::typing("ls /dev | grep eia\ncat /dev/eia0status\n");
-        assert!(out.contains("/dev/eia0\n/dev/eia0ctl\n/dev/eia0status\n"), "{out:?}");
-        assert!(out.contains("b0 c0 d0 e0 l5 m0 pn r0 s1 i0\ndev(0) type(0)"), "never enabled: {out:?}");
-    }
-
-    /// `exportfs -r /lib` on `eia0`, with `c1` so that the far end going
-    /// is the end of the line: the test reads a file through it, hangs up,
-    /// and the system carries on to its end.
-    #[test]
-    fn exportfs_serves_a_tree_down_the_serial_line() {
-        let line = Line::new();
-        line.connect();
-        let far = line.clone();
-        let client = std::thread::spawn(move || {
-            let r = conversation(&far);
-            far.hangup();
-            r
-        });
-        let cmd = "{echo c1 >[1=3]; exportfs -r /lib} <>'#t/eia0' >[3]'#t/eia0ctl'";
-        let term = Term::with_line("", line);
-        let store = store::Store::new(&rootfs()).expect("a store");
-        let args: Vec<String> = ["rc", "-c", cmd].iter().map(|s| s.to_string()).collect();
-        let r = startboot(&[BOOT.to_string()], &[], &plan9ini(&args), Box::new(term.clone()), Some(Box::new(store)));
-        let data = client.join().expect("the far end").unwrap_or_else(|e| panic!("{e}: {}", term.screen()));
-        assert!(r.is_ok(), "{r:?}: {}", term.screen());
-        // `/lib/rcmain` is the system package's, bound onto `/lib` by
-        // `/profile/start.ns`.
-        let pkg = std::fs::read_dir(rootfs().join("pkg/system")).unwrap().flatten().next().unwrap().path();
-        assert_eq!(data, std::fs::read(pkg.join("lib/rcmain")).unwrap(), "{}", term.screen());
     }
 }

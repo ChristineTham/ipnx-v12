@@ -16,7 +16,6 @@
 
 pub mod machine;
 pub mod store;
-pub mod uart;
 
 use ipnx_kernel::{
     chan,
@@ -29,7 +28,6 @@ use ipnx_kernel::{
     devproc::ProcDev,
     devroot::Root,
     devsrv::SrvDev,
-    devuart::UartDev,
     devvirtio9p::{Nineserver, Virtio9p},
     dev::DevId,
     Call, Kernel, Ret,
@@ -216,21 +214,15 @@ impl Console for Host {
             _ => Err("this host reboots by being started again".into()),
         }
     }
-
-    /// One serial line, `eia0`, with nothing at its far end yet: the
-    /// surface this host serves is the terminal, which reaches the system
-    /// through `#c`.
-    fn physuart(&mut self) -> Vec<(ipnx_kernel::devuart::Uart, Box<dyn ipnx_kernel::devuart::PhysUart>)> {
-        vec![uart::Eia::found("eia0", uart::Line::new())]
-    }
 }
 
 /// The device table — the letters this kernel carries. Plan 9 writes the same
 /// list in a configuration file and `mkdevc` turns it into `devtab[]`.
 ///
-/// Absent, and for one reason each: `#i` (draw) and `#m` (mouse) are hardware
-/// this machine has none of.
-pub const LETTERS: [DevId; 11] = [
+/// Absent, and for one reason: `#i` (draw), `#m` (mouse) and `#t` (uart)
+/// are hardware this machine has none of, and none is emulated (Christine,
+/// 2026-10-08).
+pub const LETTERS: [DevId; 10] = [
     DevId::Root,
     DevId::Pipe,
     DevId::Srv,
@@ -241,7 +233,6 @@ pub const LETTERS: [DevId; 11] = [
     DevId::Cons,
     DevId::Cap,
     DevId::Virtio9p,
-    DevId::Uart,
 ];
 
 /// The boot namespace, from `plan9/sys/src/9/port/initcode.c:28`, which is
@@ -254,17 +245,19 @@ pub const LETTERS: [DevId; 11] = [
 /// bind(s, srv, MREPL|MCREATE);     /* #s  -> /srv */
 /// ```
 ///
-/// **Nothing else.** Everything the system needs beyond this is the system's
-/// own business now: `boot` mounts the root, `/profile/start.ns` says what the
-/// namespace is, and `/profile/start.rc` binds the rest. This list used to carry
-/// three more, and each of them is now a line in one of those files.
+/// **Nothing else.** Beyond this the host does `boot`'s part — the host
+/// owner and the root ([`startboot`]) — and the rest is the system's own
+/// business: `/profile/start.ns` says what the namespace is, and
+/// `/profile/start.rc` binds the rest. This list used to carry three more,
+/// and each of them is now a line in one of those files.
 ///
 /// `#ec` is the configuration environment (`devenv.c:16`), bound under `#e`
 /// and without `MCREATE`, so the kernel's configuration reads through `/env`
 /// and a process's own `setenv` lands in its own group. **Nothing fills it
-/// yet**: it is `plan9.ini` that a Plan 9 kernel copies into it
-/// (`pc/main.c:257`), and this host has no counterpart to `plan9.ini` — so
-/// `$rootspec` and `$rootdir` are still absent and `boot` still has one root.
+/// but the lines of [`plan9ini`]**: it is `plan9.ini` that a Plan 9 kernel
+/// copies into it (`pc/main.c:257`), and this host's has `user=` and, with a
+/// command, `init=` — so `$rootspec` and `$rootdir` are absent and the host
+/// attaches the one root it has.
 pub const BINDS: [(&str, &str, i32); 4] = [
     ("#c", "/dev", MAFTER),
     ("#ec", "/env", MAFTER),
@@ -313,8 +306,8 @@ pub fn ksetenv(k: &mut Kernel, name: &str, val: &str, conf: bool) -> Result<(), 
 }
 
 /// **One command, as Plan 9 runs one at boot**: the `plan9.ini` line
-/// `init=/$cputype/init -t cmd`. `boot` reads `$init` and tokenizes it into
-/// init's arguments (`boot.c:208`), and `init` runs its first argument with
+/// `init=/$cputype/init -t cmd`. The host reads `$init` and tokenizes it into
+/// init's arguments, as Plan 9's boot does ([`execinit`]), and `init` runs its first argument with
 /// `rc -c` (`init.c:44`, `:171`) — so the command is one quoted token, and
 /// each of its words is quoted within it, both as `tokenize` and rc unquote
 /// (`''` for a quote inside quotes).
@@ -324,9 +317,9 @@ pub fn initcmd(args: &[String]) -> (String, String) {
 }
 
 /// **This system's `plan9.ini`** — the lines `pc/main.c:257` puts into the
-/// environment and `#ec`. `user=` names the host owner: `boot` writes it to
+/// environment and `#ec`. `user=` names the host owner: the host writes it to
 /// `#c/hostowner` and falls back to Plan 9's `"glenda"` only when there is
-/// none (`bootauth.c:56`, `userspace/cmd/boot.c`). This system's default
+/// none ([`authentication`], after `bootauth.c:56`). This system's default
 /// user is `kitty`. A command, when there is one, is `init=`.
 pub const USER: &str = "kitty";
 
@@ -408,10 +401,6 @@ fn copytree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()>
     Ok(())
 }
 
-/// The first process, and the only file `#/boot` carries — as a Plan 9
-/// kernel carries `/boot/boot` and nothing else (`initcode.c:11`).
-pub const BOOT: &str = "/boot/boot";
-
 pub fn boot(
     root: Root,
     host: Box<dyn Console>,
@@ -437,37 +426,18 @@ pub fn boot(
         v9.add(store);
     }
     k.tab.add(Box::new(v9));
-    // `uartreset` (`devuart.c:163`) — the lines the host has.
-    let mut host = host;
-    k.tab.add(Box::new(UartDev::new(k.up.clone(), host.physuart())));
     // **`eve` starts EMPTY**, as `userinit` leaves it (`pc/main.c:285`:
-    // `kstrdup(&eve, "")`). `boot` names the host owner by writing
-    // `#c/hostowner` — `glenda()` (`bootauth.c:56`), reached because there
-    // is no `/boot/factotum` here — and `hostownerwrite` allows the first
+    // `kstrdup(&eve, "")`). The host names the host owner by writing
+    // `#c/hostowner`, as Plan 9's boot does with no factotum to start
+    // (`glenda()`, `bootauth.c:56`), and `hostownerwrite` allows the first
     // one because `iseve()` is then comparing two empty strings
     // (`auth.c:128`).
     k.tab.add(Box::new(Cons::new(k.tab.eve(), k.up.clone(), LETTERS.to_vec(), host)));
     Ok(k)
 }
 
-/// Load `userspace/root/bin` into `#/boot`, which is where a Plan 9 kernel
-/// keeps the files a first process needs (`devroot.c:27`: `addbootfile`) —
-/// enough to start something, and that something mounts the real server.
-pub fn loadbin(root: &mut Root, dir: &std::path::Path) -> usize {
-    let mut n = 0;
-    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
-    for e in entries.flatten() {
-        let Ok(bytes) = std::fs::read(e.path()) else { continue };
-        let Some(name) = e.file_name().to_str().map(str::to_string) else { continue };
-        root.addbootfile(&name, bytes);
-        n += 1;
-    }
-    n
-}
-
 /// **`startboot`** (`plan9/sys/src/9/port/initcode.c:21`), which is the whole
-/// of what a Plan 9 kernel's first process does — and now the whole of what
-/// this embedding does before the system takes over:
+/// of what a Plan 9 kernel's first process does —
 ///
 /// ```c
 /// open(cons, OREAD); open(cons, OWRITE); open(cons, OWRITE);
@@ -476,30 +446,21 @@ pub fn loadbin(root: &mut Root, dir: &std::path::Path) -> usize {
 /// exec(boot, argv);
 /// ```
 ///
+/// — and then **what Plan 9's `boot` does, done by the host** (Christine,
+/// 2026-10-08: *"The host does it"*): name the host owner, attach the root
+/// file server, post it as `#s/root` and make it `/`, then start `init`
+/// ([`authentication`], [`connectroot`], [`nsinit`], [`execinit`]). There
+/// is no `/boot/boot`, because `boot` is the Unix bootloader's name.
+///
 /// It is a function rather than `main`'s body so that a test can run the real
 /// thing — the real kernel, the real namespace, the real binaries — with a
 /// terminal it can script and inspect.
-///
-/// `extra` puts more files in the boot list, for a test that wants the first
-/// process to be something other than `boot`.
 pub fn startboot(
-    argv: &[String],
-    extra: &[(&str, &[u8])],
     conf: &[(String, String)],
     host: Box<dyn Console>,
     store: Option<Box<dyn Nineserver>>,
 ) -> Result<String, String> {
-    let mut root = Root::new();
-    let bootdir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../userspace/build/boot");
-    if loadbin(&mut root, &bootdir) == 0 && extra.is_empty() {
-        return Err(format!("nothing in {}: run userspace/mk.sh", bootdir.display()));
-    }
-    for (name, bytes) in extra {
-        root.addbootfile(name, bytes.to_vec());
-    }
-
-    let mut k = boot(root, host, store)?;
+    let mut k = boot(Root::new(), host, store)?;
 
     // `open(cons, OREAD); open(cons, OWRITE); open(cons, OWRITE);` — three
     // opens of `#c/cons`, before the binds, because `/dev` does not exist
@@ -546,10 +507,22 @@ pub fn startboot(
         ksetenv(&mut k, name, val, true)?;
     }
 
-    // `exec(boot, argv)` — `initcode`'s last line. It no longer runs
-    // anything: the image is pid 1's now and pid 1 is `Ready`.
-    let path = argv.first().map(String::as_str).unwrap_or(BOOT).to_string();
-    k.exec(1, &path, argv)?;
+    // `boot()`'s order (`boot/boot.c:284`–`:296`): the host owner, then the
+    // root, then init. What else it does is for hardware this machine does
+    // not have — `usbinit`, `kbmap`, `#æ` and `#S`, `partinit`, `swapproc`
+    // — or is answered already: `settime`, because the clock is the host's;
+    // `rfork(RFNAMEG)`, because there are no processes yet to leave behind;
+    // a choice of method, because there is one, `#9/0`.
+    authentication(&mut k, conf)?;
+    let fd = connectroot(&mut k)?;
+    let afd = nsinit(&mut k, fd, conf)?;
+    // `close(fd)` (`:290`) has nothing to do: the mount closed it
+    // (`bindmount`'s *"fdclose(fd, 0)"*, `sysfile.c:1061`).
+    if afd > 0 {
+        let _ = k.syscall(1, Call::Close { fd: afd });
+    }
+    let (path, argv) = execinit(conf);
+    k.exec(1, &path, &argv)?;
 
     // **`schedinit()`, which never returns** (`proc.c:67`). Plan 9 reaches
     // it from `main` on every processor and the system is whatever the
@@ -562,6 +535,163 @@ pub fn startboot(
     let status = k.procs.borrow().status(1).unwrap_or_default();
     Ok(status)
 }
+
+/// A line of the configuration, as `getenv` would find it.
+fn confget<'a>(conf: &'a [(String, String)], name: &str) -> Option<&'a str> {
+    conf.iter().find(|(n, _)| n == name).map(|(_, v)| v.as_str())
+}
+
+/// `authentication` (`boot/bootauth.c:10`), and the branch it takes: with
+/// no factotum to start, `glenda()` (`:56`) — **this names the host
+/// owner**, writing `$user`, or Plan 9's `"glenda"` when there is none, to
+/// `#c/hostowner`. `eve` is the empty string until now (`pc/main.c:285`),
+/// so `hostownerwrite` permits it: `iseve()` compares two empty strings
+/// (`auth.c:128`).
+pub fn authentication(k: &mut Kernel, conf: &[(String, String)]) -> Result<(), String> {
+    let s = confget(conf, "user").unwrap_or("glenda");
+    let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "#c/hostowner".into(), mode: chan::mode::OWRITE as i32 })?
+    else {
+        return Ok(());
+    };
+    if let Err(e) = k.syscall(1, Call::Pwrite { fd, data: s.as_bytes().to_vec(), off: -1 }) {
+        return Err(format!("setting #c/hostowner to {s}: {e}"));
+    }
+    k.syscall(1, Call::Close { fd })?;
+    Ok(())
+}
+
+/// `connectroot` (`boot/boot.c:125`): connect — `bootvirtio9p.c`'s whole
+/// body, *"fd = open("#9/0", ORDWR)"* — negotiate the version, and post
+/// the channel at `#s/root` (`srvcreate`, `boot/aux.c:125`; Plan 9's
+/// `#s/boot`, renamed by Christine, 2026-10-08) **before** anything mounts
+/// it, because the version is negotiated once per connection and whoever
+/// mounts it next joins that session. The descriptor stays open for
+/// [`nsinit`].
+pub fn connectroot(k: &mut Kernel) -> Result<i32, String> {
+    let Ret::Fd(fd) = k
+        .syscall(1, Call::Open { path: "#9/0".into(), mode: chan::mode::ORDWR as i32 })
+        .map_err(|e| format!("can't connect to file server: {e}"))?
+    else {
+        return Err("can't connect to file server".into());
+    };
+    k.syscall(1, Call::Fversion { fd, msize: 0, version: String::new() })
+        .map_err(|e| format!("can't init 9P: {e}"))?;
+    let name = format!("#s/{}", ipnx_kernel::devsrv::ROOTSRV);
+    let Ret::Fd(f) = k.syscall(1, Call::Create { path: name.clone(), mode: chan::mode::OWRITE as i32, perm: 0o666 })?
+    else {
+        return Err(format!("create {name}"));
+    };
+    k.syscall(1, Call::Pwrite { fd: f, data: fd.to_string().into_bytes(), off: -1 })
+        .map_err(|e| format!("write {name}: {e}"))?;
+    k.syscall(1, Call::Close { fd: f })?;
+    Ok(fd)
+}
+
+/// `nsinit` (`boot/boot.c:152`). The order is the whole of it:
+///
+/// ```c
+/// bind("/", "/", MREPL)                      make the root a union of its own
+/// mount(fd, afd, "/root", MREPL|MCREATE, rp)  the server, somewhere to stand
+/// bind(rootdir, "/", MAFTER|MCREATE)
+/// ```
+///
+/// That last line is what makes **the root a file server**: after it, `/`
+/// answers from `#/` first and from the server after. `fauth` asks the
+/// server whether it wants authentication; the host's does not
+/// (`u9fs`'s `authnone`), and if one did, Plan 9's `auth_proxy` would need
+/// a factotum this machine has not started — so the mount goes ahead, as
+/// boot's does when that fails (`:169`). The answer is the authentication
+/// descriptor, or -1.
+pub fn nsinit(k: &mut Kernel, fd: i32, conf: &[(String, String)]) -> Result<i32, String> {
+    k.syscall(1, Call::Bind { name: "/".into(), old: "/".into(), flag: MREPL })
+        .map_err(|e| format!("bind /: {e}"))?;
+    let rp = confget(conf, "rootspec").unwrap_or("").to_string();
+    let afd = match k.syscall(1, Call::Fauth { fd, aname: rp.clone() }) {
+        Ok(Ret::Fd(a)) => a,
+        _ => -1,
+    };
+    k.syscall(1, Call::Mount { fd, afd, old: "/root".into(), flag: MREPL | MCREATE, aname: rp })
+        .map_err(|e| format!("mount /: {e}"))?;
+    // `$rootdir`, and failing a bind of it, the same under `/root`
+    // (`:174`–`:194`). The installer's own case after that, `/plan9`, is
+    // for a Plan 9 installation and has nothing to undo here.
+    let mut rp = confget(conf, "rootdir").unwrap_or(ROOTDIR).to_string();
+    let bind = |k: &mut Kernel, rp: &str| k.syscall(1, Call::Bind { name: rp.into(), old: "/".into(), flag: MAFTER | MCREATE });
+    if let Err(e) = bind(k, &rp) {
+        if rp.starts_with("/root") {
+            return Err(format!("couldn't bind $rootdir={rp} to root: {e}"));
+        }
+        rp = format!("/root/{rp}");
+        bind(k, &rp).map_err(|e| format!("couldn't bind $rootdir={rp} to root: {e}"))?;
+    }
+    // *"setenv("rootdir", rp)"* (`:196`)
+    ksetenv(k, "rootdir", &rp, false)?;
+    Ok(afd)
+}
+
+/// `rootdir`: where the root server is mounted — `/root`, which `mkboot`
+/// writes into every boot it makes (`boot/mkboot:65`, `:78`).
+pub const ROOTDIR: &str = "/root";
+
+/// `execinit` (`boot/boot.c:202`): `$init` — a line of `plan9.ini` — is
+/// init's command line, `tokenize`d, its first word's last element
+/// `argv[0]`. With none, it is Plan 9's default, *"/%s/init -%s%s"*:
+/// `$cputype`, `t` for a terminal or `c` for a cpu server, and `m` for
+/// `boot -m`, which nothing passes here. NOT `/bin/init`, because `/bin` is
+/// a union `/profile/start.ns` makes and nothing has read that file yet.
+pub fn execinit(conf: &[(String, String)]) -> (String, Vec<String>) {
+    let cmd = match confget(conf, "init") {
+        Some(c) => c.to_string(),
+        None => format!("/{OBJTYPE}/init -t"),
+    };
+    let mut argv = tokenize(&cmd);
+    let path = argv.first().cloned().unwrap_or_default();
+    if let Some(first) = argv.first_mut() {
+        // *"make iargv[0] basename(iargv[0])"*
+        if let Some(i) = first.rfind('/') {
+            *first = first[i + 1..].to_string();
+        }
+    }
+    (path, argv)
+}
+
+/// `tokenize` (`libc/port/tokenize.c:93`): words separated by blanks, tabs
+/// and newlines; `'…'` quotes, and `''` within quotes is one quote.
+pub fn tokenize(s: &str) -> Vec<String> {
+    let sep = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
+    let mut out = Vec::new();
+    let mut it = s.chars().peekable();
+    loop {
+        while it.peek().is_some_and(|&c| sep(c)) {
+            it.next();
+        }
+        if it.peek().is_none() {
+            break;
+        }
+        let mut word = String::new();
+        let mut quoting = false;
+        while let Some(&c) = it.peek() {
+            if !quoting && sep(c) {
+                break;
+            }
+            it.next();
+            if c != '\'' {
+                word.push(c);
+            } else if !quoting {
+                quoting = true;
+            } else if it.peek() == Some(&'\'') {
+                // doubled quote; fold one quote into two
+                it.next();
+                word.push('\'');
+            } else {
+                quoting = false;
+            }
+        }
+        out.push(word);
+    }
+    out
+}
+
 /// A console that answers with a script and remembers what it was shown —
 /// the counterpart of a person at a terminal, for a test or a suite. The
 /// keys go in, the screen comes out.
@@ -595,8 +725,6 @@ pub struct Script {
     /// typed, before the key is pressed; and where on the screen they were.
     marker: Option<Vec<u8>>,
     from: usize,
-    /// The serial line `eia0` is on, if the test has one.
-    line: Option<uart::Line>,
 }
 
 /// How long after the line before it a scripted `^C` is pressed.
@@ -613,12 +741,6 @@ impl Term {
     pub fn marked(keys: &str, marker: &str) -> Term {
         let t = Term::typing(keys);
         t.0.borrow_mut().marker = Some(marker.as_bytes().to_vec());
-        t
-    }
-    /// The same, with `eia0` on this line — whose far end the test holds.
-    pub fn with_line(keys: &str, line: uart::Line) -> Term {
-        let t = Term::typing(keys);
-        t.0.borrow_mut().line = Some(line);
         t
     }
     /// What the console was shown.
@@ -692,9 +814,5 @@ impl Console for Term {
     }
     fn reboot(&mut self, cmd: &str) -> Result<(), String> {
         Host.reboot(cmd)
-    }
-    fn physuart(&mut self) -> Vec<(ipnx_kernel::devuart::Uart, Box<dyn ipnx_kernel::devuart::PhysUart>)> {
-        let line = self.0.borrow().line.clone().unwrap_or_default();
-        vec![uart::Eia::found("eia0", line)]
     }
 }

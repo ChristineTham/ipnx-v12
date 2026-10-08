@@ -120,8 +120,8 @@ userspace — a namespace file and a set of binds — so nothing in the kernel
 follows from them.
 
 **`/` is not a device.** In Plan 9 it is `mount -aC #s/boot /root` followed by
-`bind -a $rootdir /` — a file server posted in `#s`, mounted. There is no root
-ramfs device letter to invent.
+`bind -a $rootdir /` — a file server posted in `#s`, mounted; here the host
+posts it as `#s/root`. There is no root ramfs device letter to invent.
 
 **Mounts are not prefix-map entries.** `findmount` (`chan.c:855`) keys a mount
 by the identity of the channel mounted upon, and `namec` checks at every

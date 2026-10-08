@@ -96,8 +96,9 @@ ABI. The conformance suite binds all three.
   file's group (`dev.c:106`), `iseve()` compares it, `hostownerwrite`
   renames it for all of them (`auth.c:135`) — and `userinit` leaves it the
   empty string (`pc/main.c:285`), with the first process's user a copy.
-  **It is `boot` that names the host owner**, by writing `#c/hostowner` with
-  `$user` or `"glenda"` (`bootauth.c:56`). A Rust kernel cannot have an
+  **The host names the host owner** before the first program runs, as Plan
+  9's `boot` does — writing `#c/hostowner` with `$user` or `"glenda"`
+  (`bootauth.c:56`). A Rust kernel cannot have an
   ambient mutable global, so the device table hands the one cell to each
   device as it joins.
 - **A walk carries the path beside the channel**, not on it (`chan.c`,
@@ -158,8 +159,7 @@ ABI. The conformance suite binds all three.
   **A last close is made only where what is left of it can be kept**: one
   reached inside another close, or in a call that may run again from the
   top, is handed to the closing loop it is inside, or to the call's end,
-  and made there next — once. A serial line's last close waits for its
-  output to drain (`uartclose`, `devuart.c:319`).
+  and made there next — once.
 - **A mount's wire is held while the server holds a fid for any channel
   through it**, and let go with the last (`chanfree`'s *"cclose(c->mchan)"*,
   `chan.c:475`); its session ends when the wire's own last reference goes
@@ -190,10 +190,11 @@ letter. Eleven:
   | `c` | **devcons** — all 23 of `consdir[]`. The console's line discipline is here because `port/devcons.c` keeps it there; the machine supplies only `screenputs` and the keyboard's characters. The rest is the kernel's own state as files |
   | `¤` | **devcap** — the only way a process becomes another user: eve mints a capability, a process spends it once |
   | `9` | **devvirtio9p** — a CHANNEL to a 9P server the machine provides, and nothing else. `pc/devvirtio9p.c:1227`; its own comment is this system's situation, *"mount a host directory … with no network in the path"*. A 9legacy device, absent from `plan9-stock` |
-  | `t` | **devuart** — serial lines, `port/devuart.c`. The hardware is a `PhysUart` the host supplies (`portdat.h:899`), and its far end is the surface: the surface reaches emca with `exportfs` down it (surface.md) |
 
-**What is NOT here, and why it is not an omission.** `#i` draw and `#m` mouse
-are hardware this machine has none of, and emca is userspace entirely. Any
+**What is NOT here, and why it is not an omission.** `#i` draw, `#m` mouse
+and `#t` uart are hardware this machine has none of, and none is emulated
+(*"This is WASM we have no hardware we do not want to emulate hardware"*,
+Christine, 2026-10-08); emca is userspace entirely. Any
 letter Plan 9 lacks — a fetcher, a versioning layer, host files — is not a
 device at all; it is a file server, which is what Plan 9 would have made it.
 
@@ -209,10 +210,10 @@ are embedded in the kernel image (`port/portmkfile:53`) and read at
 (`pc/main.c:250`). **`plan9.ini` is the other one**: what the bootloader read
 before the kernel existed, exported to `#ec` entire and to `#e` for the names
 not beginning `*` (`pc/main.c:257`). Here the first is `LETTERS` in
-`hosts/ipnx/src/main.rs`; **the second is empty**, because plan9.ini holds the
-stored answers to what `boot` would otherwise ask (`boot.c:354`, *"create
-default reply"*) and this `boot` asks nothing — one method, no prompt. See
-`docs/proposals.md`.
+`hosts/ipnx/src/main.rs`; **the second is `plan9ini`** in
+`hosts/ipnx/src/lib.rs` — `user=`, and `init=` when there is a command —
+which the host reads as Plan 9's boot reads `plan9.ini`. There is one root,
+so nothing else to answer.
 
 ## Contract: the guest ABI
 
@@ -328,6 +329,15 @@ here and has been removed from the code.
 no device. A console, a clock, storage and randomness are **file servers**,
 reached by processes over 9P, because 9P is the only IPC and the kernel holds
 no driver.
+
+**Settled by Christine, 2026-10-08 — the host does `boot`'s part** (*"The
+host does it"*). Before the first program runs the host makes, as pid 1,
+the calls Plan 9's `boot` makes (`boot/boot.c:284`–`:296`): it names the host
+owner (`bootauth.c:56`), opens `#9/0`, negotiates the version and posts the
+channel as **`#s/root`** — Plan 9's `#s/boot`, renamed — then binds `/` onto
+itself, mounts the server at `/root` and binds `/root` after `/`, and runs
+`init` from `$init` or `/$cputype/init -t`. There is no `/boot/boot` and no
+`#/boot`: `boot` is the Unix bootloader's name (2026-09-04).
 
 ## Contract: the wire
 

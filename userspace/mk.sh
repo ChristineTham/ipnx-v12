@@ -34,7 +34,7 @@ build=$here/build
 # Plan 9's tree, vendored: `sys/include` and `sys/src` as they are there
 sys=$here/sys
 # The ROOTFS — what the machine serves over 9P, and what `/` becomes once
-# boot has mounted it. `#/boot` is a different thing and holds one file.
+# the host has attached it, before the first program runs.
 root=$here/root
 
 [ -x "$CC" ] || { echo "mk.sh: no wasi-sdk at $WASI_SDK (set WASI_SDK)" >&2; exit 1; }
@@ -78,7 +78,7 @@ LDFLAGS="--table-base=4128 --no-entry --export=_start --import-memory --export-m
 # this machine runs it, its commands and rc (docs/packages.md) — at
 # `/pkg/system/<version>/`, laid out as the root it binds onto: `$objtype/bin`
 # onto `/bin`, `lib` onto `/lib`, both by `/profile/start.ns`. `init` stays
-# at `/$objtype/init`, outside it, because boot runs it before any `/bin`
+# at `/$objtype/init`, outside it, because the host runs it before any `/bin`
 # exists. The system's configuration is in `/profile`; each user's under
 # `/usr/<name>`, bound at `/home`. What older builds left — `/rc`,
 # `/lib/namespace`, `/$objtype/bin`, `/lib/rcmain` — is cleared.
@@ -87,7 +87,8 @@ VERSION=2026.09.24
 pkg=$root/pkg/system/$VERSION
 rm -rf "$root/rc" "$root/lib/namespace" "$root/lib/rcmain" "$root/$OBJTYPE/bin" \
 	"$root/pkg/system" "$root/profile" "$root/usr/kitty/profile"
-mkdir -p "$build" "$build/boot" \
+rm -rf "$build/boot"
+mkdir -p "$build" \
 	"$pkg/$OBJTYPE/bin" "$pkg/lib" "$root/$OBJTYPE" "$root/lib" "$root/profile" "$root/home" \
 	"$root/usr/kitty/profile" "$root/etc" "$root/tmp"
 
@@ -140,10 +141,6 @@ export CC LD AR CFLAGS LDFLAGS build pkg root OBJTYPE WASMOPT ASYNCIFY
 python3 "$here/mkfile.py" libs libc
 python3 "$here/mkfile.py" cmds
 
-# `boot` is the one file `#/boot` carries, as Plan 9's kernel carries
-# `/boot/boot` and nothing else; this machine's, not Plan 9's (`boot/`).
-cc "$here/cmd/boot.c" "$build/boot.o"
-link "$build/boot/boot" "$build/boot.o"
 # `args`, a test's: what a program is given
 cc "$here/cmd/args.c" "$build/args.o"
 link "$pkg/$OBJTYPE/bin/args" "$build/args.o"
@@ -224,7 +221,6 @@ if [ -s "$failed" ] && command -v cargo >/dev/null; then
 	fi
 fi
 
-echo "mk.sh: #/boot: $(ls "$build/boot" | tr '\n' ' ')"
 echo "mk.sh: /pkg/system/$VERSION/$OBJTYPE/bin: $(ls "$pkg/$OBJTYPE/bin" | wc -l) programs"
 if [ -s "$failed" ]; then
 	echo "mk.sh: $(wc -l <"$failed") did not build (build/failed):"

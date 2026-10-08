@@ -33,14 +33,8 @@ fn typing(keys: &str) -> String {
     let store = ipnx::rootcopy();
     let term = ipnx::Term::typing(keys);
     let fs = ipnx::store::Store::new(store).expect("no userspace/root — run userspace/mk.sh");
-    ipnx::startboot(
-        &[ipnx::BOOT.to_string()],
-        &[],
-        &[],
-        Box::new(term.clone()),
-        Some(Box::new(fs)),
-    )
-    .expect("the system did not boot");
+    ipnx::startboot(&ipnx::plan9ini(&[]), Box::new(term.clone()), Some(Box::new(fs)))
+        .expect("the system did not boot");
     term.screen()
 }
 
@@ -122,9 +116,13 @@ fn demo() -> Vec<Behaviour> {
             state: Reached,
             how: "the names it holds come back",
             check: Some(|| {
+                // each name a line of its own: `ls` prints one a line, and a
+                // name found inside another (`rc` in `proc`) is not there
                 let out = typing("ls /\n");
-                for name in ["boot", "bin", "dev", "env", "proc", "srv", "etc", "rc"] {
-                    wants(&out, name)?;
+                for name in ["bin", "dev", "env", "proc", "srv", "etc", "pkg", "profile"] {
+                    if !out.lines().any(|l| l.trim_end() == format!("/{name}") || l.trim_end() == name) {
+                        return Err(format!("no {name:?} in {out:?}"));
+                    }
                 }
                 Ok(())
             }),

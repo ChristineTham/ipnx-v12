@@ -94,11 +94,6 @@ pub enum DevId {
     /// connection. This is a 9legacy device — not in `plan9-stock` — and it
     /// is configured into the shipped kernels (`pc/pcf:11`).
     Virtio9p,
-    /// `#t` — uart: serial lines, `eia0` and its `ctl` and `status` for each
-    /// (`port/devuart.c`). The hardware behind one is a `PhysUart` the host
-    /// supplies, as Plan 9's is the i8250 the PC has; its far end is the
-    /// surface.
-    Uart,
 }
 
 impl DevId {
@@ -114,7 +109,6 @@ impl DevId {
             DevId::Cons => 'c',
             DevId::Cap => '\u{a4}',
             DevId::Virtio9p => '9',
-            DevId::Uart => 't',
         }
     }
 
@@ -133,7 +127,6 @@ impl DevId {
             DevId::Cons => "cons",
             DevId::Cap => "cap",
             DevId::Virtio9p => "virtio9p",
-            DevId::Uart => "uart",
         }
     }
 
@@ -149,7 +142,6 @@ impl DevId {
             'c' => DevId::Cons,
             '\u{a4}' => DevId::Cap,
             '9' => DevId::Virtio9p,
-            't' => DevId::Uart,
             _ => return None,
         })
     }
@@ -368,7 +360,7 @@ mod tests {
     fn every_letter_round_trips() {
         for d in [
             DevId::Root, DevId::Pipe, DevId::Srv, DevId::Mnt, DevId::Proc, DevId::Dup,
-            DevId::Env, DevId::Cons, DevId::Cap, DevId::Virtio9p, DevId::Uart,
+            DevId::Env, DevId::Cons, DevId::Cap, DevId::Virtio9p,
         ] {
             assert_eq!(DevId::from_letter(d.letter()), Some(d));
         }
@@ -377,10 +369,11 @@ mod tests {
 
 /// `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and it starts
 /// EMPTY**: `kstrdup(&eve, "")` in `userinit` (`pc/main.c:285`), with the
-/// first process's user a copy of it (`:287`). It is `boot` that names the
+/// first process's user a copy of it (`:287`). Plan 9's `boot` names the
 /// host owner, by writing `#c/hostowner` with `$user` or, failing that,
-/// `"glenda"` (`bootauth.c:56`); `hostownerwrite` lets it because `iseve()`
-/// is then comparing two empty strings (`auth.c:128`).
+/// `"glenda"` (`bootauth.c:56`); here the host does, before the first
+/// program runs. `hostownerwrite` lets it because `iseve()` is then
+/// comparing two empty strings (`auth.c:128`).
 ///
 /// A comment here once cited `auth.c:10` as `char *eve = "bootes"`, which is
 /// **not in this tree** — 9legacy has a bare `char *eve;`. The value was a

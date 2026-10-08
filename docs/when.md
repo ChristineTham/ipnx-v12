@@ -5,16 +5,18 @@ other document carries it.
 
 Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 
-## The kernel — 20,750 lines of Rust, no dependencies
+## The kernel — 19,581 lines of Rust, no dependencies
 
-14,761 of them outside the test modules.
+13,681 of them outside the test modules (2026-10-08, after the uart and
+`#/boot` went; `testfs.rs`, the tests' file server, is a test module).
 
 | | |
 |---|---|
 | `chan.rs` | `Chan` — the object every name resolves to; `ismtpt`, so a mount point is neither removed nor renamed (`sysfile.c:1151`, `:1181`) |
 | `dev.rs` | the device table, Plan 9's `struct Dev`; eleven letters (`/ \| s M p d e c ¤ 9 t`); `devdir`, `devdirread`, `cclone`, `devpermcheck`, which `devopen` runs for every file in a device's table (`dev.c:371`), and `devstat`'s answer for a directory (`dev.c:281`). And the kernel's libc and `parse.c`: `atoi`, `strtoul`, `tokenize`, `parsecmd`, `lookupcmd` and `cmderror` |
 | `ns.rs` | the namespace, keyed by the identity of the channel mounted upon, in `MNTHASH` chains of mount heads held by reference (`portdat.h:490`) — and a union is a LIST: `cmount` puts the directory itself in first, copies a union when one is bound onto a directory, and refuses an inconsistent mount (`Emount`); `cunmount` and its two errors; `pgrpcpy`'s copy, sharing the channels and numbering the mounts again in order; `closepgrp` |
-| `devroot.rs` | `#/` — `#/` and `boot` from `rootdir[]`, plus the ten empty directories `rootreset` adds for a first process to bind onto; every file is eve's `0555`, so an open for writing is `devopen`'s `Eperm` |
+| `devroot.rs` | `#/` — the ten empty directories `rootreset` adds for a first process to bind onto, and nothing else: no `boot` and no files, because the host attaches the root before the first program runs (2026-10-08); every entry is eve's `0555`, so an open for writing is `devopen`'s `Eperm` |
+| `testfs.rs` | for the tests only: their root, a read-only tree held in memory and served in 9P over `#9/0`, mounted by pid 1 with the calls the host makes for the store |
 | `qio.rs` | `qio.c`'s queues, for every device that streams: `qread`, `qwrite`, `qproduce`, `qconsume`, the kick, `qhangup`, `qclose`, `qreopen`, `qflush`, `qsetlimit`, `qnoblock`, and `Qcoalesce` |
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed. Each end is a `qio` queue: a read of an empty pipe **sleeps** on `q->rr` until a write wakes it, and the last close of an end hangs up the other (`pipeclose`, `devpipe.c:247`), which is end of file once what was queued is read. Eve may change both ends' mode (`pipewstat`, `devpipe.c:181`) |
 | `devproc.rs` | `#p` — the process table as files: **twelve of `procdir[]`'s eighteen** (`devproc.c:79`), and the table says why each of the other six is absent. Each file's mode is `procgen`'s — `ctl`, `note` and `notepg` take the process's `procmode`, `0640` — checked at the open (`devproc.c:471`), and changed by `procwstat`. `ns` prints the bind lines that rebuild the namespace — paths, `int2flag`'s letters, and `mount <flag> <server> <on> <spec>` with `srvname`. `ctl` is `lookupcmd` over `proccmd[]` (`devproc.c:102`); the real-time scheduler's messages are not built |
@@ -22,11 +24,10 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 | `devmnt.rs` | `#M` — the 9P client: version, attach, a walk of up to `MAXWELEM` names, open, read and write in a loop, and a clunk that waits for `Rclunk`; an RPC a note interrupts is flushed (`mountio`, `devmnt.c:782`). A walk the server refuses leaves no fid to clunk (`devmnt.c:410`). Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
 | `devsrv.rs` | `#s` — post a file descriptor's NUMBER (`strtoul`'s), and an open of the name answers the posted channel itself, shared with the poster (`devsrv.c:135`). Its owner or eve renames it (`srvwstat`); it is removed by `srvremove`'s rules, and removing it closes what was posted |
-| `devuart.rs` | `#t` — serial lines, `port/devuart.c`: `eia%d`, `eia%dctl` and `eia%dstatus` for each; input staged and `qproduce`d by `uartclock` every 22ms, output `qconsume`d by the transmitter; all of `uartctl`'s commands, with the ones that wait for output to drain sleeping on the uart's `Rendez`. The hardware is a `PhysUart` the host supplies; its interrupt handler is called at clock time (RESEARCH §16.20). The last close waits for the output to drain, and a note ends the wait (`uartclose`, `devuart.c:319`) |
 | `devvirtio9p.rs` | `#9` — a channel to a 9P server the MACHINE provides. It marshals nothing: `#M` writes a T-message down it and reads the R-message back, as it would down a TCP connection |
 | `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` answers the channel fd 3 holds — the same one, offset and all — in the mode it is open in (`devdup.c:86`), so a dup IS an open. A ctl file reads as the descriptor's `/proc/n/fd` line |
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares; and `#ec`, the kernel configuration group, which nothing fills yet |
-| `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. `boot` names the host owner by writing `#c/hostowner` (`bootauth.c:56`), so `$user` is `kitty` — the host's `plan9.ini` says `user=kitty` (`plan9ini`, `hosts/ipnx/src/lib.rs`); Plan 9's fallback, `glenda`, is for one that names none — and not the role's own name |
+| `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. The host names the host owner by writing `#c/hostowner`, as Plan 9's `boot` does (`bootauth.c:56`), so `$user` is `kitty` — the host's `plan9.ini` says `user=kitty` (`plan9ini`, `hosts/ipnx/src/lib.rs`); Plan 9's fallback, `glenda`, is for one that names none — and not the role's own name |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators. `kprint` is a queue that takes the console's output while it is open (`devcons.c:166`) |
 | `namec.rs` | name → channel, with the mount check at every component, closing each channel a walk makes once it steps past it (`chan.c:1109`); all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk, where a device's walk that errs is a miss, as `ewalk`'s is (`chan.c:948`; 2026-09-24); `validname`'s characters (`chan.c:1731`) and `namelenerror`'s form of a name in an error (`:1250`) |
 | `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s. **And the clock** (2026-09-22): `Mach` (`pc/dat.h:206`, the fields `port/` reads), `timersinit`, `hzclock`, `accounttime`, `hzsched`, `rebalance`, `anyhigher`, and `sched`'s tail with `m->schedticks`. `pexit` takes the descriptor table, `dot` and the namespace (`proc.c:1145`) and answers what was their last reference, for the kernel to close; `rfork` without `RFPROC` the same of the tables it replaces; `clunkq` (`chan.c:517`) takes what a kill leaves unclosed and what `#p`'s `ctl` closes. The kernel processes share `kpgrp` (`proc.c:1469`) and have no descriptor table. The descriptor table grows `DELTAFD` at a time to 5000 (`growfd`, `sysfile.c:25`) and holds references: a channel's device is closed at its last |
@@ -34,7 +35,7 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 31 calls, `exec`, and `unionread` |
 
-291 kernel tests, and 67 in `hosts/ipnx`.
+281 kernel tests, and 65 in `hosts/ipnx` (2026-10-08, after the uart's went).
 
 ## The host — `hosts/ipnx`, five files
 
@@ -45,12 +46,11 @@ image run again is not compiled again (2026-09-24; RESEARCH §15.12) — a
 booted session running three `echo`s went from 19.5s to 9.2s in a debug
 build; what is left is compiling each distinct image once per boot. `store.rs` is the
 filesystem the machine serves — qemu's `-fsdev local` half, a host directory
-exported over 9P. `uart.rs` is `#t`'s hardware: a line whose far end is a
-thread of the host's — the surface, or a test — and the chip at the
-kernel's end, doing what the i8250's functions do (`uarti8250.c`). `lib.rs` is `startboot` (`initcode.c:21`): the device
+exported over 9P. `lib.rs` is `startboot` (`initcode.c:21`): the device
 table — which is what a Plan 9 kernel's configuration file is, `mkdevc`
 turning a `dev` list into `devtab[]` — three opens of `#c/cons`, the binds,
-the mount, and `exec`.
+then Plan 9's `boot`'s part — the host owner, the root posted as `#s/root`
+and mounted, and `exec` of init.
 
 ```
 % cargo run -p ipnx -- echo hello </dev/null
@@ -60,8 +60,9 @@ hello
 **A command on the host's command line boots the whole system** (2026-09-24;
 RESEARCH §15.11). The host puts it in its configuration as `plan9.ini`'s
 `init=` line would — `init=/wasm/init -t 'echo hello'`, into `#e` and `#ec`
-as `pc/main.c:257` does — `boot` reads `$init` and tokenizes it into init's
-arguments (`boot.c:208`), and `init` runs the command with `rc -c`
+as `pc/main.c:257` does — the host reads `$init` and tokenizes it into
+init's arguments, as Plan 9's `boot` does (`boot.c:202`), and `init` runs
+the command with `rc -c`
 (`init.c:171`) in the namespace it built, then the interactive shell as
 Plan 9's `init` does. Before, the host exec'd `/bin/<command>` as pid 1
 before anything had mounted the store, and since the commands moved onto
@@ -331,7 +332,7 @@ mkfiles, and every linked image run through `wasm-opt --asyncify` (RESEARCH
 
 | | |
 |---|---|
-| `mk.sh` | the build: libc, then `mkfile.py libs` and `mkfile.py cmds`, then `boot`, `args` and rc; then **a second pass**, in which `ipnx` is built and what failed is built again — because some sources are made by Plan 9 programs (libsec's curves by `mpc`), and the recipe runs on this system, as Plan 9 builds itself with itself. What does not build is written to `build/failed` with its reason, and the build goes on, as `mk -k` does |
+| `mk.sh` | the build: libc, then `mkfile.py libs` and `mkfile.py cmds`, then `args` and rc; then **a second pass**, in which `ipnx` is built and what failed is built again — because some sources are made by Plan 9 programs (libsec's curves by `mpc`), and the recipe runs on this system, as Plan 9 builds itself with itself. What does not build is written to `build/failed` with its reason, and the build goes on, as `mk -k` does |
 | `mkfile.py` | reads each mkfile as mk does — continuation, comments per physical line, `<` includes, `${VAR:a%b=c%d}`, backquotes (rc's `reduce` done natively), `DIRS` below first, `cc` first in `cmd` — and builds what it declares: `mksyslib`/`mklib` libraries (members added, `ar vu`), `mkone`, `mkmany` (with the prerequisites a recipe-less rule adds, as mk merges them: `plumb/mkfile`'s `$O.plumber: $PLUMBER`), the one-file programs of `cmd/mkfile`, explicit `$O.x:` links and `%.$O: ../cc/%.c` metarules; `init` to `/$objtype/init` (`cmd/mkfile:116`) |
 | `kencc.py` | **Plan 9's C as clang compiles it**, a derivation into `build/kencc/` (RESEARCH §16.10): `-Dconst=`; every unnamed member written `union { T; T T; }` — or only named where kencc's lookup would find another member first; the conversions kencc promotes, written `&(E)->T` from clang's own diagnostics; absolute includes; old designators; block-scope `static`; prototypes that disagree with their definitions; and string literals as writable data, as kencc's are (`8c/swt.c:106`) — IR with the optimiser off, `@.str` made `internal global`, then optimised; a file's `end` is the loader's, which wasm-ld calls `__heap_base` (RESEARCH §16.18) |
 | `wasm/include/u.h`, `wasm/mkfile` | the **wasm32 architecture**: 386's `u.h` with clang's `va_list`, a `jmp_buf` whose address the machine keys its saved stack by, and 386's FP constants |
@@ -344,13 +345,15 @@ mkfiles, and every linked image run through `wasm-opt --asyncify` (RESEARCH
 | `profile/`, `usr/kitty/profile/`, `etc/motd`, `pkg/system/pkg.cfg` | the system's configuration and kitty's (P7 step 1; docs/packages.md), and the `system` package's description |
 | `cmd/pkg`, `cmd/service`, `cmd/template` | the commands written in rc that are not Plan 9's (P7 steps 3–5), installed in the `system` package's `rc/bin` |
 
-**The system boots itself.** `cargo run -p ipnx` is `initcode.c:21` and nothing
-more — three opens of `#c/cons`, four binds, and `exec("/boot/boot")`.
-Everything after that line is the system's own:
+**The system boots itself.** `cargo run -p ipnx` is `initcode.c:21` — three
+opens of `#c/cons` and four binds — and then **Plan 9's `boot`, done by the
+host** (2026-10-08): it names the host owner, posts `#9/0` as `#s/root`,
+mounts it at `/root` and binds it after `/`, and runs `/wasm/init`.
+Everything after that is the system's own:
 
 | | |
 |---|---|
-| `boot` | mounts `#9/0` at `/root` and binds it onto `/`, so **the root is a file server** (`boot.c:151`) |
+| the host | names the host owner and attaches `#9/0` as `/`, so **the root is a file server** — Plan 9's `boot` (`boot.c:284`–`:296`), done before the first program runs |
 | `init` | reads `#c/user`, calls `newns` — and starts `rc` (`init.c:23`), whose first job is `/profile/start.rc` then `/home/profile/start.rc`; when the last shell ends, `/home/profile/stop.rc` then `/profile/stop.rc` |
 | `/profile/start.ns` | what the namespace IS: every mount and bind, as a file (`newns`, `libauth/newns.c:35`; Plan 9's `/lib/namespace`) |
 | `/profile/start.rc` | what a terminal wants on top of it (Plan 9's `rc/bin/termrc`) |
@@ -373,8 +376,8 @@ Saranos.
 `IPNX_STORE`) over 9P — as `u9fs` does, and after it since 2026-09-24: a
 stat is the host file's own times, mode and inode, a `Twstat` changes the
 mode, the mtime, the name and the length, and reads and writes are at
-their offset (RESEARCH §16.9) — `#9/0` is the channel to it, and `boot` mounts it
-exactly as `boot.c:171` does. `ls /` shows both halves because `unionread`
+their offset (RESEARCH §16.9) — `#9/0` is the channel to it, and the host mounts it
+exactly as Plan 9's `boot` does (`boot.c:152`). `ls /` shows both halves because `unionread`
 reads every element. A file written under `/tmp` is a file on the host, so it
 is still there after the next boot.
 
@@ -410,21 +413,20 @@ fixtures, because a behaviour is reached when a person can do it.
 
 **P5 is done — the CLI.** Typing `ipnx` boots to `rc` on the terminal; `ls`,
 `cat /etc/motd` and the demo's commands run. The boot is the system's own:
-`boot`, `init`, `/profile/start.ns` and `/profile/start.rc`, with the embedding
-reduced to `initcode.c`'s nine lines.
+`init`, `/profile/start.ns` and `/profile/start.rc`, after the host has done
+`initcode.c`'s nine lines and `boot`'s part (2026-10-08).
 
 **P6 is the scheduler** — added 2026-09-21, before the registries, because the browser host is a worker per process and that IS P6's machine boundary. P7 is packages, services, templates, projects and profiles; P8 is emca and the browser.
 
 **P7 is built but for identity** (2026-09-29). Step 1, the profiles: `/profile` and `/home/profile` with `start.ns`, and `start`, `shell` and `stop` each as a `.env` and a `.rc`, run in the order docs/packages.md gives — the user's `start.ns` added at login by `addns` — `/home` bound to `/usr/$user`, and `/rc` gone. Step 2, the `system` package (above). **Step 3, `pkg`**: install, remove, list and prune, to the system, the user or the namespace; `disk/mkfs -a` archives from a repository at `/n/pkg` named in `/profile/repository`, found in its ndb `index`, refused unless `sha1sum -2 256` matches, unpacked by `disk/mkext` into `/pkg/<name>/<version>/`, their `depend=`s first and marked `auto`; bound at once and from `/profile/pkg.ns` at every boot. **P7's acceptance passes**: a package installs as a bind, `pkg remove` unbinds it, and its files survive. **Step 4, `service`**: enable, disable, start and stop, `/service/<name>/`, `/profile/service` with Plan 9's `!`; the system's start at boot and stop at shutdown, the user's at login and logout; `user=none` runs one through `auth/none`. **Step 5, `template`**: instantiate — an included template first, the scaffolding, `project.cfg`, `install.rc` — and remove; a project is promoted by its own `pkg.rc` (the window type is P8's). **Step 6, identity, is not built**: `su` and `sudo` are defined over `auth/login`, which needs an authentication server over `/net` (docs/packages.md, *The forms*). Tested: `a_package_installs_as_a_bind_and_removes_as_an_unbind`, `an_enabled_service_starts_at_boot_and_stops_at_shutdown`, `a_template_makes_a_project_and_the_project_a_package`.
 
-**P8 step 1, the serial line, is built** (2026-09-29; RESEARCH §16.20).
-`#t` in the kernel and `eia0` on a host line; `/profile/start.rc` binds it
-onto `/dev` in termrc's device loop. `exportfs -r /lib` on `eia0` serves the
-tree to a 9P client at the far end, and the far end hanging up (with `c1`)
-ends it. Tested: `exportfs_serves_a_tree_down_the_serial_line`,
-`the_line_is_in_dev_after_boot`, and the device's own eight. Steps 2–5 —
-emca's IPNX half, the demo's types, `hosts/web`, the page as the surface —
-are not built.
+**P8 is not built.** Its first step was the serial line — `#t` in the
+kernel and `eia0` on a host line, built 2026-09-29 (RESEARCH §16.20) — and
+it is **removed** (2026-10-08, RESEARCH §16.33): it emulated hardware, and
+*"This is WASM we have no hardware we do not want to emulate hardware"*.
+Step 1 is now the host's devices — its screen, keyboard and mouse served
+over 9P as the store is — and it, emca's IPNX half, the demo's types,
+`hosts/web` and the page as the surface are not built.
 
 **A channel's mode, and who may open what** (2026-10-07; RESEARCH §16.21).
 `read` and `write` check a descriptor's open mode, `mount`, `fversion` and
@@ -488,8 +490,8 @@ mount hangs its pipe up, and the server reads end of file. `fversion` takes
 no hold. A close made where it cannot wait — inside another close, or in a
 call that may run again from the top — is made next by the loop or the
 call's end, once. The uart's last close waits for the line to drain, as
-`uartclose` does, and a note ends the wait; the register's item for it is
-gone. A kill during `exits` lets the close in progress finish and queues
+`uartclose` does, and a note ends the wait (the uart was removed later the
+same day). A kill during `exits` lets the close in progress finish and queues
 only the rest. Not built: `Tflush` for an interrupted RPC, and several
 names to a `Twalk`.
 

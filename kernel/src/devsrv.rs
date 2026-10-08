@@ -29,6 +29,13 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 const EPERM: &str = "permission denied";
+
+/// **The root file server's channel, as posted** — Plan 9's `#s/boot`
+/// (`boot/boot.c:144`, `srvcreate("boot", fd)`), named `root` here
+/// (Christine, 2026-10-08), because `boot` is the Unix bootloader's name.
+/// The host posts it before the first program runs, and every new
+/// namespace mounts the root from it (`/profile/start.ns`).
+pub const ROOTSRV: &str = "root";
 const EEXIST: &str = "file already exists";
 const ENONEXIST: &str = "file does not exist";
 /// `Eshutdown` (`error.h:7`).
@@ -366,6 +373,8 @@ impl Dev for SrvDev {
 
     /// `srvremove` (`devsrv.c:186`): unposting, by whoever may. *"Only eve
     /// can remove system services. No one can remove #s/boot."* (`:209`) —
+    /// the root's channel, which this system posts as `#s/root` (Christine,
+    /// 2026-10-08), so that is the name no one can remove —
     /// and *"No removing personal services"* (`:218`): a name others may
     /// not write is its owner's or eve's to remove. The name goes, so a
     /// later open finds nothing rather than a dead server, and the posted
@@ -385,7 +394,7 @@ impl Dev for SrvDev {
         if sp.owner == eve && !iseve {
             return Err(EPERM.into());
         }
-        if sp.name == "boot" {
+        if sp.name == ROOTSRV {
             return Err(EPERM.into());
         }
         if sp.perm & 7 != 7 && sp.owner != user && !iseve {

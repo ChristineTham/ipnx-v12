@@ -9,7 +9,7 @@
 
 # bind all likely devices (`termrc:12`), Plan 9's list as it is: a letter
 # this kernel does not have fails, silently, as it does on a terminal
-# without that hardware. `#t` is the serial line the surface is on.
+# without that hardware.
 for(i in f t m v L P u U '$' Σ κ)
 	/bin/bind -a '#'^$i /dev >/dev/null >[2=1]
 
