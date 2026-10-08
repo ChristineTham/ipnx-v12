@@ -480,3 +480,11 @@ On running host commands, the same day:
   <br>— cited in `docs/proposals.md`, `RESEARCH.md` §16.36
 - *"That's why I said we are not creating or emulating devices. You have the wrong model"*
   <br>— cited in `docs/proposals.md`, `RESEARCH.md` §16.36
+
+Answering the three questions put to her that afternoon — whether a host binary runs by `exec` like any other, whether the host is handed the binary's file rather than its bytes, and whether a host program's environment is the host's with `/env` laid over it:
+
+- *"1. no 2. yes 3. yes (overlay)"*
+  <br>— `docs/saranos.md`, `docs/proposals.md`, `RESEARCH.md` §16.36
+- selected *"A call to the host"* — not `exec`: a wasm program asks the host to start a host command, gets its input, output and error back as descriptors, and carries on; one call beside the system calls
+  <br>— `docs/saranos.md`
+- selected *"Yes, now"* — rewrite the documents' guest framing: architecture.md's trust contract, and "guest" wherever it describes the system

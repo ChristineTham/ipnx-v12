@@ -89,7 +89,7 @@ opens a window whose namespace has the project's packages bound.
      `StartProcess` returns `ENOSYS`). A program built with Go or C is one
      standalone file, and runs; Go's toolchain built for WASI cannot build
      one, because `go` starts `compile` and `link` (RESEARCH §16.36). The
-     host's own toolchain builds, run as a host binary — *"There no need to
+     host's own toolchain builds, run as a host command — *"There no need to
      port the go and c toolchain to WASM when the host can do it so much
      better"* (Christine) — below, *Running host commands*.
    - `pip install` cannot reach the network: WASI preview 1 has no outbound
@@ -110,91 +110,53 @@ opens a window whose namespace has the project's packages bound.
    2. Which browser engine: `@bjorn3/browser_wasi_shim` (recommended, for
       its one-to-one `Fd`) or `@tybys/wasm-util`?
 
-**Running host commands** — proposed 2026-10-08 (RESEARCH §16.36). Christine:
-*"I want our wasm binary to be able to instantiate and run a host command"*,
-*"Also be able to pipe in and out of host commands etc?"*, and the model it
-follows from: *"we are not trying to create some … artificial or synthetic
-guest environment isolated from the host. We are in symbiosis with the host.
-Our wasm binaries can access host resources and invoke host binaries"*;
-*"That's why I said we are not creating or emulating devices."* So there is
-no device for it, no file to open and no command in front of it, and no
-toolchain built for wasm: a host binary is run the way every binary is.
+**Running host commands** — what is open, proposed 2026-10-08 (RESEARCH
+§16.36). Decided the same day, and now in [saranos.md](saranos.md), *The
+host's resources*: a call to the host starts a host command; the program gets
+its input, output and error back as descriptors and carries on; the host runs
+the binary from its own file; its environment is the host's with `/env` laid
+over it.
 
-1. **`exec` runs it.** rc runs `go build` as it runs `cat`. The kernel
-   already hands every image that is not a `#!` script to the host, which
-   alone knows what it can run and refuses the rest with `Ebadexec`
-   (`kernel/src/lib.rs`, `exec_read`; Plan 9 tests its own binary's magic,
-   `sysproc.c:313`–`:316`, then `#!`, `:343`). The host knows its own
-   binaries — ELF on Linux, Mach-O on a Mac — and starts one as a host
-   process where it would have instantiated a module. No program changes;
-   the kernel changes only as question 2 asks.
-2. **Its standard input, output and error are the process's descriptors 0,
-   1 and 2** — a pipe, a file, the console — so piping in and out is
-   ordinary rc: `ls | sort`, `sort <x | uniq -c >y`, any of them the host's.
-   The host copies between those and the host program's own, as Inferno's
-   `os` does (*"Os copies the standard input to the remote command's
-   standard input"*, `man/1/os`). The process stays a process — its pid,
-   its notes, its exit status — so `$status`, `&&` and `||` work, and an
-   interrupt reaches the host program.
-3. **What has to be translated, Plan 9 already translates for a Unix
-   program** — APE, its layer for running them:
-   - the environment from `/env`, a file to a variable, the zero bytes
-     that separate a list made ones (`ape/lib/ap/plan9/_envsetup.c:15`,
-     `:82`–`:84`);
-   - the exit status: a non-zero code is its number as a string, zero is
-     success (`_exit.c:27`–`:28`);
-   - notes as signals: `interrupt` is `SIGINT`, `hangup` `SIGHUP`, `kill`
-     `SIGKILL` (`signal.c:16`–`:36`).
-4. **Its files are the host's.** It starts in the process's directory,
-   which is a host directory when it is on the store — the home, a
-   project. The host serves its own root as it serves the store, for a
-   profile to bind — Inferno's `#U*`, *"the root of the host system"*
-   (`man/3/fs`) — and a profile adds the host's directories of programs to
-   `/bin` with `bind -a`, so a name in both is ours and a name only the
-   host has is the host's: `ls` is IPNX's, `go` the host's.
-5. **The precedent is WSL's**: *"WSL can run Windows tools directly from
-   the WSL command line"*, and *"ipconfig.exe | grep IPv4 | cut -d: -f2"*
-   (`MicrosoftDocs/WSL`, `WSL/filesystems.md:115`, `:129`). Plan 9 has no
-   host to run anything on. Inferno, which has, made it a device, `cmd(3)`
-   — which is the model this is not.
+1. **A command is named as `execvp` names one**: a bare name the host finds
+   on its `PATH` — the overlaid environment's, so the host's own unless the
+   program sets one — and a name with a `/` in it resolved in the program's
+   namespace, the kernel handing the host that file rather than its bytes.
+2. **Its exit status, and stopping it, through a fourth descriptor.** Reading
+   it waits for the command to end and gives its status, a non-zero code as
+   its number, as APE does (`ape/lib/ap/plan9/_exit.c:27`–`:28`); writing a
+   note to it signals the command, `interrupt` as `SIGINT` and `kill` as
+   `SIGKILL` (APE's table, `signal.c:16`–`:36`). A Plan 9 process has the
+   same two: its `wait` file, *"read to recover records from the exiting
+   children"*, and its `note` file, whose strings are *"posted as a note to
+   the process"* (`man/3/proc:163`, `:202`).
+3. **Its directory is the program's current one**, which the kernel hands
+   the host as it hands a binary. A directory the host does not serve has no
+   host path, and there the call fails, saying so.
+4. **rc's way in is Inferno's `os`**: `os [-d dir] cmd [arg …]` makes the
+   call and copies between its own descriptors and the command's, as
+   Inferno's does (*"Os copies the standard input to the remote command's
+   standard input"*, `man/1/os`), and exits with the command's status. So
+   `os go build | grep error` and `cat x | os sort` are ordinary rc, and rc
+   does not change.
 
 *What does not work, or not yet:*
-- **The host needs the binary's own path, and `touser` is given its
-  bytes.** A host program finds its files from where it is: a Mac
-  program's libraries are named from it (`@executable_path`, dyld(1)), and
-  `go` looks for its `GOROOT` above itself before it falls back to the one
-  it was built with (`cmd/go/internal/cfg/cfg.go:519`–`:560`). Plan 9's
-  exec keeps the image's channel (`attachimage(SG_TEXT|SG_RONLY, tc, …)`,
-  `sysproc.c:530`), and its qid tells the server that served it which file
-  it is. Question 2.
-- **`PATH`.** By APE's rule the host program gets rc's variables, and rc's
-  `path` is a list of IPNX directories, in lower case; a host program that
-  finds another by `PATH` — `make` running `cc` — needs the host's.
-  Question 3.
-- **A host script's `#!` line names a host path** — `#!/usr/bin/env
-  python3` — and the kernel reads `#!` itself and resolves the name in the
-  namespace, where `/usr` holds the users' directories. `python3 script`
-  works.
-- **No terminal.** The host program's input and output are pipes, so one
-  that wants a terminal — `vi`, `top`, Python's prompt — has none.
-- **`exec` reads the whole image first** — 14.3 MB for `go` — before the
-  host sees that it is one of its own.
-- **A WASI program cannot run one**: WASI has no way to start a process, so
-  Python's `subprocess` fails under WASI, even for a host binary (*Go and
-  Python*, above).
-- **The browser, the iPad and the iPhone have no host binaries**: a page
-  cannot start a process, and iOS does not let an app. There, `exec` of a
-  host binary is `Ebadexec`, as for any image the host cannot run.
+- **How the host fills the descriptors** is to be built: the only host input
+  the kernel takes today is the console's, at clock time (`kbdputcclock`,
+  `devcons.c:556`).
+- **No terminal.** The command's input and output are pipes, so one that
+  wants a terminal — `vi`, `top`, Python's prompt — has none.
+- **A WASI program cannot make the call**: unmodified, it knows only WASI's
+  calls, and WASI has none that starts a process, so Python's `subprocess`
+  fails under WASI (*Go and Python*, above).
+- **The browser, the iPad and the iPhone have no host commands**: a page
+  cannot start a process, and iOS does not let an app. There the call fails.
 
 *The questions:*
-1. A host binary run by `exec`, like any other — yes?
-2. Its path: give `touser` the image's channel as well as its bytes, as
-   Plan 9's exec keeps it (recommended; a change to the kernel's interface
-   to the host), or run a copy of the bytes (no change; a program that
-   looks beside itself does not find what it looks for)?
-3. Its environment: the host's own with the process's `/env` over it, each
-   variable by APE's rule (recommended — `x=y cmd` reaches the program, and
-   `PATH` stays the host's unless set), or `/env` alone, as APE has it?
+1. Naming as `execvp` does — a bare name on the host's `PATH`, a path in the
+   namespace handed over as the file — yes?
+2. Exit status and stopping it through a fourth descriptor, read for the
+   status and written with a note — yes?
+3. Inferno's `os` as rc's way in — yes?
 
 **The wasm32 `Ureg`, and APE's signal trampoline** — proposed 2026-09-25.
 Built, and awaiting review, because each is a machine-dependent file Plan 9

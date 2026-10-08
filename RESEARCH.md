@@ -5981,8 +5981,12 @@ and invoke host binaries"*; *"That's why I said we are not creating or
 emulating devices. You have the wrong model"* — after *"There no need to
 port the go and c toolchain to WASM when the host can do it so much
 better"* and *"No I don't want a WASM toolchain, I want our wasm binary to
-be able to instantiate and run a host command"*. The proposal is in
-`docs/proposals.md`; what it rests on is here.
+be able to instantiate and run a host command"*. Asked the same day, she
+chose **a call to the host** over running a host binary by `exec`; the host
+running the binary from its own file rather than a copy of its bytes; and the
+host's environment with `/env` laid over it. The decided design is in
+`docs/saranos.md`, what is open in `docs/proposals.md`; what they rest on is
+here.
 
 **Measured: Go's toolchain built as WASI programs cannot build**, which is
 why the toolchain is the host's. go1.24.7's `cmd/go`, `cmd/compile` and
@@ -5995,12 +5999,12 @@ down a pipe, and a WASI program can make neither. `compile`, run by hand
 with an `-importcfg` naming the standard library's export data, compiles;
 `link` crashed the engine (Node, `SIGSEGV`), not pursued.
 
-**exec already hands the host every image that is not `#!`.** Plan 9's
-`sysexec` tests its own binary's magic (`port/sysproc.c:313`–`:316`), then
-`#!` (`:343`); this kernel tests `#!` and gives the rest to `touser`, which
-refuses what the host cannot run with `Ebadexec` (`kernel/src/lib.rs`,
-`exec_read`). A host that knows its own binaries — ELF, Mach-O — can start
-one there with no program changed.
+**`exec` could have done it, and was not chosen.** Plan 9's `sysexec`
+tests its own binary's magic (`port/sysproc.c:313`–`:316`), then `#!`
+(`:343`); this kernel tests `#!` and gives the rest to `touser`, which refuses
+what the host cannot run with `Ebadexec` (`kernel/src/lib.rs`, `exec_read`).
+A host that knows its own binaries could start one there — but the program
+`exec`ing it would be gone, and the call she chose leaves it running.
 
 **The host needs the binary's path, and `touser` is given its bytes.**
 `go` looks for its `GOROOT` above its own executable — *"cmd/go may be
@@ -6017,7 +6021,11 @@ have 0 bytes in them (notably $path); we change them to 1's (and execve
 changes back)"* (`ape/lib/ap/plan9/_envsetup.c:14`–`:16`, `:82`–`:84`); a
 non-zero exit code to its number as the exit string (`_exit.c:27`–`:28`);
 notes to signals, `interrupt` to `SIGINT`, `kill` to `SIGKILL`, `term` to
-`SIGTERM` (`signal.c:15`–`:36`).
+`SIGTERM` (`signal.c:15`–`:36`). And a Plan 9 process already has the two
+files a running command's status and stopping need: `wait`, *"read to recover
+records from the exiting children of the process"*, and `note`, whose
+*"Strings … will be posted as a note to the process"* (`man/3/proc:163`,
+`:201`–`:203`).
 
 **Precedents.** WSL's interop is the user-visible behaviour: *"WSL can run
 Windows tools directly from the WSL command line using `[tool-name].exe`"*,

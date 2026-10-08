@@ -15,6 +15,10 @@ all, and neither does 9legacy.
 The input is Plan 9's `/sys/src/libc/9syscall/sys.h`, recorded verbatim in
 [RESEARCH.md](../RESEARCH.md) §2.
 
+**One call beside these is not the kernel's**: starting a host command is a
+call to the host (Christine, 2026-10-08; [saranos.md](saranos.md), *The host's
+resources*), and this list does not grow by it.
+
 ## The principle that sorts them
 
 In a hosted kernel **every** system call is a trap to the supervisor; the question per call

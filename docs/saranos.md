@@ -22,8 +22,8 @@ iPadOS app.
 **Saranos is the operating system** — the whole thing, and what someone would
 say they are running. **IPNX is the kernel and the userspace** — the wasm side.
 **emca is the windowing and UI system**, and it spans both sides by
-construction: `emca` the program is a guest, the surface that renders its tree
-is the host's.
+construction: `emca` the program is on the wasm side, the surface that renders
+its tree is the host's.
 
 | Apple | here | |
 |---|---|---|
@@ -39,6 +39,31 @@ the surface — *and* the wasm side. Neither exists without the other: the kerne
 is wasm and cannot run without a host to give it workers, memory and a screen;
 the host has nothing to do without the kernel. IPNX names only the wasm half,
 which is exactly why a second name was needed rather than a qualifier.
+
+## The host's resources
+
+**Christine's, 2026-10-08:** *"The whole point is we are not trying to create
+some of of artificial or synthetic guest environment isolated from the host.
+We are in symbiosis with the host. Our wasm binaries can access host resources
+and invoke host binaries"*; *"That's why I said we are not creating or
+emulating devices."*
+
+**A host command is started by a call to the host** — one call beside the
+system calls, chosen the same day over running it by `exec`:
+
+- the program names the command and its arguments, and the host starts it as
+  a host process;
+- the program gets the command's standard input, output and error back as
+  descriptors — to read, to write and to pass on, so a pipeline runs through
+  it — and carries on;
+- the host runs the binary from its own file, never a copy of its bytes,
+  because a host program finds its files from where it is;
+- its environment is the host's own with the process's `/env` laid over it
+  (*"yes (overlay)"*), each variable as APE makes one
+  (`ape/lib/ap/plan9/_envsetup.c:15`).
+
+Not built. What is still open is in [proposals.md](proposals.md), *Running
+host commands*. The browser, the iPad and the iPhone have no host commands.
 
 ## The names
 

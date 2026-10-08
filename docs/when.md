@@ -398,7 +398,7 @@ bind; the shell outside it does not), and **installing a package as a bind**
 Of the other six, three are P8's — several windows, actions by kind, the
 browser — and **three are built by no phase of
 [implementation.md](implementation.md)**: a Go program, Python, and building
-a program with a toolchain — the host's own, run by `exec` as a host binary —
+a program with a toolchain — the host's own, run as a host command —
 all three proposed and unreviewed ([proposals.md](proposals.md)).
 
 Two lines were corrected on 2026-10-08. *"A package becomes available

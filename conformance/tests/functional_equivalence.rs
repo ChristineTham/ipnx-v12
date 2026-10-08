@@ -233,8 +233,8 @@ fn demo() -> Vec<Behaviour> {
             // wasm-ld, as guests. `go run hello.go` drives the real gc
             // compiler and linker"*. (It streamed them in after boot, which
             // was how the page fetched 260 MB, not a feature.) The toolchain
-            // is the host's, run as a host binary is, by exec
-            // (docs/proposals.md, "Running host commands").
+            // is the host's, run as a host command (docs/saranos.md, "The
+            // host's resources"; what is open, docs/proposals.md).
             what: "build a program with a language toolchain, and run it",
             state: Proposed,
             how: "a compiler and linker make a program, and it runs",
