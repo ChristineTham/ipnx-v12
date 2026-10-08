@@ -461,3 +461,5 @@ On proposal 1, the same day:
   <br>— cited in `docs/proposals.md`
 - *"Alternatively we can build our own WASI engine but that is risky. Is there a way to expose /dev, /proc as files to wasmtime?"*
   <br>— cited in `docs/proposals.md`
+- *"For proposal 2 and 3 I don't understand why we need to cater for mounting packages without installing. Surely the whole point of having a template is to specify which packages need to be preinstalled, so why is there a need to have a toolchain in a session? Opening a project effectively opens a session with the right packages preinstalled. cd into a project does not install anything, it just views the files"* — proposals 2 and 3 withdrawn
+  <br>— cited in `docs/proposals.md`, `docs/when.md`

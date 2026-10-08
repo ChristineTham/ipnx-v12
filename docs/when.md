@@ -385,20 +385,30 @@ Fifty tests in `hosts/ipnx` (counted 2026-09-24: forty-five in the binary — mo
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
 and say so rather than passing quietly.
 
-## Functional equivalence to the demo — 5 of 12
+## Functional equivalence to the demo — 6 of 12
 
 The conformance suite lists twelve capabilities and **runs a check for every
 one it claims**: it boots the whole system on a scripted console and types at
 it, so a line reads `reached` only when a person really can do the thing, on
-this boot. The five: boot to a shell, list a directory, read a file, a
-pipeline, and per-process namespaces (`@{rfork n; bind /tmp/alt /etc}` sees
-the bind; the shell outside it does not). Of the other seven, three are P8's
-— several windows, actions by kind, the browser — and **four are built by no
-phase of [implementation.md](implementation.md)**: a Go program, Python, a
-package available without installing into the tree (P7's `pkg` copies into
-`/pkg`), and a toolchain arriving during a session. The suite labelled them
-P7 and P8, then *gap* (2026-10-07); it says *proposed* since their designs
-were written on 2026-10-08 ([proposals.md](proposals.md)), unreviewed.
+this boot. The six: boot to a shell, list a directory, read a file, a
+pipeline, per-process namespaces (`@{rfork n; bind /tmp/alt /etc}` sees the
+bind; the shell outside it does not), and **installing a package as a bind**
+— a repository made in the session, a package installed with `pkg install
+-n` inside `@{rfork n; …}`, run there, and not there outside (P7's `pkg`).
+Of the other six, three are P8's — several windows, actions by kind, the
+browser — and **three are built by no phase of
+[implementation.md](implementation.md)**: a Go program and Python, whose
+design is proposed and unreviewed ([proposals.md](proposals.md)), and
+building a program with a toolchain, a gap.
+
+Two lines were corrected on 2026-10-08. *"A package becomes available
+without installing anything into the tree"* and *"a language toolchain
+becomes usable during a session"* described how the earlier demo delivered
+its packages and toolchains to a page — streaming 260 MB after boot — not
+what it offered; Christine: *"Opening a project effectively opens a session
+with the right packages preinstalled"*. They are now the demo's own claims:
+*"installing is a bind … a subshell that does `rfork n` owns a private
+environment"*, and *"`cc hello.c` then `./a.out` … `go run hello.go`"*.
 
 It still fails, and will until all twelve are reached.
 

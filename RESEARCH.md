@@ -5824,6 +5824,12 @@ window's shell a copy (`winshell`, `rio/wind.c:1355`:
 `/n/anything` without creating it (`mntgen(4)`). This system's `start.ns`
 does not run it.
 
+*(Withdrawn the same day, with the proposals these findings were gathered
+for: a package mounted rather than installed, and a toolchain arriving during
+a session. Christine: *"Opening a project effectively opens a session with
+the right packages preinstalled"* — `docs/projects.md`'s design. The
+findings stand as facts about Plan 9.)*
+
 ### 16.32 No `boot`: the host attaches the root; an `Rerror` is 107 (2026-10-08)
 
 **Christine: *"why are you asking about boot. We already said don't use it

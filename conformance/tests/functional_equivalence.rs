@@ -59,7 +59,6 @@ enum State {
     /// a gap, in the sense of the triage rule (CLAUDE.md): undesigned, and
     /// needing a proposal before it is built. Naming a phase that does not
     /// build it was a claim with nothing behind it.
-    #[allow(dead_code)]
     Gap,
     /// Not yet: **a design is proposed** in `docs/proposals.md` and awaits
     /// Christine's review. No phase builds it until she endorses it — the
@@ -152,13 +151,40 @@ fn demo() -> Vec<Behaviour> {
             check: None,
         },
         Behaviour {
-            // P7's `pkg` copies a package into `/pkg/<name>/<version>/`
-            // (docs/packages.md), so the tree is bigger after it: P7's own
-            // acceptance — a package installs as a bind — is not this.
-            what: "a package becomes available without installing anything into the tree",
-            state: Proposed,
-            how: "the program runs afterwards; the tree is no bigger than before",
-            check: None,
+            // The demo: *"installing is a bind … and a subshell that does
+            // `rfork n` owns a private environment that vanishes with it"*.
+            // Opening a project brings its packages (docs/projects.md); this
+            // is the mechanism under it, P7's `pkg`.
+            what: "installing a package is a bind, and a subshell can have packages of its own",
+            state: Reached,
+            how: "a package installed in a subshell runs there, and outside it is not there",
+            check: Some(|| {
+                // a repository of one package, made as a packager makes one
+                // (docs/packages.md, *The forms*), then installed to a
+                // subshell's namespace only
+                let out = typing(
+                    "mkdir -p /usr/kitty/repo/src/hello/wasm/bin\n\
+                     cd /usr/kitty/repo\n\
+                     echo '#!/bin/rc' >src/hello/wasm/bin/hello\n\
+                     echo 'echo hello from a package' >>src/hello/wasm/bin/hello\n\
+                     chmod +x src/hello/wasm/bin/hello\n\
+                     echo 'pkg=hello version=1.0' >src/hello/pkg.cfg\n\
+                     {echo +; echo '\tpkg.cfg'; echo '\twasm'; echo '\t\tbin'; echo '\t\t\thello'} >proto\n\
+                     disk/mkfs -a -s src/hello proto >hello-1.0.mkfs >[2]/dev/null\n\
+                     sum=`{sha1sum -2 256 hello-1.0.mkfs}\n\
+                     echo 'pkg=hello version=1.0 sha256='$sum(1)' file=hello-1.0.mkfs' >index\n\
+                     echo 'bind /usr/kitty/repo /n/pkg' >/profile/repository\n\
+                     cd /\n\
+                     @{rfork n; pkg install -n hello >/dev/null; echo IN `{hello}}\n\
+                     echo OUT; hello\n",
+                );
+                wants(&out, "IN hello from a package")?;
+                let outside = out.split("OUT").last().unwrap_or_default();
+                if outside.contains("hello from a package") {
+                    return Err(format!("the package escaped its subshell: {out:?}"));
+                }
+                wants(outside, "does not exist")
+            }),
         },
         Behaviour {
             what: "processes have their own namespaces and do not disturb each other",
@@ -199,9 +225,15 @@ fn demo() -> Vec<Behaviour> {
             check: None,
         },
         Behaviour {
-            what: "a language toolchain becomes usable during a session, not before it",
-            state: Proposed,
-            how: "the system is usable first; the toolchain works later in the same session",
+            // The demo: *"`cc hello.c` then `./a.out` is real clang and real
+            // wasm-ld, as guests. `go run hello.go` drives the real gc
+            // compiler and linker"*. (It streamed them in after boot, which
+            // was how the page fetched 260 MB, not a feature.) A toolchain
+            // runs other programs, and a WASI program cannot start one
+            // (docs/proposals.md, item 1), so nothing designed builds this.
+            what: "build a program with a language toolchain, and run it",
+            state: Gap,
+            how: "a compiler and linker make a program, and it runs",
             check: None,
         },
     ]

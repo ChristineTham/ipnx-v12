@@ -14,12 +14,16 @@ is for what neither answers.
 
 ## Open
 
-**The four conformance gaps** — proposed 2026-10-08 (RESEARCH §16.31,
-§16.34, §16.35). The
-suite's four lines that no phase builds: a Go program, Python, a package
-available without installing anything, and a toolchain that arrives during a
-session. Neither Go nor Python is in either Plan 9 tree, so the first two are
-genuinely open; the other two are mostly lookups.
+**Go and Python** — proposed 2026-10-08 (RESEARCH §16.31, §16.34, §16.35),
+for two of the conformance suite's lines that no phase builds. Two more
+were proposed with them — a package mounted rather than installed, and a
+toolchain arriving during a session — and withdrawn the same day, because
+neither is needed: *"Surely the whole point of having a template is to
+specify which packages need to be preinstalled … Opening a project
+effectively opens a session with the right packages preinstalled. cd into a
+project does not install anything, it just views the files"* (Christine).
+That is projects.md's design already: opening a project's `project.cfg`
+opens a window whose namespace has the project's packages bound.
 
 1. **Go and Python run as WASI programs, under an existing WASI engine.**
    The direction is Christine's (2026-10-08): *"I think we need to aim to be
@@ -55,10 +59,11 @@ genuinely open; the other two are mostly lookups.
      process, and a note reaches it.
 
    *Why B:* the files come from the kernel on every host. A WASI program
-   therefore sees the same tree in the browser as in the terminal, sees a
-   package that item 2 mounts rather than copies, and stays confined if its
-   namespace confines it. Under A each host's storage is a different tree,
-   and item 2's mounted packages are invisible to WASI programs.
+   therefore sees the same tree in the browser as in the terminal, sees the
+   packages its project binds, and stays confined if its namespace confines
+   it. Under A each host's storage is a different tree, and a WASI program
+   sees a package only where it lies in that storage, not where a project
+   binds it.
 
    *The cost of B:* `wasi-common` is the implementation its maintainers call
    legacy. They recommend `wasmtime-wasi`, and keep `wasi-common` because
@@ -96,82 +101,16 @@ genuinely open; the other two are mostly lookups.
    what it printed before; Python starts, imports `json` from its library,
    and computes.
 
-2. **A package becomes available without installing: it is mounted from the
-   repository and never copied.** Plan 9 does not install software: a tree
-   is served, and you bind it in. Plan 9 also serves an archive as a tree
-   without unpacking it. `tapefs`'s servers *"mount their contents
-   (read-only) into a Plan 9 file system"*, and boot's `paq` method runs a
-   whole root from an archive through `paqfs` (`boot/paq.c:58`). `paqfs`
-   reads a block only when one is asked for.
-
-   *Proposed:* `pkg install -n` — the namespace scope, *"only valid for
-   current process"* — mounts the package's archive from the repository
-   instead of copying it, and binds from the mount. Nothing is written into
-   the tree. The scopes that last, `-s` and `-u`, still copy into `/pkg`, so
-   the system's and a user's packages keep working when the repository is
-   gone. The hash is checked as it is now, over the whole file, before
-   anything is mounted.
-
-   *What Plan 9 leaves open:* the package file is `disk/mkfs -a`'s archive
-   (decided 2026-09-29; packages.md, *The forms*), and no Plan 9 server
-   reads that format. Either:
-   - **(recommended) the package file becomes a paq archive.** `mkpaqfs`
-     writes it and `paqfs` serves it; both are Plan 9's and both are built
-     here. It is compressed, checked block by block (`adler32`) and as a
-     whole (SHA-1, with `-v`), and read a block at a time. A copy for `-s`
-     or `-u` is then the mounted tree copied into `/pkg`, and `disk/mkext`
-     is no longer needed.
-   - **or keep `mkfs -a`** and write a server for it in `tapefs`'s frame
-     (`tapefs/fs.c`, with a reader beside `tarfs.c`): a new program, in
-     Plan 9's shape.
-
-   The mount point needs nothing created either. Plan 9 serves `/n` with
-   `mntgen`, which makes a mount point when one is walked to (`termrc:6`,
-   `lib/namespace:20`); this system's `start.ns` does not run it yet.
-
-   *The check:* after `pkg install -n hello`, `hello` runs and `/pkg` holds
-   what it held before.
-
-3. **A toolchain arrives during the session: a `pkg install` in the
-   background.** Plan 9 answers the rest. rc's `&` forks without `RFNAMEG`
-   (`rc/havefork.c:18`), so a background job shares its shell's namespace,
-   and the shell sees each bind the job makes at the moment it is made.
-
-   *Proposed:* the session's `start.rc` — the system's or the user's —
-   starts its toolchains in the background, using item 2:
-   `pkg install -n python &` — or, under item 1's A, `-u`, because a WASI
-   program would see only host directories. The shell is usable at once. The toolchain
-   appears whole when its install ends, because a single `bind` makes it
-   appear. A command typed before then *"does not exist"*, as any missing
-   command does. The check uses Python, because Python needs no second
-   process.
-
-   *Open, and P8's:* a process that copied its namespace before the
-   toolchain arrived does not see it (`pgrpcpy`, `pgrp.c:128`), and rio
-   gives every window's shell a copy (`rio/wind.c:1355`). So whether a
-   window opened earlier sees the toolchain depends on whether emca's
-   windows copy the session's namespace or share it.
-
-   *Go's and C's own toolchains:* each runs other programs — `go` runs its
-   compiler and linker, and `clang` runs `wasm-ld` — and no WASI program can
-   (item 1). The earlier demo's `go` was a stand-in written for it, which
-   is ruled out (*"no cut-downs"*). The real `go` command needs Go ported
-   to `plan9/wasm` (item 1).
-
-   *The check:* the system boots and answers at once, and later in the same
-   session `python` runs.
-
    **The questions:**
    1. Which files does a WASI program see: A, host directories (a pure WASI
       view), or B, its process's namespace through wasmtime's `wasi-common`
       (recommended)?
    2. Which browser engine: `@bjorn3/browser_wasi_shim` (recommended, for
       its one-to-one `Fd`) or `@tybys/wasm-util`?
-   3. Should the package file become a paq archive (item 2), or should it
-      stay `mkfs -a` with a server written for it?
-   4. Should `pkg install -n` mount while `-s` and `-u` copy (item 2)?
-   5. The real `go` command needs Go ported to `plan9/wasm` (items 1 and 3):
-      now, after the demo, or not at all?
+   3. The real `go` command needs Go ported to `plan9/wasm` — and the
+      suite's line *"build a program with a language toolchain, and run it"*
+      needs that or another toolchain that can start its compiler and
+      linker: now, after the demo, or not at all?
 
 **The wasm32 `Ureg`, and APE's signal trampoline** — proposed 2026-09-25.
 Built, and awaiting review, because each is a machine-dependent file Plan 9
