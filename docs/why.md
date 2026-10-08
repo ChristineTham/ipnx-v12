@@ -312,8 +312,10 @@ is **typed** interfaces (WIT), and this system's is a **uniform untyped** one. T
 compose. A server exporting a WIT interface forfeits the property that makes 9P worth
 having — that any client works with any server, and `cat` works on a network connection.
 
-**WASI's role is `wasi:cli/command`** — argv, environ, exit, stdio — so a ported foreign
-program can find its arguments. That is all.
+**WASI is how foreign programs run, not how IPNX's do.** A WASI program — Go's `wasip1`
+builds, CPython's — runs as a WASI program under an existing WASI engine (Christine,
+2026-10-08: *"as WASI native as possible"*). IPNX's own programs speak 9P through the
+namespace, and that is the system interface.
 
 ## The GUI: rio-shaped, so `sam` and `acme` work
 

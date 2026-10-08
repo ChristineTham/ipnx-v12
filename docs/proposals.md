@@ -14,63 +14,83 @@ is for what neither answers.
 
 ## Open
 
-**The four conformance gaps** — proposed 2026-10-08 (RESEARCH §16.31). The
+**The four conformance gaps** — proposed 2026-10-08 (RESEARCH §16.31,
+§16.34, §16.35). The
 suite's four lines that no phase builds: a Go program, Python, a package
 available without installing anything, and a toolchain that arrives during a
 session. Neither Go nor Python is in either Plan 9 tree, so the first two are
 genuinely open; the other two are mostly lookups.
 
-1. **Go and Python run as their own WASI builds, and the host answers WASI's
-   calls with the kernel's.** Go builds for Plan 9 and for wasm, but not for
-   both at once: its wasm ports are `js/wasm` and `wasip1/wasm`. CPython's
-   wasm build is a WASI build. So both already exist as WASI programs,
-   unmodified (the earlier demo ran both, RESEARCH §9.5); something only has
-   to answer WASI's calls.
+1. **Go and Python run as WASI programs, under an existing WASI engine.**
+   The direction is Christine's (2026-10-08): *"I think we need to aim to be
+   as WASI native as possible. A package like go which is compiled as a WASI
+   binary must be allowed to run as if it is on a vanilla WASI engine. It's
+   only our native binaries that understand our conventions."* Building a
+   WASI engine of our own is the alternative, and *"that is risky"*. Go's
+   wasm ports are `js/wasm` and `wasip1/wasm`, and CPython's wasm build is a
+   WASI build, so both already exist as WASI programs, unmodified (RESEARCH
+   §9.5, §16.31).
 
-   *Proposed:* the host answers them. A module that imports
-   `wasi_snapshot_preview1` gets those imports from the host's machine,
-   beside `sys`. Each one is made of the kernel's own calls, for the process
-   making it:
+   What remains open is which files such a program sees. Two engines answer
+   that differently:
 
-   | WASI call | the kernel's |
-   |---|---|
-   | `fd_read`, `fd_write` | `pread`, `pwrite` |
-   | `path_open` | `open` or `create`, from the process's `/` |
-   | `fd_readdir` | a read of the directory |
-   | `clock_time_get` | the clock `#c` keeps |
-   | `random_get` | a read of `#c/random` |
-   | `proc_exit` | `exits` |
+   - **A. Host directories, a pure WASI view.** `wasmtime-wasi`, the
+     engine's current WASI, with the store's directories preopened (*"We
+     can bind enough of the host filesystem for them to operate"*). It can
+     show nothing else: its files are host directories, and nothing can be
+     put in their place (RESEARCH §16.34). A WASI program then sees no
+     `/dev`, `/proc`, `/env` or `/srv`, and none of the binds — which, in
+     her words, it does not need.
+   - **B. The process's namespace as files (recommended).** `wasi-common`,
+     wasmtime's own implementation of WASI preview 1, is released with
+     every wasmtime (39.0.2 beside ours; 46.0.3 is the latest). It takes its
+     directories and files from the host, as objects the host writes
+     (`WasiDir`, `WasiFile`; RESEARCH §16.35). So the host can preopen `/`
+     as the process's own namespace, every open, read and stat made with
+     the kernel's calls. The program is still an unmodified WASI program,
+     run by wasmtime's WASI code; it simply finds `/dev` and `/proc` among
+     its files. This answers *"Is there a way to expose /dev, /proc as
+     files to wasmtime?"* Its calls can also wait (its `async` linking), so
+     a WASI program waiting for input waits in the kernel like any other
+     process, and a note reaches it.
 
-   The program sees its process's namespace, a note ends it, and the kernel
-   does not change. That is *"everything else is handled by host or
-   userspace"* (2026-09-03). Where Plan 9 has nothing to answer with, such as
-   a link or a rename across directories, the answer is WASI's *not
-   supported*, never a substitute (RESEARCH §9.20).
+   *Why B:* the files come from the kernel on every host. A WASI program
+   therefore sees the same tree in the browser as in the terminal, sees a
+   package that item 2 mounts rather than copies, and stays confined if its
+   namespace confines it. Under A each host's storage is a different tree,
+   and item 2's mounted packages are invisible to WASI programs.
 
-   *What WASI cannot do:* it has no processes. On `wasip1`, Go's
-   `StartProcess` returns `ENOSYS`, so a WASI program cannot run another
-   program. In particular the real `go` command cannot run its compiler and
-   linker. That limits item 3, not this one.
+   *The cost of B:* `wasi-common` is the implementation its maintainers call
+   legacy. They recommend `wasmtime-wasi`, and keep `wasi-common` because
+   `wasi-threads` needs it. The file objects are ours to write.
 
-   *The alternatives:*
-   - **Port Go to `plan9/wasm` and CPython to APE.** For Go, that joins its
-     own Plan 9 runtime and syscall package to its wasm backend. Both then
-     become Plan 9 programs that make only Plan 9's calls, `os/exec` is
-     `rfork` and `exec`, and the real `go` command runs. The cost is two
-     ports to write and carry.
-   - **WASI as a library in userspace,** linked into each WASI program when
-     it is packaged (Binaryen's `wasm-merge`), so the host's imports stay
-     Plan 9's list. This is unproven: the program owns its memory, so the
-     library has nowhere of its own to keep anything.
-   - **wasmtime's own WASI (`wasmtime-wasi`), considered and not proposed**
-     (RESEARCH §16.34). It is WASI for the host computer: its files are host
-     directories, and that is the one part a host cannot replace. A program
-     under it would not see its process's namespace, and a process confined
-     by its namespace would reach the host directory. It would also wait
-     outside the kernel, where a note cannot reach it, and it does not exist
-     in the browser, which has no wasmtime. The proposal answers WASI in the
-     same place, the host, but with the kernel's calls rather than the host
-     computer's.
+   *In the browser, either way, an existing engine* (*"For the browser we
+   just need to find a WASI engine"*); there is no wasmtime there. Two of
+   them let the page supply the files:
+   - `@bjorn3/browser_wasi_shim` (0.4.2, MIT or Apache-2.0): a file is a
+     subclass of its `Fd`, which maps one to one onto a kernel descriptor.
+     Quiet since June 2025.
+   - `@tybys/wasm-util` (0.10.4, MIT, released 2026-09-13): the files are an
+     object in Node's `fs` shape.
+
+   For A they would serve the page's storage; for B the kernel's files, as
+   natively. Others are listed in RESEARCH §16.35.
+
+   *Either way:*
+   - A WASI program's standard streams are its process's descriptors 0, 1
+     and 2 — both engines let a host supply them — so pipelines and the
+     console work.
+   - Its arguments are `exec`'s, and its environment is the process's.
+   - It cannot start a process, because WASI has none (on `wasip1`, Go's
+     `StartProcess` returns `ENOSYS`). A prebuilt Go program runs, but the
+     real `go` command cannot build: that needs Go ported to `plan9/wasm`,
+     or it stays out.
+   - `pip install` cannot reach the network: WASI preview 1 has no outbound
+     sockets.
+
+   *Not proposed:* WASI answered by the host with our own code — an engine
+   of our own, which she calls risky — and porting Go and CPython to Plan 9
+   for programs that already exist for WASI.
 
    *The check:* a Go program built with `GOOS=wasip1 GOARCH=wasm` prints
    what it printed before; Python starts, imports `json` from its library,
@@ -119,7 +139,8 @@ genuinely open; the other two are mostly lookups.
 
    *Proposed:* the session's `start.rc` — the system's or the user's —
    starts its toolchains in the background, using item 2:
-   `pkg install -n python &`. The shell is usable at once. The toolchain
+   `pkg install -n python &` — or, under item 1's A, `-u`, because a WASI
+   program would see only host directories. The shell is usable at once. The toolchain
    appears whole when its install ends, because a single `bind` makes it
    appear. A command typed before then *"does not exist"*, as any missing
    command does. The check uses Python, because Python needs no second
@@ -134,20 +155,23 @@ genuinely open; the other two are mostly lookups.
    *Go's and C's own toolchains:* each runs other programs — `go` runs its
    compiler and linker, and `clang` runs `wasm-ld` — and no WASI program can
    (item 1). The earlier demo's `go` was a stand-in written for it, which
-   is ruled out (*"no cut-downs"*). The real `go` command needs item 1's
-   first alternative, Go on `plan9/wasm`.
+   is ruled out (*"no cut-downs"*). The real `go` command needs Go ported
+   to `plan9/wasm` (item 1).
 
    *The check:* the system boots and answers at once, and later in the same
    session `python` runs.
 
    **The questions:**
-   1. Should the host answer WASI's calls (item 1), or should one of the
-      alternatives be used?
-   2. Should the package file become a paq archive (item 2), or should it
+   1. Which files does a WASI program see: A, host directories (a pure WASI
+      view), or B, its process's namespace through wasmtime's `wasi-common`
+      (recommended)?
+   2. Which browser engine: `@bjorn3/browser_wasi_shim` (recommended, for
+      its one-to-one `Fd`) or `@tybys/wasm-util`?
+   3. Should the package file become a paq archive (item 2), or should it
       stay `mkfs -a` with a server written for it?
-   3. Should `pkg install -n` mount while `-s` and `-u` copy (item 2)?
-   4. The real `go` command needs Go ported to `plan9/wasm` (item 3): now,
-      after the demo, or not at all?
+   4. Should `pkg install -n` mount while `-s` and `-u` copy (item 2)?
+   5. The real `go` command needs Go ported to `plan9/wasm` (items 1 and 3):
+      now, after the demo, or not at all?
 
 **The wasm32 `Ureg`, and APE's signal trampoline** — proposed 2026-09-25.
 Built, and awaiting review, because each is a machine-dependent file Plan 9

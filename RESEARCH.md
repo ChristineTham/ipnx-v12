@@ -582,6 +582,9 @@ is a *uniform untyped* one. They do not compose: a server exporting a WIT interf
 the property that makes 9P worth having — that any client works with any server, and `cat`
 works on a network connection. **So file servers are plain wasm binaries speaking 9P over a
 byte stream, and WASI's role is `wasi:cli/command` and nothing else.**
+*(2026-10-08: Christine — a WASI program runs as a WASI program, under an
+existing WASI engine, *"as WASI native as possible"*; which files it sees is
+open. §16.34, §16.35.)*
 
 ---
 
@@ -5918,3 +5921,47 @@ its namespace would reach whatever host directory was preopened. The earlier
 demo did not use it either: it wrote its own 807-line shim over the kernel's
 calls (`native/host/src/wasi.rs`, commit `ac1f05a`), which is the shape
 proposal 1 takes.
+
+### 16.35 A WASI engine that takes its files from the host (2026-10-08)
+
+Christine: *"I think we need to aim to be as WASI native as possible. A
+package like go which is compiled as a WASI binary must be allowed to run as
+if it is on a vanilla WASI engine"*; *"For the browser we just need to find a
+WASI engine"*; *"Alternatively we can build our own WASI engine but that is
+risky. Is there a way to expose /dev, /proc as files to wasmtime?"*
+
+**wasmtime has a second WASI, and its files are the host's to supply.**
+`wasi-common` 39.0.2 — published with every wasmtime release, 46.0.3 the
+latest (2026-10-02, crates.io) — is *"Wasmtime's legacy implementation of
+WASI 0.1 (Preview 1)"*; *"The Wasmtime maintainers suggest all users upgrade
+to … `wasmtime-wasi`"*, and it *"remains in the wasmtime tree because it is
+required to use the `wasmtime-wasi-threads` crate"* (`src/lib.rs:3`–`:8`). Its
+directories and files are traits: `WasiDir` (`src/dir.rs:13` — `open_file`,
+`readdir`, `get_path_filestat`, `rename`, …) and `WasiFile` (`src/file.rs:7`
+— `read_vectored`, `write_vectored`, `seek`, `get_filestat`, `readable`, …),
+and `push_preopened_dir` takes any `WasiDir` (`src/ctx.rs:112`), as
+`set_stdin` and `set_stdout` take any `WasiFile` (`:100`, `:104`). Linked in
+its `async` mode (`define_wasi!(async T: Send)`, `src/tokio/mod.rs:135`;
+the macro, `src/lib.rs:108`), every call is a future the engine awaits on
+the guest's fiber; the `sync` mode runs each to completion on the spot
+(`src/sync/mod.rs:138`). So a host can preopen `/` as a directory whose every
+call is the kernel's, for the calling process: the program sees its
+namespace — `/dev`, `/proc`, binds, mounts — and a call that has to wait
+waits in the kernel's scheduler, where a note reaches it. Wasmtime's
+`wasmtime-wasi` cannot do this (§16.34).
+
+**Browser engines, from the npm registry** (2026-10-08):
+
+| package | latest | licence | its files |
+|---|---|---|---|
+| `@bjorn3/browser_wasi_shim` | 0.4.2, 2025-06-22 | MIT or Apache-2.0 | an abstract `Fd` and `Inode` to subclass (`typings/fd.d.ts:2`, `:77`); in-memory and OPFS ones supplied |
+| `@tybys/wasm-util` | 0.10.4, 2026-09-13 | MIT | an `fs` object in Node's shape, with `preopens` (`README.md:24`–`:37`) |
+| `@runno/wasi` | 0.10.0, 2025-05-18 | MIT | its own |
+| `@easywasm/wasi` | 0.0.8, 2025-04-10 | MIT | ZenFS backends |
+| `@wasmer/sdk` | 0.19.1, 2026-10-07 | its own | Wasmer's runtime, and WASIX |
+| `@bytecodealliance/preview2-shim` | 0.28.0, 2026-10-06 | Apache-2.0 with LLVM exception | WASI 0.2 components, through jco |
+
+Either of the first two lets the page answer a WASI program's files from the
+kernel, as `wasi-common` does natively — a worker can wait for the kernel's
+answer with `Atomics.wait`, which is how the browser host's processes already
+make their calls (P6).

@@ -451,3 +451,13 @@ Choosing, from options put to her the same day:
 - selected *"The host does it"* — boot's one job, attaching the host's file server as `/` and starting init, done by the host, so that `/boot/boot` and `#/boot` go
 - selected *"#s/root"* — the name the root's channel is posted under, in place of Plan 9's `#s/boot`
 - selected *"Host serves devices"* — what the surface uses in place of the serial line: the host serves its screen, keyboard and mouse over 9P as it serves the store, and emca uses them as rio uses the screen
+
+On proposal 1, the same day:
+
+- *"with regards to proposal 1, why can't we use the underlying wasm engine eg. wasmtime to do WASI?"*
+- *"I think we need to aim to be as WASI native as possible. A package like go which is compiled as a WASI binary must be allowed to run as if it is on a vanilla WASI engine. It's only our native binaries that understand our conventions. Why can't Python and Go run as native WASI binaries? We can bind enough of the host filesystem for them to operate. They don't need to see /dev, /proc etc - they won't know what to do with them. Of course, that means go and python programs may not see them either, but that's fine, go and python effective run as WASI clients so they maintain a pure WASI view"*
+  <br>— cited in `docs/proposals.md`
+- *"For the browser we just need to find a WASI engine"*
+  <br>— cited in `docs/proposals.md`
+- *"Alternatively we can build our own WASI engine but that is risky. Is there a way to expose /dev, /proc as files to wasmtime?"*
+  <br>— cited in `docs/proposals.md`

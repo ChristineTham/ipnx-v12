@@ -254,11 +254,12 @@ The machine's obligations, which are Plan 9's semantics:
 - **The `Tos`** (`sys/include/tos.h`) is at the top of the stack, the stack
   below it, its `pid` written for each process, as `kexit` writes it.
 
-A WASI-dialect binary is selected by its imports: a module importing
-`wasi_snapshot_preview1` (or `wasi_unstable`) gets the WASI shim instead — it
-exports its own memory, fd 3 is the single preopen and it is the namespace
-root, `rename` is copy-plus-remove (there is no link), and the personality is
-`wasi:cli/command` and nothing more.
+**A WASI program runs as a WASI program** — a module importing
+`wasi_snapshot_preview1`, run by an existing WASI engine and understanding
+none of IPNX's conventions (Christine, 2026-10-08: *"as WASI native as
+possible"*). Which files it sees is proposed, not decided
+([proposals.md](proposals.md), the four conformance gaps, item 1), and
+nothing runs one yet.
 
 **A personality is a libc dialect over this one ABI, and there are two kinds.**
 A *native* personality (lib9, libv10, the measured `libunix`) presents IPNX's
@@ -283,10 +284,9 @@ instance.
 
 A personality is *provided* at three layers, each cheap:
 
-1. **The ABI shim** (supervisor code) — the imports a running binary needs.
-   The WASI personality is `wasi1.mjs`; carrying both `wasi_snapshot_preview1`
-   and `wasi_unstable` makes it two dialects of one personality. A binary's
-   stat, inode, cwd and environ semantics live here too.
+1. **The ABI** — the imports a running binary needs: this machine's calls,
+   `sys`, for a native program; WASI's, answered by an existing WASI engine,
+   for a WASI program (above).
 2. **The target sysroot** (namespace files) — what *compiled* code links
    against: `libc.a`, headers, crt objects in a subtree, pointed at by the
    compiler (`-isysroot`, `-L`). A different port personality is a different
