@@ -62,6 +62,15 @@ genuinely open; the other two are mostly lookups.
      it is packaged (Binaryen's `wasm-merge`), so the host's imports stay
      Plan 9's list. This is unproven: the program owns its memory, so the
      library has nowhere of its own to keep anything.
+   - **wasmtime's own WASI (`wasmtime-wasi`), considered and not proposed**
+     (RESEARCH §16.34). It is WASI for the host computer: its files are host
+     directories, and that is the one part a host cannot replace. A program
+     under it would not see its process's namespace, and a process confined
+     by its namespace would reach the host directory. It would also wait
+     outside the kernel, where a note cannot reach it, and it does not exist
+     in the browser, which has no wasmtime. The proposal answers WASI in the
+     same place, the host, but with the kernel's calls rather than the host
+     computer's.
 
    *The check:* a Go program built with `GOOS=wasip1 GOARCH=wasm` prints
    what it printed before; Python starts, imports `json` from its library,

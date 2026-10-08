@@ -5883,3 +5883,38 @@ already serves the store, on `#9`, and emca uses them as rio uses the screen
 devices to the IPNX kernel"*, and of 2026-08-31, *"The job of emca is to
 push a file into a window via /dev/canvas"*. The serial line had the
 direction the other way: the surface a client of emca's files.
+
+### 16.34 wasmtime's own WASI is the host computer's (2026-10-08)
+
+Christine: *"why can't we use the underlying wasm engine eg. wasmtime to do
+WASI?"* Read in `wasmtime-wasi` 39.0.2, the version beside this host's
+wasmtime 39.0.2 (`Cargo.lock`):
+
+- **Its files are host directories, and that is the one part a host cannot
+  replace.** `preopened_dir` opens a host path with
+  `cap_std::fs::Dir::open_ambient_dir` (`src/ctx.rs:299`); the filesystem is
+  a list of those (`WasiFilesystemCtx { preopens: Vec<(Dir, String)> }`,
+  `src/filesystem.rs:56`), each `Dir` holding *"the operating system file
+  descriptor this struct is mediating access to"*, an `Arc<cap_std::fs::Dir>`
+  (`:770`–`:777`). The trait a host implements, `WasiFilesystemView`
+  (`:66`), says only where that context lives. What a host *can* replace is
+  the rest: stdin and stdout (`StdinStream`, `StdoutStream`, `src/cli.rs:110`,
+  `:144`), the clocks, the random source, the environment and the arguments
+  (`src/ctx.rs`).
+- **It waits outside the kernel.** File work runs on its own tokio thread
+  pool (`RUNTIME`, `src/runtime.rs:27`; `spawn_blocking`, `:95`), and the
+  synchronous linker blocks the calling thread on it (`in_tokio`, `:104`;
+  `src/p1.rs:824`). This kernel runs every process as a fiber on one thread
+  under its own scheduler (P6), so a WASI program waiting on a read would
+  stop every process, and a note could not reach it: the kernel would not
+  know it was waiting.
+- **It exists only where wasmtime does.** The browser host runs processes in
+  the browser's engine, in workers (P6, P8), where there is no wasmtime.
+
+So a program under it sees the host's files rather than its process's
+namespace — no `/dev`, `/proc`, `/env`, `/srv`, no `/bin` or `/home` (both
+binds), and nothing a process binds or mounts — and a process confined by
+its namespace would reach whatever host directory was preopened. The earlier
+demo did not use it either: it wrote its own 807-line shim over the kernel's
+calls (`native/host/src/wasi.rs`, commit `ac1f05a`), which is the shape
+proposal 1 takes.
