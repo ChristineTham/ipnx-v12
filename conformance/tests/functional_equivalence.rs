@@ -68,9 +68,6 @@ enum State {
     /// Christine's review. No phase builds it until she endorses it — the
     /// triage rule's middle state.
     Proposed,
-    /// Not yet: **designed and endorsed** — the triage rule's first state —
-    /// and no phase of `docs/implementation.md` builds it yet.
-    Specd,
 }
 
 impl fmt::Display for State {
@@ -80,7 +77,6 @@ impl fmt::Display for State {
             State::Pending(p) => write!(f, "not yet  ({p})"),
             State::Gap => write!(f, "not yet  (gap: no phase builds it)"),
             State::Proposed => write!(f, "not yet  (proposed: awaiting review)"),
-            State::Specd => write!(f, "not yet  (spec'd: no phase builds it yet)"),
         }
     }
 }
@@ -240,9 +236,9 @@ fn demo() -> Vec<Behaviour> {
             // toolchain is the host's, and the system says so: *"some
             // toolchains depend on the hsot"* (Christine, 2026-10-08). It is
             // typed through `os`, where the host runs commands, and is not in
-            // the browser (docs/saranos.md, "The host's resources").
+            // the browser (docs/saranos.md, "The host's resources"; P9).
             what: "build a program with a language toolchain, and run it",
-            state: Specd,
+            state: Pending("P9"),
             how: "`os go build` makes it with the host's toolchain, and it runs; where the host runs commands",
             check: None,
         },

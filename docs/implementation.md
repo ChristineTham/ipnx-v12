@@ -73,11 +73,12 @@ final state; design resumes after it. **Don't overengineer.**
 
 | | | proves |
 |---|---|---|
-| **the CLI** | typing `ipnx` in a terminal boots IPNX to `rc`; you run userspace commands | the kernel is a Plan 9 subset, boot is rc plus a namespace file, every personality is userspace, the machine is file servers |
+| **the CLI** | typing `ipnx` in a terminal boots IPNX to `rc`; you run userspace commands, and the host's through `os` | the kernel is a Plan 9 subset, boot is rc plus a namespace file, every personality is userspace, the machine is file servers, and what depends on the host says so |
 | **the website** | emca in the browser doing what the site does now — a listing on the left, `motd`/`tour`/`README` as tabs, `rc` below them — with the windows, toolbar and status line to spec | emca owns windows entirely, the contract and the types hold, the surface renders files and never pixels |
 
 **Not in the demo:** a window on a Mac or an iPad, the raster, `/net`, git.
-**P0–P8 deliver it.**
+**P0–P9 deliver it.** P9, host commands, is the CLI's, and does not wait for
+P8.
 
 ---
 
@@ -288,6 +289,20 @@ already agreed this is a rewrite"*):
 4. **The page is the surface**: it serves step 1's devices.
 5. **What browsers require** (platforms.md, measured): COOP and COEP headers
    for `SharedArrayBuffer`, and worker start-up serialised for WebKit.
+
+## P9 — host commands *(added 2026-10-08)*
+
+The design is [saranos.md](saranos.md), *The host's resources*: a host
+command is typed through `os`, Inferno's, and started by one call to the host
+— *"some toolchains depend on the hsot"* (Christine, 2026-10-08), and the
+system says so.
+
+| | |
+|---|---|
+| **builds** | first, how the host fills a program's descriptors — the kernel takes host input today only at the console (`kbdputcclock`, `devcons.c:556`), and what carries a command's input, output, error and status is designed when this phase is reached. Then the call, in this machine's half of libc (`sys/src/libc/wasm/`), with the userspace ABI's contract changed in the same commit ([architecture.md](architecture.md)); its host half in `hosts/ipnx` — `execvp` in the directory asked for, the environment overlaid, a process group of its own, `SIGTERM` to it when `os` goes (`emu/MacOSX/cmd.c`); and `os` in `cmd/`, in C after Inferno's `os.b` |
+| **depends on** | P6 — a read of a command's output waits as any read does. Not on P8: it is the CLI's, and can be built before the website |
+| **acceptance** | on the terminal: `os echo hello` prints `hello`; `cat x \| os sort` sorts; `os false` fails with `host: exit: 1`; killing `os` kills the command; and `os go build` then `os ./hello` runs — the conformance suite's toolchain line. In the browser there are no host commands, and the website does not claim them |
+| **exposes** | the Mac app's host half, when it is built, does the same |
 
 ---
 

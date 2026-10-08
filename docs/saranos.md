@@ -97,9 +97,10 @@ uses; here `os` makes a call to the host.
 - **A WASI program cannot make the call**: unmodified, it knows only WASI's
   calls, and WASI has none that starts a process.
 
-Not built. To be built with it: a way for the host to fill the descriptors —
-the only host input the kernel takes today is the console's, at clock time
-(`kbdputcclock`, `devcons.c:556`).
+Not built; it is P9 of the plan ([implementation.md](implementation.md)),
+which begins with a way for the host to fill the descriptors — the only host
+input the kernel takes today is the console's, at clock time (`kbdputcclock`,
+`devcons.c:556`).
 
 ## The names
 

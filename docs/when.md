@@ -396,12 +396,11 @@ bind; the shell outside it does not), and **installing a package as a bind**
 — a repository made in the session, a package installed with `pkg install
 -n` inside `@{rfork n; …}`, run there, and not there outside (P7's `pkg`).
 Of the other six, three are P8's — several windows, actions by kind, the
-browser — and **three are built by no phase of
-[implementation.md](implementation.md)**: a Go program and Python, whose
-design is proposed and unreviewed ([proposals.md](proposals.md)), and
-building a program with a toolchain, which is spec'd: the toolchain is the
-host's, typed through `os`, so it is there only where the host runs commands
-([saranos.md](saranos.md), *The host's resources*).
+browser — one is P9's — building a program with a toolchain, which is the
+host's, typed through `os`, and so there only where the host runs commands
+([saranos.md](saranos.md), *The host's resources*) — and **two are built by
+no phase of [implementation.md](implementation.md)**: a Go program and
+Python, whose design is proposed and unreviewed ([proposals.md](proposals.md)).
 
 Two lines were corrected on 2026-10-08. *"A package becomes available
 without installing anything into the tree"* and *"a language toolchain
@@ -428,7 +427,7 @@ fixtures, because a behaviour is reached when a person can do it.
 `init`, `/profile/start.ns` and `/profile/start.rc`, after the host has done
 `initcode.c`'s nine lines and `boot`'s part (2026-10-08).
 
-**P6 is the scheduler** — added 2026-09-21, before the registries, because the browser host is a worker per process and that IS P6's machine boundary. P7 is packages, services, templates, projects and profiles; P8 is emca and the browser.
+**P6 is the scheduler** — added 2026-09-21, before the registries, because the browser host is a worker per process and that IS P6's machine boundary. P7 is packages, services, templates, projects and profiles; P8 is emca and the browser; P9, added 2026-10-08, is host commands.
 
 **P7 is built but for identity** (2026-09-29). Step 1, the profiles: `/profile` and `/home/profile` with `start.ns`, and `start`, `shell` and `stop` each as a `.env` and a `.rc`, run in the order docs/packages.md gives — the user's `start.ns` added at login by `addns` — `/home` bound to `/usr/$user`, and `/rc` gone. Step 2, the `system` package (above). **Step 3, `pkg`**: install, remove, list and prune, to the system, the user or the namespace; `disk/mkfs -a` archives from a repository at `/n/pkg` named in `/profile/repository`, found in its ndb `index`, refused unless `sha1sum -2 256` matches, unpacked by `disk/mkext` into `/pkg/<name>/<version>/`, their `depend=`s first and marked `auto`; bound at once and from `/profile/pkg.ns` at every boot. **P7's acceptance passes**: a package installs as a bind, `pkg remove` unbinds it, and its files survive. **Step 4, `service`**: enable, disable, start and stop, `/service/<name>/`, `/profile/service` with Plan 9's `!`; the system's start at boot and stop at shutdown, the user's at login and logout; `user=none` runs one through `auth/none`. **Step 5, `template`**: instantiate — an included template first, the scaffolding, `project.cfg`, `install.rc` — and remove; a project is promoted by its own `pkg.rc` (the window type is P8's). **Step 6, identity, is not built**: `su` and `sudo` are defined over `auth/login`, which needs an authentication server over `/net` (docs/packages.md, *The forms*). Tested: `a_package_installs_as_a_bind_and_removes_as_an_unbind`, `an_enabled_service_starts_at_boot_and_stops_at_shutdown`, `a_template_makes_a_project_and_the_project_a_package`.
 
@@ -439,6 +438,10 @@ it is **removed** (2026-10-08, RESEARCH §16.33): it emulated hardware, and
 Step 1 is now the host's devices — its screen, keyboard and mouse served
 over 9P as the store is — and it, emca's IPNX half, the demo's types,
 `hosts/web` and the page as the surface are not built.
+
+**P9 is not built.** Host commands are designed ([saranos.md](saranos.md),
+*The host's resources*); nothing of them — the call, its host half, `os` —
+exists yet.
 
 **A channel's mode, and who may open what** (2026-10-07; RESEARCH §16.21).
 `read` and `write` check a descriptor's open mode, `mount`, `fversion` and

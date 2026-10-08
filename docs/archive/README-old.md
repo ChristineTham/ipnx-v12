@@ -1,3 +1,6 @@
+> **ARCHIVED — not current.** The project's front page as it stood on
+> 2026-08-29. The current one is [README.md](../../README.md).
+
 <h1 align="center">ipnx-v12</h1>
 
 <p align="center"><em>An operating system you can read in an afternoon,<br>
@@ -125,18 +128,18 @@ reimplementing it per-substrate is a milestone, not a lifetime.
 
 ## The documents
 
-- **[RESEARCH.md](RESEARCH.md)** — the living evidence base: every finding with
+- **[RESEARCH.md](../../RESEARCH.md)** — the living evidence base: every finding with
   provenance, from Plan 9's call table to the wasm toolchain's measured behaviors.
-- **[docs/design.md](docs/design.md)** — the living spec: scope, decisions with
+- **[docs/design.md](design-log-claude-written.md)** — the living spec: scope, decisions with
   dates, open questions.
-- **[docs/syscalls.md](docs/syscalls.md)** — the derived call list: Plan 9's 40 live
+- **[docs/syscalls.md](../syscalls.md)** — the derived call list: Plan 9's 40 live
   calls dispositioned, V10's 68 routines mapped onto them.
-- **[docs/identity.md](docs/identity.md)** — the uid model: why the compatibility layer could
+- **[docs/identity.md](../identity.md)** — the uid model: why the compatibility layer could
   not, and this kernel can.
 
 ## Licence and estate
 
-[LICENSE](LICENSE) is **MIT, inherited rather than chosen** — this is a derivative
+[LICENSE](../../LICENSE) is **MIT, inherited rather than chosen** — this is a derivative
 work of Plan 9, whose copyright passed to the Plan 9 Foundation in March 2021 under
 MIT; Plan 9-derived material keeps the Foundation's notice. Research Unix material
 appears under Nokia's 2017 covenant, each vendored batch carrying its own NOTICE with

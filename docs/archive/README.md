@@ -15,6 +15,7 @@ text where someone will read it as current (2026-09-02).
 | [dev-window-device.md](dev-window-device.md) | `/dev/window/<type>/<n>` as a **kernel device** — the bidirectional interface through which IPNX declared a window's chrome and the host reported events | [window.md](../window.md) — the same contract, served by emca. The window system left the kernel entirely on 2026-09-02 |
 | [dev-canvas-protocol.md](dev-canvas-protocol.md) | the original `/dev/canvas` protocol, before it narrowed to genuine drawing | [canvas.md](../canvas.md) |
 | [implementation-2026-08-29.md](implementation-2026-08-29.md) | the plan M0–M18, grown by accretion — a new milestone appended for each decision that invalidated an earlier one | [implementation.md](../implementation.md), replanned 2026-09-04 in three layers with the demo as a milestone |
+| [README-old.md](README-old.md) | the project's front page as it stood on 2026-08-29 — WASI as a personality, a Unix interface "derived by measurement", and the proof of concept's claims as current | [README.md](../../README.md), rewritten 2026-10-08 |
 | [packages-and-projects-v0.md](packages-and-projects-v0.md) | the first packages/projects draft — `/usr/kitty` paths, `/recipe`, no roles | the live proposal in [proposals.md](../proposals.md) |
 
 Deleting these instead would lose nothing that `git log` does not hold; they

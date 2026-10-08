@@ -500,3 +500,8 @@ On the issues found in LICENSE and CLAUDE.md, the same evening:
 
 - *"Fix the issues. WASI is not a personality, we support WASI binaries natively."*
   <br>— `CLAUDE.md`, `docs/why.md`, `docs/architecture.md`, `RESEARCH.md`'s TL;DR, `README.md`, `demo/index.md`, `LICENSE`
+
+Answering the two questions left open:
+
+- *"move README-old to archive, and add host commands to the plan"*
+  <br>— `docs/archive/README-old.md`, `docs/implementation.md` P9
