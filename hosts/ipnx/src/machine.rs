@@ -239,6 +239,15 @@ pub struct Wasm {
     /// A child chosen to run in between is put back, not entered.
     forking: RefCell<HashSet<Pid>>,
     unforked: RefCell<HashSet<Pid>>,
+    /// **The image an `exec` committed**, until the old one's frames have
+    /// unwound. `sysexec` goes on after its point of no return — it
+    /// `cclose`s the image's channel and the close-on-exec descriptors
+    /// (`sysproc.c:592`), and a close may wait — on the old image's kernel
+    /// stack; here that is the old fiber, so it must outlive the commit
+    /// until the call is over.
+    execd: RefCell<HashMap<Pid, (Module, Vec<String>)>>,
+    /// The process whose fiber is being polled, if one is.
+    polling: std::cell::Cell<Option<Pid>>,
     /// The clock: what raises this machine's interrupt. Stopped when the
     /// machine goes.
     _clock: Clock,
@@ -863,6 +872,8 @@ impl Wasm {
             sharing: RefCell::new(HashMap::new()),
             forking: RefCell::new(HashSet::new()),
             unforked: RefCell::new(HashSet::new()),
+            execd: RefCell::new(HashMap::new()),
+            polling: std::cell::Cell::new(None),
             _clock: clock,
         })
     }
@@ -934,9 +945,14 @@ impl Machine for Wasm {
         // A new image is a new memory: nothing is shared any more
         // (`sysproc.c:513`, *"putseg(up->seg[i])"*).
         self.leave(pid);
-        // Replacing an entry IS `exec`: the old fiber goes, with whatever
-        // was on it, because the process is the new image now.
-        self.procs.borrow_mut().insert(pid, Fiber { run: None, image: Some((module, args.to_vec())) });
+        // The process is the new image now. An `exec` made from its own
+        // fiber finishes on it first ([`Wasm::execd`]); one made from
+        // outside — the boot's — has no fiber to finish on.
+        if self.polling.get() == Some(pid) {
+            self.execd.borrow_mut().insert(pid, (module, args.to_vec()));
+        } else {
+            self.procs.borrow_mut().insert(pid, Fiber { run: None, image: Some((module, args.to_vec())) });
+        }
         Ok(())
     }
 
@@ -972,7 +988,10 @@ impl Machine for Wasm {
         // moment longer: `entered` drops before `sys`'s borrow ends.
         let polled = {
             let _entered = enter(sys);
-            run.as_mut().poll(&mut Context::from_waker(&waker))
+            self.polling.set(Some(pid));
+            let p = run.as_mut().poll(&mut Context::from_waker(&waker));
+            self.polling.set(None);
+            p
         };
         // The processes `fork` made during the poll: fibers of their own
         // now, before the scheduler can choose one.
@@ -993,14 +1012,11 @@ impl Machine for Wasm {
             let run = self.child(k)?;
             self.procs.borrow_mut().insert(child, Fiber { run: Some(run), image: None });
         }
-        // Whatever `exec` left in the table wins; otherwise the fiber goes
-        // back, suspended where it stopped.
-        let replaced = self.procs.borrow().contains_key(&pid);
+        // A fiber that left goes back, suspended where it stopped — one in
+        // an `exec` that is still closing what it must among them.
         match polled {
             Poll::Pending => {
-                if !replaced {
-                    self.procs.borrow_mut().insert(pid, Fiber { run: Some(run), image: None });
-                }
+                self.procs.borrow_mut().insert(pid, Fiber { run: Some(run), image: None });
                 Ok(Left::Sched)
             }
             Poll::Ready(r) => {
@@ -1018,8 +1034,9 @@ impl Machine for Wasm {
                         sys.notify(pid, NoteAt::Fault);
                     }
                 }
-                if replaced {
+                if let Some(image) = self.execd.borrow_mut().remove(&pid) {
                     // It `exec`d: the process lives on in its new image.
+                    self.procs.borrow_mut().insert(pid, Fiber { run: None, image: Some(image) });
                     return Ok(Left::Sched);
                 }
                 self.leave(pid);

@@ -332,6 +332,10 @@ impl Devtab {
 pub struct Start {
     pub chan: Chan,
     pub nomount: bool,
+    /// Whether the walk made the channel — a `#` name's attach — and so
+    /// must close it when it is done with it. `slash` and `dot` are the
+    /// process's own.
+    pub owned: bool,
 }
 
 /// Step 1: the starting point.
@@ -372,12 +376,12 @@ pub fn start(
         }
         let d = tab.get(id).ok_or(EBADSHARP)?;
         let chan = d.attach(spec)?;
-        return Ok((Start { chan, nomount: true }, elems(below)));
+        return Ok((Start { chan, nomount: true, owned: true }, elems(below)));
     }
     if let Some(rest) = name.strip_prefix('/') {
-        return Ok((Start { chan: slash.clone(), nomount: false }, elems(rest)));
+        return Ok((Start { chan: slash.clone(), nomount: false, owned: false }, elems(rest)));
     }
-    Ok((Start { chan: dot.clone(), nomount: false }, elems(name)))
+    Ok((Start { chan: dot.clone(), nomount: false, owned: false }, elems(name)))
 }
 
 fn elems(path: &str) -> Vec<String> {
@@ -411,7 +415,13 @@ fn domount(
         Some(els) if !els.is_empty() => els.to_vec(),
         _ => return Ok((c, Vec::new())),
     };
-    let mut m = tab.dcclone(&els[0].chan)?;
+    // *"cclose(*cp); incref(m->mount->to); *cp = m->mount->to"*
+    // (`findmount`, `chan.c:878`) — the mount's own channel, not a clone of
+    // it: a walk from it makes its own fid (`Twalk`'s newfid), and
+    // `cunique` clones one that is to be opened. A clone here was a fid on
+    // the server for every mount crossed, and never clunked.
+    let _ = tab;
+    let mut m = els[0].chan.clone();
     m.path = c.path.clone(); // the name is how we got here, not where we landed
     Ok((m, els))
 }
@@ -422,9 +432,20 @@ pub fn walk(
     tab: &mut Devtab,
     ns: &Ns,
     mut c: Chan,
+    owned: bool,
     names: &[String],
     nomount: bool,
-) -> Result<Chan, String> {
+) -> Result<(Chan, bool), String> {
+    // **A channel the walk made is the walk's to close** when it steps past
+    // it — *"cclose(c); c = nc"* (`chan.c:1109`) — or fails: through a
+    // mount, each step is a fid the server holds until it is clunked. The
+    // channel it was given, and one a mount answers, are someone else's.
+    let mut owned = owned;
+    let drop = |tab: &mut Devtab, c: &mut Chan, owned: bool| {
+        if owned {
+            tab.dclose(c);
+        }
+    };
     // **The path is carried beside the channel, not taken from it**
     // (`chan.c`, `walk`): `path = c->path` before the loop, `path =
     // addelem(path, names[nhave+i], mtpt)` for each name, and `c->path =
@@ -435,6 +456,7 @@ pub fn walk(
     let mut path = c.path.clone();
     for name in names {
         if !c.is_dir() {
+            drop(tab, &mut c, owned);
             return Err("not a directory".into());
         }
         // `..` does not step onto a mount: it goes back out of one. Plan 9
@@ -443,7 +465,13 @@ pub fn walk(
         // and is honest about only that.
         let mut union = Vec::new();
         if name != ".." && !nomount {
+            let was = c.clone();
             let (first, rest) = domount(tab, ns, c)?;
+            if !rest.is_empty() {
+                let mut was = was;
+                drop(tab, &mut was, owned);
+                owned = false;
+            }
             c = first;
             union = rest;
         }
@@ -455,7 +483,11 @@ pub fn walk(
         // reached its second (`/home` over `/usr/kitty`, with `bind -a /etc
         // /home` after it, listed `motd` and could not open it).
         match tab.dwalk(&c, name) {
-            Ok(Some(next)) => c = next,
+            Ok(Some(next)) => {
+                drop(tab, &mut c, owned);
+                c = next;
+                owned = true;
+            }
             Err(e) if e == crate::devmnt::SLEPT => return Err(e),
             miss => {
                 let mut err = miss.err();
@@ -477,10 +509,17 @@ pub fn walk(
                     }
                 }
                 match found {
-                    Some(next) => c = next,
+                    Some(next) => {
+                        drop(tab, &mut c, owned);
+                        c = next;
+                        owned = true;
+                    }
                     // Every element missed: the error is the last device's,
                     // as `walk` returns -1 with it still set (`:1041`).
-                    None => return Err(err.unwrap_or_else(|| format!("'{}' does not exist", name))),
+                    None => {
+                        drop(tab, &mut c, owned);
+                        return Err(err.unwrap_or_else(|| format!("'{}' does not exist", name)));
+                    }
                 }
             }
         }
@@ -492,12 +531,15 @@ pub fn walk(
     // at the top of each iteration, before walking that component
     // (`chan.c:1020`); what to do about the last one is the access mode's
     // business, and two of the seven answer "nothing".
-    Ok(c)
+    Ok((c, owned))
 }
 
 /// `namec(name, amode, omode, perm)` for every access mode but `Aopen`,
 /// which is [`open`]'s: an open answers a reference, and may answer a
-/// channel that already exists.
+/// channel that already exists. With the channel, whether the caller owns
+/// it — made by this walk, and the caller's to close when it is done with
+/// it, as Plan 9's caller `cclose`s what `namec` answers — or it is the
+/// process's own `dot` or `slash`, or a mount's.
 pub fn namec(
     tab: &mut Devtab,
     ns: &Ns,
@@ -506,7 +548,7 @@ pub fn namec(
     name: &str,
     amode: A,
     omode: u16,
-) -> Result<Chan, String> {
+) -> Result<(Chan, bool), String> {
     if matches!(amode, A::Open) {
         return Err("Aopen goes through `open`, which answers a reference".into());
     }
@@ -526,10 +568,21 @@ pub fn open(
     name: &str,
     omode: u16,
 ) -> Result<Rc<RefCell<Chan>>, String> {
-    let c = resolve(tab, ns, slash, dot, name, A::Open, omode)?;
+    let (c, owned) = resolve(tab, ns, slash, dot, name, A::Open, omode)?;
     // close-on-exec is the channel's business, not the device's, and a 9P
-    // server is never sent it.
-    let c = tab.dopen(c, omode & !crate::chan::mode::OCEXEC)?;
+    // server is never sent it. An open that fails leaves the walked channel
+    // to be closed — *"if(waserror()){ cclose(c); nexterror(); }"*.
+    let keep = c.clone();
+    let c = match tab.dopen(c, omode & !crate::chan::mode::OCEXEC) {
+        Ok(c) => c,
+        Err(e) => {
+            if owned && e != crate::devmnt::SLEPT {
+                let mut keep = keep;
+                tab.dclose(&mut keep);
+            }
+            return Err(e);
+        }
+    };
     opened(&mut c.borrow_mut(), omode);
     Ok(c)
 }
@@ -544,13 +597,12 @@ fn resolve(
     name: &str,
     amode: A,
     omode: u16,
-) -> Result<Chan, String> {
+) -> Result<(Chan, bool), String> {
     let (s, names) = start(tab, ns, name, slash, dot)?;
     // A walk of one element or more answers a channel of its own; none
     // answers the namespace's own `dot` or `slash`, which `cunique` below
     // must copy before anything opens or removes it.
-    let mut owned = !names.is_empty();
-    let mut c = walk(tab, ns, s.chan, &names, s.nomount)?;
+    let (mut c, mut owned) = walk(tab, ns, s.chan, s.owned, &names, s.nomount)?;
     // Whether the LAST element steps onto what is mounted there, per access
     // mode (`chan.c:1456`). Two say no, and each says why:
     //
@@ -568,9 +620,18 @@ fn resolve(
         // one that does not, and says why: *"no need to maintain path —
         // cannot dotdot an Abind"* (`:1458`).
         let path = c.path.clone();
+        let was = c.clone();
         let (first, rest) = domount(tab, ns, c)?;
+        if !rest.is_empty() {
+            // the mount's channel is the namespace's; the one it replaced,
+            // if the walk made it, is closed (`findmount`'s `cclose(*cp)`)
+            if owned {
+                let mut was = was;
+                tab.dclose(&mut was);
+            }
+            owned = false;
+        }
         c = first;
-        owned |= !rest.is_empty();
         if !matches!(amode, A::Bind) {
             c.path = path;
         }
@@ -590,7 +651,14 @@ fn resolve(
         let path = c.path.clone();
         c = tab.dcclone(&c)?;
         c.path = path;
+        owned = true;
     }
+    let refuse = |tab: &mut Devtab, mut c: Chan, owned: bool, e: &str| {
+        if owned {
+            tab.dclose(&mut c);
+        }
+        Err(e.to_string())
+    };
     match amode {
         // `Aaccess`, `Abind`, `Amount` and `Aremove` resolve and stop.
         // **None requires a directory** — which is why `bind` can put a file
@@ -598,11 +666,11 @@ fn resolve(
         A::Access | A::Bind | A::Mount | A::Remove => {}
         A::Todir => {
             if !c.is_dir() {
-                return Err("not a directory".into());
+                return refuse(tab, c, owned, "not a directory");
             }
         }
         A::Create => {
-            return Err("Acreate goes through `create`, which walks the parent".into());
+            return refuse(tab, c, owned, "Acreate goes through `create`, which walks the parent");
         }
         // The open itself is [`open`]'s.
         A::Open => {
@@ -610,11 +678,11 @@ fn resolve(
             // by the device, because only `namec` knows the caller asked
             // for `OEXEC`.
             if omode & 3 == crate::chan::mode::OEXEC && c.is_dir() {
-                return Err("cannot exec directory".into());
+                return refuse(tab, c, owned, "cannot exec directory");
             }
         }
     }
-    Ok(c)
+    Ok((c, owned))
 }
 
 /// `namec`'s `Aopen` and `Acreate` after the device has opened or created:
@@ -664,7 +732,16 @@ pub fn create(
     if last.is_empty() || last == "." || last == ".." {
         return Err("bad create name".into());
     }
-    let parent = namec(tab, ns, slash, dot, dir, A::Todir, 0)?;
+    let (parent, powned) = namec(tab, ns, slash, dot, dir, A::Todir, 0)?;
+    // What the walk made is closed once it is done with (`chan.c:1109`); a
+    // close is skipped only when the call has left the processor, since it
+    // runs again from the top and the record gives the closes back then.
+    let close = |tab: &mut Devtab, c: &Chan, owned: bool| {
+        if owned {
+            let mut c = c.clone();
+            tab.dclose(&mut c);
+        }
+    };
 
     // **`create(2)` of a name that already exists is an OPEN with `OTRUNC`**
     // (`chan.c:1540`): namec walks the last element first, and if it is
@@ -680,12 +757,21 @@ pub fn create(
     // *"omode |= OTRUNC; goto Open"* (`chan.c:1550`): the open is `Aopen`'s,
     // `OCEXEC` and all.
     if omode & crate::chan::mode::OEXCL == 0 {
-        match walk(tab, ns, parent.clone(), &[last.to_string()], false) {
-            Ok(existing) => {
+        match walk(tab, ns, parent.clone(), false, &[last.to_string()], false) {
+            Ok((existing, eowned)) => {
+                close(tab, &parent, powned);
                 let omode = omode | crate::chan::mode::OTRUNC;
-                let c = tab.dopen(existing, omode & !crate::chan::mode::OCEXEC)?;
-                opened(&mut c.borrow_mut(), omode);
-                return Ok(c);
+                let keep = existing.clone();
+                return match tab.dopen(existing, omode & !crate::chan::mode::OCEXEC) {
+                    Ok(c) => {
+                        opened(&mut c.borrow_mut(), omode);
+                        Ok(c)
+                    }
+                    Err(e) => {
+                        close(tab, &keep, eowned && e != crate::devmnt::SLEPT);
+                        Err(e)
+                    }
+                };
             }
             Err(e) if e == crate::devmnt::SLEPT => return Err(e),
             Err(_) => {}
@@ -700,7 +786,10 @@ pub fn create(
     let target = match ns.findmount(&parent) {
         Some(els) => match els.iter().find(|e| e.create()) {
             Some(e) => e.chan.clone(),
-            None => return Err(ENOCREATE.into()),
+            None => {
+                close(tab, &parent, powned);
+                return Err(ENOCREATE.into());
+            }
         },
         None => parent.clone(),
     };
@@ -709,11 +798,22 @@ pub fn create(
     // Without it a create in `.` moved the current directory's own fid onto
     // the new file — every relative name after `cd /tmp; echo a >x` answered
     // "unknown fid" — and a create in a union moved the mount's channel.
-    let mut target = tab.dcclone(&target)?;
+    let mut target = match tab.dcclone(&target) {
+        Ok(t) => t,
+        Err(e) => {
+            close(tab, &parent, powned && e != crate::devmnt::SLEPT);
+            return Err(e);
+        }
+    };
     target.path = parent.path.clone();
+    close(tab, &parent, powned);
     // *"devtab[cnew->type]->create(cnew, …, omode&~(OEXCL|OCEXEC), perm)"*
     // (`chan.c:1613`), and then the flags, as an open has them.
-    tab.dcreate(&mut target, last, omode & !(crate::chan::mode::OEXCL | crate::chan::mode::OCEXEC), perm)?;
+    let mode = omode & !(crate::chan::mode::OEXCL | crate::chan::mode::OCEXEC);
+    if let Err(e) = tab.dcreate(&mut target, last, mode, perm) {
+        close(tab, &target, e != crate::devmnt::SLEPT);
+        return Err(e);
+    }
     opened(&mut target, omode);
     Ok(Rc::new(RefCell::new(target)))
 }
@@ -737,7 +837,7 @@ mod tests {
     fn a_rooted_name_resolves_from_the_processs_root_channel() {
         let (mut tab, slash) = tab_with_root();
         let ns = Ns::new();
-        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap();
+        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap().0;
         assert_eq!(c.path, "#/boot/init", "the root device is `#/`, so the name joins without doubling");
     }
 
@@ -767,7 +867,7 @@ mod tests {
         elsewhere.qid.path = 999;
         ns.mount(&slash, Element::new(elsewhere), Bind::Replace);
 
-        let c = namec(&mut tab, &ns, &slash, &slash, "#/", A::Access, 0).unwrap();
+        let c = namec(&mut tab, &ns, &slash, &slash, "#/", A::Access, 0).unwrap().0;
         assert_eq!(c.qid, slash.qid, "the device itself, not the mount");
     }
 
@@ -789,7 +889,7 @@ mod tests {
         let mut ns = Ns::new();
         ns.mount(&slash, Element::new(over), Bind::Replace);
 
-        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).expect("resolve");
+        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).expect("resolve").0;
         assert_eq!(
             c.dev,
             DevId::Srv,
@@ -809,7 +909,7 @@ mod tests {
         tab.add(Box::new(r));
 
         // the channel for /init — reached by a walk, not the starting point
-        let on = namec(&mut tab, &Ns::new(), &slash, &slash, "/boot/init", A::Access, 0).unwrap();
+        let on = namec(&mut tab, &Ns::new(), &slash, &slash, "/boot/init", A::Access, 0).unwrap().0;
         assert_eq!(on.dev, DevId::Root);
 
         let mut other = Other::new();
@@ -819,7 +919,7 @@ mod tests {
         let mut ns = Ns::new();
         ns.mount(&on, Element::new(over), Bind::Replace);
 
-        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap();
+        let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap().0;
         assert_eq!(
             c.dev,
             DevId::Srv,
@@ -870,9 +970,9 @@ mod tests {
         tab.add(Box::new(r));
         let ns = Ns::new();
 
-        let rooted = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap();
+        let rooted = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0).unwrap().0;
         let relative = namec(&mut tab, &ns, &slash, &slash, "boot/init", A::Access, 0)
-            .expect("a relative name must resolve from dot");
+            .expect("a relative name must resolve from dot").0;
         assert_eq!(rooted.qid, relative.qid);
     }
 
@@ -982,7 +1082,7 @@ mod tests {
         ns.mount(&slash, Element::new(slash.clone()), Bind::After);
 
         let c = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Access, 0)
-            .expect("the second element has /boot/init");
+            .expect("the second element has /boot/init").0;
         assert_eq!(c.dev, DevId::Root);
         let e = namec(&mut tab, &ns, &slash, &slash, "/nothing", A::Access, 0).unwrap_err();
         assert!(e.contains("does not exist"), "{e}");
@@ -1006,9 +1106,8 @@ mod tests {
     fn opening_for_writing_is_refused_by_the_root() {
         let (mut tab, slash) = tab_with_root();
         let ns = Ns::new();
-        let e = namec(&mut tab, &ns, &slash, &slash, "/boot/init", A::Open,
-                      crate::chan::mode::OWRITE);
-        assert!(e.is_err(), "devroot refuses writing, as rootwrite does");
+        let e = open(&mut tab, &ns, &slash, &slash, "/boot/init", crate::chan::mode::OWRITE);
+        assert_eq!(e.unwrap_err(), "permission denied", "devopen's Eperm: every file in #/ is 0555");
     }
 }
 
@@ -1061,8 +1160,8 @@ enum Step {
 struct Mux {
     /// `m->rip` — the one process reading the wire.
     rip: Option<crate::proc::Pid>,
-    /// `m->queue` — each outstanding RPC by its tag, and who waits for it.
-    /// A clunk waits for nobody.
+    /// `m->queue` — each outstanding RPC by its tag, and who waits for it:
+    /// nobody once its process has gone.
     queue: Vec<(u16, Option<crate::proc::Pid>)>,
     /// Replies read by another process, waiting for their owner.
     done: HashMap<u16, Vec<u8>>,
@@ -1176,7 +1275,6 @@ impl crate::devmnt::Transport for Wire<'_> {
             return Err(SLEPT.into());
         }
         let key = (self.wire.dev, self.wire.devno, self.wire.qid.path);
-        let clunk = request.get(4) == Some(&(crate::ninep::T::Clunk as u8));
 
         // The record: a reply had already, or an RPC under way.
         let rec = self.tab.records.entry(pid).or_default();
@@ -1228,16 +1326,9 @@ impl crate::devmnt::Transport for Wire<'_> {
                 return Err(SLEPT.into());
             }
             let m = self.tab.muxes.entry(key).or_default();
-            m.queue.push((tag, if clunk { None } else { Some(pid) }));
+            m.queue.push((tag, Some(pid)));
             if let Some(Step::Rpc { sent, .. }) = self.tab.records.entry(pid).or_default().steps.get_mut(at) {
                 *sent = true;
-            }
-            // **A clunk waits for nobody.** Plan 9's `mntclunk` waits for
-            // `Rclunk`; a clunk here is made where a call cannot be run
-            // again — a channel's last close — so its reply is left for
-            // whoever reads the wire next, and dropped (RESEARCH §16.14).
-            if clunk {
-                return Ok(finish(self.tab, crate::ninep::W::new().frame(crate::ninep::T::Clunk.reply(), tag)));
             }
         }
 
@@ -1304,9 +1395,8 @@ impl crate::devmnt::Transport for Wire<'_> {
                 self.tab.gate(key);
                 return Ok(finish(self.tab, msg));
             }
-            // Someone else's, or nobody's — a clunk's, or one whose
-            // process is gone, which Plan 9 prints as *"unexpected reply
-            // tag"* and drops.
+            // Someone else's, or nobody's — one whose process is gone,
+            // which Plan 9 prints as *"unexpected reply tag"* and drops.
             if let Some((_, Some(p))) = owner {
                 self.tab.muxes.entry(key).or_default().done.insert(rtag, msg);
                 if let Some(u) = &self.tab.up {

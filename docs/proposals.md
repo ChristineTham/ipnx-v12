@@ -48,19 +48,14 @@ from eve — and one answer: **the default user is `kitty`** (Christine,
 `pc/main.c:285`); Plan 9's fallback, `"glenda"`, is kept for a
 configuration that names none.
 
-**A last close does not wait** — proposed 2026-09-24 (RESEARCH §16.14),
-and the serial line's drain added 2026-09-29 (§16.20). Built, and awaiting
-review. `mntclunk` waits for `Rclunk`, and `uartclose` for the line to take
-what is queued (`uartdrainoutput`, `devuart.c:342`). Here the `Tclunk` is
-sent and its reply dropped by whoever reads the wire next, and the line is
-kicked once and what it would not take freed. A program sees it: a close
-returns before the server has let the fid go, so an `ORCLOSE` file may
-still be there, and before the line has sent its output. The reason given:
-a call that sleeps in this kernel keeps the rest of itself to run when it
-is entered again, and a last close is made where nothing kept it — a
-descriptor's close, `dup`, `exec`'s close-on-exec, exit's `closefgrp`. The
-alternative is that rest kept for each such close, and `forceclosefgrp`
-(`pgrp.c:245`) for a process killed while it waits.
+**The serial line's last close does not drain** — proposed 2026-09-29
+(RESEARCH §16.20). Built, and awaiting review. `uartclose` waits for the
+line to take what is queued (`uartdrainoutput`, `devuart.c:342`); here the
+line is kicked once and what it would not take is freed by the `qclose`
+Plan 9 also does after the wait. A program sees it as a close that returns
+before the line has sent its output. The mount driver's clunk, which this
+item first named, waits now (§16.24), and a last close may wait anywhere it
+is made; the alternative here is the drain built on that.
 
 **The serial line's interrupt, taken at clock time** — proposed 2026-09-29
 (RESEARCH §16.20). Built, and awaiting review. `i8250interrupt`

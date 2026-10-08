@@ -530,6 +530,15 @@ pub struct Proc {
     pub procctl: Option<Procctl>,
     /// `p->kp` — a kernel process: its body is kernel code, not an image.
     pub kp: bool,
+    /// **Its image is gone, and it is still in `pexit`**, waiting for a
+    /// close — reached from a note, so no call is left on the image to
+    /// carry the rest. Plan 9 waits there on the process's kernel stack;
+    /// here what is left runs as a kernel process's body does, until it is
+    /// `Moribund`.
+    pub noimage: bool,
+    /// `up->closingfgrp` (`pgrp.c:222`) — in `closefgrp`, the descriptors
+    /// not all closed: what `forceclosefgrp` hands to the close queue.
+    pub closingfgrp: bool,
     /// `p->alarm` — the tick an `alarm` is due on; 0 is none (`alarm.c`).
     pub alarm: u64,
     /// `p->rgrp` — the rendezvous group: the processes waiting in
@@ -645,6 +654,8 @@ impl Proc {
             noteid: 1,
             procctl: None,
             kp: false,
+            noimage: false,
+            closingfgrp: false,
             alarm: 0,
             rgrp: Rc::new(RefCell::new(Vec::new())),
             seg: Rc::new(RefCell::new(Segment::default())),
@@ -1673,6 +1684,8 @@ impl Procs {
             // children are traced.
             procctl: parent.procctl.filter(|&c| c == Procctl::Tracesyscall),
             kp: false,
+            noimage: false,
+            closingfgrp: false,
             alarm: 0,
             // *"if(flag & RFREND) p->rgrp = newrgrp(); else … up->rgrp"*
             // (`sysproc.c:153`); *"p->hang = up->hang"* (`:171`).
@@ -1834,13 +1847,37 @@ impl Procs {
     /// It answers the channels whose last reference went with the process's
     /// descriptor table, for the caller to `cclose` — `closefgrp`
     /// (`pgrp.c:207`) — because only the kernel can reach their devices.
-    pub fn exits(&mut self, pid: Pid, status: &str) -> Vec<Chan> {
+    /// `pexit`'s first acts (`proc.c:1138`, `:1147`): *"up->alarm = 0"*,
+    /// and *"fgrp = up->fgrp; up->fgrp = nil"* — the descriptor table taken,
+    /// to be closed. `closefgrp` does nothing unless this was the last
+    /// reference to the table (`pgrp.c:215`, *"if(decref(f) != 0) return"*)
+    /// — a child made without `RFFDG` shares its parent's — and then
+    /// `cclose`s every channel in it, which reaches the device only for a
+    /// channel nobody else holds (`chan.c:496`): those are what this
+    /// answers, for the caller to close.
+    pub fn closefgrp(&mut self, pid: Pid) -> Vec<Chan> {
+        let Some(p) = self.tab.get_mut(&pid) else { return Vec::new() };
+        p.alarm = 0;
+        let fgrp = std::mem::replace(&mut p.fds, Rc::new(RefCell::new(Fds::default())));
+        let mut last = Vec::new();
+        if let Ok(fds) = Rc::try_unwrap(fgrp) {
+            for c in fds.into_inner().slots.into_iter().flatten() {
+                if let Ok(c) = Rc::try_unwrap(c) {
+                    last.push(c.into_inner());
+                }
+            }
+        }
+        last
+    }
+
+    /// The rest of `pexit` (`proc.c:1170`–`:1250`), once what the process
+    /// held is closed: its status and times, the parent's share of them,
+    /// the wait record on the parent's queue, and the process `Moribund`.
+    pub fn exits(&mut self, pid: Pid, status: &str) {
         let ticks = self.m.ticks;
         let (ppid, utime, stime) = match self.tab.get_mut(&pid) {
-            None => return Vec::new(),
+            None => return,
             Some(p) => {
-                // *"up->alarm = 0"* (`proc.c:1138`).
-                p.alarm = 0;
                 let utime = p.time[TUSER] + p.time[TCUSER];
                 let stime = p.time[TSYS] + p.time[TCSYS];
                 let msg = if status.is_empty() {
@@ -1873,27 +1910,8 @@ impl Procs {
         if self.m.readied == Some(pid) {
             self.m.readied = None;
         }
-        // *"fgrp = up->fgrp; up->fgrp = nil; … closefgrp(fgrp);"*
-        // (`proc.c:1147`, `:1160`). `closefgrp` does nothing unless this was
-        // the last reference to the table (`pgrp.c:215`, `if(decref(f) !=
-        // 0) return;`) — a child made without `RFFDG` shares its parent's —
-        // and then `cclose`s every channel in it, which reaches the device
-        // only for a channel nobody else holds (`chan.c:496`).
-        let fgrp = self
-            .tab
-            .get_mut(&pid)
-            .map(|p| std::mem::replace(&mut p.fds, Rc::new(RefCell::new(Fds::default()))));
-        let mut last = Vec::new();
-        if let Some(Ok(fds)) = fgrp.map(Rc::try_unwrap) {
-            for c in fds.into_inner().slots.into_iter().flatten() {
-                if let Ok(c) = Rc::try_unwrap(c) {
-                    last.push(c.into_inner());
-                }
-            }
-        }
         self.setstate(pid, State::Moribund);
         self.wakeup(Rid::Proc(ppid, Which::Waitr));
-        last
     }
 
     /// `ccloseq` (`chan.c:521`): a channel whose last reference is gone, to

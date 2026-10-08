@@ -276,6 +276,49 @@ mod userspace {
         }
     }
 
+    /// **A session leaves no fid behind for the commands it ran.** Each step
+    /// of a walk is a fid on the server, and Plan 9 `cclose`s every channel
+    /// a walk steps past and every one a call is done with (`chan.c:1109`,
+    /// `sysstat`'s *"cclose(c)"*); here they were dropped, and the host's
+    /// server held four more fids for every line typed — 182 after one line,
+    /// 198 after five (2026-10-08). What a session still holds at its end
+    /// must not depend on how much it did.
+    #[test]
+    fn a_session_leaves_no_fid_for_what_it_did() {
+        use std::cell::Cell;
+        use std::rc::Rc;
+        /// The host's server, counting the fids it holds: an attach and a
+        /// walk to a new fid make one, a clunk or a remove ends one.
+        struct Counting(store::Store, Rc<Cell<i64>>);
+        impl ipnx_kernel::devvirtio9p::Nineserver for Counting {
+            fn rpc(&mut self, t: &[u8]) -> Result<Vec<u8>, String> {
+                let r = self.0.rpc(t)?;
+                let ok = r[4] == t[4] + 1;
+                let u32at = |b: &[u8], i: usize| u32::from_le_bytes([b[i], b[i + 1], b[i + 2], b[i + 3]]);
+                match t[4] {
+                    104 if ok => self.1.set(self.1.get() + 1),
+                    110 if ok => {
+                        let nw = u16::from_le_bytes([t[15], t[16]]);
+                        if u32at(t, 11) != u32at(t, 7) && u16::from_le_bytes([r[7], r[8]]) == nw {
+                            self.1.set(self.1.get() + 1);
+                        }
+                    }
+                    120 | 122 => self.1.set(self.1.get() - 1),
+                    _ => {}
+                }
+                Ok(r)
+            }
+        }
+        let held = |lines: usize| {
+            let n = Rc::new(Cell::new(0));
+            let term = Term::typing(&"ls /bin >/dev/null; cat /etc/motd >/dev/null\n".repeat(lines));
+            let store = Counting(store::Store::new(&rootfs()).unwrap(), n.clone());
+            startboot(&[BOOT.to_string()], &[], &plan9ini(&[]), Box::new(term), Some(Box::new(store))).unwrap();
+            n.get()
+        };
+        assert_eq!(held(1), held(5), "fids left behind by the commands");
+    }
+
     /// The same, on a filesystem of this test's own.
     pub(super) fn typing_at(keys: &str, store: &std::path::Path) -> String {
         let term = Term::typing(keys);

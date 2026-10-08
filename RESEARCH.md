@@ -5450,3 +5450,70 @@ down"*, `Enoattach` *"mount/attach disallowed"*; an unknown `#` letter is
 `procctlclosefiles` loops *"for(i = 0; i < f->maxfd; i++)"*
 (`devproc.c:1279`), and `maxfd` is the highest open descriptor, so
 `closefiles` leaves that one open. This kernel closes them all.
+
+### 16.24 A last close waits, and a walk closes what it steps past (2026-10-08)
+
+**A clunk waits for `Rclunk`.** `mntclunk` is `mountrpc` (`devmnt.c`), and
+`cclose` waits in it on the process's kernel stack; `uartclose` waits the
+same way for the line to drain (`devuart.c:342`). Here a clunk had waited for
+nobody — its reply dropped by whoever read the wire next — because a last
+close was made where no call kept the rest of itself (§16.14, the register's
+first item). Now the mount driver's clunk is an RPC like any other, and
+every last close made where a call cannot simply run again keeps what is
+left — the closes not yet made and the rest of the call — to run when the
+process is entered again: `close`, `dup`, `seek`'s union channel, `mount`,
+`unmount`, `exec`, `closeproc`, and `pexit`. A close inside a call that runs
+again from the top (§16.14's record) needs nothing more: the record gives
+the clunk back.
+
+| | Plan 9 | was here |
+|---|---|---|
+| `pexit` | `closefgrp` (`proc.c:1160`), *then* the wait record (`:1219`): the parent's `wait` returns once the files are let go | the wait record first, the closes after |
+| a kill during it | `forceclosefgrp` (`pgrp.c:245`): what is left goes to the close queue | — |
+| `exec` | `cclose(tc)` (`sysproc.c:571`), then the close-on-exec descriptors (`:591`), past the point of no return | the host replaced the process's fiber at the commit, so a wait after it would have lost the call |
+| `closeproc` | `devtab[c->type]->close(c)` (`chan.c:575`) may wait, and the queue is drained in order | — |
+
+The host keeps the old image's fiber until its `exec` has finished
+(`Wasm::execd`); a `pexit` reached from a note, with the image gone, runs on
+as kernel code (`Proc::noimage`) until it is `Moribund`; and `closingfgrp`
+is Plan 9's `up->closingfgrp`.
+
+**A walk closes the channels it makes.** Each step of a walk through a mount
+is a fid on the server — `Twalk`'s newfid — and Plan 9's `walk` closes the
+channel it stepped from, *"cclose(c); c = nc"* (`chan.c:1109`), and the one
+it holds when it fails; `sysstat` and its kind close what `namec` answered.
+Here they were dropped, and **the host's 9P server held 182 fids at the end
+of a session of one command line, and four more for every line after** —
+198 after five. `domount` made one more for every mount crossed, cloning
+the mount's channel where `findmount` takes it with a reference (*"cclose(*
+cp); incref(m->mount->to); *cp = m->mount->to"*, `chan.c:878`). Now a walk
+knows which channels it made and closes each as it steps past it or fails;
+`domount` does not clone; `stat`, `wstat`, `unmount` and a failed `open` or
+`create` close what they walked to; and `namec` says, with what it answers,
+whether it is the caller's to close. The same session ends with **10 fids
+held, however many lines it ran** — a test in `hosts/ipnx` holds it to
+that. `mount`'s target is `Amount` (`sysfile.c:1048`), as `bind`'s is.
+
+**What remains, and why the 10:**
+
+- **A namespace's channels and `dot` are not closed when the last process
+  holding them exits.** `pexit` closes `dot` and `closepgrp`s the namespace
+  (`proc.c:1166`, `:1168`), and `pgrpcpy` takes a reference to every mount it
+  copies (`newmount`'s *"incref(to)"*, `pgrp.c:273`). Here a copied
+  namespace and a child's `dot` are copies of the channels, not references
+  to them, so closing one would clunk a fid another still walks from; they
+  must be shared before they can be closed. The 10 are these.
+- **A mount's wire is never let go** (`Devtab::wires`): Plan 9 closes it when
+  the last channel through the mount goes (`chanfree`'s
+  *"cclose(c->mchan)"*), and the server reads end of file. It follows from
+  the item above.
+- **An interrupted RPC is dropped, not flushed.** `mountio` answers `Eintr`
+  by sending `Tflush` and waiting for its reply (`mntflushalloc`,
+  `devmnt.c`); here the request is forgotten, and a server that answers it
+  later answers nobody — a plumb port's next message, to a reader that was
+  interrupted, is lost.
+- **A walk sends one name per `Twalk`.** Plan 9 sends up to `MAXWELEM` at once
+  (`chan.c:1006`) and stops at a mount point it finds among the qids.
+- **`remove` of a mount point** is *"Eismtpt"* (`sysfile.c:1151`); here it is
+  not refused.
+- **The uart's last close does not drain** (§16.20).

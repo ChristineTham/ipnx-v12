@@ -134,6 +134,16 @@ ABI. The conformance suite binds all three.
   count: the device's close runs at the last reference (`chan.c:490`). A
   descriptor, `/fd/3` opened from it, and a name it was posted under are one
   channel, offset and all.
+- **A last close may wait, and the call it is made in waits with it** —
+  the mount driver for `Rclunk`, as `cclose` waits in `mntclunk`. A call
+  that leaves the processor keeps the rest of itself, and where a close is
+  made the closes not yet made are part of that rest. `pexit` closes before
+  the parent is told (`proc.c:1160`, `:1219`).
+- **What a walk makes, it closes.** Each step through a mount is a fid on
+  the server; a walk closes the channel it steps from and the one it holds
+  when it fails (`chan.c:1109`), and `namec` answers, with its channel,
+  whether the caller owns it — and so must close it — or it is the process's
+  `dot` or `slash`, or a mount's.
 
 **THE DEVICE LETTERS ARE PLAN 9'S, AND THERE IS NO EXCEPTION.** A device exists
 here only if Plan 9 has one, means the same by it, and spells it with the same

@@ -341,8 +341,15 @@ impl Kernel {
             let cc = c.borrow().clone();
             self.exec_commit(pid, &cc, &image, &elem, &args)
         };
-        self.tab.cclose(c);
-        r
+        if let Err(e) = r {
+            self.tab.cclose(c);
+            return Err(e);
+        }
+        // *"poperror(); cclose(tc);"* (`sysproc.c:571`) — past the point of
+        // no return, and the close may wait; the rest of `sysexec` is after
+        // it.
+        let tc = std::rc::Rc::try_unwrap(c).ok().map(|cell| cell.into_inner());
+        self.closethen(pid, tc.into_iter().collect(), Box::new(|k, pid| k.exec_closeonexec(pid))).map(|_| ())
     }
 
     /// Step 3, and what `sysexec` commits. **The machine is asked first**:
@@ -378,32 +385,34 @@ impl Kernel {
             }
             p.priority = p.basepri;
         }
+        Ok(())
+    }
+
+    /// The rest of `sysexec`, after the image's channel is closed
+    /// (`sysproc.c:576`–`:594`): the notes go, *"if(up->hang) up->procctl =
+    /// Proc_stopme"*, and **close on exec** — *"for(i=0; i<=f->maxfd; i++)
+    /// fdclose(i, CCEXEC)"*, every descriptor opened `OCEXEC` or marked so,
+    /// as `fauth`'s is. They had been passed on to the new image. Each close
+    /// may wait.
+    fn exec_closeonexec(&mut self, pid: Pid) -> Result<Ret, String> {
         self.procs.borrow_mut().execnotes(pid);
-        // *"if(up->hang) up->procctl = Proc_stopme"* (`sysproc.c:587`).
         if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
             if p.hang {
                 p.procctl = Some(proc::Procctl::Stopme);
             }
         }
-        // *"Close on exec"* (`sysproc.c:592`): *"for(i=0; i<=f->maxfd;
-        // i++) fdclose(i, CCEXEC)"* — every descriptor opened `OCEXEC`, or
-        // marked so, as `fauth`'s is. They had been passed on to the new
-        // image.
+        let mut last = Vec::new();
         let fds = self.procs.borrow().get(pid).map(|p| p.fds.clone());
         if let Some(fds) = fds {
             let n = fds.borrow().slots();
             for fd in 0..n {
                 let marked = fds.borrow().get(fd).is_some_and(|c| c.borrow().flag & chan::flag::CCEXEC != 0);
-                if !marked {
-                    continue;
-                }
-                let last = fds.borrow_mut().close(fd);
-                if let Some(Some(mut c)) = last {
-                    self.tab.dclose(&mut c);
+                if marked {
+                    last.extend(fds.borrow_mut().close(fd).flatten());
                 }
             }
         }
-        Ok(())
+        self.closethen(pid, last, Box::new(|_, _| Ok(Ret::Ok)))
     }
 
     /// `schedinit` (`proc.c:67`) — **the scheduler**, and *"never returns"*.
@@ -459,12 +468,21 @@ impl Kernel {
                     // `exits`, so nothing recorded a status.
                     (machine::Left::Exited, _) => {
                         drop(procs);
-                        if self.procs.borrow().status(pid).is_none() {
-                            self.pexit(pid, "", true);
+                        let closing = |k: &Kernel| k.procs.borrow().get(pid).is_some_and(|p| p.closingfgrp);
+                        if !closing(self) && self.procs.borrow().status(pid).is_none() {
+                            let _ = self.pexit(pid, "", true);
                         }
-                        // A process `pexit` kept `Broken` stays so until it
-                        // is killed; nothing of it runs again.
-                        if self.procs.borrow().state(pid) != proc::State::Broken {
+                        if closing(self) {
+                            // Its `pexit` is waiting on a close, and the
+                            // image is gone: the rest runs as kernel code.
+                            let mut procs = self.procs.borrow_mut();
+                            procs.take_setlabel(pid);
+                            if let Some(p) = procs.get_mut(pid) {
+                                p.noimage = true;
+                            }
+                        } else if self.procs.borrow().state(pid) != proc::State::Broken {
+                            // A process `pexit` kept `Broken` stays so until
+                            // it is killed; nothing of it runs again.
                             self.procs.borrow_mut().setstate(pid, proc::State::Dead);
                         }
                     }
@@ -537,7 +555,7 @@ impl Kernel {
             // A kernel process has no image: its body is kernel code, kept
             // as the rest of what it was doing, and entering it is running
             // that (`kprocchild`, `pc/trap.c`).
-            let kp = self.procs.borrow().get(pid).is_some_and(|p| p.kp);
+            let kp = self.procs.borrow().get(pid).is_some_and(|p| p.kp || p.noimage);
             let how = if kp {
                 self.runkproc(pid)
             } else {
@@ -1164,7 +1182,7 @@ fn closeprocwoken(k: &mut Kernel, me: Pid) -> Result<Ret, String> {
     k.procs.borrow_mut().interrupted(me);
     if k.procs.borrow().clunkq.is_empty() {
         k.procs.borrow_mut().qunlock(&mut k.clunkq);
-        k.pexit(me, "no work", true);
+        let _ = k.pexit(me, "no work", true);
         return Ok(Ret::Ok);
     }
     if closeproc1(k, me) {
@@ -1184,8 +1202,23 @@ fn closeproc1(k: &mut Kernel, me: Pid) -> bool {
     }
     let c = k.procs.borrow_mut().clunkq.remove(0);
     k.procs.borrow_mut().qunlock(&mut k.clunkq);
-    let mut c = c;
-    k.tab.dclose(&mut c);
+    closeproc_close(k, me, c)
+}
+
+/// `closeproc`'s *"devtab[c->type]->close(c)"* (`chan.c:575`), which may
+/// wait — the mount driver for `Rclunk` — and then the loop goes on: what
+/// is kept is this close and the loop after it. `false` if it went to sleep.
+fn closeproc_close(k: &mut Kernel, me: Pid, c: Chan) -> bool {
+    let mut cc = c.clone();
+    k.tab.dclose(&mut cc);
+    if k.procs.borrow().get(me).is_some_and(|p| p.setlabel) {
+        k.labels.insert(
+            me,
+            Box::new(move |k, me| if closeproc_close(k, me, c) { closeproc(k, me) } else { Ok(Ret::Ok) }),
+        );
+        return false;
+    }
+    k.tab.endcall(me);
     true
 }
 
@@ -1517,6 +1550,51 @@ impl Kernel {
         self.labels.insert(up, rest);
     }
 
+    /// A channel the call walked to, used once, and closed — *"if(waserror()){
+    /// cclose(c); nexterror(); } … poperror(); cclose(c);"* (`sysstat`,
+    /// `sysfile.c:951`) — when it is the call's own. Not when the call has
+    /// left the processor: it runs again from the top, and the record gives
+    /// the close back then.
+    fn done<T>(&mut self, mut c: Chan, owned: bool, f: impl FnOnce(&mut Kernel, &mut Chan) -> Result<T, String>) -> Result<T, String> {
+        let r = f(self, &mut c);
+        if owned && r.as_ref().err().is_none_or(|e| e != devmnt::SLEPT) {
+            self.tab.dclose(&mut c);
+        }
+        r
+    }
+
+    /// **Last closes that wait, then the rest of the call.** `cclose`
+    /// (`chan.c:490`) of each channel in turn, and a close may leave the
+    /// processor — the mount driver waiting for `Rclunk` (`mntclunk`), a line
+    /// for what is queued to go (`uartdrainoutput`, `devuart.c:342`). Plan 9
+    /// waits there on the process's kernel stack and goes on from the line;
+    /// here what is kept is the closes not yet finished and `then`, the rest
+    /// of the call (`p->sched`). It is for a close made where the call could
+    /// not simply run again — after the descriptor is gone, the slot
+    /// replaced, the image committed.
+    ///
+    /// What the call did on the wires before is over, so its record goes;
+    /// each close's own RPCs are what the record gives back when the process
+    /// is entered again.
+    fn closethen(&mut self, up: Pid, cs: Vec<Chan>, then: Label) -> Result<Ret, String> {
+        self.tab.endcall(up);
+        self.closing(up, cs, then)
+    }
+
+    fn closing(&mut self, up: Pid, mut cs: Vec<Chan>, then: Label) -> Result<Ret, String> {
+        while !cs.is_empty() {
+            let mut c = cs[0].clone();
+            self.tab.dclose(&mut c);
+            if self.procs.borrow().get(up).is_some_and(|p| p.setlabel) {
+                self.setlabel(up, Box::new(move |k, up| k.closing(up, cs, then)));
+                return Ok(Ret::Ok);
+            }
+            cs.remove(0);
+            self.tab.endcall(up);
+        }
+        then(self, up)
+    }
+
     /// The record `pwait` takes once `haswaitq` is true.
     fn waitrecord(&mut self, up: Pid) -> Result<Ret, String> {
         match self.procs.borrow_mut().await_child(up) {
@@ -1580,20 +1658,67 @@ impl Kernel {
     }
 
     /// `pexit(exitstr, freemem)` (`proc.c:1123`), where it needs the
-    /// kernel: *"closefgrp(fgrp)"* (`:1160`) — `cclose` each channel whose
-    /// last reference went — and, when `freemem` is false, which is a note
-    /// that was a fault or a suicide, *"addbroken(up)"* (`:1227`): the
-    /// process is kept `Broken` for a debugger. `*nobroken` would stop that,
-    /// and it is a configuration this system has no source for.
-    pub fn pexit(&mut self, pid: Pid, status: &str, freemem: bool) {
-        let last = self.procs.borrow_mut().exits(pid, status);
-        for mut c in last {
+    /// kernel. **What the process held is closed first** —
+    /// *"closefgrp(fgrp)"* (`:1160`), `cclose` of each channel whose last
+    /// reference went, each of which may wait — and only then is the parent
+    /// told: its `wait` returns once the server has let the files go. Then,
+    /// when `freemem` is false, which is a note that was a fault or a
+    /// suicide, *"addbroken(up)"* (`:1227`): the process is kept `Broken`
+    /// for a debugger. `*nobroken` would stop that, and it is a
+    /// configuration this system has no source for.
+    ///
+    /// A close that waits leaves the rest of `pexit` to run when the process
+    /// is entered again; one reached from a note, with the image gone, runs
+    /// on as kernel code ([`proc::Proc::noimage`]). A process killed while
+    /// it closes waits for nothing: `forceclosefgrp` (`pgrp.c:245`) hands
+    /// what is left to the close queue.
+    pub fn pexit(&mut self, pid: Pid, status: &str, freemem: bool) -> Result<Ret, String> {
+        let last = self.procs.borrow_mut().closefgrp(pid);
+        let status = status.to_string();
+        self.tab.endcall(pid);
+        // *"up->closingfgrp = f"* … *"up->closingfgrp = nil"* (`pgrp.c:222`).
+        if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
+            p.closingfgrp = true;
+        }
+        self.closingfgrp(pid, last, Box::new(move |k, pid| {
+            if let Some(p) = k.procs.borrow_mut().get_mut(pid) {
+                p.closingfgrp = false;
+            }
+            k.procs.borrow_mut().exits(pid, &status);
+            k.tab.forget(pid);
+            if !freemem {
+                k.procs.borrow_mut().addbroken(pid);
+            }
+            Ok(Ret::Ok)
+        }))
+    }
+
+    /// `closefgrp`'s loop (`pgrp.c:223`), with `forceclosefgrp`'s way out:
+    /// *"Called from sleep because up is in the middle of closefgrp and
+    /// just got a kill ctl message … To break free, hand the unclosed
+    /// channels to the close queue"* (`pgrp.c:234`).
+    fn closingfgrp(&mut self, up: Pid, mut cs: Vec<Chan>, then: Label) -> Result<Ret, String> {
+        while !cs.is_empty() {
+            let killed = self.procs.borrow().get(up).is_some_and(|p| p.procctl == Some(proc::Procctl::Exitme));
+            if killed {
+                let mut procs = self.procs.borrow_mut();
+                for c in cs.drain(..) {
+                    if !procs.ccloseq(c) {
+                        procs.closeproc = true;
+                    }
+                }
+                break;
+            }
+            let mut c = cs[0].clone();
             self.tab.dclose(&mut c);
+            if self.procs.borrow().get(up).is_some_and(|p| p.setlabel) {
+                self.setlabel(up, Box::new(move |k, up| k.closingfgrp(up, cs, then)));
+                return Ok(Ret::Ok);
+            }
+            cs.remove(0);
+            self.tab.endcall(up);
         }
-        self.tab.forget(pid);
-        if !freemem {
-            self.procs.borrow_mut().addbroken(pid);
-        }
+        then(self, up)
     }
 
     /// `pprint` (`devcons.c:322`) — a message from the kernel to a process's
@@ -1664,7 +1789,7 @@ impl Kernel {
             // *"case Proc_exitme: pexit("Killed", 1)"*.
             Some(Procctl::Exitme) => {
                 self.procs.borrow_mut().get_mut(up).map(|p| p.procctl = None);
-                self.pexit(up, "Killed", true);
+                let _ = self.pexit(up, "Killed", true);
                 Some(machine::Notify::Pexit)
             }
             // *"case Proc_traceme: if(p->nnote == 0) return; /* No break
@@ -1719,14 +1844,14 @@ impl Kernel {
             if n.flag == NoteFlag::NDebug {
                 self.pprint(up, &format!("suicide: {}\n", n.msg));
             }
-            self.pexit(up, &n.msg, n.flag != NoteFlag::NDebug);
+            let _ = self.pexit(up, &n.msg, n.flag != NoteFlag::NDebug);
             return Notify::Pexit;
         }
         if notified {
             return Notify::No;
         }
         if handler == 0 {
-            self.pexit(up, &n.msg, n.flag != NoteFlag::NDebug);
+            let _ = self.pexit(up, &n.msg, n.flag != NoteFlag::NDebug);
             return Notify::Pexit;
         }
         match at {
@@ -1737,7 +1862,7 @@ impl Kernel {
                 if n.flag == NoteFlag::NDebug {
                     self.pprint(up, &format!("suicide: {}\n", n.msg));
                 }
-                self.pexit(up, &n.msg, n.flag != NoteFlag::NDebug);
+                let _ = self.pexit(up, &n.msg, n.flag != NoteFlag::NDebug);
                 return Notify::Pexit;
             }
             machine::NoteAt::Syscall => {}
@@ -1785,10 +1910,7 @@ impl Kernel {
                 self.exec(up, &path, &args)?;
                 Ok(Ret::Ok)
             }
-            Call::Exits { status } => {
-                self.pexit(up, &status, true);
-                Ok(Ret::Ok)
-            }
+            Call::Exits { status } => self.pexit(up, &status, true),
             // `sysawait` (`sysproc.c:715`) formats the message in the KERNEL
             // and answers its length; `wait(2)` parses it back with
             // `tokenize`. The times belong to the reaped child and nothing
@@ -1835,26 +1957,31 @@ impl Kernel {
             // TARGET is `Amount` (`:51`, `:60`). Neither is `Atodir`, so a
             // file binds over a file — `bind /bin/rc /bin/sh`.
             Call::Bind { name, old, flag } => {
-                let on = self.walk(up, &old, namec::A::Mount, 0)?;
-                let to = self.walk(up, &name, namec::A::Bind, 0)?;
+                let (on, _) = self.walk(up, &old, namec::A::Mount, 0)?;
+                let (to, _) = self.walk(up, &name, namec::A::Bind, 0)?;
                 let procs = self.procs.borrow();
                 let p = procs.get(up).ok_or("no such process")?;
                 p.ns.borrow_mut().mount(&on, element_of(to, flag, ""), bind_of(flag));
                 Ok(Ret::Ok)
             }
+            // `sysunmount` (`sysfile.c:1087`): the two channels named are
+            // the call's, and `cclose`d when it is done with them.
             Call::Unmount { name, old } => {
                 let on = self.walk(up, &old, namec::A::Mount, 0)?;
                 let what = match &name {
                     Some(n) => Some(self.walk(up, n, namec::A::Bind, 0)?),
                     None => None,
                 };
-                let procs = self.procs.borrow();
-                let p = procs.get(up).ok_or("no such process")?;
-                p.ns.borrow_mut().unmount(&on, what.as_ref());
-                Ok(Ret::Ok)
+                {
+                    let procs = self.procs.borrow();
+                    let p = procs.get(up).ok_or("no such process")?;
+                    p.ns.borrow_mut().unmount(&on.0, what.as_ref().map(|w| &w.0));
+                }
+                let mine: Vec<Chan> = [Some(on), what].into_iter().flatten().filter(|c| c.1).map(|c| c.0).collect();
+                self.closethen(up, mine, Box::new(|_, _| Ok(Ret::Ok)))
             }
             Call::Chdir { path } => {
-                let c = self.walk(up, &path, namec::A::Todir, 0)?;
+                let (c, _) = self.walk(up, &path, namec::A::Todir, 0)?;
                 self.procs.borrow_mut().chdir(up, c);
                 Ok(Ret::Ok)
             }
@@ -1892,10 +2019,7 @@ impl Kernel {
                     let r = p.fds.borrow_mut().close(fd);
                     r.ok_or(EBADFD)?
                 };
-                if let Some(mut c) = last {
-                    self.tab.dclose(&mut c);
-                }
-                Ok(Ret::Ok)
+                self.closethen(up, last.into_iter().collect(), Box::new(|_, _| Ok(Ret::Ok)))
             }
             // *"c = fdtochan(fd, OREAD, 1, 1)"* (`sysfile.c:637`) and
             // *"fdtochan(fd, OWRITE, 1, 1)"* (`:728`): the channel must be
@@ -1955,17 +2079,17 @@ impl Kernel {
                     return Err("negative i/o offset".into());
                 }
                 let new = new as u64;
-                let mut c = cell.borrow_mut();
-                c.offset = new;
-                c.dri = 0;
-                // `unionrewind` (`sysfile.c:367`) — a rewind starts the union
-                // over too, or the next read carries on from the element the
-                // last one stopped in.
-                c.uri = 0;
-                if let Some(mut umc) = c.umc.take() {
-                    self.tab.dclose(&mut umc);
-                }
-                Ok(Ret::N(new as usize))
+                let umc = {
+                    let mut c = cell.borrow_mut();
+                    c.offset = new;
+                    c.dri = 0;
+                    // `unionrewind` (`sysfile.c:367`) — a rewind starts the
+                    // union over too, or the next read carries on from the
+                    // element the last one stopped in.
+                    c.uri = 0;
+                    c.umc.take()
+                };
+                self.closethen(up, umc.into_iter().map(|b| *b).collect(), Box::new(move |_, _| Ok(Ret::N(new as usize))))
             }
             Call::Dup { old, new } => {
                 let fds = {
@@ -1973,10 +2097,7 @@ impl Kernel {
                     procs.get(up).ok_or("no such process")?.fds.clone()
                 };
                 let (r, oc) = fds.borrow_mut().dup(old, new).ok_or(EBADFD)?;
-                if let Some(mut oc) = oc {
-                    self.tab.dclose(&mut oc);
-                }
-                Ok(Ret::Fd(r))
+                self.closethen(up, oc.into_iter().collect(), Box::new(move |_, _| Ok(Ret::Fd(r))))
             }
             // `syspipe` (`sysfile.c`): attach `#|`, walk the two ends, open
             // both. The attach IS the allocation.
@@ -2022,8 +2143,10 @@ impl Kernel {
                     }
                 }
             }
+            // `sysremove` (`sysfile.c:1141`): *"Remove clunks the fid"*, so
+            // the channel is not closed after.
             Call::Remove { path } => {
-                let mut c = self.walk(up, &path, namec::A::Remove, 0)?;
+                let (mut c, _) = self.walk(up, &path, namec::A::Remove, 0)?;
                 self.tab.dremove(&mut c)?;
                 Ok(Ret::Ok)
             }
@@ -2032,8 +2155,8 @@ impl Kernel {
             // named as it was reached, not as its server calls it. `fstat`
             // does not (`:932`).
             Call::Stat { path } => {
-                let c = self.walk(up, &path, namec::A::Access, 0)?;
-                let d = self.tab.dstat(&c)?;
+                let (c, owned) = self.walk(up, &path, namec::A::Access, 0)?;
+                let d = self.done(c.clone(), owned, |k, c| k.tab.dstat(c))?;
                 Ok(Ret::Data(match pathlast(&c.path) {
                     Some(name) => dirsetname(name, d),
                     None => d,
@@ -2045,8 +2168,8 @@ impl Kernel {
             // down by `packoldstat`. What does not fit is *"old stat system
             // call - recompile"*.
             Call::OldStat { path } => {
-                let c = self.walk(up, &path, namec::A::Access, 0)?;
-                let d = self.tab.dstat(&c)?;
+                let (c, owned) = self.walk(up, &path, namec::A::Access, 0)?;
+                let d = self.done(c.clone(), owned, |k, c| k.tab.dstat(c))?;
                 oldstat(&c, d, "old stat system call - recompile")
             }
             Call::OldFstat { fd } => {
@@ -2059,8 +2182,8 @@ impl Kernel {
                 Ok(Ret::Data(self.tab.dstat(&c)?))
             }
             Call::Wstat { path, edir } => {
-                let mut c = self.walk(up, &path, namec::A::Access, 0)?;
-                self.tab.dwstat(&mut c, &edir)?;
+                let (c, owned) = self.walk(up, &path, namec::A::Access, 0)?;
+                self.done(c, owned, |k, c| k.tab.dwstat(c, &edir))?;
                 Ok(Ret::Ok)
             }
             Call::Fwstat { fd, edir } => {
@@ -2094,7 +2217,8 @@ impl Kernel {
                 } else {
                     ninep::NOFID
                 };
-                let on = self.walk(up, &old, namec::A::Todir, 0)?;
+                // *"c1 = namec(arg1, Amount, 0, 0)"* (`sysfile.c:1048`).
+                let (on, _) = self.walk(up, &old, namec::A::Mount, 0)?;
                 let user = self.procs.borrow().user(up).unwrap_or_default();
                 let to = self.tab.dmount(wire, &user, &aname, afid)?;
                 cell.borrow_mut().flag |= chan::flag::CMSG;
@@ -2111,10 +2235,7 @@ impl Kernel {
                     let r = p.fds.borrow_mut().close(fd);
                     r.flatten()
                 };
-                if let Some(mut c) = last {
-                    self.tab.dclose(&mut c);
-                }
-                Ok(Ret::N(id as usize))
+                self.closethen(up, last.into_iter().collect(), Box::new(move |_, _| Ok(Ret::N(id as usize))))
             }
             // `sysfversion` (`auth.c:23`): `mntversion` on the descriptor,
             // answering the version agreed, which the machine copies into
@@ -2227,7 +2348,7 @@ impl Kernel {
                 let notified = self.procs.borrow().get(up).is_some_and(|p| p.notified);
                 if how != NRSTR && !notified {
                     self.pprint(up, "call to noted() when not notified\n");
-                    self.pexit(up, "Suicide", false);
+                    let _ = self.pexit(up, "Suicide", false);
                     return Ok(Ret::N(NDFLT as usize));
                 }
                 let last = {
@@ -2247,7 +2368,7 @@ impl Kernel {
                         if flag == proc::NoteFlag::NDebug {
                             self.pprint(up, &format!("suicide: {}\n", last.msg));
                         }
-                        self.pexit(up, &last.msg, flag != proc::NoteFlag::NDebug);
+                        let _ = self.pexit(up, &last.msg, flag != proc::NoteFlag::NDebug);
                         Ok(Ret::N(NDFLT as usize))
                     }
                 }
@@ -2858,8 +2979,9 @@ impl Kernel {
         r
     }
 
-    /// `namec` for the calling process: its namespace, its `slash`, its `dot`.
-    fn walk(&mut self, up: Pid, path: &str, a: namec::A, mode: u16) -> Result<Chan, String> {
+    /// `namec` for the calling process: its namespace, its `slash`, its `dot`
+    /// — and whether the channel is the caller's to close ([`namec::namec`]).
+    fn walk(&mut self, up: Pid, path: &str, a: namec::A, mode: u16) -> Result<(Chan, bool), String> {
         // The process table is let go before the walk: a walk through a
         // server a process runs sleeps, and sleeping is the table's.
         let (slash, dot, ns) = {
@@ -4510,5 +4632,171 @@ mod syscalls {
         assert_eq!((a, b), (first, gap + 1));
         let Ret::Data(st) = k.syscall(1, Call::Fstat { fd: a }).unwrap() else { panic!() };
         assert_eq!(ninep::Dir::conv_m2d(&st).unwrap().name, "data");
+    }
+
+    /// The far end of a pipe as a file server process: read the request the
+    /// client sent, and answer it as `serve9p` does.
+    fn answer(k: &mut Kernel, server: Pid, fd: Fd) -> Vec<u8> {
+        let Ok(Ret::Data(req)) = k.syscall(server, Call::Pread { fd, n: 8192, off: -1 }) else {
+            panic!("the client sent nothing")
+        };
+        k.syscall(server, Call::Pwrite { fd, data: serve9p(&req), off: -1 }).unwrap();
+        req
+    }
+
+    /// How much the client has sent that the server has not read —
+    /// `pipestat`'s length (`devpipe.c:154`).
+    fn queued(k: &mut Kernel, server: Pid, fd: Fd) -> u64 {
+        let Ok(Ret::Data(d)) = k.syscall(server, Call::Fstat { fd }) else { panic!("fstat") };
+        ninep::Dir::conv_m2d(&d).unwrap().length
+    }
+
+    /// A call of `pid`'s through a mount whose server is `server`, run until
+    /// it finishes: each time the client leaves the processor, the server
+    /// answers what it sent.
+    fn served(k: &mut Kernel, pid: Pid, server: Pid, fd: Fd, call: Call) -> Result<Ret, String> {
+        let mut r = k.syscall(pid, call);
+        while r == Ok(Ret::Sched) {
+            answer(k, server, fd);
+            r = k.resume(pid);
+        }
+        r
+    }
+
+    /// A mount over `/` whose server is a process on a pipe's far end, and
+    /// `/answer` opened through it: the client, the server, the server's end
+    /// and the descriptor.
+    fn mounted(k: &mut Kernel) -> (Pid, Fd, Fd) {
+        k.tab.add(Box::new(devmnt::MntDev::new()));
+        let Ret::Two(client, end) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
+        let Ret::Pid(server) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        let mount = Call::Mount { fd: client, afd: -1, old: "/".into(), flag: 1, aname: String::new() };
+        served(k, 1, server, end, mount).expect("mount");
+        let Ok(Ret::Fd(fd)) = served(k, 1, server, end, Call::Open { path: "/answer".into(), mode: 0 }) else {
+            panic!("the mounted server was not reached")
+        };
+        (server, end, fd)
+    }
+
+    /// **A last close waits for `Rclunk`** (`mntclunk`, `devmnt.c`): the
+    /// server is told to let the fid go, and the close returns once it has
+    /// — not before, as it did when a clunk waited for nobody.
+    #[test]
+    fn a_close_through_a_mount_waits_for_the_server_to_clunk() {
+        let mut k = booted();
+        let (server, end, fd) = mounted(&mut k);
+        assert_eq!(k.syscall(1, Call::Close { fd }), Ok(Ret::Sched), "it waits for Rclunk");
+        assert_eq!(k.procs.borrow().state(1), proc::State::Wakeme);
+        let req = answer(&mut k, server, end);
+        assert_eq!(req[4], ninep::T::Clunk as u8);
+        assert_eq!(k.procs.borrow().state(1), proc::State::Ready, "the answer woke it");
+        assert_eq!(k.resume(1), Ok(Ret::Ok));
+        assert_eq!(k.syscall(1, Call::Pread { fd, n: 1, off: 0 }), Err(EBADFD.into()), "and it is closed");
+    }
+
+    /// `dup` onto an open descriptor closes what it replaces, waiting as any
+    /// last close does (`sysfile.c:246`), and answers the slot after.
+    #[test]
+    fn dup_waits_for_the_close_of_what_it_replaces() {
+        let mut k = booted();
+        let (server, end, fd) = mounted(&mut k);
+        let other = fd_(k.syscall(1, Call::Open { path: "#e".into(), mode: 0 }));
+        assert_eq!(k.syscall(1, Call::Dup { old: other, new: fd }), Ok(Ret::Sched));
+        assert_eq!(answer(&mut k, server, end)[4], ninep::T::Clunk as u8);
+        assert_eq!(k.resume(1), Ok(Ret::Fd(fd)));
+    }
+
+    fn fd_(r: Result<Ret, String>) -> Fd {
+        match r {
+            Ok(Ret::Fd(f)) => f,
+            r => panic!("{r:?}"),
+        }
+    }
+
+    /// **`pexit` closes before it tells the parent** (`proc.c:1160`, then
+    /// `:1219`): a process holding the last reference to a file a server
+    /// serves waits in `exits` for `Rclunk`, and its parent's `await`
+    /// returns after that, not before.
+    #[test]
+    fn exits_waits_for_its_closes_before_the_parent_hears() {
+        let mut k = booted();
+        let (server, end, fd) = mounted(&mut k);
+        let Ret::Pid(child) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::FDG }).unwrap() else { panic!() };
+        assert_eq!(k.syscall(1, Call::Close { fd }), Ok(Ret::Ok), "the child still holds it");
+        assert_eq!(k.syscall(child, Call::Exits { status: String::new() }), Ok(Ret::Sched), "waits for Rclunk");
+        assert_eq!(k.syscall(1, Call::Await), Ok(Ret::Sched), "nothing to reap yet");
+        assert_eq!(answer(&mut k, server, end)[4], ninep::T::Clunk as u8);
+        assert_eq!(k.resume(child), Ok(Ret::Ok));
+        assert_eq!(k.procs.borrow().state(child), proc::State::Moribund);
+        let Ok(Ret::Str(w)) = k.resume(1) else { panic!("no wait record") };
+        assert!(w.starts_with(&format!("{child} ")), "{w}");
+    }
+
+    /// `forceclosefgrp` (`pgrp.c:245`): a process killed while it closes
+    /// waits for nothing — what it has not closed goes to the close queue,
+    /// and its parent hears at once.
+    #[test]
+    fn a_process_killed_in_exits_hands_its_closes_to_the_queue() {
+        let mut k = booted();
+        let (_server, _end, fd) = mounted(&mut k);
+        let Ret::Pid(child) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::FDG }).unwrap() else { panic!() };
+        k.syscall(1, Call::Close { fd }).unwrap();
+        k.procs.borrow_mut().get_mut(child).unwrap().procctl = Some(proc::Procctl::Exitme);
+        assert_eq!(k.syscall(child, Call::Exits { status: "Killed".into() }), Ok(Ret::Ok), "no wait");
+        assert_eq!(k.procs.borrow().state(child), proc::State::Moribund);
+        assert_eq!(k.procs.borrow().clunkq.len(), 1, "the close queue has it");
+    }
+
+    /// `closeproc`'s close waits as any last close does (`chan.c:575`), and
+    /// then closes what is queued after it: the queue is drained in order,
+    /// each clunk answered before the next is sent.
+    #[test]
+    fn closeproc_waits_for_each_close_it_makes() {
+        let mut k = booted();
+        let (server, end, fd) = mounted(&mut k);
+        let Ret::Pid(child) = k.syscall(1, Call::Rfork { flags: rf::PROC | rf::FDG }).unwrap() else { panic!() };
+        k.syscall(1, Call::Close { fd }).unwrap();
+        k.procs.borrow_mut().get_mut(child).unwrap().procctl = Some(proc::Procctl::Exitme);
+        k.syscall(child, Call::Exits { status: "Killed".into() }).unwrap();
+        let cp = k.kproc("closeproc", closeproc);
+        // as `schedinit` enters a process: `up` is it
+        k.up.borrow_mut().pid = cp;
+        assert_eq!(k.runkproc(cp), machine::Left::Sched, "asleep for Rclunk");
+        assert!(k.procs.borrow().clunkq.is_empty(), "taken off the queue");
+        assert_eq!(answer(&mut k, server, end)[4], ninep::T::Clunk as u8);
+        assert_eq!(k.procs.borrow().state(cp), proc::State::Ready, "the answer woke it");
+        k.up.borrow_mut().pid = cp;
+        assert_eq!(k.runkproc(cp), machine::Left::Sched, "and it waits for more");
+        assert_eq!(k.procs.borrow().state(cp), proc::State::Wakeme);
+    }
+
+    /// `exec` closes the close-on-exec descriptors past its point of no
+    /// return (`sysproc.c:591`), and each close waits as any last close
+    /// does: the call ends when the server has let the file go.
+    #[test]
+    fn exec_waits_for_its_close_on_exec_descriptors() {
+        let mut k = booted();
+        let (server, end, _fd) = mounted(&mut k);
+        let mode = chan::mode::OCEXEC as i32;
+        let Ok(Ret::Fd(cx)) = served(&mut k, 1, server, end, Call::Open { path: "/answer".into(), mode }) else {
+            panic!()
+        };
+        // `/` is the mount before the root, so the walk asks the server too;
+        // the last thing the call waits for is the clunk.
+        let exec = Call::Exec { path: "/boot/init".into(), args: vec!["init".into()] };
+        let mut r = k.syscall(1, exec);
+        let mut last = 0;
+        for _ in 0..64 {
+            if r != Ok(Ret::Sched) {
+                break;
+            }
+            if queued(&mut k, server, end) > 0 {
+                last = answer(&mut k, server, end)[4];
+            }
+            r = k.resume(1);
+        }
+        assert_eq!(r, Ok(Ret::Ok));
+        assert_eq!(last, ninep::T::Clunk as u8, "the call ended once the server let the file go");
+        assert_eq!(k.syscall(1, Call::Pread { fd: cx, n: 1, off: 0 }), Err(EBADFD.into()), "closed on exec");
     }
 }
