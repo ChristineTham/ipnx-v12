@@ -87,9 +87,11 @@ opens a window whose namespace has the project's packages bound.
      console work.
    - Its arguments are `exec`'s, and its environment is the process's.
    - It cannot start a process, because WASI has none (on `wasip1`, Go's
-     `StartProcess` returns `ENOSYS`). A prebuilt Go program runs, but the
-     real `go` command cannot build: that needs Go ported to `plan9/wasm`,
-     or it stays out.
+     `StartProcess` returns `ENOSYS`). A program built with Go or C is one
+     standalone file, and runs. What cannot run is *building* one inside
+     the system: the command a person types is a driver that starts the
+     other tools as separate programs. `go build` starts `compile` for each
+     package and then `link`; `clang` starts the linker, `wasm-ld`.
    - `pip install` cannot reach the network: WASI preview 1 has no outbound
      sockets.
 
@@ -107,10 +109,28 @@ opens a window whose namespace has the project's packages bound.
       (recommended)?
    2. Which browser engine: `@bjorn3/browser_wasi_shim` (recommended, for
       its one-to-one `Fd`) or `@tybys/wasm-util`?
-   3. The real `go` command needs Go ported to `plan9/wasm` — and the
-      suite's line *"build a program with a language toolchain, and run it"*
-      needs that or another toolchain that can start its compiler and
-      linker: now, after the demo, or not at all?
+   3. Building inside the system — the suite's line *"build a program with
+      a language toolchain, and run it"*, the demo's `cc hello.c` and `go
+      run hello.go` — needs the driver to be a native program, which can
+      start others (`rfork` and `exec`). *Proposed:*
+      - **C:** Plan 9's own shape, `pcc`, which runs the preprocessor, the
+        compiler and the loader as three programs (`cmd/pcc.c:172`, `:179`,
+        `:192`, through `doexec`'s `fork` and `exec`, `:213`–`:226`). A
+        native `cc` in that shape would run the real `clang -c` and the real
+        `wasm-ld`, each a standalone WASI program.
+      - **Go:** its driver is `go` itself, which does far more than start
+        two tools — it resolves packages and modules and keeps a build
+        cache — so a small native stand-in would be a cut-down. The real
+        `go` needs **Go for Plan 9 on wasm**. Go names a target by system
+        and processor: it has `plan9/386`, `plan9/amd64` and `plan9/arm`,
+        and `js/wasm` and `wasip1/wasm`, but no `plan9/wasm`. Adding it
+        means joining Go's own Plan 9 runtime and system calls — the calls
+        this kernel answers — to Go's own wasm code generator. Go programs,
+        and `go` itself, would then be native programs here, like the C
+        commands. The cost is a change to Go's runtime that we would carry
+        ourselves, unless Go took it.
+
+      Should these be built, and when: now, after the demo, or not at all?
 
 **The wasm32 `Ureg`, and APE's signal trampoline** — proposed 2026-09-25.
 Built, and awaiting review, because each is a machine-dependent file Plan 9
