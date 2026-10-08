@@ -306,7 +306,7 @@ a manager over a file** — a host-side one.
 | `text/plain` | `edit` — CodeMirror, Monaco, TextKit, whichever the surface has | host |
 | `inode/directory` | `look` and `edit` over the listing | either |
 | `image/*`, `video/*`, `application/postscript` | the surface's own renderers | host |
-| process, package and user tables | programs that need the namespace | guest |
+| process, package and user tables | programs that need the namespace | wasm |
 
 Which retroactively explains two rules that had looked like special cases.
 **"Editing is the surface's"** was never a fact about text: it is that

@@ -78,7 +78,7 @@ Underneath them is the real 4th-edition `rc` and twenty-four real Plan 9 command
 
 **run & svc** — orchestration without the industry. A process spec is a directory: a Dockerfile has to be a script because installing is mutation, and here it is a declaration because installing is a bind. `svc` keeps N replicas alive, and kubectl is `cat` and `echo`: `echo start web /spec 3 > /n/svc/ctl`.
 
-**Real toolchains, running now** — `cc hello.c` then `./a.out` is real clang and real wasm-ld, as guests. `go run hello.go` drives the real gc compiler and linker, also guests, because they are pure Go and cross-build. `python hello.py` is CPython 3.14 with the full standard library, and `pip install cowsay` talks to the real PyPI. Try them in the shell below once the toolchains have streamed in — `examples/` in your home has runnable programs for each.
+**Real toolchains, running now** — `cc hello.c` then `./a.out` is real clang and real wasm-ld, as wasm programs. `go run hello.go` drives the real gc compiler and linker, also wasm programs, because they are pure Go and cross-build. `python hello.py` is CPython 3.14 with the full standard library, and `pip install cowsay` talks to the real PyPI. Try them in the shell below once the toolchains have streamed in — `examples/` in your home has runnable programs for each.
 
 ## The macOS surface
 
@@ -86,7 +86,7 @@ The same system runs native — full JIT under wasmtime, real windows, your real
 
 ```
 git clone https://github.com/ChristineTham/ipnx-v12 && cd ipnx-v12
-bash userspace/mk.sh                                      # build the guest world
+bash userspace/mk.sh                                      # build the userspace
 cargo run -p ipnx                                         # boot to rc on this terminal
 cargo run -p ipnx -- echo hello                           # boot; init runs a command
 ```
@@ -97,7 +97,7 @@ Once the prompt appears, take the guided tour:
 tour
 ```
 
-You boot as **kitty**, at home in `/usr/kitty`, where `hello.c`, `hello.py` and `hello.go` are waiting. With the toolchain aboard, `cc hello.c` then `./a.out` runs real clang and wasm-ld as guests, then the binary you built — Hello Kitty. It is a real `cc(1)`: flags, `-o`, `-c` and multiple files all work. Python interprets in the tab too (`python hello.py`); the real gc compiler and linker run as guests too, because they are pure Go and cross-build (`go` explains how). The tour shows everything.
+You boot as **kitty**, at home in `/usr/kitty`, where `hello.c`, `hello.py` and `hello.go` are waiting. With the toolchain aboard, `cc hello.c` then `./a.out` runs real clang and wasm-ld as wasm programs, then the binary you built — Hello Kitty. It is a real `cc(1)`: flags, `-o`, `-c` and multiple files all work. Python interprets in the tab too (`python hello.py`); the real gc compiler and linker run as wasm programs too, because they are pure Go and cross-build (`go` explains how). The tour shows everything.
 
 Heritage is one command away: `font=/lib/font/bit/go/regular.13.font win acme9 &` opens the 1993 raster acme, verbatim source, beside its successor; `@{bind /lib/alt /etc; cat /etc/motd}` shows a subshell rearranging its own private namespace; `/v10/bin/echo -e 'a\nb' | wc` pipes 1989 into 1992.
 

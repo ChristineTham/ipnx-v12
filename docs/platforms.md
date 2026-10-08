@@ -38,7 +38,7 @@ are unaffected.
 > else. This table is kept as the dated record it is, not as a present-tense
 > claim.
 
-| form | host | engine (guests) | state (2026-08-30) |
+| form | host | engine (wasm) | state (2026-08-30) |
 |---|---|---|---|
 | **macOS** | `hosts/macos` | wasmtime 48, Cranelift JIT | **green, 149** (floor 131) headless — full canvas parity (M5); **IPNX.app runs** (M3): windows via winit/softbuffer, acme on screen, `--live` hostfs persistence (M4), snapshots, and the canvas presenter v0 renders the semantic tree natively (con's transcript verified by capture) |
 | **OCI container** | `hosts/oci` | wasmtime, Cranelift (or AOT `.cwasm`) | **green, 149** (floor 131) — `FROM scratch`, musl-static, 62.2MB image (amd64 full suite; the aarch64 image smoke-boots under qemu) |

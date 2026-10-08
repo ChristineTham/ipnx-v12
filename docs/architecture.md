@@ -48,8 +48,8 @@ userspace/         the userspace (graduated at M0): libcs, vendored sources
 ```
 
 The kernel core and the JS reference implement the same kernel; a host
-implements the host contract below; every userspace binary implements the guest
-ABI. The conformance suite binds all three.
+implements the host contract below; every userspace binary implements the
+userspace ABI. The conformance suite binds all three.
 
 ## The kernel's shape
 
@@ -215,7 +215,7 @@ not beginning `*` (`pc/main.c:257`). Here the first is `LETTERS` in
 which the host reads as Plan 9's boot reads `plan9.ini`. There is one root,
 so nothing else to answer.
 
-## Contract: the guest ABI
+## Contract: the userspace ABI
 
 A Plan 9-dialect binary is a wasm32 module that (as built by
 `userspace/mk.sh`; the stubs are `userspace/sys/src/libc/wasm/sys.c`):
@@ -369,20 +369,22 @@ itself, mounts the server at `/root` and binds `/root` after `/`, and runs
 
 ## Contract: what is trusted
 
-- **The engine's sandbox is the isolation primitive.** A guest reaches
-  exactly its imports and its linear memory; everything else it can touch is
-  what its namespace resolves. There is no second barrier: on hosted rungs
-  the host OS process stands behind the engine, on the microVM rung nothing
-  does — a runtime escape there is a whole-system escape, recorded plainly
-  ([design.md](archive/design-log-claude-written.md), OCI decision).
-- **Trusted**: the kernel (both implementations), the host shims, the build
+- **The host is part of the system, not something to be kept out.**
+  *"We are in symbiosis with the host. Our wasm binaries can access host
+  resources and invoke host binaries"* (Christine, 2026-10-08;
+  [saranos.md](saranos.md), *The host's resources*). The engine runs each
+  program in its linear memory, reaching out only through its imports —
+  that is how wasm runs code, not a wall between the system and its host.
+- **A program's authority is its namespace** — what it resolves, the
+  host's own files among them where the host serves them — and the host
+  commands it starts, which run as the host's user (decided, not built).
+- **Trusted**: the kernel (both implementations), the host, the build
   toolchain's output.
-- **Untrusted by construction**: every guest (its authority is its
-  namespace, nothing else), every wire-mounted server (the client applies
-  the protocol and its own policy — "the namespace unions services; it
-  cannot union their trust", [identity.md](identity.md)), and every wire
+- **Untrusted by construction**: every wire-mounted server (the client
+  applies the protocol and its own policy — "the namespace unions services;
+  it cannot union their trust", [identity.md](identity.md)), and every wire
   client (per-attach identity; the server decides what the name may do).
-- **A demo visitor** executes guests in their own browser only; the hosting
+- **A demo visitor** runs the system in their own browser only; the hosting
   is static files; nothing a visitor does reaches another visitor or a
   server.
 - The future credential mechanism (M8) uses boring, reviewed cryptographic

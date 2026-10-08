@@ -9,7 +9,7 @@ mkdir -p dist/build
 cp -R ../poc/browser dist/browser
 cp -R supervisor dist/supervisor            # the demo's own kernel lineage
 # rootfs.json is packed by userspace/mk.sh, NOT here — so editing a file under
-# userspace/rootfs and running only this script serves a stale guest world, and
+# userspace/rootfs and running only this script serves a stale userspace, and
 # the symptom is a change that plainly landed and plainly is not running (it
 # cost three wrong diagnoses before it was caught). Refuse rather than mislead.
 if [ -n "$(find ../userspace/rootfs -newer ../userspace/build/rootfs.json -print -quit 2>/dev/null)" ]; then

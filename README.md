@@ -297,8 +297,8 @@ until all twelve are reached.
 **[docs/when.md](docs/when.md)** — what is built, and what is not. The only
  document that says.
 **[docs/architecture.md](docs/architecture.md)** — the architecture: what the system
- is, present tense — the component map and the contracts a host, a guest, and the
- wire must honour.
+ is, present tense — the component map and the contracts a host, a userspace binary, and
+ the wire must honour.
 **[docs/handbook.md](docs/handbook.md)** — the handbook: how to build, run,
  extend and debug it.
 **[docs/implementation.md](docs/implementation.md)** — the plan, replanned 2026-09-04:

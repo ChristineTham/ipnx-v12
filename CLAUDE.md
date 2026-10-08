@@ -80,7 +80,7 @@ what is built is [docs/when.md](docs/when.md). Everything else is design documen
 
 ## Commands
 
-Build the guest binaries — the libc, the commands and `rc` — into
+Build the userspace — the libc, the commands and `rc` — into
 `userspace/root/bin` (requires wasi-sdk at `~/.local/opt/wasi-sdk`, overridable
 with `WASI_SDK`, for its wasm backend alone: nothing here links against wasi,
 and a built binary imports exactly the calls in `userspace/libc/wasm/sys.c`;
@@ -116,7 +116,7 @@ lets `libl.a`'s `main` win (RESEARCH §16.15). And **`-matomics` with `--shared-
 --import-memory`**, because `rfork(RFMEM)` is wasm shared memory (RESEARCH
 §16.13); the host enables wasmtime's `threads`.
 
-`userspace/build/` and `userspace/root/` are generated and gitignored. Guest
+`userspace/build/` and `userspace/root/` are generated and gitignored. Userspace
 binaries carry no `.wasm` extension: exec walks the namespace for `/bin/cat`,
 and a freshly produced module is indistinguishable from a shipped one.
 
@@ -310,7 +310,7 @@ dependencies) and `hosts/ipnx/` (the machine — wasmtime — and the boot; the
 workspace root is `Cargo.toml`). The other hosts named in
 `docs/implementation.md` are not built yet.
 
-The guest world lives at `userspace/`, and **mirrors Plan 9's tree**:
+The userspace lives at `userspace/`, and **mirrors Plan 9's tree**:
 `sys/include` and `sys/src` (every library, every command, `ape` and `games`,
 vendored whole from `plan9/` and committed, 2026-09-24), each architecture's
 `include` (`386/include`, … — libmach and the debuggers read them all), and
@@ -490,7 +490,7 @@ target is **functional equivalence to the demo**.
   `../ipnx`** so every quoted number keeps file-and-line provenance (RESEARCH.md's own
   rule).
 - Prose is British-inflected (`licence`, `rasterise`), em-dashed; tables carry comparisons.
-  Guest C is Plan 9 style (tabs, `nil`, no const clutter); the build silences the
+  Userspace C is Plan 9 style (tabs, `nil`, no const clutter); the build silences the
   builtin-redeclaration warnings that style causes.
 
 ## Current state

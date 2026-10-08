@@ -160,7 +160,7 @@ windowing style into every program that ever ran here.
 > window, and a manager reads and writes files in it.**
 
 This needs no new protocol, because 9P is already the only IPC. It works
-identically for a host-side manager (`edit` over CodeMirror) and a guest-side
+identically for a host-side manager (`edit` over CodeMirror) and a wasm-side
 one (`/proc`), because one reaches the files through emca-host↔emca-IPNX and
 the other mounts them directly — the symbiosis doing what it is for.
 
@@ -230,5 +230,5 @@ and canvas.
 > So `body` exists for every window, including one whose manager is host-side.
 > The mirror protocol (`insert`, `delete`, `seq`) is then an **optimisation for
 > keeping a host editor in step** — not a substitute for the file and not a
-> second source of truth. A guest reading `/dev/window/body` gets the content,
+> second source of truth. A program reading `/dev/window/body` gets the content,
 > whatever is drawing it.

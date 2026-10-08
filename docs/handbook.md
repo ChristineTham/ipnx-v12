@@ -35,7 +35,7 @@ cargo run -p ipnx -- rc /bin/<script>.rc
 cargo run -p ipnx -- echo hello   # boot; init runs it with rc -c, then the shell
 ```
 
-`userspace/build/` and `userspace/root/` are generated and gitignored. Guest
+`userspace/build/` and `userspace/root/` are generated and gitignored. Userspace
 binaries carry no `.wasm` extension: exec walks the namespace for `/bin/echo`,
 and a freshly built module is indistinguishable from a shipped one.
 

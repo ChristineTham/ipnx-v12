@@ -5,7 +5,7 @@
 # Upstream digests are PINNED here and verified at fetch; pkg(1) verifies
 # again at install against the digests written into cache/index. The zlib
 # sysroot is exploded (pkg's tree kind fetches plain files — no archive code
-# in the guest) and carries a meta binding it into cc's sysroot paths.
+# in the userspace) and carries a meta binding it into cc's sysroot paths.
 set -e
 cd "$(dirname "$0")"
 mkdir -p cache
@@ -46,7 +46,7 @@ tar xf ../toolchain/cache/sysroot.tar -C cache/zbuild/root/
 mkdir -p cache/zbuild/root/zsrc cache/zbuild/root/zout
 cp cache/zbuild/src/*.c cache/zbuild/src/*.h cache/zbuild/root/zsrc/
 ZFILES="adler32 compress crc32 deflate inflate inffast inftrees trees uncompr zutil"
-# ramfs is memory-only, so the guest base64s each object to the console
+# ramfs is memory-only, so the build inside base64s each object to the console
 # (the root carries full CPython) and the host decodes them back out
 { echo 'cd /zsrc'
   for f in $ZFILES; do echo "cc -c -I/zsrc '-DNO_GZIP' $f.c -o /zout/$f.o"; done
@@ -60,7 +60,7 @@ ZFILES="adler32 compress crc32 deflate inflate inffast inftrees trees uncompr zu
 ZPID=$!
 for i in $(seq 1 180); do sleep 5; grep -q "ZDONE" cache/zbuild/log && break; done
 kill $ZPID 2>/dev/null || true; wait $ZPID 2>/dev/null || true
-grep -q ZDONE cache/zbuild/log || { echo "zlib guest build failed:" >&2; tail -8 cache/zbuild/log >&2; exit 1; }
+grep -q ZDONE cache/zbuild/log || { echo "zlib build inside the system failed:" >&2; tail -8 cache/zbuild/log >&2; exit 1; }
 python3 - cache/zbuild/log cache/zlib-1.2.13/lib/wasm32-wasi/zlib <<'PYX'
 import base64, sys, pathlib
 log = pathlib.Path(sys.argv[1]).read_text().splitlines()

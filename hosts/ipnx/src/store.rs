@@ -8,7 +8,7 @@
 //! the version is plain 9P2000, which spares the 9P2000.u shim Plan 9's
 //! device needs.
 //!
-//! **It is not part of the kernel and it is not a guest process.** It is what
+//! **It is not part of the kernel and it is not a wasm process.** It is what
 //! the embedding serves, and Saranos includes the embedding: *"It is a
 //! symbiosis between host and WASM, neither can exist without the other."*
 //!

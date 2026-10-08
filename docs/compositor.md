@@ -451,7 +451,7 @@ Nobody has shipped both halves well together because nobody else had
 this boundary.
 
 WHAT THIS RETIRES, none of it to be written: the presenter's
-hand-rolled caret; guest-side line editing and readline; escape-
+hand-rolled caret; wasm-side line editing and readline; escape-
 sequence handling for history; syntax highlighting, folding,
 multi-cursor and find-in-file. Inherited, not implemented.
 

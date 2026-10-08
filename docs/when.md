@@ -185,7 +185,7 @@ fault is *"sys: trap: …"* and ends the process. `closeproc` is a kernel
 process too.
 
 What differs: a note for a handler that arrives at a clock interrupt waits
-for the process's next call to end, because the guest can only be entered
+for the process's next call to end, because the program can only be entered
 from a host call; a note that ends the process does not wait. There is no
 `Ureg` for a handler to see, and *"sys:"* notes gain no *" pc=…"*.
 
@@ -275,7 +275,7 @@ the rest of the table is free to carry its wire. That is the same property Plan
 `Kernel.procs` is now shared, which is what makes `up` reachable from the
 devices that need it — again what Plan 9 gets from a global.
 
-**A guest reaches them.** `Machine::touser` is handed a `Syscalls` — the
+**A program reaches them.** `Machine::touser` is handed a `Syscalls` — the
 kernel, lent for the duration — and turns whatever its trap looks like into a
 `Call`. Plan 9 needs no such arrangement: a trap lands in `syscall()` and
 reaches the kernel through globals. Here the machine goes out of the kernel

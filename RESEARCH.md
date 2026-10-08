@@ -38,7 +38,7 @@ Four findings drive that, in the order they mattered:
 3. **The architecture has been built three times** — plan9port, 9vx, Inferno `emu` — and
    each got one thing wrong. This project is **`emu` with WebAssembly in place of Dis** (§4).
 4. **iOS forces the choice of execution substrate.** Apps cannot spawn child processes and
-   cannot JIT, so the jail cannot be host processes or native code. 9vx's answer (vx32) is
+   cannot JIT, so a program cannot be a host process or native code there. 9vx's answer (vx32) is
    x86 and dead; emu's answer is a VM. Wasm is the VM with an ecosystem (§4.3).
 
 **Do not use WASI as the system interface** (§6). Its filesystem proposal names this

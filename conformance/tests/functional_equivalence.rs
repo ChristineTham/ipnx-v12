@@ -230,7 +230,7 @@ fn demo() -> Vec<Behaviour> {
         },
         Behaviour {
             // The demo: *"`cc hello.c` then `./a.out` is real clang and real
-            // wasm-ld, as guests. `go run hello.go` drives the real gc
+            // wasm-ld, as wasm programs. `go run hello.go` drives the real gc
             // compiler and linker"*. (It streamed them in after boot, which
             // was how the page fetched 260 MB, not a feature.) The toolchain
             // is the host's, run as a host command (docs/saranos.md, "The

@@ -1,4 +1,4 @@
-# Every push builds the guest world, then runs the system's own tests
+# Every push builds the userspace, then runs the system's own tests
 # against it.
 #
 # The order is load-bearing and is the same one `CLAUDE.md` gives: **the
@@ -48,7 +48,7 @@ jobs:
 
       # `userspace/build/` (objects) and `userspace/root/` (the files a
       # booting system finds by name), both gitignored.
-      - name: build the guest world
+      - name: build the userspace
         run: |
           export WASI_SDK=$HOME/opt/wasi-sdk-${WASI_SDK_RELEASE}-x86_64-linux
           export BINARYEN=$HOME/opt/binaryen-version_${BINARYEN_RELEASE}
@@ -84,7 +84,7 @@ jobs:
       # what did not build is `build/failed`, each with its reason.
       - name: measurements (for RESEARCH)
         run: |
-          echo "guest binaries: $(du -sb userspace/root | cut -f1) bytes"
+          echo "userspace binaries: $(du -sb userspace/root | cut -f1) bytes"
           echo "programs: $(find userspace/root/pkg/system -path '*/wasm/bin/*' -type f | wc -l)"
           echo "not built: $(wc -l < userspace/build/failed)"
           cat userspace/build/failed

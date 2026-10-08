@@ -1481,7 +1481,7 @@ impl Kernel {
         self.tab.endcall(up);
         // **A clock interrupt that fell due during the call.** This kernel
         // runs a call to its end with nothing able to interrupt it — the
-        // machine's interrupt is only taken in guest code — which is Plan
+        // machine's interrupt is only taken in a program's code — which is Plan
         // 9's kernel running `splhi`. An interrupt held off by `splhi` is
         // taken at `spllo`, and the call's end is where that is: still
         // `insyscall`, so the tick is `TSys`'s (`accounttime`, `proc.c:1624`).
@@ -1886,7 +1886,7 @@ impl Kernel {
     /// What is not here: *"sys:"* notes gain *" pc=0x…"* on Plan 9 (`:809`)
     /// and there is no program counter to report; and at a clock interrupt
     /// a note for a handler stays queued until the process's next call ends,
-    /// because a machine whose guest can only be entered from a host call
+    /// because a machine whose program can only be entered from a host call
     /// cannot enter it from an interrupt. A note that ends the process does
     /// not wait.
     /// `procctl` (`proc.c:1480`) — do what `p->procctl` asks. `None` is it

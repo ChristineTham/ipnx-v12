@@ -27,7 +27,7 @@ is what the supervisor does with it. Five answers cover everything:
 | class | answered from | examples |
 |---|---|---|
 | **proc** | process state in the supervisor | `rfork`, `exits`, `await`, `alarm` |
-| **mem** | the guest's linear memory arrangement | `brk_`, `seg*` |
+| **mem** | the program's linear memory arrangement | `brk_`, `seg*` |
 | **fd** | the descriptor table | `dup`, `seek`, `fd2path`, `chdir` |
 | **ns** | the per-process mount table | `bind`, `unmount`; `mount` speaks 9P to attach |
 | **9P** | dispatched down a Chan | `open`, `pread`, `wstat`, `remove` |
@@ -82,7 +82,7 @@ emulators use (2026-09-25); the other nine are not made by anything in the tree.
 | 21 | `pipe` | 9P | — | ✓ | the pipe device `#\|`; bidirectional |
 | 22 | `create` | 9P | `Tcreate` | ✓ | |
 | 23 | `fd2path` | fd | — | ✓ | `chanpath(c)` into the caller's buffer (2026-09-24) |
-| 24 | `brk_` | mem | — | (guest) | v0 deviation: heap is guest-local `memory.grow`, see plan |
+| 24 | `brk_` | mem | — | (program) | v0 deviation: heap is the program's own `memory.grow`, see plan |
 | 25 | `remove` | 9P | `Tremove` | ✓ | |
 | 26 | `_wstat` | drop | — | — | |
 | 27 | `_fwstat` | drop | — | — | |
@@ -129,7 +129,7 @@ The seven it omits, and why:
 
 | omitted | why |
 |---|---|
-| `segbrk` `brk_` `segattach` `segdetach` `segfree` `segflush` | memory is the machine's, not the kernel's. A guest grows its own linear memory; on another machine the arrangement differs and the kernel does not change |
+| `segbrk` `brk_` `segattach` `segdetach` `segfree` `segflush` | memory is the machine's, not the kernel's. A program grows its own linear memory; on another machine the arrangement differs and the kernel does not change |
 | `nsec` | time is a file |
 
 **A process that makes one is answered as Plan 9's kernel answers a call

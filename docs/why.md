@@ -136,7 +136,7 @@ down rather than a thing to write fresh.
 
 The architecture has been built three times and the differences are instructive.
 
-| | Kernel | Guest execution |
+| | Kernel | Program execution |
 |---|---|---|
 | **plan9port** | none — a library port | native host processes |
 | **9vx** | Plan 9's, as a user program | **vx32**, a user-level x86 sandbox |
@@ -158,8 +158,8 @@ namespaces `devdraw` had to abandon the file interface for graphics (see §The G
 ### The constraint that forces wasm
 
 **iOS apps cannot spawn child processes** — `fork()` and `posix_spawn()` are prohibited in
-the sandbox — and cannot make writable-executable pages, so there is no JIT. The jail
-therefore cannot be host processes and cannot be native ARM64 code.
+the sandbox — and cannot make writable-executable pages, so there is no JIT. A program
+therefore cannot be a host process and cannot be native ARM64 code.
 
 That leaves an in-process, sandboxed, interpretable substrate. 9vx's answer is dead; emu's
 answer is a VM. **Wasm is the answer that has an ecosystem.**

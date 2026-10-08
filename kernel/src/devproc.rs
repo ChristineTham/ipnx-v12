@@ -149,8 +149,8 @@ pub enum Q {
 ///
 /// | | |
 /// |---|---|
-/// | `fpregs` `kregs` `regs` | a register set. There is none — the machine's registers are the engine's and a guest has no `Ureg`. This is the narrow case that needs no approval |
-/// | `mem` `segment` `text` | an address space. A guest has ONE linear memory and no segments, and `text` is the module — what each should mean here is a design question, not a gap to fill in passing |
+/// | `fpregs` `kregs` `regs` | a register set. There is none — the machine's registers are the engine's and a wasm program has no `Ureg`. This is the narrow case that needs no approval |
+/// | `mem` `segment` `text` | an address space. A wasm program has ONE linear memory and no segments, and `text` is the module — what each should mean here is a design question, not a gap to fill in passing |
 pub const PROCDIR: &[(&str, Q, u32)] = &[
     ("args", Q::Args, 0o660),
     ("ctl", Q::Ctl, 0o000),

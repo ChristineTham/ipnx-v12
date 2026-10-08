@@ -175,15 +175,15 @@ mod tests {
         assert_eq!(run(SHORT, &[]).unwrap(), "");
     }
 
-    /// The path the demo takes: a guest resolves a name through its namespace,
+    /// The path the demo takes: a program resolves a name through its namespace,
     /// reads what it finds, and closes it.
     ///
     /// **It exits with what it read**, so the test knows the bytes arrived.
     /// Asserting only that the run succeeded let `/` be opened in place
-    /// of `/hello` — a directory, which opens fine — and the guest
+    /// of `/hello` — a directory, which opens fine — and the program
     /// printed the directory listing while this test stayed green.
     #[test]
-    fn a_guest_reaches_the_kernel_and_reads_a_file_by_name() {
+    fn a_program_reaches_the_kernel_and_reads_a_file_by_name() {
         const READ: &str = r#"
 (module
   (import "sys" "open"  (func $open  (param i32 i32) (result i32)))
@@ -207,7 +207,7 @@ mod tests {
     }
 
     /// A call that fails answers −1 and leaves its reason where `errstr`
-    /// finds it. Without this the guest could not tell "empty file" from
+    /// finds it. Without this the program could not tell "empty file" from
     /// "no such file".
     #[test]
     fn a_failed_call_answers_minus_one_and_errstr_says_why() {
@@ -230,7 +230,7 @@ mod tests {
       (then (call $exits (i32.const 96)) (return)))
     (call $exits (i32.const 0))))
 "#;
-        assert_eq!(run(TRY, &[]).unwrap(), "", "the guest reported a failure of its own");
+        assert_eq!(run(TRY, &[]).unwrap(), "", "the program reported a failure of its own");
     }
 
     /// `exits` reaches the kernel, so the status a process sets is the status
@@ -249,7 +249,7 @@ mod tests {
 
     /// The arguments arrive. `sysexec` copies argv onto the new process's
     /// stack; this machine writes the block into the module's own memory and
-    /// hands the entry its address. The guest exits with `argv[1]`, so a
+    /// hands the entry its address. The program exits with `argv[1]`, so a
     /// block that is one pointer out fails here rather than in a shell.
     #[test]
     fn a_process_is_given_its_arguments() {
@@ -732,11 +732,11 @@ mod userspace {
         // `exec`, so `$apid` is the sleeping process and not an rc around it.
         let out = typing("{exec sleep 30} &\ndate -n\necho kill >/proc/$apid/ctl\nwait\ndate -n\necho done\n");
         assert!(out.contains("done"), "{out}");
-        assert!(guest_seconds(&out) < 20, "it waited out the sleep: {out}");
+        assert!(date_seconds(&out) < 20, "it waited out the sleep: {out}");
     }
 
     /// The seconds between the first two `date -n` lines a script printed.
-    fn guest_seconds(out: &str) -> u64 {
+    fn date_seconds(out: &str) -> u64 {
         // the last word of a line: the shell's prompts come before it
         let t: Vec<u64> = out
             .lines()
@@ -782,7 +782,7 @@ mod userspace {
         // far (`Term::marked`)
         let out = typing_marked("sleep 0; echo sleeping; date -n; sleep 30\n\x03date -n; echo after\n", "sleeping\n");
         assert!(out.contains("after"), "{out}");
-        assert!(guest_seconds(&out) < 20, "the sleep ran its course: {out}");
+        assert!(date_seconds(&out) < 20, "the sleep ran its course: {out}");
     }
 
     /// And a command waiting for the keyboard: `cat` asleep in `qread` is
