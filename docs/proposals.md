@@ -59,9 +59,8 @@ opens a window whose namespace has the project's packages bound.
      process, and a note reaches it.
 
    *Why B:* the files come from the kernel on every host. A WASI program
-   therefore sees the same tree in the browser as in the terminal, sees the
-   packages its project binds, and stays confined if its namespace confines
-   it. Under A each host's storage is a different tree, and a WASI program
+   therefore sees the same tree in the browser as in the terminal, and sees
+   the packages its project binds. Under A each host's storage is a different tree, and a WASI program
    sees a package only where it lies in that storage, not where a project
    binds it.
 
@@ -88,10 +87,11 @@ opens a window whose namespace has the project's packages bound.
    - Its arguments are `exec`'s, and its environment is the process's.
    - It cannot start a process, because WASI has none (on `wasip1`, Go's
      `StartProcess` returns `ENOSYS`). A program built with Go or C is one
-     standalone file, and runs. What cannot run is *building* one inside
-     the system: the command a person types is a driver that starts the
-     other tools as separate programs. `go build` starts `compile` for each
-     package and then `link`; `clang` starts the linker, `wasm-ld`.
+     standalone file, and runs; Go's toolchain built for WASI cannot build
+     one, because `go` starts `compile` and `link` (RESEARCH §16.36). The
+     host's own toolchain builds, run as a host binary — *"There no need to
+     port the go and c toolchain to WASM when the host can do it so much
+     better"* (Christine) — below, *Running host commands*.
    - `pip install` cannot reach the network: WASI preview 1 has no outbound
      sockets.
 
@@ -109,28 +109,92 @@ opens a window whose namespace has the project's packages bound.
       (recommended)?
    2. Which browser engine: `@bjorn3/browser_wasi_shim` (recommended, for
       its one-to-one `Fd`) or `@tybys/wasm-util`?
-   3. Building inside the system — the suite's line *"build a program with
-      a language toolchain, and run it"*, the demo's `cc hello.c` and `go
-      run hello.go` — needs the driver to be a native program, which can
-      start others (`rfork` and `exec`). *Proposed:*
-      - **C:** Plan 9's own shape, `pcc`, which runs the preprocessor, the
-        compiler and the loader as three programs (`cmd/pcc.c:172`, `:179`,
-        `:192`, through `doexec`'s `fork` and `exec`, `:213`–`:226`). A
-        native `cc` in that shape would run the real `clang -c` and the real
-        `wasm-ld`, each a standalone WASI program.
-      - **Go:** its driver is `go` itself, which does far more than start
-        two tools — it resolves packages and modules and keeps a build
-        cache — so a small native stand-in would be a cut-down. The real
-        `go` needs **Go for Plan 9 on wasm**. Go names a target by system
-        and processor: it has `plan9/386`, `plan9/amd64` and `plan9/arm`,
-        and `js/wasm` and `wasip1/wasm`, but no `plan9/wasm`. Adding it
-        means joining Go's own Plan 9 runtime and system calls — the calls
-        this kernel answers — to Go's own wasm code generator. Go programs,
-        and `go` itself, would then be native programs here, like the C
-        commands. The cost is a change to Go's runtime that we would carry
-        ourselves, unless Go took it.
 
-      Should these be built, and when: now, after the demo, or not at all?
+**Running host commands** — proposed 2026-10-08 (RESEARCH §16.36). Christine:
+*"I want our wasm binary to be able to instantiate and run a host command"*,
+*"Also be able to pipe in and out of host commands etc?"*, and the model it
+follows from: *"we are not trying to create some … artificial or synthetic
+guest environment isolated from the host. We are in symbiosis with the host.
+Our wasm binaries can access host resources and invoke host binaries"*;
+*"That's why I said we are not creating or emulating devices."* So there is
+no device for it, no file to open and no command in front of it, and no
+toolchain built for wasm: a host binary is run the way every binary is.
+
+1. **`exec` runs it.** rc runs `go build` as it runs `cat`. The kernel
+   already hands every image that is not a `#!` script to the host, which
+   alone knows what it can run and refuses the rest with `Ebadexec`
+   (`kernel/src/lib.rs`, `exec_read`; Plan 9 tests its own binary's magic,
+   `sysproc.c:313`–`:316`, then `#!`, `:343`). The host knows its own
+   binaries — ELF on Linux, Mach-O on a Mac — and starts one as a host
+   process where it would have instantiated a module. No program changes;
+   the kernel changes only as question 2 asks.
+2. **Its standard input, output and error are the process's descriptors 0,
+   1 and 2** — a pipe, a file, the console — so piping in and out is
+   ordinary rc: `ls | sort`, `sort <x | uniq -c >y`, any of them the host's.
+   The host copies between those and the host program's own, as Inferno's
+   `os` does (*"Os copies the standard input to the remote command's
+   standard input"*, `man/1/os`). The process stays a process — its pid,
+   its notes, its exit status — so `$status`, `&&` and `||` work, and an
+   interrupt reaches the host program.
+3. **What has to be translated, Plan 9 already translates for a Unix
+   program** — APE, its layer for running them:
+   - the environment from `/env`, a file to a variable, the zero bytes
+     that separate a list made ones (`ape/lib/ap/plan9/_envsetup.c:15`,
+     `:82`–`:84`);
+   - the exit status: a non-zero code is its number as a string, zero is
+     success (`_exit.c:27`–`:28`);
+   - notes as signals: `interrupt` is `SIGINT`, `hangup` `SIGHUP`, `kill`
+     `SIGKILL` (`signal.c:16`–`:36`).
+4. **Its files are the host's.** It starts in the process's directory,
+   which is a host directory when it is on the store — the home, a
+   project. The host serves its own root as it serves the store, for a
+   profile to bind — Inferno's `#U*`, *"the root of the host system"*
+   (`man/3/fs`) — and a profile adds the host's directories of programs to
+   `/bin` with `bind -a`, so a name in both is ours and a name only the
+   host has is the host's: `ls` is IPNX's, `go` the host's.
+5. **The precedent is WSL's**: *"WSL can run Windows tools directly from
+   the WSL command line"*, and *"ipconfig.exe | grep IPv4 | cut -d: -f2"*
+   (`MicrosoftDocs/WSL`, `WSL/filesystems.md:115`, `:129`). Plan 9 has no
+   host to run anything on. Inferno, which has, made it a device, `cmd(3)`
+   — which is the model this is not.
+
+*What does not work, or not yet:*
+- **The host needs the binary's own path, and `touser` is given its
+  bytes.** A host program finds its files from where it is: a Mac
+  program's libraries are named from it (`@executable_path`, dyld(1)), and
+  `go` looks for its `GOROOT` above itself before it falls back to the one
+  it was built with (`cmd/go/internal/cfg/cfg.go:519`–`:560`). Plan 9's
+  exec keeps the image's channel (`attachimage(SG_TEXT|SG_RONLY, tc, …)`,
+  `sysproc.c:530`), and its qid tells the server that served it which file
+  it is. Question 2.
+- **`PATH`.** By APE's rule the host program gets rc's variables, and rc's
+  `path` is a list of IPNX directories, in lower case; a host program that
+  finds another by `PATH` — `make` running `cc` — needs the host's.
+  Question 3.
+- **A host script's `#!` line names a host path** — `#!/usr/bin/env
+  python3` — and the kernel reads `#!` itself and resolves the name in the
+  namespace, where `/usr` holds the users' directories. `python3 script`
+  works.
+- **No terminal.** The host program's input and output are pipes, so one
+  that wants a terminal — `vi`, `top`, Python's prompt — has none.
+- **`exec` reads the whole image first** — 14.3 MB for `go` — before the
+  host sees that it is one of its own.
+- **A WASI program cannot run one**: WASI has no way to start a process, so
+  Python's `subprocess` fails under WASI, even for a host binary (*Go and
+  Python*, above).
+- **The browser, the iPad and the iPhone have no host binaries**: a page
+  cannot start a process, and iOS does not let an app. There, `exec` of a
+  host binary is `Ebadexec`, as for any image the host cannot run.
+
+*The questions:*
+1. A host binary run by `exec`, like any other — yes?
+2. Its path: give `touser` the image's channel as well as its bytes, as
+   Plan 9's exec keeps it (recommended; a change to the kernel's interface
+   to the host), or run a copy of the bytes (no change; a program that
+   looks beside itself does not find what it looks for)?
+3. Its environment: the host's own with the process's `/env` over it, each
+   variable by APE's rule (recommended — `x=y cmd` reaches the program, and
+   `PATH` stays the host's unless set), or `/env` alone, as APE has it?
 
 **The wasm32 `Ureg`, and APE's signal trampoline** — proposed 2026-09-25.
 Built, and awaiting review, because each is a machine-dependent file Plan 9

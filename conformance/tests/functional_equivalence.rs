@@ -59,6 +59,10 @@ enum State {
     /// a gap, in the sense of the triage rule (CLAUDE.md): undesigned, and
     /// needing a proposal before it is built. Naming a phase that does not
     /// build it was a claim with nothing behind it.
+    ///
+    /// No line is one on 2026-10-08; the state stays, because the triage
+    /// has three.
+    #[allow(dead_code)]
     Gap,
     /// Not yet: **a design is proposed** in `docs/proposals.md` and awaits
     /// Christine's review. No phase builds it until she endorses it — the
@@ -228,11 +232,11 @@ fn demo() -> Vec<Behaviour> {
             // The demo: *"`cc hello.c` then `./a.out` is real clang and real
             // wasm-ld, as guests. `go run hello.go` drives the real gc
             // compiler and linker"*. (It streamed them in after boot, which
-            // was how the page fetched 260 MB, not a feature.) A toolchain
-            // runs other programs, and a WASI program cannot start one
-            // (docs/proposals.md, item 1), so nothing designed builds this.
+            // was how the page fetched 260 MB, not a feature.) The toolchain
+            // is the host's, run as a host binary is, by exec
+            // (docs/proposals.md, "Running host commands").
             what: "build a program with a language toolchain, and run it",
-            state: Gap,
+            state: Proposed,
             how: "a compiler and linker make a program, and it runs",
             check: None,
         },

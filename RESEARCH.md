@@ -5971,3 +5971,64 @@ Either of the first two lets the page answer a WASI program's files from the
 kernel, as `wasi-common` does natively — a worker can wait for the kernel's
 answer with `Atomics.wait`, which is how the browser host's processes already
 make their calls (P6).
+
+### 16.36 Running host commands (2026-10-08)
+
+**Christine's model:** *"The whole point is we are not trying to create some
+of of artificial or synthetic guest environment isolated from the host. We
+are in symbiosis with the host. Our wasm binaries can access host resources
+and invoke host binaries"*; *"That's why I said we are not creating or
+emulating devices. You have the wrong model"* — after *"There no need to
+port the go and c toolchain to WASM when the host can do it so much
+better"* and *"No I don't want a WASM toolchain, I want our wasm binary to
+be able to instantiate and run a host command"*. The proposal is in
+`docs/proposals.md`; what it rests on is here.
+
+**Measured: Go's toolchain built as WASI programs cannot build**, which is
+why the toolchain is the host's. go1.24.7's `cmd/go`, `cmd/compile` and
+`cmd/link`, built with `GOOS=wasip1 GOARCH=wasm` (25.9 MB, 40.4 MB, 10.6 MB)
+and run under Node 22's `node:wasi` (preview 1, `/` preopened): `go version`
+answers *"go version go1.24.7 wasip1/wasm"*; `go build hello.go` stops at its
+first step, *"go: error obtaining buildID for go tool compile: pipe: Not
+implemented on wasip1"* — `go` starts `compile -V=full` and reads its answer
+down a pipe, and a WASI program can make neither. `compile`, run by hand
+with an `-importcfg` naming the standard library's export data, compiles;
+`link` crashed the engine (Node, `SIGSEGV`), not pursued.
+
+**exec already hands the host every image that is not `#!`.** Plan 9's
+`sysexec` tests its own binary's magic (`port/sysproc.c:313`–`:316`), then
+`#!` (`:343`); this kernel tests `#!` and gives the rest to `touser`, which
+refuses what the host cannot run with `Ebadexec` (`kernel/src/lib.rs`,
+`exec_read`). A host that knows its own binaries — ELF, Mach-O — can start
+one there with no program changed.
+
+**The host needs the binary's path, and `touser` is given its bytes.**
+`go` looks for its `GOROOT` above its own executable — *"cmd/go may be
+installed in GOROOT/bin or GOROOT/bin/GOOS_GOARCH … Try both"* — before
+falling back to the one it was built with (`cmd/go/internal/cfg/cfg.go:519`
+–`:560`); a Mac program's libraries are named from `@executable_path`
+(dyld(1)). Plan 9's exec keeps the image's channel as the text segment
+(`attachimage(SG_TEXT|SG_RONLY, tc, UTZERO, …)`, `sysproc.c:530`), and a
+channel's qid names its file to the server that served it.
+
+**APE already translates what a Unix program needs** — it is Plan 9's layer
+for running them: `/env` to `environ`, *"Some plan9 environment variables
+have 0 bytes in them (notably $path); we change them to 1's (and execve
+changes back)"* (`ape/lib/ap/plan9/_envsetup.c:14`–`:16`, `:82`–`:84`); a
+non-zero exit code to its number as the exit string (`_exit.c:27`–`:28`);
+notes to signals, `interrupt` to `SIGINT`, `kill` to `SIGKILL`, `term` to
+`SIGTERM` (`signal.c:15`–`:36`).
+
+**Precedents.** WSL's interop is the user-visible behaviour: *"WSL can run
+Windows tools directly from the WSL command line using `[tool-name].exe`"*,
+and pipes cross in both directions — *"ipconfig.exe | grep IPv4 | cut -d:
+-f2"*, *"ls -la | findstr.exe foo.txt"* (`MicrosoftDocs/WSL`,
+`WSL/filesystems.md:115`, `:129`, `:135`). Inferno, Plan 9's hosted
+successor, reaches the host two ways: its root is a host directory and
+`#U*` is *"the root of the host system"* (`inferno-os`, `man/3/fs`); and
+host commands are a device, `cmd(3)` — `/cmd/clone`, and per command `ctl`,
+`data`, `stderr`, `status`, `wait` (`emu/port/devcmd.c:69`–`:85`, `:135`),
+with `os(1)` copying between them and its own descriptors (*"Os copies the
+standard input to the remote command's standard input"*). The device is the
+model she rejected; the copying is what any way of running a host program
+has to do.

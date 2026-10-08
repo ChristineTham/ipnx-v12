@@ -397,9 +397,9 @@ bind; the shell outside it does not), and **installing a package as a bind**
 -n` inside `@{rfork n; …}`, run there, and not there outside (P7's `pkg`).
 Of the other six, three are P8's — several windows, actions by kind, the
 browser — and **three are built by no phase of
-[implementation.md](implementation.md)**: a Go program and Python, whose
-design is proposed and unreviewed ([proposals.md](proposals.md)), and
-building a program with a toolchain, a gap.
+[implementation.md](implementation.md)**: a Go program, Python, and building
+a program with a toolchain — the host's own, run by `exec` as a host binary —
+all three proposed and unreviewed ([proposals.md](proposals.md)).
 
 Two lines were corrected on 2026-10-08. *"A package becomes available
 without installing anything into the tree"* and *"a language toolchain

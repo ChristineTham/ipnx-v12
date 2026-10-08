@@ -463,3 +463,20 @@ On proposal 1, the same day:
   <br>— cited in `docs/proposals.md`
 - *"For proposal 2 and 3 I don't understand why we need to cater for mounting packages without installing. Surely the whole point of having a template is to specify which packages need to be preinstalled, so why is there a need to have a toolchain in a session? Opening a project effectively opens a session with the right packages preinstalled. cd into a project does not install anything, it just views the files"* — proposals 2 and 3 withdrawn
   <br>— cited in `docs/proposals.md`, `docs/when.md`
+
+On running host commands, the same day:
+
+- *"Why can't programs built with go and c be standalone binaries? I don't understand"*
+- *"and what is plan9/wasm?"*
+- *"I still don't understand. There is a Go toolchain for WASM. Why does that not work as is?"*
+- *"So why can't go and cc toolchain when invoked from IPNX actually call the host toolchain? I still don't undestand"*
+- *"There no need to port the go and c toolchain to WASM when the host can do it so much better. We just need to be able to invoke host commands"*
+  <br>— cited in `docs/proposals.md`, `RESEARCH.md` §16.36
+- *"No I don't want a WASM toolchain, I want our wasm binary to be able to instantiate and run a host command"*
+  <br>— cited in `docs/proposals.md`, `RESEARCH.md` §16.36
+- *"Also be able to pipe in and out of host commands etc?"*
+  <br>— cited in `docs/proposals.md`
+- *"The whole point is we are not trying to create some of of artificial or synthetic guest environment isolated from the host. We are in symbiosis with the host. Our wasm binaries can access host resources and invoke host binaries"*
+  <br>— cited in `docs/proposals.md`, `RESEARCH.md` §16.36
+- *"That's why I said we are not creating or emulating devices. You have the wrong model"*
+  <br>— cited in `docs/proposals.md`, `RESEARCH.md` §16.36
