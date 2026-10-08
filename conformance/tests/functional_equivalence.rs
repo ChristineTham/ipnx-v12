@@ -65,7 +65,12 @@ enum State {
     /// a gap, in the sense of the triage rule (CLAUDE.md): undesigned, and
     /// needing a proposal before it is built. Naming a phase that does not
     /// build it was a claim with nothing behind it.
+    #[allow(dead_code)]
     Gap,
+    /// Not yet: **a design is proposed** in `docs/proposals.md` and awaits
+    /// Christine's review. No phase builds it until she endorses it — the
+    /// triage rule's middle state.
+    Proposed,
 }
 
 impl fmt::Display for State {
@@ -74,6 +79,7 @@ impl fmt::Display for State {
             State::Reached => write!(f, "reached"),
             State::Pending(p) => write!(f, "not yet  ({p})"),
             State::Gap => write!(f, "not yet  (gap: no phase builds it)"),
+            State::Proposed => write!(f, "not yet  (proposed: awaiting review)"),
         }
     }
 }
@@ -137,13 +143,13 @@ fn demo() -> Vec<Behaviour> {
         },
         Behaviour {
             what: "run a Go program",
-            state: Gap,
+            state: Proposed,
             how: "it runs and prints what it printed before",
             check: None,
         },
         Behaviour {
             what: "run Python",
-            state: Gap,
+            state: Proposed,
             how: "it starts, imports from its library, and computes",
             check: None,
         },
@@ -152,7 +158,7 @@ fn demo() -> Vec<Behaviour> {
             // (docs/packages.md), so the tree is bigger after it: P7's own
             // acceptance — a package installs as a bind — is not this.
             what: "a package becomes available without installing anything into the tree",
-            state: Gap,
+            state: Proposed,
             how: "the program runs afterwards; the tree is no bigger than before",
             check: None,
         },
@@ -196,7 +202,7 @@ fn demo() -> Vec<Behaviour> {
         },
         Behaviour {
             what: "a language toolchain becomes usable during a session, not before it",
-            state: Gap,
+            state: Proposed,
             how: "the system is usable first; the toolchain works later in the same session",
             check: None,
         },

@@ -438,3 +438,16 @@ On building P7, and on names:
 - *"It sounds like you just need to fix the layout file. In acme, any window can spit horizontally and vertically"* — the layout file's `row` and `column`
   <br>— cited in `docs/type.md`
 - *"it sounds to me this was a question you could have answered from plan 9 rather than asking me"* — the layout's `row` and `column`; and the surface's serial line, taken from Plan 9 rather than proposed
+
+## 2026-10-08
+
+- *"propose designs for the four conformance gaps"*
+  <br>— `docs/proposals.md`
+- *"In @docs/proposals.md why are you asking about boot. We already said don't use it because it gets confused with Unix bootloader"*
+- *"I also don't understand why you are asking about serial line? This is WASM we have no hardware we do not want to emulate hardware"*
+
+Choosing, from options put to her the same day:
+
+- selected *"The host does it"* — boot's one job, attaching the host's file server as `/` and starting init, done by the host, so that `/boot/boot` and `#/boot` go
+- selected *"#s/root"* — the name the root's channel is posted under, in place of Plan 9's `#s/boot`
+- selected *"Host serves devices"* — what the surface uses in place of the serial line: the host serves its screen, keyboard and mouse over 9P as it serves the store, and emca uses them as rio uses the screen

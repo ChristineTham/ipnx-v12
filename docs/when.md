@@ -394,7 +394,8 @@ the bind; the shell outside it does not). Of the other seven, three are P8's
 phase of [implementation.md](implementation.md)**: a Go program, Python, a
 package available without installing into the tree (P7's `pkg` copies into
 `/pkg`), and a toolchain arriving during a session. The suite labelled them
-P7 and P8; it says *gap* now (2026-10-07).
+P7 and P8, then *gap* (2026-10-07); it says *proposed* since their designs
+were written on 2026-10-08 ([proposals.md](proposals.md)), unreviewed.
 
 It still fails, and will until all twelve are reached.
 

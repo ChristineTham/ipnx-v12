@@ -5757,3 +5757,66 @@ element a read had open (`:660`); a directory not a union is read only
 where its channel is, *"if(off != c->offset) error(Edirseek)"* (`:675`);
 and a directory's offset moves whichever read it was (`:683`). A write to a
 directory is `Eisdir` (`:739`).
+
+### 16.30 Four lookups, kept from the register (2026-09-18; moved 2026-10-08)
+
+Answered by reading `plan9/` on 2026-09-18, and held in `docs/proposals.md`
+until it was emptied of what is settled. They are findings, so they are here.
+
+- **A crossing to a server is batched in userspace.** `bufimage`
+  (`libdraw/init.c:453`) appends to a buffer whose size is
+  `iounit(datafd)` (`:291`, 8000 when that is 0) and flushes when the next
+  operation will not fit. The kernel sees whole writes.
+- **A window system leaves nothing in the kernel.** rio is a userspace file
+  server: it posts its channel (`rio/fsys.c:170`), mounts itself at
+  `/mnt/wsys` (`:237`) and binds that over `/dev` with `MBEFORE` (`:241`).
+- **A posted server is named for itself, its user and its pid** —
+  `/srv/riowctl.%s.%d` (`fsys.c:152`) — because `#s` is one table for the
+  whole kernel and the pid keeps a second instance from colliding.
+- **`/dev` is assembled by the shell.** `termrc` binds every likely device
+  in one loop (`rc/bin/termrc:11–13`), `Σ` and `κ` among them: a non-ASCII
+  device letter is ordinary.
+
+### 16.31 The four conformance gaps, looked up first (2026-10-08)
+
+Measured before proposing (`docs/proposals.md`), so that what is proposed is
+only what `plan9/` and the record do not already answer.
+
+**Neither Plan 9 tree has Go or Python** — no file, manual page or `mkfile`
+names either (`plan9/`, `plan9-stock/`).
+
+**Go runs on Plan 9 and on wasm, but not both at once.** go1.24.7's `go tool
+dist list`: `plan9/386`, `plan9/amd64`, `plan9/arm`, `js/wasm`,
+`wasip1/wasm`. Its `wasip1` runtime and `syscall` package import **36** of
+WASI's calls (`//go:wasmimport wasi_snapshot_preview1`, counted across
+`runtime`, `syscall` and `internal`), and starting a process is not one of
+them: `StartProcess` is `return 0, 0, ENOSYS` (`syscall/syscall_wasip1.go:409`).
+On Plan 9 it is `rfork(RFPROC|RFFDG|RFREND|…)` and `exec`
+(`syscall/exec_plan9.go:161`). So under WASI a Go program runs and the `go`
+command cannot run its compiler and linker.
+
+**Plan 9 mounts an archive as a tree rather than unpacking it** — twice over.
+`tapefs`'s eight servers *"interpret data from traditional tape or file
+system formats stored in file, and mount their contents (read-only) into a
+Plan 9 file system"* (`tapefs(4)`). And boot's `paq` and `embed` methods run
+`paqfs` on an archive and use what it serves as the root (`boot/paq.c:58`,
+`boot/embed.c:65`), so Plan 9 has run a whole root from an archive it never
+unpacked. `paqfs` reads a block when one is asked for (`blockRead`,
+`paqfs.c:948`), keeps 20 (`paqfs(4)`, `-c`), checks each block's `adler32`
+(`paqfs.h`) and, with `-v`, the archive's SHA-1 before it mounts
+(`paqfs.c:1054`). `mkpaqfs` writes one, flate-compressed by default
+(`mkpaqfs(8)`). Both are built here, in the `system` package; so are
+`tapefs`'s eight. No Plan 9 server reads `disk/mkfs -a`'s archive, the
+package form decided on 2026-09-29.
+
+**A background job shares its shell's namespace.** rc's `&` is
+`rfork(RFFDG|RFPROC|RFNOTEG)` (`rc/havefork.c:18`) — no `RFNAMEG` — so
+what it binds, its shell sees when the bind is made. A process that took a
+copy before then does not (`pgrpcpy`, `pgrp.c:128`), and rio gives every
+window's shell a copy (`winshell`, `rio/wind.c:1355`:
+`rfork(RFNAMEG|RFFDG|RFENVG)`).
+
+**Plan 9 makes its mount points on demand** — `mntgen -s slashn`
+(`termrc:6`), mounted on `/n` (`lib/namespace:20`), so `9fs` can mount on
+`/n/anything` without creating it (`mntgen(4)`). This system's `start.ns`
+does not run it.
