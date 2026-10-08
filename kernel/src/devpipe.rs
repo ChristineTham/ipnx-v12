@@ -29,6 +29,10 @@ const EPIPENOTE: &str = "sys: write on closed pipe";
 
 /// `Ebadarg` (`error.h:18`).
 const EBADARG: &str = "bad arg in system call";
+/// `Eisdir` (`error.h:13`).
+const EISDIR: &str = "file is a directory";
+/// `Eshortstat` (`error.h:48`).
+const ESHORTSTAT: &str = "stat buffer too small";
 
 /// `struct Pipe` (`devpipe.c:12`): two queues, and how many opens of each
 /// end there are. Plan 9 hangs it off `c->aux`; here the channel's `devno`
@@ -38,6 +42,9 @@ struct Pipe {
     /// `qref[2]` — opens of `data` and of `data1`. When one reaches zero the
     /// other end's queue is hung up (`pipeclose`, `devpipe.c:247`).
     qref: [u32; 2],
+    /// `perm` — both ends' mode, `pipedir[Qdata0].perm` (0600) when made
+    /// (`devpipe.c:84`), and eve's to change ([`Dev::wstat`]).
+    perm: u32,
 }
 
 /// Qids within one pipe, as `devpipe.c:28` enumerates them.
@@ -130,7 +137,7 @@ impl Dev for PipeDev {
 
     /// `pipeattach` — the allocation. Every attach is a NEW pipe.
     fn attach(&mut self, _spec: &str) -> Result<Chan, String> {
-        self.pipes.push(Pipe { q: [Queue::new(PIPEQSIZE), Queue::new(PIPEQSIZE)], qref: [0, 0] });
+        self.pipes.push(Pipe { q: [Queue::new(PIPEQSIZE), Queue::new(PIPEQSIZE)], qref: [0, 0], perm: 0o600 });
         Ok(Chan::attach(DevId::Pipe, (self.pipes.len() - 1) as u32))
     }
 
@@ -187,16 +194,16 @@ impl Dev for PipeDev {
         // `piperead` answers `pipedir[]` for the directory — two entries,
         // and their lengths are what is queued in each.
         if c.qid.is_dir() {
-            let queued = {
+            let (queued, perm) = {
                 let p = self.pipe(c)?;
-                [p.q[0].dlen() as u64, p.q[1].dlen() as u64]
+                ([p.q[0].dlen() as u64, p.q[1].dlen() as u64], p.perm)
             };
             let eve_ = self.eve.borrow().clone();
             let entries: Vec<crate::ninep::Dir> = [("data", QDATA0, 0), ("data1", QDATA1, 1)]
                 .into_iter()
                 .map(|(name, path, i)| {
                     let qid = Qid { qtype: 0, vers: 0, path };
-                    crate::dev::devdir(c, qid, name, queued[i], &eve_, &eve_, 0o600)
+                    crate::dev::devdir(c, qid, name, queued[i], &eve_, &eve_, perm)
                 })
                 .collect();
             return Ok(crate::dev::devdirread(c, n, &entries));
@@ -225,10 +232,12 @@ impl Dev for PipeDev {
             QDATA1 => "data1",
             _ => ".",
         };
+        // `pipestat` (`devpipe.c:154`): the directory is `DMDIR|0555`, the
+        // ends the pipe's `perm`.
         let perm = if c.qid.path == QDIR {
-            crate::ninep::DMDIR | 0o500
+            crate::ninep::DMDIR | 0o555
         } else {
-            0o600
+            self.pipe(c)?.perm
         };
         // A pipe end's LENGTH is what is queued in it, which is how a reader
         // can tell there is something there (`pipestat`, `devpipe.c:196`).
@@ -242,8 +251,24 @@ impl Dev for PipeDev {
         Ok(crate::dev::devdir(c, c.qid, name, length, &self.eve.borrow(), &self.eve.borrow(), perm).conv_d2m())
     }
 
-    fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
-        Err("permission denied".into())
+    /// `pipewstat` (`devpipe.c:181`): eve may change both ends' mode, and
+    /// nobody their owner.
+    fn wstat(&mut self, c: &mut Chan, edir: &[u8]) -> Result<(), String> {
+        // *"if(strcmp(up->user, eve) != 0) error(Eperm)"*.
+        if !crate::dev::iseve(&self.eve, &self.up.borrow().user()) {
+            return Err("permission denied".into());
+        }
+        if c.qid.path == QDIR {
+            return Err(EISDIR.into());
+        }
+        let d = crate::ninep::Dir::conv_m2d(edir).ok_or(ESHORTSTAT)?;
+        if !d.uid.is_empty() {
+            return Err("can't change owner".into());
+        }
+        if d.mode != !0 {
+            self.pipe(c)?.perm = d.mode;
+        }
+        Ok(())
     }
 
     fn remove(&mut self, _c: &mut Chan) -> Result<(), String> {
@@ -254,19 +279,6 @@ impl Dev for PipeDev {
     /// stream"*. The last close of one end hangs up the queue the OTHER end
     /// reads, so its reader sees end of file once what is queued is gone,
     /// and closes its own; when both ends are closed, both reopen.
-    /// Another reference to an open end: one more for `qref` to count down
-    /// (`pipeclose`, `devpipe.c:247`).
-    fn incref(&mut self, c: &Chan) {
-        if c.flag & COPEN == 0 {
-            return;
-        }
-        if let Some((end, _)) = Self::ends(c.qid.path) {
-            if let Ok(p) = self.pipe(c) {
-                p.qref[end] += 1;
-            }
-        }
-    }
-
     fn close(&mut self, c: &mut Chan) {
         if c.flag & COPEN == 0 {
             return;
@@ -499,5 +511,37 @@ mod tests {
         assert_eq!(d.write(&mut a, b"go", 0).unwrap(), 2, "and comes back to finish");
         by(&d, 2);
         assert_eq!(d.read(&mut b, 16, 0).unwrap(), b"go", "queued once");
+    }
+
+    /// `pipewstat` (`devpipe.c:181`): eve may change both ends' mode, which
+    /// both report from then on; nobody may change their owner, nor stat the
+    /// directory into anything; and nobody but eve may do either.
+    #[test]
+    fn eve_may_change_a_pipes_mode_and_nobody_its_owner() {
+        let ((mut d, mut a, b), procs) = pipe_with();
+        let eve = crate::dev::Eve::new(RefCell::new("eve".to_string()));
+        d.seteve(eve);
+        let mode = |m: u32, uid: &str| {
+            let mut x = crate::ninep::Dir::default();
+            x.mode = m;
+            x.uid = uid.to_string();
+            x.atime = !0;
+            x.mtime = !0;
+            x.length = !0;
+            x.conv_d2m()
+        };
+        procs.borrow_mut().get_mut(1).unwrap().user = "kitty".into();
+        assert!(d.wstat(&mut a, &mode(0o644, "")).is_err(), "eve's alone");
+        procs.borrow_mut().get_mut(1).unwrap().user = "eve".into();
+        assert_eq!(d.wstat(&mut a, &mode(0o644, "kitty")).unwrap_err(), "can't change owner");
+        d.wstat(&mut a, &mode(0o644, "")).unwrap();
+        for c in [&a, &b] {
+            let st = crate::ninep::Dir::conv_m2d(&d.stat(c).unwrap()).unwrap();
+            assert_eq!(st.mode & 0o777, 0o644);
+        }
+        let mut dir = d.attach("").unwrap();
+        assert_eq!(d.wstat(&mut dir, &mode(0o777, "")).unwrap_err(), EISDIR);
+        let st = crate::ninep::Dir::conv_m2d(&d.stat(&dir).unwrap()).unwrap();
+        assert_eq!(st.mode, crate::ninep::DMDIR | 0o555, "pipestat's directory");
     }
 }

@@ -23,7 +23,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 const EPERM: &str = "permission denied";
-const ESHORT: &str = "short read or write";
+/// `Eshort` (`error.h:43`) — `capwrite`'s (`devcap.c:210`, `:229`).
+const ESHORT: &str = "i/o count too small";
+/// `Enonexist` (`error.h:9`).
+const ENONEXIST: &str = "file does not exist";
 /// `Ebadarg` (`error.h:18`).
 const EBADARG: &str = "bad arg in system call";
 
@@ -45,11 +48,21 @@ pub struct CapDev {
     caps: Vec<[u8; HASHLEN]>,
     up: Rc<RefCell<Up>>,
     eve: Eve,
+    /// `ncapdir` (`devcap.c:49`) — how much of [`CAPDIR`] is there. Eve
+    /// removing `caphash` makes it one fewer (`capremove`, `:64`), for
+    /// everyone and for good: *"caphash must be last"*. Factotum opens it
+    /// and removes it, and nobody else can mint.
+    ncapdir: usize,
 }
 
 impl CapDev {
     pub fn new(up: Rc<RefCell<Up>>) -> CapDev {
-        CapDev { caps: Vec::new(), up, eve: Eve::default() }
+        CapDev { caps: Vec::new(), up, eve: Eve::default(), ncapdir: CAPDIR.len() }
+    }
+
+    /// `capdir[]` as far as `ncapdir` reaches.
+    fn capdir(&self) -> &'static [(&'static str, Q, u32)] {
+        &CAPDIR[..self.ncapdir]
     }
 
     fn iseve(&self) -> bool {
@@ -93,7 +106,8 @@ impl Dev for CapDev {
         if name == ".." || name == "." {
             return Ok(Some(c.walked(name, Qid { qtype: QTDIR, vers: 0, path: Q::Dir as u64 })));
         }
-        Ok(CAPDIR
+        Ok(self
+            .capdir()
             .iter()
             .find(|e| e.0 == name)
             .map(|e| c.walked(name, Qid { qtype: 0, vers: 0, path: e.1 as u64 })))
@@ -130,12 +144,14 @@ impl Dev for CapDev {
             return Err(EPERM.into());
         }
         let _ = off;
-        let user = self.up.borrow().user();
-        let entries: Vec<crate::ninep::Dir> = CAPDIR
+        // `devgen`: eve's (`dev.c:106`).
+        let eve = self.eve.borrow().clone();
+        let entries: Vec<crate::ninep::Dir> = self
+            .capdir()
             .iter()
             .map(|(name, q, perm)| {
                 let qid = Qid { qtype: 0, vers: 0, path: *q as u64 };
-                crate::dev::devdir(c, qid, name, 0, &user, &self.eve.borrow(), *perm)
+                crate::dev::devdir(c, qid, name, 0, &eve, &eve, *perm)
             })
             .collect();
         Ok(crate::dev::devdirread(c, n, &entries))
@@ -186,22 +202,28 @@ impl Dev for CapDev {
         }
     }
 
+    /// `capstat` (`devcap.c:74`): `devstat` over `capdir`, as far as
+    /// `ncapdir` reaches.
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
-        let (name, perm) = if c.qid.is_dir() {
-            ("#\u{a4}".to_string(), crate::ninep::DMDIR | 0o555)
-        } else {
-            let e = CAPDIR.iter().find(|e| e.1 as u64 == c.qid.path).ok_or("no such file")?;
-            (e.0.to_string(), e.2)
-        };
-        let user = self.up.borrow().user();
-        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, &self.eve.borrow(), perm).conv_d2m())
+        let eve = self.eve.borrow().clone();
+        if c.qid.is_dir() {
+            return Ok(crate::dev::devstatdir(c, &eve).conv_d2m());
+        }
+        let e = self.capdir().iter().find(|e| e.1 as u64 == c.qid.path).ok_or(ENONEXIST)?;
+        Ok(crate::dev::devdir(c, c.qid, e.0, 0, &eve, &eve, e.2).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
         Err(EPERM.into())
     }
 
-    fn remove(&mut self, _c: &mut Chan) -> Result<(), String> {
+    /// `capremove` (`devcap.c:64`): eve may remove `caphash`, which hides
+    /// it — *"ncapdir = nelem(capdir)-1"*; nothing else is removed.
+    fn remove(&mut self, c: &mut Chan) -> Result<(), String> {
+        if self.iseve() && c.qid.path == Q::Hash as u64 {
+            self.ncapdir = CAPDIR.len() - 1;
+            return Ok(());
+        }
         Err(EPERM.into())
     }
 
@@ -325,5 +347,43 @@ mod tests {
             crate::ninep::Dir::parse_all(&b).into_iter().map(|e| e.name).collect();
         assert_eq!(names, ["capuse", "caphash"]);
         let _ = OREAD;
+    }
+
+    /// `capremove` (`devcap.c:64`): eve may remove `caphash`, which hides it
+    /// from everyone — no walk, stat or listing finds it again, so nobody
+    /// else can mint — and a channel already open to it, factotum's, still
+    /// mints. Nothing else is removed, and nobody else removes anything.
+    #[test]
+    fn eve_removing_caphash_hides_it_from_everyone() {
+        let (mut d, procs) = cap();
+        let c = chan(&mut d, "caphash");
+        let mut mint = d.open(c, OWRITE).unwrap();
+        let mut use_ = chan(&mut d, "capuse");
+        assert!(d.remove(&mut use_).is_err(), "capuse stays");
+        procs.borrow_mut().get_mut(1).unwrap().user = "kitty".into();
+        assert!(d.remove(&mut mint).is_err(), "eve's alone");
+        procs.borrow_mut().get_mut(1).unwrap().user = "eve".into();
+        d.remove(&mut mint).unwrap();
+        let dir = d.attach("").unwrap();
+        assert!(d.walk(&dir, "caphash").unwrap().is_none());
+        assert!(d.stat(&mint).is_err(), "not in capdir now");
+        let mut root = d.attach("").unwrap();
+        let names: Vec<String> = crate::ninep::Dir::parse_all(&d.read(&mut root, 512, 0).unwrap())
+            .into_iter()
+            .map(|e| e.name)
+            .collect();
+        assert_eq!(names, ["capuse"]);
+        assert!(d.write(&mut mint, &[0u8; HASHLEN], 0).is_ok(), "the open one still mints");
+    }
+
+    /// `devgen` (`dev.c:106`): the files are eve's, whoever lists them.
+    #[test]
+    fn the_files_are_eves() {
+        let (mut d, procs) = cap();
+        procs.borrow_mut().get_mut(1).unwrap().user = "kitty".into();
+        let mut root = d.attach("").unwrap();
+        for e in crate::ninep::Dir::parse_all(&d.read(&mut root, 512, 0).unwrap()) {
+            assert_eq!(e.uid, "eve", "{}", e.name);
+        }
     }
 }

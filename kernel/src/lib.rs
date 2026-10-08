@@ -266,18 +266,22 @@ impl Kernel {
     fn exec_read(
         &mut self,
         pid: Pid,
-        mut c: Chan,
+        c: std::rc::Rc<std::cell::RefCell<Chan>>,
         mut image: Vec<u8>,
         path: String,
         args: Vec<String>,
         indir: bool,
         elem: String,
     ) -> Result<(), String> {
+        // *"devtab[tc->type]->read(tc, …, offset)"* — at an offset of its
+        // own, so the channel's is not moved: it may be a descriptor's
+        // (`exec /fd/3`).
+        let mut cc = c.borrow().clone();
         loop {
-            let got = match self.tab.dread(&mut c, 8192, image.len() as u64) {
+            let got = match self.tab.dread(&mut cc, 8192, image.len() as u64) {
                 Ok(got) => got,
                 Err(e) => {
-                    self.tab.dclose(&mut c);
+                    self.tab.cclose(c);
                     return Err(e);
                 }
             };
@@ -296,7 +300,7 @@ impl Kernel {
         // *"n = devtab[tc->type]->read(tc, &exec, sizeof(exec), 0); if(n <
         // 2) error(Ebadexec);"* (`sysproc.c:310`–`:312`).
         if image.len() < 2 {
-            self.tab.dclose(&mut c);
+            self.tab.cclose(c);
             return Err(EBADEXEC.into());
         }
         // **Not a binary: perhaps `#!`** (`sysproc.c:340`). Plan 9 tests for
@@ -307,7 +311,7 @@ impl Kernel {
         // same `Ebadexec`. No machine's binary begins `#!`: a wasm module
         // begins `\0asm`, and Plan 9's own `Exec` begins with its magic.
         if image.starts_with(b"#!") {
-            self.tab.dclose(&mut c);
+            self.tab.cclose(c);
             // *"if(indir || line[0]!='#' || line[1]!='!') error(Ebadexec)"*
             // — one level: an interpreter that is a script is refused.
             if indir {
@@ -333,8 +337,11 @@ impl Kernel {
             let c = self.exec_open(pid, &file)?;
             return self.exec_read(pid, c, Vec::new(), file, progarg, true, elem);
         }
-        let r = self.exec_commit(pid, &c, &image, &elem, &args);
-        self.tab.dclose(&mut c);
+        let r = {
+            let cc = c.borrow().clone();
+            self.exec_commit(pid, &cc, &image, &elem, &args)
+        };
+        self.tab.cclose(c);
         r
     }
 
@@ -588,15 +595,16 @@ impl Kernel {
     }
 
     /// Step 1: `namec(file, Aopen, OEXEC, 0)` — resolve through the
-    /// process's namespace and open for execution.
-    fn exec_open(&mut self, pid: Pid, path: &str) -> Result<Chan, String> {
+    /// process's namespace and open for execution. A reference, as every
+    /// open answers: `exec` of `/fd/3` reads fd 3's own channel.
+    fn exec_open(&mut self, pid: Pid, path: &str) -> Result<std::rc::Rc<std::cell::RefCell<Chan>>, String> {
         let (slash, dot, ns) = {
             let procs = self.procs.borrow();
             let p = procs.get(pid).ok_or("no such process")?;
             (p.slash.clone(), p.dot.clone(), p.ns.clone())
         };
         let ns = ns.borrow();
-        namec::namec(&mut self.tab, &ns, &slash, &dot, path, namec::A::Open, chan::mode::OEXEC)
+        namec::open(&mut self.tab, &ns, &slash, &dot, path, chan::mode::OEXEC)
     }
 
     /// Steps 1 and 2 alone: resolve and read. It is entirely Plan 9's, and
@@ -609,16 +617,17 @@ impl Kernel {
     /// stopped the moment the commands moved onto a file server — which is
     /// what `/bin` IS on Plan 9.
     pub fn exec_image(&mut self, pid: Pid, path: &str) -> Result<Vec<u8>, String> {
-        let mut c = self.exec_open(pid, path)?;
+        let c = self.exec_open(pid, path)?;
         let mut image = Vec::new();
+        let mut cc = c.borrow().clone();
         let r = loop {
-            match self.tab.dread(&mut c, 8192, image.len() as u64) {
+            match self.tab.dread(&mut cc, 8192, image.len() as u64) {
                 Ok(got) if got.is_empty() => break Ok(image),
                 Ok(got) => image.extend_from_slice(&got),
                 Err(e) => break Err(e),
             }
         };
-        self.tab.dclose(&mut c);
+        self.tab.cclose(c);
         r
     }
 
@@ -1860,7 +1869,7 @@ impl Kernel {
                     return Err(proc::Procs::EBADARG.into());
                 }
                 chan::openmode(mode as u16)?;
-                let c = self.walk(up, &path, namec::A::Open, mode as u16)?;
+                let c = self.walk_open(up, &path, mode as u16)?;
                 Ok(Ret::Fd(self.newfd(up, c)?))
             }
             Call::Create { path, mode, perm } => {
@@ -1973,16 +1982,45 @@ impl Kernel {
             // both. The attach IS the allocation.
             Call::Pipe => {
                 let dir = self.tab.get(dev::DevId::Pipe).ok_or(ENODEV)?.attach("")?;
+                // *"if(waserror()){ cclose(c[0]); if(c[1]) cclose(c[1]);
+                // …"* (`sysfile.c:201`): an end opened is closed if the
+                // other cannot be.
                 let mut ends = Vec::new();
                 for name in ["data", "data1"] {
-                    let d = self.tab.get(dev::DevId::Pipe).ok_or(ENODEV)?;
-                    let c = d.walk(&dir, name)?.ok_or("no such file")?;
-                    let c = self.tab.dopen(c, chan::mode::ORDWR)?;
-                    ends.push(c);
+                    let opened = self
+                        .tab
+                        .get(dev::DevId::Pipe)
+                        .ok_or(ENODEV.to_string())
+                        .and_then(|d| d.walk(&dir, name)?.ok_or_else(|| "no such file".to_string()))
+                        .and_then(|c| self.tab.dopen(c, chan::mode::ORDWR));
+                    match opened {
+                        Ok(c) => ends.push(c),
+                        Err(e) => {
+                            for c in ends {
+                                self.tab.cclose(c);
+                            }
+                            return Err(e);
+                        }
+                    }
                 }
-                let b = self.newfd(up, ends.pop().unwrap())?;
-                let a = self.newfd(up, ends.pop().unwrap())?;
-                Ok(Ret::Two(a, b))
+                // *"if(newfd2(fd, c) < 0) error(Enofd)"* (`sysfile.c:215`):
+                // `data` in the lowest free slot and `data1` in the next, or
+                // neither — and both closed.
+                let fds = {
+                    let procs = self.procs.borrow();
+                    procs.get(up).ok_or("no such process")?.fds.clone()
+                };
+                let data1 = ends.pop().unwrap();
+                let data = ends.pop().unwrap();
+                let r = fds.borrow_mut().newfd2([data, data1]);
+                match r {
+                    Ok([a, b]) => Ok(Ret::Two(a, b)),
+                    Err([data, data1]) => {
+                        self.tab.cclose(data);
+                        self.tab.cclose(data1);
+                        Err(ENOFD.into())
+                    }
+                }
             }
             Call::Remove { path } => {
                 let mut c = self.walk(up, &path, namec::A::Remove, 0)?;
@@ -2108,7 +2146,7 @@ impl Kernel {
                 cell.borrow_mut().flag |= chan::flag::CMSG;
                 self.tab.keepwire(cell);
                 ac.flag |= chan::flag::CCEXEC;
-                Ok(Ret::Fd(self.newfd(up, ac)?))
+                Ok(Ret::Fd(self.newfd(up, std::rc::Rc::new(std::cell::RefCell::new(ac)))?))
             }
             // `sysfd2path` (`sysfile.c:173`): *"snprint((char*)arg[1],
             // arg[2], "%s", chanpath(c))"* — the machine writes it into the
@@ -2833,7 +2871,18 @@ impl Kernel {
         namec::namec(&mut self.tab, &ns, &slash, &dot, path, a, mode)
     }
 
-    fn walk_create(&mut self, up: Pid, path: &str, mode: u16, perm: u32) -> Result<Chan, String> {
+    /// `namec(name, Aopen, …)` for the calling process — a reference.
+    fn walk_open(&mut self, up: Pid, path: &str, mode: u16) -> Result<std::rc::Rc<std::cell::RefCell<Chan>>, String> {
+        let (slash, dot, ns) = {
+            let procs = self.procs.borrow();
+            let p = procs.get(up).ok_or("no such process")?;
+            (p.slash.clone(), p.dot.clone(), p.ns.clone())
+        };
+        let ns = ns.borrow();
+        namec::open(&mut self.tab, &ns, &slash, &dot, path, mode)
+    }
+
+    fn walk_create(&mut self, up: Pid, path: &str, mode: u16, perm: u32) -> Result<std::rc::Rc<std::cell::RefCell<Chan>>, String> {
         let (slash, dot, ns) = {
             let procs = self.procs.borrow();
             let p = procs.get(up).ok_or("no such process")?;
@@ -2843,12 +2892,22 @@ impl Kernel {
         namec::create(&mut self.tab, &ns, &slash, &dot, path, mode, perm)
     }
 
-    fn newfd(&mut self, up: Pid, c: Chan) -> Result<Fd, String> {
-        let procs = self.procs.borrow();
-                let p = procs.get(up).ok_or("no such process")?;
-        let fds = p.fds.clone();
-        let fd = fds.borrow_mut().add(c);
-        Ok(fd)
+    /// `newfd(c)` (`sysfile.c:74`): the reference goes into the lowest free
+    /// slot — and with none, *"if(fd < 0) error(Enofd)"*, the caller's
+    /// `waserror` closing it (`sysopen`, `sysfile.c:1135`).
+    fn newfd(&mut self, up: Pid, c: std::rc::Rc<std::cell::RefCell<Chan>>) -> Result<Fd, String> {
+        let fds = {
+            let procs = self.procs.borrow();
+            procs.get(up).ok_or("no such process")?.fds.clone()
+        };
+        let r = fds.borrow_mut().newfd(c);
+        match r {
+            Ok(fd) => Ok(fd),
+            Err(c) => {
+                self.tab.cclose(c);
+                Err(ENOFD.into())
+            }
+        }
     }
 
     fn chan(&mut self, up: Pid, fd: Fd) -> Result<Chan, String> {
@@ -2874,11 +2933,15 @@ impl Kernel {
             if c.umc.is_none() {
                 let alt = c.umh[c.uri as usize].chan.clone();
                 let cl = self.tab.dcclone(&alt)?;
-                match self.tab.dopen(cl, chan::mode::OREAD) {
-                    Ok(o) => c.umc = Some(Box::new(o)),
+                // A union's elements are directories (`bind` refuses a file
+                // on a directory, `Emount`), and only `#d`'s and `#s`'s
+                // files open as a channel that already exists — so this one
+                // is the element's own.
+                match self.tab.dopen(cl, chan::mode::OREAD).map(std::rc::Rc::try_unwrap) {
+                    Ok(Ok(o)) => c.umc = Some(Box::new(o.into_inner())),
                     // *"Error causes component of union to be skipped"*
                     // (`sysfile.c:340`).
-                    Err(_) => {
+                    Ok(Err(_)) | Err(_) => {
                         c.uri += 1;
                         continue;
                     }
@@ -2931,6 +2994,8 @@ impl Kernel {
 const EISDIR: &str = "file is a directory";
 const EBADFD: &str = "fd out of range or not open";
 const ENODEV: &str = "no such device";
+/// `Enofd` (`error.h:32`).
+const ENOFD: &str = "no free file descriptors";
 
 /// `MREPL`, `MBEFORE`, `MAFTER` (`<libc.h>:556`) — the low two bits.
 fn bind_of(flag: i32) -> ns::Bind {
@@ -4304,5 +4369,146 @@ mod syscalls {
         assert!(k.walk(1, "#s/kept", namec::A::Access, 0).is_ok());
     }
 
+    /// **An open of `/fd/n` is the descriptor's own channel** (`dupopen`,
+    /// `devdup.c:86`): one more reference to it, not a copy — so the two
+    /// share one offset, as a `dup` does, and closing one leaves the other.
+    #[test]
+    fn a_descriptor_opened_by_name_shares_its_offset() {
+        let mut k = booted();
+        k.tab.add(Box::new(devdup::DupDev::new(k.up.clone())));
+        let w = fd(k.syscall(1, Call::Create { path: "#e/x".into(), mode: 1, perm: 0o666 }));
+        k.syscall(1, Call::Pwrite { fd: w, data: b"abcdef".to_vec(), off: 0 }).unwrap();
+        let r = fd(k.syscall(1, Call::Open { path: "#e/x".into(), mode: 0 }));
+        assert_eq!(k.syscall(1, Call::Pread { fd: r, n: 2, off: -1 }), Ok(Ret::Data(b"ab".to_vec())));
+        let d = fd(k.syscall(1, Call::Open { path: format!("#d/{r}"), mode: 0 }));
+        assert_eq!(k.syscall(1, Call::Pread { fd: d, n: 2, off: -1 }), Ok(Ret::Data(b"cd".to_vec())));
+        assert_eq!(k.syscall(1, Call::Pread { fd: r, n: 2, off: -1 }), Ok(Ret::Data(b"ef".to_vec())));
+        k.syscall(1, Call::Close { fd: r }).unwrap();
+        assert_eq!(k.syscall(1, Call::Pread { fd: d, n: 2, off: 0 }), Ok(Ret::Data(b"ab".to_vec())));
+    }
 
+    /// **An open of a posted name is the posted channel** (`srvopen`,
+    /// `devsrv.c:135`): the poster's descriptor and every opener share one
+    /// channel, and one offset.
+    #[test]
+    fn a_posted_channel_and_its_openers_share_its_offset() {
+        let mut k = booted();
+        k.tab.add(Box::new(devsrv::SrvDev::new(k.up.clone())));
+        let w = fd(k.syscall(1, Call::Create { path: "#e/x".into(), mode: 1, perm: 0o666 }));
+        k.syscall(1, Call::Pwrite { fd: w, data: b"abcdef".to_vec(), off: 0 }).unwrap();
+        let r = fd(k.syscall(1, Call::Open { path: "#e/x".into(), mode: 0 }));
+        let post = fd(k.syscall(1, Call::Create { path: "#s/x".into(), mode: 1, perm: 0o666 }));
+        k.syscall(1, Call::Pwrite { fd: post, data: r.to_string().into_bytes(), off: -1 }).unwrap();
+        let o = fd(k.syscall(1, Call::Open { path: "#s/x".into(), mode: 0 }));
+        assert_eq!(k.syscall(1, Call::Pread { fd: o, n: 2, off: -1 }), Ok(Ret::Data(b"ab".to_vec())));
+        assert_eq!(k.syscall(1, Call::Pread { fd: r, n: 2, off: -1 }), Ok(Ret::Data(b"cd".to_vec())));
+    }
+
+    /// `srvremove` (`devsrv.c:186`): an eve-owned name is eve's to remove,
+    /// `boot` nobody's, and a name others may not write its owner's or
+    /// eve's. Removing one closes what was posted — *"cclose(sp->chan)"*
+    /// (`:227`) — so a pipe end nobody else holds hangs up.
+    #[test]
+    fn a_posted_name_is_removed_by_whoever_may_and_closes_what_was_posted() {
+        let mut k = booted();
+        k.tab.add(Box::new(devsrv::SrvDev::new(k.up.clone())));
+        *k.tab.eve().borrow_mut() = "kitty".into();
+        let as_ = |k: &mut Kernel, u: &str| k.procs.borrow_mut().setuser(1, u);
+        let mk = |k: &mut Kernel, name: &str, perm: u32| {
+            let f = fd(k.syscall(1, Call::Create { path: format!("#s/{name}"), mode: 1, perm }));
+            k.syscall(1, Call::Close { fd: f }).unwrap();
+        };
+        let rm = |k: &mut Kernel, name: &str| k.syscall(1, Call::Remove { path: format!("#s/{name}") });
+        as_(&mut k, "kitty");
+        mk(&mut k, "system", 0o666);
+        mk(&mut k, "boot", 0o666);
+        as_(&mut k, "glenda");
+        mk(&mut k, "personal", 0o600);
+        mk(&mut k, "shared", 0o667);
+        as_(&mut k, "other");
+        assert_eq!(rm(&mut k, "system"), Err("permission denied".into()), "eve's");
+        assert_eq!(rm(&mut k, "personal"), Err("permission denied".into()), "glenda's");
+        assert_eq!(rm(&mut k, "shared"), Ok(Ret::Ok), "anyone may write it");
+        as_(&mut k, "glenda");
+        assert_eq!(rm(&mut k, "personal"), Ok(Ret::Ok));
+        as_(&mut k, "kitty");
+        assert_eq!(rm(&mut k, "boot"), Err("permission denied".into()), "nobody's");
+        assert_eq!(rm(&mut k, "system"), Ok(Ret::Ok));
+
+        let Ret::Two(a, b) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
+        let p = fd(k.syscall(1, Call::Create { path: "#s/p".into(), mode: 1, perm: 0o600 }));
+        k.syscall(1, Call::Pwrite { fd: p, data: b.to_string().into_bytes(), off: -1 }).unwrap();
+        k.syscall(1, Call::Close { fd: b }).unwrap();
+        k.syscall(1, Call::Close { fd: p }).unwrap();
+        assert_eq!(rm(&mut k, "p"), Ok(Ret::Ok));
+        assert_eq!(
+            k.syscall(1, Call::Pread { fd: a, n: 8, off: -1 }),
+            Ok(Ret::Data(Vec::new())),
+            "the end /srv held is closed, so the other reads end of file"
+        );
+    }
+
+    /// `srvwstat` (`devsrv.c:235`): the owner, or eve, may rename a posted
+    /// name and change its mode; a `/` in the name is `Ebadchar`.
+    #[test]
+    fn a_posted_names_owner_may_rename_it() {
+        let mut k = booted();
+        k.tab.add(Box::new(devsrv::SrvDev::new(k.up.clone())));
+        *k.tab.eve().borrow_mut() = "kitty".into();
+        k.procs.borrow_mut().setuser(1, "glenda");
+        let f = fd(k.syscall(1, Call::Create { path: "#s/a".into(), mode: 1, perm: 0o600 }));
+        k.syscall(1, Call::Close { fd: f }).unwrap();
+        let wstat = |name: &str, mode: u32| {
+            ninep::Dir { name: name.into(), mode, atime: !0, mtime: !0, length: !0, ..Default::default() }.conv_d2m()
+        };
+        k.procs.borrow_mut().setuser(1, "other");
+        assert!(k.syscall(1, Call::Wstat { path: "#s/a".into(), edir: wstat("b", !0) }).is_err());
+        k.procs.borrow_mut().setuser(1, "glenda");
+        assert_eq!(
+            k.syscall(1, Call::Wstat { path: "#s/a".into(), edir: wstat("x/y", !0) }),
+            Err("bad character in file name".into())
+        );
+        k.syscall(1, Call::Wstat { path: "#s/a".into(), edir: wstat("b", 0o644) }).unwrap();
+        assert!(k.walk(1, "#s/a", namec::A::Access, 0).is_err());
+        let Ret::Data(st) = k.syscall(1, Call::Stat { path: "#s/b".into() }).unwrap() else { panic!() };
+        assert_eq!(ninep::Dir::conv_m2d(&st).unwrap().mode & 0o777, 0o644);
+    }
+
+    /// `srvwrite` (`devsrv.c:302`): the descriptor is `strtoul`'s number in
+    /// under 32 bytes — `0x` hexadecimal, and what follows the digits
+    /// ignored — and a name is posted once (`Ebadusefd`).
+    #[test]
+    fn a_posted_descriptor_is_strtouls_number() {
+        let mut k = booted();
+        k.tab.add(Box::new(devsrv::SrvDev::new(k.up.clone())));
+        let Ret::Two(_, b) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
+        let post = fd(k.syscall(1, Call::Create { path: "#s/p".into(), mode: 1, perm: 0o600 }));
+        let long = format!("{b}{}", " ".repeat(40));
+        assert_eq!(
+            k.syscall(1, Call::Pwrite { fd: post, data: long.into_bytes(), off: -1 }),
+            Err("jmk added reentrancy for threads".into()),
+            "Egreg"
+        );
+        let hex = format!("0x{b:x} and then some");
+        k.syscall(1, Call::Pwrite { fd: post, data: hex.into_bytes(), off: -1 }).unwrap();
+        assert_eq!(
+            k.syscall(1, Call::Pwrite { fd: post, data: b.to_string().into_bytes(), off: -1 }),
+            Err(chan::EBADUSEFD.into()),
+            "posted once"
+        );
+    }
+
+    /// `newfd2` (`sysfile.c:94`): `pipe`'s `data` is in the lower descriptor
+    /// and `data1` in the next free one.
+    #[test]
+    fn a_pipes_data_end_is_its_lower_descriptor() {
+        let mut k = booted();
+        let first = fd(k.syscall(1, Call::Open { path: "#e".into(), mode: 0 }));
+        let gap = fd(k.syscall(1, Call::Open { path: "#e".into(), mode: 0 }));
+        k.syscall(1, Call::Close { fd: first }).unwrap();
+        let Ret::Two(a, b) = k.syscall(1, Call::Pipe).unwrap() else { panic!() };
+        assert_eq!((a, b), (first, gap + 1));
+        let Ret::Data(st) = k.syscall(1, Call::Fstat { fd: a }).unwrap() else { panic!() };
+        assert_eq!(ninep::Dir::conv_m2d(&st).unwrap().name, "data");
+    }
 }

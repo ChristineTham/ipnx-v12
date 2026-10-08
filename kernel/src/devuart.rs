@@ -34,7 +34,7 @@
 
 use crate::chan::{flag::COPEN, mode, Chan};
 use crate::dev::{Dev, DevId, Eve};
-use crate::ninep::{Dir, Qid, DMDIR, QTDIR};
+use crate::ninep::{Dir, Qid, QTDIR};
 use crate::proc::{Pid, Procs, QLock, Rid, Up, EINTR};
 use crate::qio::{self, At, Qid3, Queue, MAXATOMIC};
 use std::cell::RefCell;
@@ -438,7 +438,9 @@ impl UartDev {
 
     /// `uartctl` on a line with nothing queued — `uartenable`'s own calls.
     fn uartctl_now(&mut self, i: usize, cmd: &str) -> Result<(), ()> {
-        let f: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
+        // *"char *f[16]; … nf = tokenize(cmd, f, nelem(f))"* (`devuart.c:381`).
+        let mut f = crate::dev::tokenize(&cmd);
+        f.truncate(16);
         match self.uartctl(i, &f, 0, None, 0) {
             Ctl::Done(r) => r,
             Ctl::Asleep(_) | Ctl::Eintr => Err(()),
@@ -476,7 +478,7 @@ impl UartDev {
                 continue;
             }
             let b = field.as_bytes();
-            let n = atoi(&field[1..]);
+            let n = crate::dev::atoi(&field[1..]);
             let cmd = b[0];
             // The commands that let output drain first.
             if b"BbDdIiKkLlMmPpRrSs".contains(&cmd) && drained != Some(at) {
@@ -724,7 +726,9 @@ impl UartDev {
             }
         };
         let cmd = String::from_utf8_lossy(data);
-        let f: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
+        // *"char *f[16]; … nf = tokenize(cmd, f, nelem(f))"* (`devuart.c:381`).
+        let mut f = crate::dev::tokenize(&cmd);
+        f.truncate(16);
         let r = match self.uartctl(i, &f, from, drained, pid) {
             Ctl::Asleep(field) => {
                 self.held.insert(pid, Held::Drain { field });
@@ -756,21 +760,6 @@ fn wakeall(procs: &mut Procs, dev: u32) {
     }
 }
 
-/// `atoi` — leading digits, after an optional sign; nothing is 0.
-fn atoi(s: &str) -> i32 {
-    let s = s.trim_start();
-    let (neg, digits) = match s.as_bytes().first() {
-        Some(b'-') => (true, &s[1..]),
-        Some(b'+') => (false, &s[1..]),
-        _ => (false, s),
-    };
-    let n = digits.bytes().take_while(u8::is_ascii_digit).fold(0i32, |n, d| n.wrapping_mul(10).wrapping_add((d - b'0') as i32));
-    if neg {
-        -n
-    } else {
-        n
-    }
-}
 
 impl Dev for UartDev {
     fn id(&self) -> DevId {
@@ -889,12 +878,10 @@ impl Dev for UartDev {
 
     /// `uartstat` (`devuart.c:262`) — `devstat` over `uartdir`; a
     /// directory is not in the table, and is named from its path
-    /// (`dev.c:272`).
+    /// (`dev.c:281`).
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
         if c.qid.is_dir() {
-            let elem = c.path.rsplit('/').next().unwrap_or(&c.path).to_string();
-            let eve = self.eve.borrow();
-            return Ok(crate::dev::devdir(c, c.qid, &elem, 0, &eve, &eve, DMDIR | 0o555).conv_d2m());
+            return Ok(crate::dev::devstatdir(c, &self.eve.borrow()).conv_d2m());
         }
         self.dir(c, c.qid.path).map(|d| d.conv_d2m()).ok_or_else(|| ENONEXIST.into())
     }
@@ -959,17 +946,6 @@ impl Dev for UartDev {
         u.dcd = false;
         u.dsr = false;
         u.dohup = false;
-    }
-
-    /// Another reference to an open line (`incref`): one more for `opens`
-    /// to count down.
-    fn incref(&mut self, c: &Chan) {
-        if c.flag & COPEN == 0 || !matches!(nettype(c.qid.path), NDATAQID | NCTLQID) {
-            return;
-        }
-        if let Ok(i) = self.index(c) {
-            self.uart[i].opens += 1;
-        }
     }
 }
 

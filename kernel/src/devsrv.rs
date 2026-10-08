@@ -22,7 +22,7 @@
 //! name would collide the moment a second instance started.
 
 use crate::chan::{flag, Chan};
-use crate::dev::{Dev, DevId};
+use crate::dev::{strtoul, Dev, DevId};
 use crate::ninep::{Qid, QTDIR};
 use crate::proc::Up;
 use std::cell::RefCell;
@@ -31,9 +31,19 @@ use std::rc::Rc;
 const EPERM: &str = "permission denied";
 const EEXIST: &str = "file already exists";
 const ENONEXIST: &str = "file does not exist";
-const ESHUTDOWN: &str = "channel shut down";
+/// `Eshutdown` (`error.h:7`).
+const ESHUTDOWN: &str = "device shut down";
 /// `Eisdir` (`error.h:13`).
 const EISDIR: &str = "file is a directory";
+/// `Ebadchar` (`error.h:14`).
+const EBADCHAR: &str = "bad character in file name";
+/// `Eshortstat` (`error.h:48`).
+const ESHORTSTAT: &str = "stat buffer too small";
+/// `Egreg` (`error.h:44`).
+const EGREG: &str = "jmk added reentrancy for threads";
+/// A posted name opened as a copy — never Plan 9's, whose `srvopen` answers
+/// the posted channel itself ([`SrvDev::srvopen`]).
+const SHARED: &str = "#s: a posted channel is opened through the device table, which shares it";
 
 /// Plan 9's `Srv`.
 pub struct Srv {
@@ -100,16 +110,56 @@ pub struct SrvDev {
     /// `qidpath` (`srvinit`, `devsrv.c`), counting from 1.
     next: u64,
     up: Rc<RefCell<Up>>,
+    /// The posted channels of names just removed, for the device table to
+    /// `cclose` — *"if(sp->chan) cclose(sp->chan)"* (`devsrv.c:227`) — since
+    /// a device cannot reach `devtab`, and the close of a last reference is
+    /// another device's ([`SrvDev::unposted`]).
+    unposted: Vec<Rc<RefCell<Chan>>>,
 }
 
 impl SrvDev {
     pub fn new(up: Rc<RefCell<Up>>) -> SrvDev {
-        SrvDev { srv: Srvtab::default(), eve: Default::default(), next: 1, up }
+        SrvDev { srv: Srvtab::default(), eve: Default::default(), next: 1, up, unposted: Vec::new() }
     }
 
     /// The table, for whoever else needs it — `srvname`'s callers.
     pub fn table(&self) -> Srvtab {
         self.srv.clone()
+    }
+
+    /// The channels `srvremove` let go of, to be `cclose`d by the caller
+    /// that can reach their devices.
+    pub fn unposted(&mut self) -> Vec<Rc<RefCell<Chan>>> {
+        std::mem::take(&mut self.unposted)
+    }
+
+    /// `srvopen` (`devsrv.c:104`) for a posted name: **the posted channel
+    /// itself, with one more reference** — *"cclose(c); incref(sp->chan);
+    /// … return sp->chan"* (`:134`–`:138`) — so whoever opens the name
+    /// shares the poster's channel, its offset included. The device table
+    /// reaches it here ([`crate::namec::Devtab::dopen`]), because an open
+    /// that answers a channel that already exists answers a reference.
+    ///
+    /// A name with nothing behind it, or none, is `Eshutdown` (`:126`); a
+    /// posted file cannot be truncated, and opens only in the mode the
+    /// posted channel is open in unless that is `ORDWR` (`:128`–`:131`);
+    /// then `devpermcheck`.
+    pub fn srvopen(&mut self, c: &Chan, mode: u16) -> Result<Rc<RefCell<Chan>>, String> {
+        let (posted, owner, perm) = {
+            let tab = self.srv.borrow();
+            let sp = tab.iter().find(|s| s.path == c.qid.path).ok_or(ESHUTDOWN)?;
+            (sp.chan.clone().ok_or(ESHUTDOWN)?, sp.owner.clone(), sp.perm)
+        };
+        if mode & crate::chan::mode::OTRUNC != 0 {
+            return Err("srv file already exists".into());
+        }
+        let m = crate::chan::openmode(mode)?;
+        let pm = posted.borrow().mode;
+        if m != pm && pm != crate::chan::mode::ORDWR {
+            return Err(EPERM.into());
+        }
+        self.permcheck(&owner, perm, mode)?;
+        Ok(posted)
     }
 
     /// `devpermcheck` (`dev.c:339`), shared in [`crate::dev::permcheck`].
@@ -150,14 +200,10 @@ impl Dev for SrvDev {
             .map(|s| c.walked(name, Qid { qtype: 0, vers: 0, path: s.path })))
     }
 
-    /// `srvopen`: **returns the posted channel**, not the one it was given.
-    /// A name with nothing behind it is `Eshutdown` — the entry exists and
-    /// the server is gone, which is a different thing from no such file.
-    ///
-    /// `srvopen` (`devsrv.c:104`): the directory opens only to read, and
-    /// never `ORCLOSE`; a posted file cannot be truncated, and opens only in
-    /// the mode the posted channel is open in, unless that is `ORDWR`
-    /// (`:128`–`:131`) — then `devpermcheck`.
+    /// `srvopen` (`devsrv.c:104`) for the directory: it opens only to
+    /// read, and never `ORCLOSE`. A posted name is [`SrvDev::srvopen`]'s,
+    /// which answers the posted channel itself; a copy of it is not a
+    /// channel this device can answer.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
         if c.qid.is_dir() {
             if mode & crate::chan::mode::ORCLOSE != 0 {
@@ -171,21 +217,7 @@ impl Dev for SrvDev {
             c.offset = 0;
             return Ok(c);
         }
-        let (posted, owner, perm) = {
-            let tab = self.srv.borrow();
-            let sp = tab.iter().find(|s| s.path == c.qid.path).ok_or(ENONEXIST)?;
-            let posted = sp.chan.as_ref().ok_or(ESHUTDOWN)?.borrow().clone();
-            (posted, sp.owner.clone(), sp.perm)
-        };
-        if mode & crate::chan::mode::OTRUNC != 0 {
-            return Err("srv file already exists".into());
-        }
-        let m = crate::chan::openmode(mode)?;
-        if m != posted.mode && posted.mode != crate::chan::mode::ORDWR {
-            return Err(EPERM.into());
-        }
-        self.permcheck(&owner, perm, mode)?;
-        Ok(posted)
+        Err(SHARED.into())
     }
 
     /// `srvcreate`: `OWRITE` only, because the file is a place to post into
@@ -245,38 +277,55 @@ impl Dev for SrvDev {
         Ok(crate::dev::devdirread(c, n, &entries))
     }
 
-    /// `srvwrite`: the text is a **file descriptor number**. `fdtochan` turns
-    /// it into a channel, and that channel is what the name now means.
+    /// `srvwrite` (`devsrv.c:302`): the text is a **file descriptor number**.
+    /// `fdtochan` turns it into a channel — the descriptor's own, with one
+    /// more reference (*"error check and inc ref"*, `:315`) — and that
+    /// channel is what the name now means.
+    ///
+    /// The number is `strtoul(buf, 0, 0)` of fewer than 32 bytes (`:309`–
+    /// `:313`): `0x` is hexadecimal, a leading `0` octal, and what follows
+    /// the digits is ignored.
     fn write(&mut self, c: &mut Chan, data: &[u8], _off: u64) -> Result<usize, String> {
         if c.qid.is_dir() {
             return Err(EPERM.into());
         }
-        let text = String::from_utf8_lossy(data);
-        let fd: i32 = text.trim().parse().map_err(|_| "bad fd")?;
+        // *"if(n >= sizeof buf) error(Egreg)"*, `char buf[32]`.
+        if data.len() >= 32 {
+            return Err(EGREG.into());
+        }
+        let fd = strtoul(data) as i32;
         let fgrp = self.up.borrow().fgrp().ok_or("no such process")?;
         let cell = fgrp.borrow().get(fd).cloned().ok_or("fd out of range or not open")?;
-        let posted = cell.borrow().clone();
-        let posted_cell = cell.clone();
-        // `srvwrite` (`devsrv.c:323`). A channel that goes away on exec or on
-        // close cannot be left behind a name: whoever opens the name later
-        // would get a channel its poster no longer holds.
-        if posted.flag & (flag::CCEXEC | flag::CRCLOSE) != 0 {
-            return Err("posted fd has remove-on-close or close-on-exec".into());
+        // A channel that goes away on exec or on close cannot be left behind
+        // a name: whoever opens the name later would get a channel its
+        // poster no longer holds (`:323`); nor can an authentication file
+        // (`:325`).
+        {
+            let posted = cell.borrow();
+            if posted.flag & (flag::CCEXEC | flag::CRCLOSE) != 0 {
+                return Err("posted fd has remove-on-close or close-on-exec".into());
+            }
+            if posted.qid.qtype & crate::ninep::QTAUTH != 0 {
+                return Err("cannot post auth file in srv".into());
+            }
         }
         let path = c.qid.path;
         let mut tab = self.srv.borrow_mut();
         let sp = tab.iter_mut().find(|s| s.path == path).ok_or(ENONEXIST)?;
+        // *"if(sp->chan) error(Ebadusefd)"* (`:331`).
         if sp.chan.is_some() {
-            return Err(EEXIST.into());
+            return Err(crate::chan::EBADUSEFD.into());
         }
-        sp.chan = Some(posted_cell);
+        sp.chan = Some(cell);
         Ok(data.len())
     }
 
+    /// `srvstat` (`devsrv.c:81`): `devstat` over `srvgen`.
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
-        let (name, owner, perm) = if c.qid.is_dir() {
-            ("#s".to_string(), self.eve.borrow().clone(), crate::ninep::DMDIR | 0o555)
-        } else {
+        if c.qid.is_dir() {
+            return Ok(crate::dev::devstatdir(c, &self.eve.borrow()).conv_d2m());
+        }
+        let (name, owner, perm) = {
             let tab = self.srv.borrow();
             let sp = tab.iter().find(|s| s.path == c.qid.path).ok_or(ENONEXIST)?;
             (sp.name.clone(), sp.owner.clone(), sp.perm)
@@ -284,24 +333,71 @@ impl Dev for SrvDev {
         Ok(crate::dev::devdir(c, c.qid, &name, 0, &owner, &self.eve.borrow().clone(), perm).conv_d2m())
     }
 
-    fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
-        Err(EPERM.into())
+    /// `srvwstat` (`devsrv.c:235`): a posted name's owner, or eve, may
+    /// change its mode, its owner and its name — in that order, so a name
+    /// with a `/` in it is refused with `Ebadchar` (`:269`) after the rest
+    /// has been changed.
+    fn wstat(&mut self, c: &mut Chan, edir: &[u8]) -> Result<(), String> {
+        if c.qid.is_dir() {
+            return Err(EPERM.into());
+        }
+        let user = self.up.borrow().user();
+        let iseve = crate::dev::iseve(&self.eve, &user);
+        let mut tab = self.srv.borrow_mut();
+        let sp = tab.iter_mut().find(|s| s.path == c.qid.path).ok_or(ENONEXIST)?;
+        if sp.owner != user && !iseve {
+            return Err(EPERM.into());
+        }
+        let d = crate::ninep::Dir::conv_m2d(edir).ok_or(ESHORTSTAT)?;
+        if d.mode != !0 {
+            sp.perm = d.mode & 0o777;
+        }
+        if !d.uid.is_empty() {
+            sp.owner = d.uid.clone();
+        }
+        if !d.name.is_empty() && d.name != sp.name {
+            if d.name.contains('/') {
+                return Err(EBADCHAR.into());
+            }
+            sp.name = d.name.clone();
+        }
+        Ok(())
     }
 
-    /// `srvremove`: unposting. The name goes and the channel with it, so a
-    /// later open finds nothing rather than a dead server.
+    /// `srvremove` (`devsrv.c:186`): unposting, by whoever may. *"Only eve
+    /// can remove system services. No one can remove #s/boot."* (`:209`) —
+    /// and *"No removing personal services"* (`:218`): a name others may
+    /// not write is its owner's or eve's to remove. The name goes, so a
+    /// later open finds nothing rather than a dead server, and the posted
+    /// channel is closed (`:227`) — a last reference tells its device, so a
+    /// posted pipe end nobody else holds hangs up.
     fn remove(&mut self, c: &mut Chan) -> Result<(), String> {
         if c.qid.is_dir() {
             return Err(EPERM.into());
         }
+        let user = self.up.borrow().user();
+        let iseve = crate::dev::iseve(&self.eve, &user);
+        let eve = self.eve.borrow().clone();
         let path = c.qid.path;
         let mut tab = self.srv.borrow_mut();
         let i = tab.iter().position(|s| s.path == path).ok_or(ENONEXIST)?;
-        tab.remove(i);
+        let sp = &tab[i];
+        if sp.owner == eve && !iseve {
+            return Err(EPERM.into());
+        }
+        if sp.name == "boot" {
+            return Err(EPERM.into());
+        }
+        if sp.perm & 7 != 7 && sp.owner != user && !iseve {
+            return Err(EPERM.into());
+        }
+        if let Some(ch) = tab.remove(i).chan {
+            self.unposted.push(ch);
+        }
         Ok(())
     }
 
-    /// `srvclose` (`devsrv.c:280`): a channel opened with `ORCLOSE` unposts
+    /// `srvclose` (`devsrv.c:279`): a channel opened with `ORCLOSE` unposts
     /// its name when it closes. The comment there notes why no re-check is
     /// needed — only the owner is checked, and an owner is immutable.
     fn close(&mut self, c: &mut Chan) {
@@ -341,8 +437,10 @@ mod tests {
         // a walk from a fresh attach, as a process that inherited nothing does
         let dir2 = d.attach("").unwrap();
         let c = d.walk(&dir2, "store").unwrap().expect("not posted");
-        let got = d.open(c, OREAD).unwrap();
-        assert_eq!((got.dev, got.devno, got.qid.path), (DevId::Pipe, 7, 99));
+        let got = d.srvopen(&c, OREAD).unwrap();
+        let held = procs.borrow().get(1).unwrap().fds.borrow().get(fd).cloned().unwrap();
+        assert!(Rc::ptr_eq(&got, &held), "the posted channel itself, not a copy");
+        assert!(d.open(c, OREAD).is_err(), "and never a copy");
     }
 
     /// **A posted channel opens only in its own mode** (`devsrv.c:130`):
@@ -360,9 +458,9 @@ mod tests {
         d.write(&mut dir, fd.to_string().as_bytes(), 0).unwrap();
         let dir2 = d.attach("").unwrap();
         let c = d.walk(&dir2, "ro").unwrap().unwrap();
-        assert!(d.open(c.clone(), OWRITE).is_err(), "posted for reading");
-        assert!(d.open(c.clone(), OREAD | crate::chan::mode::OTRUNC).is_err());
-        assert!(d.open(c, OREAD).is_ok());
+        assert!(d.srvopen(&c, OWRITE).is_err(), "posted for reading");
+        assert!(d.srvopen(&c, OREAD | crate::chan::mode::OTRUNC).is_err());
+        assert!(d.srvopen(&c, OREAD).is_ok());
         let top = d.attach("").unwrap();
         assert!(d.open(top, OWRITE).is_err(), "Eisdir");
     }
@@ -384,8 +482,7 @@ mod tests {
         let (mut d, _) = srv();
         let mut dir = d.attach("").unwrap();
         d.create(&mut dir, "empty", OWRITE, 0o600).unwrap();
-        let c = dir.clone();
-        assert_eq!(d.open(c, OREAD).unwrap_err(), ESHUTDOWN);
+        assert_eq!(d.srvopen(&dir, OREAD).unwrap_err(), ESHUTDOWN);
     }
 
     /// What is written is a file descriptor NUMBER, not a path.

@@ -48,23 +48,29 @@ from eve — and one answer: **the default user is `kitty`** (Christine,
 `pc/main.c:285`); Plan 9's fallback, `"glenda"`, is kept for a
 configuration that names none.
 
-**Two differences in how the mount driver sleeps** — proposed 2026-09-24
-(RESEARCH §16.14). Built, and awaiting review, because each departs from
-Plan 9's mechanism though not from what a program sees:
+**A last close does not wait** — proposed 2026-09-24 (RESEARCH §16.14),
+and the serial line's drain added 2026-09-29 (§16.20). Built, and awaiting
+review. `mntclunk` waits for `Rclunk`, and `uartclose` for the line to take
+what is queued (`uartdrainoutput`, `devuart.c:342`). Here the `Tclunk` is
+sent and its reply dropped by whoever reads the wire next, and the line is
+kicked once and what it would not take freed. A program sees it: a close
+returns before the server has let the fid go, so an `ORCLOSE` file may
+still be there, and before the line has sent its output. The reason given:
+a call that sleeps in this kernel keeps the rest of itself to run when it
+is entered again, and a last close is made where nothing kept it — a
+descriptor's close, `dup`, `exec`'s close-on-exec, exit's `closefgrp`. The
+alternative is that rest kept for each such close, and `forceclosefgrp`
+(`pgrp.c:245`) for a process killed while it waits.
 
-1. **A clunk waits for nobody.** `mntclunk` waits for `Rclunk`. Here the
-   `Tclunk` is sent and the reply left for whoever reads the wire next,
-   which drops it. The reason: this kernel has no stack per process, so a
-   call that sleeps runs again from the top, and a clunk is made where a
-   call cannot run again — a descriptor's last close, a process's exit.
-   The alternative is a continuation for each such close.
-2. **`Dev::incref`.** Plan 9 counts references on the `Chan`, and closes the
-   device at the last; a channel here is a value, and each copy is closed
-   on its own. `srvopen`'s *"incref(sp->chan)"* (`devsrv.c:135`) is
-   therefore a call telling the device serving the posted channel that
-   there is another reference — devpipe counts it in `qref`. `struct Dev`
-   has no such function; the alternative is reference-counted channels
-   throughout the kernel.
+**The serial line's interrupt, taken at clock time** — proposed 2026-09-29
+(RESEARCH §16.20). Built, and awaiting review. `i8250interrupt`
+(`uarti8250.c:463`) runs when the hardware interrupts; here the host's line
+cannot interrupt the kernel, so `uartclock`, which stages input into the
+queue every 22ms (`devuart.c:244`), calls it first. What a reader sees is
+the same — input reaches the queue at the clock either way — as the
+console's keyboard is taken in at clock time already (`kbdputcclock`,
+`devcons.c:556`). The alternative is an interrupt the machine raises and
+the kernel dispatches, which the kernel does not have.
 
 **The wasm32 `Ureg`, and APE's signal trampoline** — proposed 2026-09-25.
 Built, and awaiting review, because each is a machine-dependent file Plan 9

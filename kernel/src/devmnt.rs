@@ -264,11 +264,6 @@ fn rerror(body: &[u8]) -> Option<String> {
 #[derive(Default)]
 pub struct MntDev {
     mounts: Vec<Mnt>,
-    /// Copies of a channel beyond the first, by fid — Plan 9 has one `Chan`
-    /// with a reference count, and `mntclose` clunks at the last
-    /// ([`crate::dev::Dev::incref`]). Without this a copy's close clunked
-    /// the fid every other copy was still using.
-    refs: std::collections::HashMap<u32, u32>,
     /// `chanalloc.fid` (`chan.c:20`). **A fid is unique across the whole
     /// kernel, not per mount**: Plan 9 gives every channel its own when it
     /// is allocated — *"c->fid = ++chanalloc.fid"* (`chan.c:250`) — and
@@ -530,13 +525,6 @@ impl MntDev {
     /// is told to let go.
     pub fn close(&mut self, t: &mut dyn Transport, c: &mut Chan) {
         let fid = c.fid;
-        if let Some(n) = self.refs.get_mut(&fid) {
-            *n -= 1;
-            if *n == 0 {
-                self.refs.remove(&fid);
-            }
-            return;
-        }
         if let Ok(m) = self.mnt(c) {
             let _ = m.clunk(t, fid);
         }
@@ -598,12 +586,6 @@ impl Dev for MntDev {
         Err(DIRECT.into())
     }
     fn close(&mut self, _c: &mut Chan) {}
-
-    /// Another copy of a channel through a mount: its fid is clunked by the
-    /// last close, not the first.
-    fn incref(&mut self, c: &Chan) {
-        *self.refs.entry(c.fid).or_insert(0) += 1;
-    }
 }
 
 const DIRECT: &str = "#M reached directly: it needs a transport, so it is \

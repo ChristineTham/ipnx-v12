@@ -33,7 +33,8 @@ pub const MAXENVSIZE: usize = 16300;
 const EPERM: &str = "permission denied";
 const EBADARG: &str = "bad arg in system call";
 const EEXIST: &str = "file already exists";
-const ETOOBIG: &str = "value too big";
+/// `Etoobig` (`error.h:21`) — `envwrite`'s past `Maxenvsize` (`devenv.c:275`).
+const ETOOBIG: &str = "read or write too large";
 const ENONEXIST: &str = "file does not exist";
 
 /// One process's environment group — Plan 9's `Egrp`. Shared through `Rc`,
@@ -104,7 +105,8 @@ impl EnvDev {
     /// `Dirtab` — the environment group IS the table — so this is `envgen`
     /// (`devenv.c:33`), which walks the group.
     fn entries(&mut self, c: &Chan) -> Vec<crate::ninep::Dir> {
-        let user = self.up.borrow().user();
+        // `envgen`: eve's (`devenv.c:58`).
+        let eve = self.eve.borrow().clone();
         let mut named: Vec<(String, usize)> = {
             let eg = self.egrp(c);
             let g = eg.borrow();
@@ -115,7 +117,7 @@ impl EnvDev {
             .into_iter()
             .map(|(name, len)| {
                 let qid = Qid { qtype: 0, vers: 0, path: self.qid(&name) };
-                crate::dev::devdir(c, qid, &name, len as u64, &user, &self.eve.borrow(), 0o666)
+                crate::dev::devdir(c, qid, &name, len as u64, &eve, &eve, 0o666)
             })
             .collect()
     }
@@ -250,15 +252,14 @@ impl Dev for EnvDev {
     }
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
+        let eve = self.eve.borrow().clone();
         if c.qid.is_dir() {
-            let user = self.up.borrow().user();
             let name = if c.aux == AUXCONF { "#ec" } else { "#e" };
-            return Ok(crate::dev::devdir(c, c.qid, name, 0, &user, &self.eve.borrow(), 0o775).conv_d2m());
+            return Ok(crate::dev::devdir(c, c.qid, name, 0, &eve, &eve, 0o775).conv_d2m());
         }
         let name = self.name(c.qid.path).ok_or(ENONEXIST)?.clone();
         let len = self.egrp(c).borrow().get(&name).map(|v| v.len()).unwrap_or(0);
-        let user = self.up.borrow().user();
-        Ok(crate::dev::devdir(c, c.qid, &name, len as u64, &user, &self.eve.borrow(), 0o666).conv_d2m())
+        Ok(crate::dev::devdir(c, c.qid, &name, len as u64, &eve, &eve, 0o666).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {

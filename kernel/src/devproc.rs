@@ -26,6 +26,100 @@ const ETOOBIG: &str = "read or write too large";
 const EBADARG: &str = "bad arg in system call";
 /// `Ebadctl` (`error.h`).
 const EBADCTL: &str = "bad process or channel control request";
+/// `Egreg` (`error.h:44`) — `procopen`'s default (`devproc.c:459`).
+const EGREG: &str = "jmk added reentrancy for threads";
+/// `Enonexist` (`error.h:9`).
+const ENONEXIST: &str = "file does not exist";
+
+/// `proccmd[]` (`devproc.c:102`): each control message, and how many fields
+/// it takes (0 is any).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Cm {
+    Close,
+    Closefiles,
+    Fixedpri,
+    Hang,
+    Nohang,
+    Noswap,
+    Kill,
+    Pri,
+    Private,
+    Profile,
+    Start,
+    Startstop,
+    Startsyscall,
+    Stop,
+    Waitstop,
+    Wired,
+    Trace,
+    Period,
+    Deadline,
+    Cost,
+    Sporadic,
+    Deadlinenotes,
+    Admit,
+    Extra,
+    Expel,
+    Event,
+}
+
+const PROCCMD: &[(Cm, &str, usize)] = &[
+    (Cm::Close, "close", 2),
+    (Cm::Closefiles, "closefiles", 1),
+    (Cm::Fixedpri, "fixedpri", 2),
+    (Cm::Hang, "hang", 1),
+    (Cm::Nohang, "nohang", 1),
+    (Cm::Noswap, "noswap", 1),
+    (Cm::Kill, "kill", 1),
+    (Cm::Pri, "pri", 2),
+    (Cm::Private, "private", 1),
+    (Cm::Profile, "profile", 1),
+    (Cm::Start, "start", 1),
+    (Cm::Startstop, "startstop", 1),
+    (Cm::Startsyscall, "startsyscall", 1),
+    (Cm::Stop, "stop", 1),
+    (Cm::Waitstop, "waitstop", 1),
+    (Cm::Wired, "wired", 2),
+    (Cm::Trace, "trace", 0),
+    (Cm::Period, "period", 2),
+    (Cm::Deadline, "deadline", 2),
+    (Cm::Cost, "cost", 2),
+    (Cm::Sporadic, "sporadic", 1),
+    (Cm::Deadlinenotes, "deadlinenotes", 1),
+    (Cm::Admit, "admit", 1),
+    (Cm::Extra, "extra", 1),
+    (Cm::Expel, "expel", 1),
+    (Cm::Event, "event", 1),
+];
+
+/// `procqidwidth` (`devproc.c:543`): how wide the qid's version prints.
+pub fn procqidwidth(c: &crate::chan::Chan) -> usize {
+    c.qid.vers.to_string().len()
+}
+
+/// `procfdprint` (`devproc.c:551`): one descriptor as `/proc/n/fd` and
+/// `#d`'s ctl files show it — *"%3d %.2s %C %4ld (%.16llux %*lud %.2ux)
+/// %5ld %8lld %s"*: the mode as `&"r w rw"[(c->mode&3)<<1]`, the device,
+/// the qid with its version `w` wide (its own width when `w` is 0), the
+/// iounit, the offset and the name.
+pub fn procfdprint(c: &crate::chan::Chan, fd: i32, w: usize) -> String {
+    let w = if w == 0 { procqidwidth(c) } else { w };
+    let m = ["r ", "w ", "rw", ""][(c.mode & 3) as usize];
+    format!(
+        "{:3} {} {} {:4} ({:016x} {:w$} {:02x}) {:5} {:8} {}\n",
+        fd,
+        m,
+        c.dev.letter(),
+        c.devno,
+        c.qid.path,
+        c.qid.vers,
+        c.qid.qtype,
+        c.iounit,
+        c.offset,
+        c.path,
+        w = w
+    )
+}
 
 /// `KNAMELEN` (`portdat.h`) and `STATSIZE` (`devproc.c:73`).
 pub const KNAMELEN: usize = 28;
@@ -311,7 +405,7 @@ impl Dev for ProcDev {
                 }
                 c.aux = procs.get(pid).map_or(0, |p| p.noteid) as u64;
             }
-            Q::Root => return Err("it's a mystery to me".into()),
+            Q::Root => return Err(EGREG.into()),
         }
         // *"tc = devopen(c, omode, 0, 0, procgen)"* (`devproc.c:471`) —
         // `devpermcheck` of the file's mode for its process's user: the
@@ -482,24 +576,9 @@ impl Dev for ProcDev {
                     let fds = proc.fds.borrow();
                     let chans: Vec<(i32, crate::chan::Chan)> =
                         (0..fds.slots()).filter_map(|fd| fds.get(fd).map(|c| (fd, c.borrow().clone()))).collect();
-                    let w = chans.iter().map(|(_, c)| c.qid.vers.to_string().len()).max().unwrap_or(0);
+                    let w = chans.iter().map(|(_, c)| procqidwidth(c)).max().unwrap_or(0);
                     for (fd, ch) in chans {
-                        // `&"r w rw"[(c->mode&3)<<1]`, two characters
-                        let m = ["r ", "w ", "rw", ""][(ch.mode & 3) as usize];
-                        s.push_str(&format!(
-                            "{:3} {} {} {:4} ({:016x} {:w$} {:02x}) {:5} {:8} {}\n",
-                            fd,
-                            m,
-                            ch.dev.letter(),
-                            ch.devno,
-                            ch.qid.path,
-                            ch.qid.vers,
-                            ch.qid.qtype,
-                            ch.iounit,
-                            ch.offset,
-                            ch.path,
-                            w = w
-                        ));
+                        s.push_str(&procfdprint(&ch, fd, w));
                     }
                     s
                 }
@@ -568,20 +647,19 @@ impl Dev for ProcDev {
         Ok(b[off..(off + n).min(b.len())].to_vec())
     }
 
-    /// `procctlreq` (`devproc.c:1321`). The verbs this kernel can answer
-    /// honestly; the rest want a scheduler and say so.
+    /// `procwrite` (`devproc.c:1038`), and `procctlreq` (`:1321`) for
+    /// `ctl`: the message is `parsecmd`'s fields and `lookupcmd` finds it
+    /// in `proccmd[]`, its count of fields checked.
     fn write(&mut self, c: &mut Chan, data: &[u8], _off: u64) -> Result<usize, String> {
         let (pid, q) = split_qid(c.qid.path);
         if pid == 0 {
             return Err(EPERM.into());
         }
         self.nonone(pid)?;
-        let text = String::from_utf8_lossy(data).trim().to_string();
-        let mut word = text.split_whitespace();
-        let cmd = word.next().unwrap_or("");
+        let text = String::from_utf8_lossy(data).into_owned();
         let procs = self.up.borrow().procs.clone();
         // *"if(p->kp) error(Eperm)"* — *"no ctl requests to kprocs"*
-        // (`devproc.c:1330`).
+        // (`devproc.c:1331`).
         if q == Q::Ctl && procs.borrow().get(pid).is_some_and(|p| p.kp) {
             return Err(EPERM.into());
         }
@@ -598,13 +676,15 @@ impl Dev for ProcDev {
             p.get(target).ok_or(EPROCDIED)?;
             return Ok(data.len());
         }
-        match (q, cmd) {
+        let cb = if q == Q::Ctl { crate::dev::parsecmd(data) } else { Vec::new() };
+        let ct = if q == Q::Ctl { Some(crate::dev::lookupcmd(&cb, PROCCMD)?) } else { None };
+        match (q, ct) {
             // `CMkill` (`devproc.c:1352`): *"p->procctl = Proc_exitme;
             // postnote(p, 0, "sys: killed", NExit)"* — the process ends
             // itself, in `procctl`, on its way out of the kernel. A `Broken`
             // or `Stopped` process is started first there; neither state
             // is built.
-            (Q::Ctl, "kill") => {
+            (Q::Ctl, Some(Cm::Kill)) => {
                 use crate::proc::State;
                 let mut p = procs.borrow_mut();
                 match p.get(pid).ok_or(EPROCDIED)?.state {
@@ -619,7 +699,7 @@ impl Dev for ProcDev {
                 }
             }
             // `CMstart` (`devproc.c`): only a `Stopped` process.
-            (Q::Ctl, "start") => {
+            (Q::Ctl, Some(Cm::Start)) => {
                 let mut p = procs.borrow_mut();
                 if p.get(pid).ok_or(EPROCDIED)?.state != crate::proc::State::Stopped {
                     return Err(EBADCTL.into());
@@ -628,31 +708,33 @@ impl Dev for ProcDev {
                 p.ready(pid);
             }
             // `CMstop` and `CMwaitstop`: `procstopwait`, asking or not.
-            (Q::Ctl, cmd @ ("stop" | "waitstop")) => {
-                let ctl = (cmd == "stop").then_some(crate::proc::Procctl::Stopme);
+            (Q::Ctl, Some(cm @ (Cm::Stop | Cm::Waitstop))) => {
+                let ctl = (cm == Cm::Stop).then_some(crate::proc::Procctl::Stopme);
                 drop(procs);
                 if !self.procstopwait(pid, ctl)? {
                     return Ok(0);
                 }
             }
-            (Q::Ctl, "hang") => {
+            (Q::Ctl, Some(Cm::Hang)) => {
                 procs.borrow_mut().get_mut(pid).ok_or(EPROCDIED)?.hang = true;
             }
-            (Q::Ctl, "nohang") => {
+            (Q::Ctl, Some(Cm::Nohang)) => {
                 procs.borrow_mut().get_mut(pid).ok_or(EPROCDIED)?.hang = false;
             }
-            (Q::Ctl, "close") => {
-                let fd: Fd = word.next().and_then(|w| w.parse().ok()).ok_or("bad fd")?;
+            // `procctlclosefiles(p, 0, atoi(cb->f[1]))` (`devproc.c:1343`):
+            // take the channel out and `cclose` it — a descriptor that is
+            // not open is passed over (`procctlcloseone`, `:1251`). `#p`
+            // cannot reach `devtab`, so a channel whose last reference this
+            // was goes on `clunkq`, and the kernel closes it before the
+            // write returns.
+            (Q::Ctl, Some(Cm::Close)) => {
+                let fd: Fd = crate::dev::atoi(&cb[1]);
                 let mut p = procs.borrow_mut();
                 let proc = p.get(pid).ok_or(EPROCDIED)?;
-                // `procctlclosefiles` (`devproc.c`): take the channel out
-                // and `cclose` it. `#p` cannot reach `devtab`, so a channel
-                // whose last reference this was goes on `clunkq`, and the
-                // kernel closes it before the write returns.
-                let last = proc.fds.borrow_mut().close(fd).ok_or("fd out of range or not open")?;
+                let last = proc.fds.borrow_mut().close(fd).flatten();
                 p.clunkq.extend(last);
             }
-            (Q::Ctl, "closefiles") => {
+            (Q::Ctl, Some(Cm::Closefiles)) => {
                 let mut p = procs.borrow_mut();
                 let proc = p.get(pid).ok_or(EPROCDIED)?;
                 let fds = proc.fds.clone();
@@ -665,16 +747,38 @@ impl Dev for ProcDev {
             }
             // `pri n` and `fixedpri n` (`devproc.c:1373`, `:1379`): only the
             // host owner may raise a process above `PriNormal`.
-            (Q::Ctl, cmd @ ("pri" | "fixedpri")) => {
-                // `lookupcmd` wants the one argument; `atoi` reads it, and
-                // what is not a number is 0.
-                let arg = word.next().ok_or(EBADCTL)?;
-                let pri: usize = arg.parse().unwrap_or(0);
+            (Q::Ctl, Some(cm @ (Cm::Pri | Cm::Fixedpri))) => {
+                // `atoi` reads the one argument, and what is not a number
+                // is 0.
+                let pri = crate::dev::atoi(&cb[1]).max(0) as usize;
                 let user = self.up.borrow().user();
                 if pri > crate::proc::pri::NORMAL && !crate::dev::iseve(&self.eve, &user) {
                     return Err(EPERM.into());
                 }
-                procs.borrow_mut().procpriority(pid, pri, cmd == "fixedpri");
+                procs.borrow_mut().procpriority(pid, pri, cm == Cm::Fixedpri);
+            }
+            // `CMnoswap`, `CMprivate`, `CMwired` (`devproc.c:1370`, `:1385`,
+            // `:1424`): `p->noswap`, `p->privatemem` and `procwired` act on
+            // swapping, `/proc/n/mem` and a choice of processors, and this
+            // machine has none of the three, so each is what Plan 9's is
+            // here: nothing. `CMtrace` toggles `p->trace` for `#p/trace`,
+            // which is not built; its counts are Plan 9's (`:1427`). An
+            // `event` is traced only for a process being traced (`:1489`).
+            (Q::Ctl, Some(Cm::Noswap | Cm::Private | Cm::Wired | Cm::Event)) => {}
+            (Q::Ctl, Some(Cm::Trace)) => {
+                if cb.len() > 2 {
+                    return Err("args".into());
+                }
+            }
+            // The real-time scheduler, `edf.c`, is not built: `expel` of a
+            // process it does not hold is nothing (*"if(p->edf)
+            // edfstop(p)"*, `:1485`), `admit` of one it holds no
+            // parameters for is *"edf params"* (`:1474`), and the rest
+            // would make it hold one.
+            (Q::Ctl, Some(Cm::Expel)) => {}
+            (Q::Ctl, Some(Cm::Admit)) => return Err("edf params".into()),
+            (Q::Ctl, Some(Cm::Period | Cm::Deadline | Cm::Cost | Cm::Sporadic | Cm::Deadlinenotes | Cm::Extra)) => {
+                return Err(EBADCTL.into())
             }
             // `procwrite`'s `Qnote` (`devproc.c:1115`).
             (Q::Note, _) => {
@@ -703,7 +807,7 @@ impl Dev for ProcDev {
             // `procwrite`'s `Qnoteid` (`devproc.c:1125`): join a note group —
             // one's own pid, or a group a process of the same user is in.
             (Q::Noteid, _) => {
-                let id: u32 = cmd.parse().unwrap_or(0);
+                let id = crate::dev::atoi(&text) as u32;
                 let mut p = procs.borrow_mut();
                 let user = p.user(pid).ok_or(EPROCDIED)?;
                 if id != pid {
@@ -723,9 +827,9 @@ impl Dev for ProcDev {
             // `CMstartstop` and `CMstartsyscall` (`devproc.c:1404`, `:1411`):
             // start a `Stopped` process and wait for it to stop again — at
             // its next note, or on its way into or out of its next call.
-            (Q::Ctl, cmd @ ("startstop" | "startsyscall")) => {
+            (Q::Ctl, Some(cm @ (Cm::Startstop | Cm::Startsyscall))) => {
                 use crate::proc::Procctl;
-                let ctl = if cmd == "startstop" { Procctl::Traceme } else { Procctl::Tracesyscall };
+                let ctl = if cm == Cm::Startstop { Procctl::Traceme } else { Procctl::Tracesyscall };
                 {
                     let mut p = procs.borrow_mut();
                     let t = p.get_mut(pid).ok_or(EPROCDIED)?;
@@ -743,35 +847,31 @@ impl Dev for ProcDev {
             }
             // `CMprofile` (`devproc.c:1388`): start keeping a profile of the
             // text segment, new and zeroed, *"npc = (s->top-s->base)>>LRESPROF"*.
-            (Q::Ctl, "profile") => {
+            (Q::Ctl, Some(Cm::Profile)) => {
                 let p = procs.borrow();
                 let s = p.get(pid).ok_or(EPROCDIED)?.tseg.clone().ok_or(EBADCTL)?;
                 let mut s = s.borrow_mut();
                 let npc = (s.size >> crate::proc::LRESPROF) as usize;
                 s.profile = Some(vec![0; npc]);
             }
-            (Q::Ctl, _) => return Err("unknown control message".into()),
             _ => return Err(EPERM.into()),
         }
         Ok(data.len())
     }
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
+        // `procstat` is `devstat` over `procgen` (`devproc.c:325`), which
+        // names a process's files and never a directory: `#p` and a
+        // process's directory are `devstat`'s own — eve's, named from the
+        // path — though `ls -l /proc` lists each as its process's user's.
         let (pid, q) = split_qid(c.qid.path);
-        let (name, perm) = if pid == 0 {
-            ("#p".to_string(), crate::ninep::DMDIR | 0o555)
-        } else if c.qid.is_dir() {
-            (pid.to_string(), crate::ninep::DMDIR | 0o555)
-        } else {
-            let e = PROCDIR.iter().find(|e| e.1 == q).ok_or("no such file")?;
-            (e.0.to_string(), procperm(&self.up.borrow().procs.borrow(), pid, e.2))
-        };
-        let user = if pid == 0 {
-            self.eve.borrow().clone()
-        } else {
-            self.up.borrow().procs.borrow().user(pid).unwrap_or_else(|| self.eve.borrow().clone())
-        };
-        let len = if pid == 0 { 0 } else { proclen(&self.up.borrow().procs.borrow(), pid, q) };
+        if pid == 0 || c.qid.is_dir() {
+            return Ok(crate::dev::devstatdir(c, &self.eve.borrow()).conv_d2m());
+        }
+        let e = PROCDIR.iter().find(|e| e.1 == q).ok_or(ENONEXIST)?;
+        let (name, perm) = (e.0.to_string(), procperm(&self.up.borrow().procs.borrow(), pid, e.2));
+        let user = self.up.borrow().procs.borrow().user(pid).unwrap_or_else(|| self.eve.borrow().clone());
+        let len = proclen(&self.up.borrow().procs.borrow(), pid, q);
         Ok(crate::dev::devdir(c, c.qid, &name, len, &user, &self.eve.borrow(), perm).conv_d2m())
     }
 
@@ -1154,7 +1254,8 @@ mod tests {
         assert!(d.write(&mut ctl, b"pri 14", 0).is_err(), "nobody else may");
     }
 
-    /// `close` and `closefiles` act on the target's fd table.
+    /// `close` and `closefiles` act on the target's fd table; a descriptor
+    /// that is not open is passed over (`procctlcloseone`, `devproc.c:1251`).
     #[test]
     fn ctl_can_close_one_descriptor_or_all_of_them() {
         let (mut d, procs) = proc();
@@ -1166,7 +1267,28 @@ mod tests {
         assert_eq!(fds.borrow().count(), 1);
         d.write(&mut ctl, b"closefiles", 0).unwrap();
         assert_eq!(fds.borrow().count(), 0);
-        assert!(d.write(&mut ctl, b"close 9", 0).is_err());
+        assert!(d.write(&mut ctl, b"close 9", 0).is_ok());
+    }
+
+    /// **A control message is `parsecmd`'s and `lookupcmd`'s** (`parse.c`):
+    /// fields as `tokenize` splits them, quotes and all; a known message
+    /// with the wrong count of fields is `Ecmdargs`, an unknown one says
+    /// so with the fields it was given, as `%q` quotes them.
+    #[test]
+    fn a_control_message_is_looked_up_in_proccmd() {
+        let (mut d, _) = proc();
+        let mut ctl = open(&mut d, 1, "ctl", OWRITE);
+        assert_eq!(
+            d.write(&mut ctl, b"close", 0).unwrap_err(),
+            "wrong #args in control message \"close\""
+        );
+        assert_eq!(
+            d.write(&mut ctl, b"frob 'a b'\n", 0).unwrap_err(),
+            "unknown control message \"frob 'a b'\""
+        );
+        assert_eq!(d.write(&mut ctl, b"\n", 0).unwrap_err(), "empty control message");
+        assert!(d.write(&mut ctl, b"noswap", 0).is_ok(), "nothing to swap");
+        assert_eq!(d.write(&mut ctl, b"admit", 0).unwrap_err(), "edf params");
     }
 
     /// `nonone` (`devproc.c:336`): a process running as `none` cannot touch

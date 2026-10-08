@@ -107,9 +107,6 @@ pub struct Cons {
     /// `kprintinuse` (`devcons.c`) — the one-reader lock `consopen` takes
     /// with `tas` and `consclose` releases.
     kprintinuse: bool,
-    /// Copies of the open `kprint` beyond the first — the close that frees
-    /// it is the last ([`crate::dev::Dev::incref`]).
-    kprintrefs: u32,
     /// `kprintoq` (`devcons.c:17`) — *"console output, for /dev/kprint"*:
     /// made by the first open, and while it is open what would reach the
     /// screen goes here instead (`putstrn0`, `devcons.c:166`).
@@ -251,8 +248,10 @@ const EPERM: &str = "permission denied";
 /// `Einuse` (`error.h`) — *"device or object already in use"*.
 const EINUSE: &str = "device or object already in use";
 const EBADARG: &str = "bad arg in system call";
-/// `Egreg` — `conswrite`'s answer for a file it has no case for.
-const EGREG: &str = "it's a mystery to me";
+/// `Egreg` (`error.h:44`) — `conswrite`'s answer for a file it has no case
+/// for. `mkerrstr` makes each error's text from its comment in `error.h`, and
+/// this is Egreg's in both the 9legacy and the stock tree.
+const EGREG: &str = "jmk added reentrancy for threads";
 
 /// Which of `#c`'s queues a [`Rid::Rr`] names: `kbdq` is 0.
 const KPRINTQ: usize = 1;
@@ -271,7 +270,6 @@ impl Cons {
             sysname: String::new(),
             kmesg: Vec::new(),
             kprintinuse: false,
-            kprintrefs: 0,
             kprintoq: None,
             kprintat: std::collections::HashMap::new(),
             letters,
@@ -590,7 +588,7 @@ impl Dev for Cons {
     }
 
     fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
-        let q = Q::from_path(c.qid.path).ok_or("no such file")?;
+        let q = Q::from_path(c.qid.path).ok_or(EGREG)?;
         // **A file ends.** `readnum` and `readstr` both take the offset and
         // answer 0 past the end (`devcons.c:640`, `:652`); the numbers here
         // were formatted and handed back whole however far in the reader
@@ -761,13 +759,13 @@ impl Dev for Cons {
             // first and `devgen` skips it; this one holds only the files, so
             // there is nothing to skip.
             Q::Dir => {
-                let user = self.up.borrow().user();
+                // `devgen`'s owner is eve (`dev.c:106`).
                 let eve = self.eve.borrow().clone();
                 let entries: Vec<crate::ninep::Dir> = CONSDIR
                     .iter()
                     .map(|(name, q, qtype, perm)| {
                         let qid = Qid { qtype: *qtype, vers: 0, path: *q as u64 };
-                        crate::dev::devdir(c, qid, name, 0, &user, &eve, *perm)
+                        crate::dev::devdir(c, qid, name, 0, &eve, &eve, *perm)
                     })
                     .collect();
                 return Ok(crate::dev::devdirread(c, n, &entries));
@@ -784,7 +782,7 @@ impl Dev for Cons {
     }
 
     fn write(&mut self, c: &mut Chan, data: &[u8], _off: u64) -> Result<usize, String> {
-        let q = Q::from_path(c.qid.path).ok_or("no such file")?;
+        let q = Q::from_path(c.qid.path).ok_or(EGREG)?;
         let s = String::from_utf8_lossy(data).trim_end_matches('\n').to_string();
         match q {
             // `userwrite` (`auth.c:107`): the four bytes "none", and nothing
@@ -857,15 +855,14 @@ impl Dev for Cons {
         Ok(data.len())
     }
 
+    /// `consstat` (`devcons.c:687`): `devstat` over `consdir`.
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
         let q = Q::from_path(c.qid.path).unwrap_or(Q::Dir);
-        let (name, perm) = if q == Q::Dir {
-            ("#c", crate::ninep::DMDIR | 0o555)
-        } else {
-            (q.name(), q.perm())
-        };
-        let user = self.up.borrow().user();
-        Ok(crate::dev::devdir(c, c.qid, name, 0, &user, &self.eve.borrow().clone(), perm).conv_d2m())
+        let eve = self.eve.borrow().clone();
+        if q == Q::Dir {
+            return Ok(crate::dev::devstatdir(c, &eve).conv_d2m());
+        }
+        Ok(crate::dev::devdir(c, c.qid, q.name(), 0, &eve, &eve, q.perm()).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -893,10 +890,6 @@ impl Dev for Cons {
             // `consclose`: *"case Qkprint: if(c->flag & COPEN){ kprintinuse
             // = 0; ... }"*. The next open gets it.
             Some(Q::Kprint) => {
-                if self.kprintrefs > 0 {
-                    self.kprintrefs -= 1;
-                    return;
-                }
                 self.kprintinuse = false;
                 if let Some(q) = self.kprintoq.as_mut() {
                     q.hangup();
@@ -904,20 +897,6 @@ impl Dev for Cons {
                 let procs = self.up.borrow().procs.clone();
                 procs.borrow_mut().wakeup(Rid::Rr(DevId::Cons, 0, KPRINTQ));
             }
-            _ => {}
-        }
-    }
-
-    /// Another copy of an open channel. `consctl` counts its opens —
-    /// *"incref(&kbd.ctl)"* — so raw mode lasts until the last close; and
-    /// `kprint` is freed by the last.
-    fn incref(&mut self, c: &Chan) {
-        if c.flag & crate::chan::flag::COPEN == 0 {
-            return;
-        }
-        match Q::from_path(c.qid.path) {
-            Some(Q::Consctl) => self.kbd.ctl += 1,
-            Some(Q::Kprint) => self.kprintrefs += 1,
             _ => {}
         }
     }

@@ -126,6 +126,14 @@ ABI. The conformance suite binds all three.
   the reason is in Plan 9's own comment: *"We need our own copy of the Chan
   because we're about to send a create, which will move it."* A channel taken
   out of a mount table is shared by everything that resolves through it.
+- **An open answers a reference, and a close lets one go.** `devtab[]`'s
+  `open` returns a `Chan*`, and two devices return one that already exists,
+  with one more reference: `dupopen` the descriptor's (`devdup.c:86`) and
+  `srvopen` the posted one (`devsrv.c:135`). So the device table's open
+  answers `Rc<RefCell<Chan>>`, a descriptor holds one, and `cclose` is its
+  count: the device's close runs at the last reference (`chan.c:490`). A
+  descriptor, `/fd/3` opened from it, and a name it was posted under are one
+  channel, offset and all.
 
 **THE DEVICE LETTERS ARE PLAN 9'S, AND THERE IS NO EXCEPTION.** A device exists
 here only if Plan 9 has one, means the same by it, and spells it with the same

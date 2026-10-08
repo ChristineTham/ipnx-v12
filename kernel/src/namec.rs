@@ -19,7 +19,9 @@
 use crate::chan::Chan;
 use crate::dev::{self, Dev, DevId};
 use crate::ns::Ns;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 
 /// `namec`'s `amode`: what the name is being resolved FOR. Plan 9's set, less
 /// `namec`'s access modes — all seven of Plan 9's (`portdat.h:144`).
@@ -153,27 +155,55 @@ impl Devtab {
         self.get(c.dev).ok_or("no such device")?.walk(c, name)
     }
 
-    pub fn dopen(&mut self, c: Chan, mode: u16) -> Result<Chan, String> {
-        // `srvopen` answers the posted channel, *"incref(sp->chan)"*
-        // (`devsrv.c:135`), and `dupopen` the descriptor's,
-        // *"fdtochan(fd, openmode(omode), 0, 1)"* (`devdup.c:86`) — the `1`
-        // is a reference. A copy here, which its own device counts.
-        let foreign = !c.qid.is_dir()
-            && (c.dev == DevId::Srv || (c.dev == DevId::Dup && (c.qid.path - 1) & 1 == 0));
-        if foreign {
-            let got = self.get(c.dev).ok_or("no such device")?.open(c, mode)?;
-            if let Some(d) = self.get(got.dev) {
-                d.incref(&got);
-            }
-            return Ok(got);
+    /// `devtab[c->type]->open(c, omode)`, which answers a `Chan*` — and
+    /// **two devices answer one that already exists**, with one more
+    /// reference: `srvopen` the posted channel (*"incref(sp->chan); …
+    /// return sp->chan"*, `devsrv.c:135`) and `dupopen` the descriptor's
+    /// (*"fdtochan(fd, openmode(omode), 0, 1)"*, `devdup.c:86` — the `1` is
+    /// the reference). So an open answers a reference: the descriptor's own
+    /// channel for those two, shared with whoever else holds it, offset
+    /// and all; a channel of its own for everything else.
+    pub fn dopen(&mut self, c: Chan, mode: u16) -> Result<Rc<RefCell<Chan>>, String> {
+        if !c.qid.is_dir() && c.dev == DevId::Srv {
+            let d = self.get(DevId::Srv).ok_or("no such device")?;
+            let d = d.as_any().downcast_mut::<crate::devsrv::SrvDev>().ok_or("#s is not srv")?;
+            return d.srvopen(&c, mode);
         }
-        if c.dev == DevId::Mnt {
-            return self.with_mnt(|m, tab| {
+        if !c.qid.is_dir() && c.dev == DevId::Dup && (c.qid.path - 1) & 1 == 0 {
+            let d = self.get(DevId::Dup).ok_or("no such device")?;
+            let d = d.as_any().downcast_mut::<crate::devdup::DupDev>().ok_or("#d is not dup")?;
+            return d.dupopen(&c, mode);
+        }
+        let c = if c.dev == DevId::Mnt {
+            self.with_mnt(|m, tab| {
                 let mut w = Wire::new(&c, m, tab)?;
                 m.open(&mut w, c.clone(), mode)
-            })?;
+            })??
+        } else {
+            self.get(c.dev).ok_or("no such device")?.open(c, mode)?
+        };
+        Ok(Rc::new(RefCell::new(c)))
+    }
+
+    /// `cclose` (`chan.c:490`): one reference fewer — *"if(decref(c))
+    /// return;"* — and at the last, the device's close.
+    pub fn cclose(&mut self, c: Rc<RefCell<Chan>>) {
+        if let Ok(cell) = Rc::try_unwrap(c) {
+            let mut c = cell.into_inner();
+            self.dclose(&mut c);
         }
-        self.get(c.dev).ok_or("no such device")?.open(c, mode)
+    }
+
+    /// What `srvremove` let go of, closed here because the device cannot
+    /// reach the table (`devsrv.c:227`).
+    fn unposted(&mut self) {
+        let gone = match self.get(DevId::Srv).and_then(|d| d.as_any().downcast_mut::<crate::devsrv::SrvDev>()) {
+            Some(d) => d.unposted(),
+            None => return,
+        };
+        for c in gone {
+            self.cclose(c);
+        }
     }
 
     pub fn dread(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
@@ -231,7 +261,11 @@ impl Devtab {
                 m.remove(&mut w, &mut cc)
             })?;
         }
-        self.get(c.dev).ok_or("no such device")?.remove(c)
+        let r = self.get(c.dev).ok_or("no such device")?.remove(c);
+        if c.dev == DevId::Srv {
+            self.unposted();
+        }
+        r
     }
 
     pub fn dwstat(&mut self, c: &mut Chan, edir: &[u8]) -> Result<(), String> {
@@ -258,6 +292,10 @@ impl Devtab {
         }
         if let Some(d) = self.get(c.dev) {
             d.close(c)
+        }
+        // `srvclose` of a name opened `ORCLOSE` is `srvremove`.
+        if c.dev == DevId::Srv {
+            self.unposted();
         }
     }
 
@@ -312,7 +350,7 @@ pub fn start(
         return Err("empty file name".into());
     }
     if name.starts_with('#') {
-        let (id, spec, below) = dev::split(name).ok_or("bad # in file name")?;
+        let (id, spec, below) = dev::split(name).ok_or(EBADSHARP)?;
         // `chan.c:1374`. `#M` is never reachable by name: `mount(2)` supplies
         // the channel, and there is no server to find by writing the letter.
         if id == DevId::Mnt {
@@ -332,7 +370,7 @@ pub fn start(
         if ns.noattach() && !"|decp".contains(id.letter()) {
             return Err(ENOATTACH.into());
         }
-        let d = tab.get(id).ok_or("bad # in file name")?;
+        let d = tab.get(id).ok_or(EBADSHARP)?;
         let chan = d.attach(spec)?;
         return Ok((Start { chan, nomount: true }, elems(below)));
     }
@@ -457,8 +495,48 @@ pub fn walk(
     Ok(c)
 }
 
-/// `namec(name, amode, omode, perm)`.
+/// `namec(name, amode, omode, perm)` for every access mode but `Aopen`,
+/// which is [`open`]'s: an open answers a reference, and may answer a
+/// channel that already exists.
 pub fn namec(
+    tab: &mut Devtab,
+    ns: &Ns,
+    slash: &Chan,
+    dot: &Chan,
+    name: &str,
+    amode: A,
+    omode: u16,
+) -> Result<Chan, String> {
+    if matches!(amode, A::Open) {
+        return Err("Aopen goes through `open`, which answers a reference".into());
+    }
+    resolve(tab, ns, slash, dot, name, amode, omode)
+}
+
+/// `namec(name, Aopen, omode, 0)`: resolve, then *"c =
+/// devtab[c->type]->open(c, omode&~OCEXEC)"* (`chan.c:1513`) — which
+/// `dupopen` and `srvopen` answer with a channel that already exists, one
+/// more reference to it ([`Devtab::dopen`]) — and the open modes that are
+/// the channel's flags (`:1515`), on that channel.
+pub fn open(
+    tab: &mut Devtab,
+    ns: &Ns,
+    slash: &Chan,
+    dot: &Chan,
+    name: &str,
+    omode: u16,
+) -> Result<Rc<RefCell<Chan>>, String> {
+    let c = resolve(tab, ns, slash, dot, name, A::Open, omode)?;
+    // close-on-exec is the channel's business, not the device's, and a 9P
+    // server is never sent it.
+    let c = tab.dopen(c, omode & !crate::chan::mode::OCEXEC)?;
+    opened(&mut c.borrow_mut(), omode);
+    Ok(c)
+}
+
+/// `namec` up to the access mode's own work: the walk, the mount the last
+/// element steps onto, and `cunique`.
+fn resolve(
     tab: &mut Devtab,
     ns: &Ns,
     slash: &Chan,
@@ -526,17 +604,14 @@ pub fn namec(
         A::Create => {
             return Err("Acreate goes through `create`, which walks the parent".into());
         }
+        // The open itself is [`open`]'s.
         A::Open => {
-            // `chan.c`: exec of a directory is refused here rather than by the
-            // device, because only `namec` knows the caller asked for `OEXEC`.
+            // `chan.c:1454`: exec of a directory is refused here rather than
+            // by the device, because only `namec` knows the caller asked
+            // for `OEXEC`.
             if omode & 3 == crate::chan::mode::OEXEC && c.is_dir() {
                 return Err("cannot exec directory".into());
             }
-            // *"c = devtab[c->type]->open(c, omode&~OCEXEC)"* (`chan.c:1513`)
-            // — close-on-exec is the channel's business, not the device's,
-            // and a 9P server is never sent it.
-            c = tab.dopen(c, omode & !crate::chan::mode::OCEXEC)?;
-            opened(&mut c, omode);
         }
     }
     Ok(c)
@@ -570,7 +645,7 @@ pub fn create(
     name: &str,
     omode: u16,
     perm: u32,
-) -> Result<Chan, String> {
+) -> Result<Rc<RefCell<Chan>>, String> {
     // `Acreate`'s own checks (`chan.c`), before anything is walked:
     // a name ending in `/` or `/.` must be created with `DMDIR`, and creating
     // the root itself is `Eexist`.
@@ -608,8 +683,8 @@ pub fn create(
         match walk(tab, ns, parent.clone(), &[last.to_string()], false) {
             Ok(existing) => {
                 let omode = omode | crate::chan::mode::OTRUNC;
-                let mut c = tab.dopen(existing, omode & !crate::chan::mode::OCEXEC)?;
-                opened(&mut c, omode);
+                let c = tab.dopen(existing, omode & !crate::chan::mode::OCEXEC)?;
+                opened(&mut c.borrow_mut(), omode);
                 return Ok(c);
             }
             Err(e) if e == crate::devmnt::SLEPT => return Err(e),
@@ -640,7 +715,7 @@ pub fn create(
     // (`chan.c:1613`), and then the flags, as an open has them.
     tab.dcreate(&mut target, last, omode & !(crate::chan::mode::OEXCL | crate::chan::mode::OCEXEC), perm)?;
     opened(&mut target, omode);
-    Ok(target)
+    Ok(Rc::new(RefCell::new(target)))
 }
 
 #[cfg(test)]
@@ -1256,5 +1331,8 @@ impl Wire<'_> {
     }
 }
 
-/// `Enoattach` (`port/error.h`).
-const ENOATTACH: &str = "not attached";
+/// `Enoattach` (`error.h:47`).
+const ENOATTACH: &str = "mount/attach disallowed";
+/// `Ebadsharp` (`error.h:11`) — a `#` name whose letter is no device's
+/// (`chan.c:1380`).
+const EBADSHARP: &str = "unknown device in # filename";

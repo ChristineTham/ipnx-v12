@@ -65,10 +65,6 @@ struct Server {
     /// (`devvirtio9p.c:1110`). One mount at a time, because one reply stream
     /// cannot be shared.
     inuse: bool,
-    /// Copies of the open channel beyond the first — Plan 9 has one `Chan`
-    /// and its reference count, and `v9close` runs at the last
-    /// ([`crate::dev::Dev::incref`]).
-    refs: u32,
     /// The reply being handed out, and how much of it has gone. `v9read`
     /// answers bytes of ONE R-message and never spans two
     /// (`devvirtio9p.c:1171`), which is what lets `#M` reassemble by the
@@ -91,7 +87,7 @@ impl Virtio9p {
     /// `v9probe` (`v9reset`, `devvirtio9p.c:1066`) — what the machine found.
     /// Each one becomes a file, in the order it was added.
     pub fn add(&mut self, host: Box<dyn Nineserver>) {
-        self.servers.push(Server { host, inuse: false, refs: 0, reply: Vec::new(), rp: 0 });
+        self.servers.push(Server { host, inuse: false, reply: Vec::new(), rp: 0 });
     }
 
     /// `ctlrindex(c->qid.path - 1)` — the qid path is the index plus one,
@@ -218,13 +214,12 @@ impl Dev for Virtio9p {
     }
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
-        let (name, perm) = if c.qid.is_dir() {
-            ("#9".to_string(), crate::ninep::DMDIR | 0o555)
-        } else {
-            let i = self.index(c.qid.path).ok_or(ENONEXIST)?;
-            (i.to_string(), 0o660)
-        };
-        Ok(crate::dev::devdir(c, c.qid, &name, 0, &self.eve.borrow(), &self.eve.borrow(), perm).conv_d2m())
+        // `v9stat` is `devstat` over `v9gen` (`pc/devvirtio9p.c:1086`).
+        if c.qid.is_dir() {
+            return Ok(crate::dev::devstatdir(c, &self.eve.borrow()).conv_d2m());
+        }
+        let i = self.index(c.qid.path).ok_or(ENONEXIST)?;
+        Ok(crate::dev::devdir(c, c.qid, &i.to_string(), 0, &self.eve.borrow(), &self.eve.borrow(), 0o660).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -242,23 +237,9 @@ impl Dev for Virtio9p {
         }
         if let Some(i) = self.index(c.qid.path) {
             let s = &mut self.servers[i];
-            if s.refs > 0 {
-                s.refs -= 1;
-                return;
-            }
             s.inuse = false;
             s.reply.clear();
             s.rp = 0;
-        }
-    }
-
-    /// Another copy of an open channel: one more close before `v9close`'s.
-    fn incref(&mut self, c: &Chan) {
-        if c.qid.is_dir() || c.flag & crate::chan::flag::COPEN == 0 {
-            return;
-        }
-        if let Some(i) = self.index(c.qid.path) {
-            self.servers[i].refs += 1;
         }
     }
 }

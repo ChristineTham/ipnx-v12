@@ -5,34 +5,34 @@ other document carries it.
 
 Measured 2026-09-20; the kernel's size and the test counts 2026-10-07.
 
-## The kernel — 17,820 lines of Rust, no dependencies
+## The kernel — 18,669 lines of Rust, no dependencies
 
 | | |
 |---|---|
 | `chan.rs` | `Chan` — the object every name resolves to |
-| `dev.rs` | the device table, Plan 9's `struct Dev`; eleven letters (`/ \| s M p d e c ¤ 9 t`); `devdir`, `devdirread`, `cclone`, and `devpermcheck`, which `devopen` runs for every file in a device's table (`dev.c:371`) |
+| `dev.rs` | the device table, Plan 9's `struct Dev`; eleven letters (`/ \| s M p d e c ¤ 9 t`); `devdir`, `devdirread`, `cclone`, `devpermcheck`, which `devopen` runs for every file in a device's table (`dev.c:371`), and `devstat`'s answer for a directory (`dev.c:281`). And the kernel's libc and `parse.c`: `atoi`, `strtoul`, `tokenize`, `parsecmd`, `lookupcmd` and `cmderror` |
 | `ns.rs` | the namespace, keyed by the identity of the channel mounted upon — and a union is a LIST: `cmount` puts the directory itself in first, and copies a union when one is bound onto a directory |
 | `devroot.rs` | `#/` — `#/` and `boot` from `rootdir[]`, plus the ten empty directories `rootreset` adds for a first process to bind onto; every file is eve's `0555`, so an open for writing is `devopen`'s `Eperm` |
 | `qio.rs` | `qio.c`'s queues, for every device that streams: `qread`, `qwrite`, `qproduce`, `qconsume`, the kick, `qhangup`, `qclose`, `qreopen`, `qflush`, `qsetlimit`, `qnoblock`, and `Qcoalesce` |
-| `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed. Each end is a `qio` queue: a read of an empty pipe **sleeps** on `q->rr` until a write wakes it, and the last close of an end hangs up the other (`pipeclose`, `devpipe.c:247`), which is end of file once what was queued is read |
-| `devproc.rs` | `#p` — the process table as files: **twelve of `procdir[]`'s eighteen** (`devproc.c:79`), and the table says why each of the other six is absent. Each file's mode is `procgen`'s — `ctl`, `note` and `notepg` take the process's `procmode`, `0640` — checked at the open (`devproc.c:471`), and changed by `procwstat`. `ns` prints the bind lines that rebuild the namespace — paths, `int2flag`'s letters, and `mount <flag> <server> <on> <spec>` with `srvname` |
-| `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user |
+| `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed. Each end is a `qio` queue: a read of an empty pipe **sleeps** on `q->rr` until a write wakes it, and the last close of an end hangs up the other (`pipeclose`, `devpipe.c:247`), which is end of file once what was queued is read. Eve may change both ends' mode (`pipewstat`, `devpipe.c:181`) |
+| `devproc.rs` | `#p` — the process table as files: **twelve of `procdir[]`'s eighteen** (`devproc.c:79`), and the table says why each of the other six is absent. Each file's mode is `procgen`'s — `ctl`, `note` and `notepg` take the process's `procmode`, `0640` — checked at the open (`devproc.c:471`), and changed by `procwstat`. `ns` prints the bind lines that rebuild the namespace — paths, `int2flag`'s letters, and `mount <flag> <server> <on> <spec>` with `srvname`. `ctl` is `lookupcmd` over `proccmd[]` (`devproc.c:102`); the real-time scheduler's messages are not built |
+| `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user. Eve removing `caphash` hides it for good (`capremove`, `devcap.c:64`) |
 | `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, clunk. Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
-| `devsrv.rs` | `#s` — post a file descriptor's NUMBER, and an open of the name answers with the channel behind it |
+| `devsrv.rs` | `#s` — post a file descriptor's NUMBER (`strtoul`'s), and an open of the name answers the posted channel itself, shared with the poster (`devsrv.c:135`). Its owner or eve renames it (`srvwstat`); it is removed by `srvremove`'s rules, and removing it closes what was posted |
 | `devuart.rs` | `#t` — serial lines, `port/devuart.c`: `eia%d`, `eia%dctl` and `eia%dstatus` for each; input staged and `qproduce`d by `uartclock` every 22ms, output `qconsume`d by the transmitter; all of `uartctl`'s commands, with the ones that wait for output to drain sleeping on the uart's `Rendez`. The hardware is a `PhysUart` the host supplies; its interrupt handler is called at clock time, and a last close cannot wait for output to drain (RESEARCH §16.20) |
 | `devvirtio9p.rs` | `#9` — a channel to a 9P server the MACHINE provides. It marshals nothing: `#M` writes a T-message down it and reads the R-message back, as it would down a TCP connection |
-| `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` returns the channel fd 3 holds, in the mode it is open in (`devdup.c:86`), so a dup IS an open — a copy here, counted by its device, so its offset is its own where Plan 9's is shared |
+| `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` answers the channel fd 3 holds — the same one, offset and all — in the mode it is open in (`devdup.c:86`), so a dup IS an open. A ctl file reads as the descriptor's `/proc/n/fd` line |
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares; and `#ec`, the kernel configuration group, which nothing fills yet |
 | `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. `boot` names the host owner by writing `#c/hostowner` (`bootauth.c:56`), so `$user` is `kitty` — the host's `plan9.ini` says `user=kitty` (`plan9ini`, `hosts/ipnx/src/lib.rs`); Plan 9's fallback, `glenda`, is for one that names none — and not the role's own name |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators. `kprint` is a queue that takes the console's output while it is open (`devcons.c:166`) |
 | `namec.rs` | name → channel, with the mount check at every component; all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk, where a device's walk that errs is a miss, as `ewalk`'s is (`chan.c:948`; 2026-09-24) |
-| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s. **And the clock** (2026-09-22): `Mach` (`pc/dat.h:206`, the fields `port/` reads), `timersinit`, `hzclock`, `accounttime`, `hzsched`, `rebalance`, `anyhigher`, and `sched`'s tail with `m->schedticks`. `exits` does `closefgrp` (`proc.c:1160`), queuing what reaches a device on `clunkq` (`chan.c:517`) |
+| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s. **And the clock** (2026-09-22): `Mach` (`pc/dat.h:206`, the fields `port/` reads), `timersinit`, `hzclock`, `accounttime`, `hzsched`, `rebalance`, `anyhigher`, and `sched`'s tail with `m->schedticks`. `exits` does `closefgrp` (`proc.c:1160`), queuing what reaches a device on `clunkq` (`chan.c:517`). The descriptor table grows `DELTAFD` at a time to 5000 (`growfd`, `sysfile.c:25`) and holds references: a channel's device is closed at its last |
 | `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 31 calls, `exec`, and `unionread` |
 
-247 kernel tests, and 66 in `hosts/ipnx`.
+261 kernel tests, and 66 in `hosts/ipnx`.
 
 ## The host — `hosts/ipnx`, five files
 
@@ -441,3 +441,13 @@ driver's `Rclunk` (§16.14) — and a `#d` open sharing the original's offset.
 hand the processor to a child with no fiber yet, ending the system with
 *"no such process"* under load. The tests boot on a copy of the built root
 each, not on `userspace/root`.
+
+**One channel and its references; who may change what** (2026-10-08;
+RESEARCH §16.23). An open answers a reference, and `#d` and `#s` answer the
+channel that already exists, so `/fd/3` and a posted name share the
+descriptor's offset; `Dev::incref` is gone. The descriptor table stops at
+5000, as `growfd` does, not at 100. `srvremove`, `srvwstat`, `pipewstat` and
+`capremove` are Plan 9's, a posted channel is closed when its name is
+removed, listings name eve where Plan 9's do, a directory stats as
+`devstat`'s, `/proc/n/ctl` is `lookupcmd`'s, and every error's text is its
+comment in `error.h`.

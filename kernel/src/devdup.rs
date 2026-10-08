@@ -27,6 +27,9 @@ const PERM: [u32; 4] = [0o400, 0o200, 0o600, 0];
 const EBADFD: &str = "fd out of range or not open";
 /// `Eisdir` (`error.h:13`).
 const EISDIR: &str = "file is a directory";
+/// A descriptor's file opened as a copy — never Plan 9's, whose `dupopen`
+/// answers the descriptor's channel itself ([`DupDev::dupopen`]).
+const SHARED: &str = "#d: a descriptor's file is opened through the device table, which shares it";
 
 pub struct DupDev {
     /// `eve` — the kernel-wide host owner (`auth.c:10`), shared rather than
@@ -55,11 +58,26 @@ impl DupDev {
         (fd as u64) * 2 + if ctl { 2 } else { 1 }
     }
 
-    fn chan(&self, fd: Fd) -> Option<Chan> {
+    fn chan(&self, fd: Fd) -> Option<Rc<RefCell<Chan>>> {
         let fgrp = self.up.borrow().fgrp()?;
-        let cell = fgrp.borrow().get(fd).cloned()?;
-        let c = cell.borrow().clone();
-        Some(c)
+        let cell = fgrp.borrow().get(fd).cloned();
+        cell
+    }
+
+    /// `dupopen` (`devdup.c:61`) for a descriptor's file: **the channel the
+    /// descriptor holds, with one more reference** —
+    /// `fdtochan(fd, openmode(omode), 0, 1)` (`:86`) — so `open("#d/3", …)`
+    /// and `dup(3, -1)` are the same act by two names, and the two share
+    /// one offset. Refused unless the channel is open in the mode asked for:
+    /// one open for reading does not become one open for writing by being
+    /// opened again here. The device table reaches it here
+    /// ([`crate::namec::Devtab::dopen`]).
+    pub fn dupopen(&mut self, c: &Chan, mode: u16) -> Result<Rc<RefCell<Chan>>, String> {
+        let (fd, _) = Self::slot(c.qid.path).ok_or(EBADFD)?;
+        let m = crate::chan::openmode(mode)?;
+        let got = self.chan(fd).ok_or(EBADFD)?;
+        crate::chan::fdcheck(&got.borrow(), Some(m), false)?;
+        Ok(got)
     }
 }
 
@@ -103,15 +121,10 @@ impl Dev for DupDev {
         Ok(Some(c.walked(name, Qid { qtype: 0, vers: 0, path: Self::qid(fd, ctl) })))
     }
 
-    /// **The whole device.** `dupopen` returns the channel the fd holds, so
-    /// `open("#d/3", ...)` and `dup(3, -1)` are the same act by two names.
-    ///
-    /// `dupopen` (`devdup.c:61`): the directory opens only to read, *"if(omode
-    /// != 0) error(Eisdir)"*; the ctl file is this device's own; and the fd
-    /// file is **`fdtochan(fd, openmode(omode), 0, 1)`** — the channel as it
-    /// is, refused unless it is open in the mode asked for. A channel open
-    /// for reading does not become one open for writing by being opened
-    /// again here, which is what setting the mode on it did.
+    /// `dupopen` (`devdup.c:61`) for the directory, which opens only to
+    /// read — *"if(omode != 0) error(Eisdir)"* — and for a ctl file, which
+    /// is this device's own. A descriptor's file is [`DupDev::dupopen`]'s,
+    /// which answers the descriptor's channel itself.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
         if c.qid.is_dir() {
             if mode != 0 {
@@ -131,9 +144,8 @@ impl Dev for DupDev {
             c.offset = 0;
             return Ok(c);
         }
-        let got = self.chan(fd).ok_or(EBADFD)?;
-        crate::chan::fdcheck(&got, Some(m), false)?;
-        Ok(got)
+        let _ = fd;
+        Err(SHARED.into())
     }
 
     fn create(&mut self, _c: &mut Chan, _n: &str, _m: u16, _p: u32) -> Result<(), String> {
@@ -142,8 +154,8 @@ impl Dev for DupDev {
 
     fn read(&mut self, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
         if c.qid.is_dir() {
-            // `dupgen` (`devdup.c:34`): every open slot, as `n` and `nctl`.
-            let user = self.up.borrow().user();
+            // `dupgen` (`devdup.c:34`): every open slot, as `n` and `nctl`,
+            // eve's (`:38`).
             let fgrp = self.up.borrow().fgrp().ok_or("no such process")?;
             let open: Vec<Fd> = {
                 let g = fgrp.borrow();
@@ -152,19 +164,11 @@ impl Dev for DupDev {
             let eve_ = self.eve.borrow().clone();
             let mut entries = Vec::new();
             for fd in open {
-                let perm = self.chan(fd).map(|got| PERM[(got.mode & 3) as usize]).unwrap_or(0);
+                let perm = self.chan(fd).map(|got| PERM[(got.borrow().mode & 3) as usize]).unwrap_or(0);
                 let q = Qid { qtype: 0, vers: 0, path: Self::qid(fd, false) };
                 let qctl = Qid { qtype: 0, vers: 0, path: Self::qid(fd, true) };
-                entries.push(crate::dev::devdir(c, q, &format!("{fd}"), 0, &user, &eve_, perm));
-                entries.push(crate::dev::devdir(
-                    c,
-                    qctl,
-                    &format!("{fd}ctl"),
-                    0,
-                    &user,
-                    &self.eve.borrow(),
-                    0o400,
-                ));
+                entries.push(crate::dev::devdir(c, q, &format!("{fd}"), 0, &eve_, &eve_, perm));
+                entries.push(crate::dev::devdir(c, qctl, &format!("{fd}ctl"), 0, &eve_, &eve_, 0o400));
             }
             return Ok(crate::dev::devdirread(c, n, &entries));
         }
@@ -175,8 +179,11 @@ impl Dev for DupDev {
                 // fd 3's channel, so a read goes to whatever that serves.
                 return Err(EPERM.into());
             }
+            // *"procfdprint(c, fd, 0, buf, sizeof buf)"* (`dupread`): the
+            // descriptor as `/proc/n/fd` shows it.
             let got = self.chan(fd).ok_or(EBADFD)?;
-            format!("{}\n", got.mode & 3)
+            let got = got.borrow();
+            crate::devproc::procfdprint(&got, fd, 0)
         };
         let b = s.into_bytes();
         let off = off as usize;
@@ -193,19 +200,21 @@ impl Dev for DupDev {
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
         // `perm[] = { 0400, 0200, 0600, 0 }` indexed by the channel's mode
         // (`dupgen`, `devdup.c:14`); a ctl file is 0400.
-        let (name, perm) = if c.qid.is_dir() {
-            ("#d".to_string(), crate::ninep::DMDIR | 0o555)
-        } else {
+        let eve = self.eve.borrow().clone();
+        if c.qid.is_dir() {
+            return Ok(crate::dev::devstatdir(c, &eve).conv_d2m());
+        }
+        let (name, perm) = {
             let (fd, ctl) = Self::slot(c.qid.path).ok_or(EBADFD)?;
             if ctl {
                 (format!("{fd}ctl"), 0o400)
             } else {
                 let got = self.chan(fd).ok_or(EBADFD)?;
-                (format!("{fd}"), PERM[(got.mode & 3) as usize])
+                let m = got.borrow().mode;
+                (format!("{fd}"), PERM[(m & 3) as usize])
             }
         };
-        let user = self.up.borrow().user();
-        Ok(crate::dev::devdir(c, c.qid, &name, 0, &user, &self.eve.borrow(), perm).conv_d2m())
+        Ok(crate::dev::devdir(c, c.qid, &name, 0, &eve, &eve, perm).conv_d2m())
     }
 
     fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
@@ -238,20 +247,19 @@ mod tests {
         procs.borrow().get(1).unwrap().fds.borrow_mut().add(c)
     }
 
-    /// The device's whole reason: opening `#d/3` answers with the channel fd
-    /// 3 holds, so a dup is an ordinary open of an ordinary file.
+    /// The device's whole reason: opening `#d/3` answers with **the channel
+    /// fd 3 holds** — the same one, one more reference to it — so a dup is
+    /// an ordinary open of an ordinary file (`devdup.c:86`).
     #[test]
     fn opening_the_file_answers_with_the_channel_the_fd_holds() {
         let (mut d, procs) = dup();
         let fd = openfd(&procs, 7, 99);
         let dir = d.attach("").unwrap();
         let c = d.walk(&dir, &fd.to_string()).unwrap().expect("no such slot");
-        let got = d.open(c, OREAD).unwrap();
-        assert_eq!(
-            (got.dev, got.devno, got.qid.path),
-            (DevId::Pipe, 7, 99),
-            "the open must answer with the fd's own channel, not the #d file"
-        );
+        let got = d.dupopen(&c, OREAD).unwrap();
+        let held = procs.borrow().get(1).unwrap().fds.borrow().get(fd).cloned().unwrap();
+        assert!(Rc::ptr_eq(&got, &held), "the fd's own channel, not a copy of it");
+        assert!(d.open(c, OREAD).is_err(), "and never a copy");
     }
 
     /// A slot that is not open has no file, because the directory is
@@ -277,17 +285,21 @@ mod tests {
         assert_eq!(DupDev::slot(0), None, "the directory is not a slot");
     }
 
-    /// The ctl file is the device's own and reports the channel's mode, so
-    /// opening it does NOT substitute the fd's channel.
+    /// The ctl file is the device's own, so opening it does NOT substitute
+    /// the fd's channel; it reads as the descriptor's line in
+    /// `/proc/n/fd` — *"procfdprint(c, fd, 0, buf, sizeof buf)"*
+    /// (`dupread`).
     #[test]
-    fn the_ctl_file_stays_this_devices_and_reports_the_mode() {
+    fn the_ctl_file_stays_this_devices_and_reports_the_descriptor() {
         let (mut d, procs) = dup();
         let fd = openfd(&procs, 7, 99);
         let dir = d.attach("").unwrap();
         let c = d.walk(&dir, &format!("{fd}ctl")).unwrap().unwrap();
         let mut got = d.open(c, OREAD).unwrap();
         assert_eq!(got.dev, DevId::Dup, "the ctl file is #d's own");
-        assert_eq!(d.read(&mut got, 16, 0).unwrap(), b"2\n", "ORDWR");
+        let line = String::from_utf8(d.read(&mut got, 256, 0).unwrap()).unwrap();
+        assert!(line.starts_with("  0 rw |    7 (0000000000000063 0 00)     0        0 "), "{line:?}");
+        assert!(line.ends_with('\n'));
     }
 
     /// Reading the directory names every open slot twice, which is what

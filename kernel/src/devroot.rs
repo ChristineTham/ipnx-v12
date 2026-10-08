@@ -125,9 +125,12 @@ impl Root {
     }
 }
 
-/// `Egreg` — Plan 9's own error for writing where writing makes no sense;
-/// `rootwrite`'s (`devroot.c:237`).
-const EGREG: &str = "it's a mystery to me";
+/// `Egreg` (`error.h:44`) — Plan 9's own error for writing where writing
+/// makes no sense; `rootwrite`'s (`devroot.c:237`).
+const EGREG: &str = "jmk added reentrancy for threads";
+
+/// `Enonexist` (`error.h:9`).
+const ENONEXIST: &str = "file does not exist";
 
 /// `Eperm` — `devopen`'s, `devcreate`'s, `devremove`'s and `devwstat`'s.
 const EPERM: &str = "permission denied";
@@ -198,7 +201,7 @@ impl Dev for Root {
             let entries = self.entries(c);
             return Ok(crate::dev::devdirread(c, n, &entries));
         }
-        let e = self.find(c.qid).ok_or("no such file")?;
+        let e = self.find(c.qid).ok_or(ENONEXIST)?;
         let data = &e.data;
         let off = off as usize;
         if off >= data.len() {
@@ -212,16 +215,13 @@ impl Dev for Root {
     }
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {
-        // `#/` and `boot` are `rootdir[]`'s own two entries, and neither is
-        // in a list this device can look up.
-        let (name, qid, len, perm) = match c.qid.path {
-            QROOT => ("#/", c.qid, 0, crate::ninep::DMDIR | 0o555),
-            QBOOT => ("boot", c.qid, 0, crate::ninep::DMDIR | 0o555),
-            _ => {
-                let e = self.find(c.qid).ok_or("no such file")?;
-                (e.name.as_str(), e.qid, e.data.len() as u64, e.perm)
-            }
-        };
+        // `rootstat` is `devstat` over `rootgen` (`devroot.c:171`): `#/` and
+        // `boot` are directories, which `devstat` names from the path.
+        if matches!(c.qid.path, QROOT | QBOOT) {
+            return Ok(crate::dev::devstatdir(c, &self.eve.borrow()).conv_d2m());
+        }
+        let e = self.find(c.qid).ok_or(ENONEXIST)?;
+        let (name, qid, len, perm) = (e.name.as_str(), e.qid, e.data.len() as u64, e.perm);
         Ok(crate::dev::devdir(c, qid, name, len, &self.eve.borrow(), &self.eve.borrow(), perm).conv_d2m())
     }
 

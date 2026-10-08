@@ -19,9 +19,6 @@ pub type Pid = u32;
 /// is bounded by the same thing an error string is.
 pub const ERRMAX: usize = 128;
 
-/// `NFD` — *"per process file descriptors"* (`portdat.h:476`).
-pub const NFD: usize = 100;
-
 /// `DELTAFD` — *"incremental increase in Fgrp.fd's"* (`portdat.h:530`).
 pub const DELTAFD: usize = 20;
 
@@ -63,21 +60,57 @@ pub struct Fds {
 }
 
 impl Fds {
-    /// `newfd`. `NFD` bounds the table, so a process that leaks descriptors
-    /// fails rather than growing without limit.
-    pub fn add(&mut self, c: Chan) -> Fd {
-        if self.count() >= NFD {
-            return -1;
+    /// `nfd`: the table's size, `DELTAFD` slots at a time (`growfd`,
+    /// `sysfile.c:25`) — the slots past the last one held are free.
+    fn nfd(&self) -> usize {
+        self.slots.len().div_ceil(DELTAFD).max(1) * DELTAFD
+    }
+
+    /// `findfreefd(f, start)` (`sysfile.c:61`): the lowest free slot from
+    /// `start`, growing the table when it is full — **never past 5000**
+    /// (`growfd`, `:34`: *"Unbounded allocation is unwise"*). `NFD`
+    /// (`portdat.h:476`) bounds nothing: no `port/` code reads it.
+    fn findfreefd(&self, start: usize) -> Option<usize> {
+        let free = (start..self.slots.len()).find(|&i| self.slots[i].is_none());
+        let fd = free.unwrap_or(self.slots.len().max(start));
+        let nfd = self.nfd();
+        if fd >= nfd && (fd >= nfd + DELTAFD || nfd >= 5000) {
+            return None;
         }
-        let c = Rc::new(RefCell::new(c));
-        for (i, s) in self.slots.iter_mut().enumerate() {
-            if s.is_none() {
-                *s = Some(c);
-                return i as Fd;
+        Some(fd)
+    }
+
+    fn put(&mut self, fd: usize, c: Rc<RefCell<Chan>>) {
+        while self.slots.len() <= fd {
+            self.slots.push(None);
+        }
+        self.slots[fd] = Some(c);
+    }
+
+    /// `newfd(c)` (`sysfile.c:74`): a reference to a channel, into the
+    /// lowest free slot — or back to the caller, to close, when there is
+    /// none (`Enofd`).
+    pub fn newfd(&mut self, c: Rc<RefCell<Chan>>) -> Result<Fd, Rc<RefCell<Chan>>> {
+        match self.findfreefd(0) {
+            Some(fd) => {
+                self.put(fd, c);
+                Ok(fd as Fd)
             }
+            None => Err(c),
         }
-        self.slots.push(Some(c));
-        (self.slots.len() - 1) as Fd
+    }
+
+    /// `newfd2(fd, c)` (`sysfile.c:94`): two at once or neither — the first
+    /// in the lowest free slot, the second in the next free one after it.
+    pub fn newfd2(&mut self, c: [Rc<RefCell<Chan>>; 2]) -> Result<[Fd; 2], [Rc<RefCell<Chan>>; 2]> {
+        let Some(a) = self.findfreefd(0) else { return Err(c) };
+        let mut t = self.clone();
+        t.put(a, c[0].clone());
+        let Some(b) = t.findfreefd(a + 1) else { return Err(c) };
+        let [c0, c1] = c;
+        self.put(a, c0);
+        self.put(b, c1);
+        Ok([a as Fd, b as Fd])
     }
     pub fn get(&self, fd: Fd) -> Option<&Rc<RefCell<Chan>>> {
         self.slots.get(fd as usize).and_then(|s| s.as_ref())
@@ -136,6 +169,13 @@ impl Fds {
     }
     pub fn count(&self) -> usize {
         self.slots.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// A channel of its own into the lowest free slot — for a test that
+    /// builds a table by hand.
+    #[cfg(test)]
+    pub fn add(&mut self, c: Chan) -> Fd {
+        self.newfd(Rc::new(RefCell::new(c))).unwrap_or(-1)
     }
 
     /// How far the table reaches — `fgrp->maxfd`, which `dupgen` walks to.
@@ -2219,15 +2259,39 @@ mod tests {
         assert!(p.await_child(1).unwrap().msg.len() < ERRMAX);
     }
 
-    /// `NFD` = 100 (`portdat.h:476`). A process that leaks descriptors fails
-    /// rather than growing without limit.
+    /// **The table grows `DELTAFD` at a time and stops at 5000** (`growfd`,
+    /// `sysfile.c:34`): a process that leaks descriptors fails rather than
+    /// growing without limit. It had stopped at `NFD`, 100, which no `port/`
+    /// code reads.
     #[test]
-    fn nfd_bounds_the_descriptor_table() {
+    fn the_descriptor_table_grows_to_five_thousand() {
         let mut f = Fds::default();
-        for _ in 0..NFD {
-            assert!(f.add(Chan::attach(crate::dev::DevId::Root, 0)) >= 0);
+        let c = || Rc::new(RefCell::new(Chan::attach(crate::dev::DevId::Root, 0)));
+        for i in 0..5000 {
+            assert_eq!(f.newfd(c()), Ok(i));
         }
-        assert_eq!(f.add(Chan::attach(crate::dev::DevId::Root, 0)), -1);
+        assert!(f.newfd(c()).is_err(), "Enofd");
+        assert!(f.close(3).is_some());
+        assert_eq!(f.newfd(c()), Ok(3), "the lowest free slot");
+    }
+
+    /// `newfd2` (`sysfile.c:94`) — `pipe`'s: the first channel in the lowest
+    /// free slot and the second in the next free one, or neither.
+    #[test]
+    fn newfd2_places_both_or_neither() {
+        let mut f = Fds::default();
+        let c = || Rc::new(RefCell::new(Chan::attach(crate::dev::DevId::Root, 0)));
+        for _ in 0..4 {
+            f.newfd(c()).unwrap();
+        }
+        f.close(1);
+        assert_eq!(f.newfd2([c(), c()]), Ok([1, 4]));
+        for _ in 5..5000 {
+            f.newfd(c()).unwrap();
+        }
+        f.close(7);
+        assert!(f.newfd2([c(), c()]).is_err(), "one free slot is not two");
+        assert!(f.get(7).is_none(), "and neither was placed");
     }
 
     /// `sysrfork` checks its flags before it commits (`sysproc.c:43`). Asking

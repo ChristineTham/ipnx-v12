@@ -225,14 +225,6 @@ pub trait Dev {
     fn remove(&mut self, c: &mut Chan) -> Result<(), String>;
     fn close(&mut self, c: &mut Chan);
 
-    /// **`incref(c)`** on an open channel this kernel has copied rather
-    /// than shared. Plan 9 counts references on the `Chan`, and the device
-    /// is closed once, at the last; here a channel is a value, and each
-    /// copy is closed on its own — so a device that counts its opens counts
-    /// the copy. `srvopen` is where it happens: *"incref(sp->chan); return
-    /// sp->chan"* (`devsrv.c:135`). Most devices count nothing.
-    fn incref(&mut self, _c: &Chan) {}
-
     // `bread` and `bwrite` are absent, and this is the one kind of difference
     // that needs no approval: **Plan 9's counterpart cannot exist here.**
     //
@@ -394,6 +386,212 @@ pub fn iseve(eve: &Eve, user: &str) -> bool {
     *eve.borrow() == user
 }
 
+/// `devstat`'s answer for a directory its generator does not name
+/// (`dev.c:281`) — which is every device directory: named for the last
+/// element of the path it was reached by, `/` for the root and `???` for
+/// none; eve's; `DMDIR|0555`.
+pub fn devstatdir(c: &Chan, eve: &str) -> crate::ninep::Dir {
+    let elem = if c.path.is_empty() {
+        "???"
+    } else if c.path == "/" {
+        "/"
+    } else {
+        c.path.rsplit('/').next().unwrap_or(&c.path)
+    };
+    devdir(c, c.qid, elem, 0, eve, eve, crate::ninep::DMDIR | 0o555)
+}
+
+/// `atoi(s)`, which is `atol` (`libc/port/atol.c`): blanks and tabs, a
+/// sign, then `0x` hexadecimal, a leading `0` octal, or decimal — the
+/// digits up to the first that is not one. Nothing is 0.
+pub fn atoi(s: &str) -> i32 {
+    let b = s.as_bytes();
+    let at = |i: usize| b.get(i).copied().unwrap_or(0);
+    let mut p = 0;
+    while at(p) == b' ' || at(p) == b'\t' {
+        p += 1;
+    }
+    let mut neg = false;
+    if at(p) == b'-' || at(p) == b'+' {
+        neg = at(p) == b'-';
+        p += 1;
+        while at(p) == b' ' || at(p) == b'\t' {
+            p += 1;
+        }
+    }
+    let mut n: i32 = 0;
+    if at(p) == b'0' && at(p + 1) != 0 {
+        if at(p + 1) == b'x' || at(p + 1) == b'X' {
+            p += 2;
+            while let Some(v) = (at(p) as char).to_digit(16) {
+                n = n.wrapping_mul(16).wrapping_add(v as i32);
+                p += 1;
+            }
+        } else {
+            while (b'0'..=b'7').contains(&at(p)) {
+                n = n.wrapping_mul(8).wrapping_add((at(p) - b'0') as i32);
+                p += 1;
+            }
+        }
+    } else {
+        while at(p).is_ascii_digit() {
+            n = n.wrapping_mul(10).wrapping_add((at(p) - b'0') as i32);
+            p += 1;
+        }
+    }
+    if neg {
+        n.wrapping_neg()
+    } else {
+        n
+    }
+}
+
+/// `tokenize(s, args, maxargs)` (`libc/port/tokenize.c`): fields
+/// separated by blanks, tabs, returns and newlines, where a quoted section
+/// belongs to its field and a doubled quote inside one is a quote.
+pub fn tokenize(s: &str) -> Vec<String> {
+    let sep = |c: char| matches!(c, ' ' | '\t' | '\r' | '\n');
+    let t: Vec<char> = s.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    loop {
+        while i < t.len() && sep(t[i]) {
+            i += 1;
+        }
+        if i >= t.len() {
+            return out;
+        }
+        // `qtoken`
+        let mut tok = String::new();
+        let mut quoting = false;
+        while i < t.len() && (quoting || !sep(t[i])) {
+            if t[i] != '\'' {
+                tok.push(t[i]);
+                i += 1;
+            } else if !quoting {
+                quoting = true;
+                i += 1;
+            } else if t.get(i + 1) != Some(&'\'') {
+                quoting = false;
+                i += 1;
+            } else {
+                tok.push('\'');
+                i += 2;
+            }
+        }
+        out.push(tok);
+    }
+}
+
+/// `parsecmd` (`parse.c:37`): a control message's fields — its last
+/// newline dropped, then `tokenize`.
+pub fn parsecmd(data: &[u8]) -> Vec<String> {
+    let s = String::from_utf8_lossy(data);
+    tokenize(s.strip_suffix('\n').unwrap_or(&s))
+}
+
+/// `cmderror` (`parse.c:74`): *"%s \""*, the fields as `%q`, *"\""* —
+/// within `ERRMAX-10` bytes, as `up->genbuf` holds it.
+pub fn cmderror(cb: &[String], s: &str) -> String {
+    let mut out = format!("{s} \"");
+    for (i, f) in cb.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        out.push_str(&crate::proc::quote(f));
+    }
+    let max = crate::proc::ERRMAX - 10 - 1;
+    if out.len() > max {
+        let mut cut = max;
+        while !out.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        out.truncate(cut);
+    }
+    out.push('"');
+    out
+}
+
+/// `Ecmdargs` (`error.h:51`).
+pub const ECMDARGS: &str = "wrong #args in control message";
+
+/// `lookupcmd` (`parse.c:95`): the entry of `tab` the first field names,
+/// or `*`'s, which matches anything — refused unless the message has its
+/// count of fields (`0` is any); an unknown one is `cmderror`'s.
+pub fn lookupcmd<T: Copy>(cb: &[String], tab: &[(T, &str, usize)]) -> Result<T, String> {
+    if cb.is_empty() {
+        return Err("empty control message".into());
+    }
+    for &(index, cmd, narg) in tab {
+        if cmd != "*" && cmd != cb[0] {
+            continue;
+        }
+        if narg != 0 && narg != cb.len() {
+            return Err(cmderror(cb, ECMDARGS));
+        }
+        return Ok(index);
+    }
+    Err(cmderror(cb, "unknown control message"))
+}
+
+/// `strtoul(s, nil, 0)` (`libc/port/strtoul.c`), which the kernel links:
+/// leading white space, a sign, then the base from the digits — `0x` is
+/// hexadecimal, a leading `0` octal, anything else decimal — and the digits
+/// up to the first that is not one. No digits is 0; overflow is
+/// `ULONG_MAX`; a `-` negates. A `ulong` is 32 bits.
+pub fn strtoul(s: &[u8]) -> u32 {
+    let mut p = 0;
+    while p < s.len() && matches!(s[p], b' ' | b'\t' | b'\n' | b'\x0c' | b'\r' | b'\x0b') {
+        p += 1;
+    }
+    let mut neg = false;
+    if p < s.len() && (s[p] == b'-' || s[p] == b'+') {
+        neg = s[p] == b'-';
+        p += 1;
+    }
+    let at = |i: usize| s.get(i).copied().unwrap_or(0);
+    let base: u32 = if at(p) != b'0' {
+        10
+    } else if at(p + 1) == b'x' || at(p + 1) == b'X' {
+        16
+    } else {
+        8
+    };
+    if base == 16 && at(p) == b'0' && (at(p + 1) == b'x' || at(p + 1) == b'X') && at(p + 2).is_ascii_hexdigit() {
+        p += 2;
+    }
+    let (mut n, mut ovfl) = (0u32, false);
+    let m = u32::MAX / base;
+    loop {
+        let c = at(p);
+        let v = match c {
+            b'0'..=b'9' => (c - b'0') as u32,
+            b'a'..=b'z' => (c - b'a') as u32 + 10,
+            b'A'..=b'Z' => (c - b'A') as u32 + 10,
+            _ => base,
+        };
+        if v >= base {
+            break;
+        }
+        if n > m {
+            ovfl = true;
+        }
+        let nn = n.wrapping_mul(base).wrapping_add(v);
+        if nn < n {
+            ovfl = true;
+        }
+        n = nn;
+        p += 1;
+    }
+    if ovfl {
+        return u32::MAX;
+    }
+    if neg {
+        return n.wrapping_neg();
+    }
+    n
+}
+
 /// `devdir` (`dev.c:34`) — fill in a [`Dir`] for one file of a device.
 ///
 /// Every field is Plan 9's:
@@ -460,4 +658,43 @@ pub fn devdirread(c: &mut Chan, n: usize, entries: &[crate::ninep::Dir]) -> Vec<
         c.dri += 1;
     }
     out
+}
+
+#[cfg(test)]
+mod parse_tests {
+    use super::*;
+
+    /// `atoi` is `atol` (`libc/port/atol.c`): hexadecimal after `0x`,
+    /// octal after a leading `0`, and the digits up to the first that is
+    /// not one.
+    #[test]
+    fn atoi_is_atol() {
+        assert_eq!(atoi("12"), 12);
+        assert_eq!(atoi("  -7x"), -7);
+        assert_eq!(atoi("0x1f"), 31);
+        assert_eq!(atoi("010"), 8);
+        assert_eq!(atoi("0"), 0);
+        assert_eq!(atoi("none"), 0);
+    }
+
+    /// `strtoul(s, nil, 0)` (`libc/port/strtoul.c`).
+    #[test]
+    fn strtoul_reads_its_base_from_the_digits() {
+        assert_eq!(strtoul(b"3\n"), 3);
+        assert_eq!(strtoul(b" 0x10"), 16);
+        assert_eq!(strtoul(b"017"), 15);
+        assert_eq!(strtoul(b"/some/path"), 0);
+        assert_eq!(strtoul(b"99999999999"), u32::MAX, "overflow");
+    }
+
+    /// `tokenize` (`libc/port/tokenize.c`): a quoted section is part of its
+    /// field, and a doubled quote inside one is a quote.
+    #[test]
+    fn tokenize_keeps_a_quoted_field_whole() {
+        assert_eq!(tokenize("  a  b\tc\n"), ["a", "b", "c"]);
+        assert_eq!(tokenize("x 'a b' c"), ["x", "a b", "c"]);
+        assert_eq!(tokenize("'it''s'"), ["it's"]);
+        assert_eq!(tokenize("pre'mid'post"), ["premidpost"]);
+        assert!(tokenize(" \t ").is_empty());
+    }
 }

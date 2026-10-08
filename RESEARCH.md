@@ -5374,3 +5374,79 @@ likewise; a build that replaced a program under a running test could fail
 its boot; and every run left its `/tmp` files in the root `ipnx` boots
 from. Each test process now boots on a copy of its own
 (`ipnx::rootcopy`), removed when it exits.
+
+
+### 16.23 One channel, its references, and who may change it (2026-10-08)
+
+**An open answers a reference, and two devices answer one that already
+exists.** `devtab[]`'s `open` returns a `Chan*`: `dupopen` the
+descriptor's own — `fdtochan(fd, openmode(omode), 0, 1)`, the `1` a
+reference (`devdup.c:86`) — and `srvopen` the posted one, *"incref(sp->chan);
+… return sp->chan"* (`devsrv.c:135`). Here the open answered a copy, and a
+device that counted its opens counted the copy through `Dev::incref`
+(§16.14, §16.21) — so an offset moved through `/fd/3` or through a posted
+name was the copy's alone, where Plan 9's is the descriptor's. Now the device
+table's open answers `Rc<RefCell<Chan>>`, the descriptor table holds those,
+and `#d` and `#s` answer the one they hold. `cclose` is the reference count
+(`chan.c:490`): the device's close comes at the last. `Dev::incref` and every
+device's counting of copies — `#c`, `#|`, `#t`, `#M`, `#9` — are gone; the
+register's second item (`docs/proposals.md`) was this, and its alternative
+is what was built.
+
+**The descriptor table stops at 5000, not 100.** The deviation audit (§10,
+2026-09-18) took `NFD` (`portdat.h:476`, *"per process file descriptors"*)
+for the bound and enforced it; no `port/` code reads `NFD`. `findfreefd` grows the table
+`DELTAFD` at a time (`sysfile.c:61`) and `growfd` stops at 5000 —
+*"Unbounded allocation is unwise"* (`:34`). An open with no free slot is
+`Enofd`, the channel closed (`:1135`). And `pipe` places both ends or
+neither, `data` in the lower slot (`newfd2`, `:94`); it had put `data1`
+there.
+
+**Who may remove, rename and post** — the open audit (§16.21) did not reach
+remove and wstat:
+
+| | Plan 9 | was here |
+|---|---|---|
+| `srvremove` | an eve-owned name is eve's to remove, `boot` nobody's, and one others may not write its owner's or eve's (`devsrv.c:209`–`:220`); the posted channel is `cclose`d (`:227`) | anyone removed anything; the posted channel was dropped without its close, so a posted pipe end nobody else held never hung up |
+| `srvwstat` | the owner or eve sets mode, owner and name; a `/` is `Ebadchar` (`:235`, `:269`) | refused |
+| `srvwrite` | `strtoul(buf, 0, 0)` of under 32 bytes, else `Egreg`; an auth file refused; a second post `Ebadusefd` (`:309`–`:332`) | decimal only, any length; `Eexist` |
+| `srvopen` | a name with no channel, or none, is `Eshutdown` (`:126`) | `Enonexist` when none |
+| `pipewstat` | eve sets both ends' mode, `p->perm`, and nobody the owner (`devpipe.c:181`); the directory stats `DMDIR\|0555` (`:154`) | refused; `0500` |
+| `capremove` | eve removes `caphash`, hiding it from every walk, stat and listing for good — *"ncapdir = nelem(capdir)-1"* (`devcap.c:67`) — while a channel open to it still mints: how factotum keeps minting to itself | refused |
+
+**What a listing says.** `devgen`, `envgen` and `dupgen` make every file
+eve's (`dev.c:106`, `devenv.c:58`, `devdup.c:38`); `#c`, `#e`, `#d` and `#¤`
+named the reader. A device directory stats as `devstat` answers one its
+generator does not name — the path's last element, eve's, `DMDIR|0555`
+(`dev.c:281`) — where these said `#c`, `#e` (at `0775`), `#d` and so on. So
+`/proc/12` stats as eve's, though `ls -l /proc` lists it as its user's
+(`procgen`, `devproc.c:237`). `#d`'s ctl file reads as the descriptor's line
+in `/proc/n/fd` — `procfdprint` (`dupread`, `devproc.c:551`) — not the mode
+alone.
+
+**A control message is `parsecmd`'s.** `/proc/n/ctl` is looked up in
+`proccmd[]` (`devproc.c:102`) by `lookupcmd` (`parse.c:95`): a known message
+with the wrong count of fields is `Ecmdargs`, an unknown one `cmderror`'s
+*unknown control message "…"* with its fields quoted as `%q` quotes them,
+and `tokenize` keeps a quoted field whole (`libc/port/tokenize.c`). `close
+n` passes over a descriptor that is not open (`procctlcloseone`,
+`devproc.c:1251`). `noswap`, `private`, `wired`, `trace` and `event` set
+fields that act on swapping, `/proc/n/mem`, a choice of processors and
+`#p/trace` — none of which this machine has, so each is what it would be
+there: nothing. `edf.c` is not built: `admit` is *"edf params"*, `expel`
+nothing, and the rest are refused. `atoi` is `atol` (`libc/port/atol.c`),
+with `0x` and a leading `0`, where `#t`'s read decimal; `uartctl` splits
+its message with `tokenize`, at most 16 fields (`devuart.c:381`).
+
+**An error's text is its comment in `error.h`.** `mkerrstr` makes
+`error.c` from the comments, in both trees. Six here were other words:
+`Egreg` is *"jmk added reentrancy for threads"* (`error.h:44`; this kernel
+had the third edition's *"it's a mystery to me"*), `Eshort` *"i/o count too
+small"*, `Etoobig` *"read or write too large"*, `Eshutdown` *"device shut
+down"*, `Enoattach` *"mount/attach disallowed"*; an unknown `#` letter is
+`Ebadsharp`, and a stat of a file a device does not have is `Enonexist`.
+
+**Plan 9's own, not reproduced, and put to Christine.**
+`procctlclosefiles` loops *"for(i = 0; i < f->maxfd; i++)"*
+(`devproc.c:1279`), and `maxfd` is the highest open descriptor, so
+`closefiles` leaves that one open. This kernel closes them all.
