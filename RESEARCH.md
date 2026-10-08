@@ -25,7 +25,11 @@ and add a **Unix personality** on top. *(Re-founded 2026-08-27, decision log: th
 personality is a **modern** Unix surface — derived by measurement against git, CPython
 and Go, not adopted from POSIX — plus a WASI second ABI; the Tenth Edition personality
 became the V10 exhibit, kept but no longer grown. The kernel findings below are
-untouched by the re-founding.)*
+untouched by the re-founding.)* *(2026-10-08: Christine — "WASI is not a
+personality, we support WASI binaries natively": a WASI binary is run by a WASI
+engine, as it is. The measured modern personality above was never hers, and is
+withdrawn; Go and CPython run as WASI binaries, and toolchains are the host's,
+typed through `os` (§16.36).)*
 
 Four findings drive that, in the order they mattered:
 

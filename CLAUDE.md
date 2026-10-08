@@ -8,11 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 **the IPNX kernel — Plan 9's architecture, none of its code — hosted as an ordinary
 userspace process** (browser, macOS,
 iPadOS, OCI, eventually hypervisor-direct); **9P as the only IPC**; **per-process
-namespaces**; **WebAssembly as the executable format**; and **personalities as libc
-dialects** over that one kernel — Plan 9's own userland (taken entire, by the curation
-principle), a WASI ABI (Go `wasip1`, CPython's wasi builds), and a **modern Unix
-personality** whose surface is derived by measurement against three benchmarks — git,
-CPython, Go — never adopted from POSIX. Three refusals: no POSIX-the-standard, no
+namespaces**; **WebAssembly as the executable format**, with **WASI binaries
+supported natively** — run as WASI programs, by a WASI engine; *"WASI is not a
+personality"* (Christine, 2026-10-08); **Plan 9's own userland, taken entire**
+(by the curation principle); and **personalities in userspace**, never the
+kernel. Three refusals: no POSIX-the-standard, no
 systemd (boot is rc plus a namespace file), no Linux/BSD sediment. Three adoptions:
 sockets won (the BSD API over `/net` files), UTF-8 won (its authors invented it),
 modern software must run. The V10 exhibit (`/v10/bin` cat and echo, TUHS tapes) stays

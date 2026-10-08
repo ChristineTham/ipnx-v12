@@ -30,10 +30,9 @@ Processes are WebAssembly instances; `exec` is instantiation. Every process has
 its own namespace — a mount table mapping paths to file servers — and every
 non-process syscall resolves through it. 9P is the only IPC: in-process devices
 present the file interface as function calls, and exactly one driver marshals
-wire 9P at mount boundaries. Userspaces are libc dialects over the one kernel:
-Plan 9's own (`lib9`), the V10 exhibit (`libv10`), a WASI shim, and a measured
-modern personality to come. (The full statement and its derivation:
-[design.md](archive/design-log-claude-written.md).)
+wire 9P at mount boundaries. The userspace is Plan 9's own, vendored whole —
+its libraries, APE among them — and a personality is userspace too. WASI
+binaries are supported natively: a WASI engine runs them, not a personality.
 
 ## The component map
 
@@ -254,53 +253,24 @@ The machine's obligations, which are Plan 9's semantics:
 - **The `Tos`** (`sys/include/tos.h`) is at the top of the stack, the stack
   below it, its `pid` written for each process, as `kexit` writes it.
 
-**A WASI program runs as a WASI program** — a module importing
+**A WASI binary runs natively** — a module importing
 `wasi_snapshot_preview1`, run by an existing WASI engine and understanding
 none of IPNX's conventions (Christine, 2026-10-08: *"as WASI native as
-possible"*). Which files it sees is proposed, not decided
-([proposals.md](proposals.md), the four conformance gaps, item 1), and
-nothing runs one yet.
+possible"*; *"WASI is not a personality, we support WASI binaries
+natively"*). Which files it sees is proposed, not decided
+([proposals.md](proposals.md), *Go and Python*), and nothing runs one yet.
 
-**A personality is a libc dialect over this one ABI, and there are two kinds.**
-A *native* personality (lib9, libv10, the measured `libunix`) presents IPNX's
-own chosen surface. A *port* personality supplies a foreign environment —
-`libc.a`, its headers, its runtime — so that **unmodified** third-party source
-compiles against it (a GNU/glibc personality, a musl personality, a BSD
-personality). The port personality is where the adaptation lives: the source
-is never patched to match IPNX; the environment is built to match the source.
-The same construction dissolves the package layer's two classic problems:
-versions coexist under `/pkg/<name>/<version>` — which installing
-**binds**, never copies (P7's proposals, 2026-09-24) — and namespaces
-choose, so there is no dependency solver at the OS layer; and a conflict — a name about
-to be bound over DIFFERENT bytes — is checkable at install, and pkg refuses
-it (identical bytes are idempotent; deliberate shadowing remains expressible
-through union order). Per-process installs follow: an `rfork n` child that
-pkg-installs has its own package set — coexisting development environments
-are processes, with no activation machinery.
-Both kinds are ordinary userspace over the unchanged kernel — the design's
-porting inversion ([design.md](archive/design-log-claude-written.md), 2026-08-29). The demo's in-tab `cc`
-compiles stock C against a wasi-libc/POSIX port environment, the first
-instance.
+**A personality is userspace** (Christine: *"even the Unix v10 personality
+should be userspace"*) — a library over this ABI, and nothing in the kernel.
+Plan 9's own APE is one, vendored with the rest of the userland. WASI is not
+one.
 
-A personality is *provided* at three layers, each cheap:
-
-1. **The ABI** — the imports a running binary needs: this machine's calls,
-   `sys`, for a native program; WASI's, answered by an existing WASI engine,
-   for a WASI program (above).
-2. **The target sysroot** (namespace files) — what *compiled* code links
-   against: `libc.a`, headers, crt objects in a subtree, pointed at by the
-   compiler (`-isysroot`, `-L`). A different port personality is a different
-   subtree (musl vs glibc vs BSD); nothing else changes.
-3. **The runtime support** (namespace files + environment) — what an
-   interpreter or runtime needs at run time: CPython's stdlib tree at
-   `/lib/python3.14` plus `PYTHONHOME`, for instance.
-
-Because layers 2 and 3 are *files in a namespace*, **a personality is a
-subtree you bind in, and a process chooses its personality by its namespace**
-— the founding idea, concrete. The provisioning method is measurement: run
-the real program, and each thing it fails on is a missing piece of its
-personality (the demo's `wasi_unstable` dialect, real inodes, cwd-aware
-paths, populated environ and `PYTHONHOME` were all found this way).
+**Installing a package binds it** ([packages.md](packages.md)). Versions
+coexist under `/pkg/<name>/<version>` and namespaces choose, so there is no
+dependency solver at the OS layer; a name about to be bound over different
+bytes is refused at install (identical bytes are idempotent, and deliberate
+shadowing remains expressible through union order); and an `rfork n` child
+that installs a package has its own package set.
 
 Binaries carry no `.wasm` extension: `exec` walks the caller's namespace for
 the path and instantiates the bytes it finds — a freshly built module is
@@ -393,8 +363,6 @@ itself, mounts the server at `/root` and binds `/root` after `/`, and runs
 ## Deliberately not architecture
 
 Per-host internals (how a shim spawns threads or paints), window *policy*
-(placement, menus — the contract is the files a window serves), the modern
-personality's surface (measured against its benchmarks when built —
-[implementation.md](implementation.md) M10), and on-disk formats (**the system
+(placement, menus — the contract is the files a window serves), and on-disk formats (**the system
 never learns one** — durability is always another filesystem reached through
 9P or a host device; [design.md](archive/design-log-claude-written.md), storage invariant).

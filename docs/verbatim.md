@@ -495,3 +495,8 @@ On the open questions, and the README, the same evening:
   <br>— `docs/saranos.md`, `RESEARCH.md` §16.36, `README.md`
 - *"I think host commands should be explicit rather than invisible. We should be explicitly acknowledging that some toolchains depend on the hsot"*
   <br>— `docs/saranos.md`, `README.md`, the conformance suite
+
+On the issues found in LICENSE and CLAUDE.md, the same evening:
+
+- *"Fix the issues. WASI is not a personality, we support WASI binaries natively."*
+  <br>— `CLAUDE.md`, `docs/why.md`, `docs/architecture.md`, `RESEARCH.md`'s TL;DR, `README.md`, `demo/index.md`, `LICENSE`

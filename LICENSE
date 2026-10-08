@@ -24,8 +24,10 @@ SOFTWARE.
 
 Why MIT: this licence is inherited, not chosen
 
-ipnx-v12 is a derivative work of Plan 9. Its kernel is Plan 9's, modified, and
-its userland derives from Plan 9's own — so the licence comes from upstream.
+ipnx-v12 is a derivative work of Plan 9. Its kernel reimplements a subset of
+Plan 9's in Rust — Plan 9's design, followed at file and line and quoted where
+it is followed, though none of Plan 9's C is in it — and its userland is Plan
+9's own source, vendored — so the licence comes from upstream.
 
 Nokia Bell Labs transferred the Plan 9 copyright to the Plan 9 Foundation on
 23 March 2021, and the Foundation relicensed all previous editions under the
@@ -36,8 +38,8 @@ Plan 9-derived material remains the copyright of the Plan 9 Foundation and
 carries its own notice. MIT requires that notice be reproduced with any copy or
 substantial portion, so it travels with the code rather than being replaced by
 the grant above. The copyright line above claims only this repository's own
-content — at present the documentation, and the kernel modifications, file
-servers and host application as they are added.
+content — the documentation, the kernel, the host application, and the file
+servers as they are added.
 
 Research Unix is a separate estate and is NOT covered by the grant above
 

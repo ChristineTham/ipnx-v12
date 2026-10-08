@@ -34,7 +34,7 @@ It also adheres to the principles set by the designers of *Plan 9 from Bell Labs
 
 **Saranos is a symbiosis of host and WASM, and neither half can exist without the other.** The kernel is WebAssembly and cannot run without a host to give it workers, memory and a screen; the host has nothing to do without the kernel. That is why Saranos has its own name: IPNX describes only the kernel and userspace — the WASM side — while Saranos is both sides together, which is what makes it an operating system rather than a runtime.
 
-The underlying kernel and userspace of Saranos is IPNX v12 - with a reimplementation of the Plan 9 kernel on Rust, compiled to WASM, but with a Unix v10 personality. The personality is userspace; the kernel is a strict subset of Plan 9's, measured against its source. The userspace supports a combination of Plan 9 and Unix v10 utilities, plus modern language toolchains and packages such as Rust, Python and Go — Python and Go run today — and it fully interoperates with WASI binaries.
+The underlying kernel and userspace of Saranos is IPNX v12 — a reimplementation in Rust of a subset of the Plan 9 kernel, with Plan 9's own userland compiled to WASM. Personalities are userspace; the kernel is a strict subset of Plan 9's, measured against its source. WASI binaries are supported natively, and the host's own toolchains — Go's, C's — are reached explicitly, through `os`, wherever the host can run them.
 
 The windowing system and user interface is an evolution of *acme*, Bell Labs' "user interface for programmers". We generalise the concepts behind acme into a user interface that we call **emca** ("acme" reversed).
 
@@ -44,7 +44,7 @@ So in short
 - **Saranos** an operating system that can run on Everything, Everywhere, All at Once
 - using a user interface and windowing system called **emca** ("acme" reversed) supporting the browser and Apple devices
 - on a kernel and userspace called IPNX, modelled after *Plan 9* but written in Rust and compiled into WASM — so Rust is already in the system, and a Rust package for writing your own is a to-do
-- supporting WASM binaries from multiple personalities (Plan 9, UNIX, WASI, etc.)
+- running Plan 9's own binaries, Unix programs through personalities in userspace, and WASI binaries natively
 
 It has functionality similar to but not supplanting:
 

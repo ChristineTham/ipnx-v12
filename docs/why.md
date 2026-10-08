@@ -29,10 +29,10 @@ threw away?**
 code — hosted as an ordinary userspace process** — browser, macOS, iPadOS, OCI,
 eventually hypervisor-direct; **9P as the only
 IPC**; **per-process namespaces**; **everything exposed as a file**; **WebAssembly as
-the executable format**; and **personalities as libc dialects** above the one kernel —
-Plan 9's userland entire by the curation principle, a WASI second ABI, and a **modern
-Unix personality** derived by measurement against git, CPython and Go. The V10 exhibit
-stays as heritage; its completeness is not a goal.
+the executable format**, with **WASI binaries supported natively** — not through a
+personality (Christine, 2026-10-08); **Plan 9's userland, entire**, by the curation
+principle; and **personalities in userspace**, never the kernel. The V10 exhibit stays
+as heritage; its completeness is not a goal.
 
 No VAX. No disk image. No emulator. No POSIX, no systemd, no sediment.
 

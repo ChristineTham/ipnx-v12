@@ -59,9 +59,9 @@ This is the design; what is built of it is [docs/when.md](docs/when.md).
   the namespace like any other file.
 - **Personalities in userspace.** A Unix interface is a library over the same
   calls — Plan 9's own APE is one — never a feature of the kernel.
-- **WASI programs as they are.** A Go or Python program built for WASI runs as
-  if it were on a plain WASI engine; only the system's own programs know its
-  conventions.
+- **WASI binaries, natively.** WASI is not a personality: a Go or Python
+  program built for WASI runs as if it were on a plain WASI engine, and only
+  the system's own programs know its conventions.
 - **The host's resources, as files.** The root of the file system is a
   directory the host serves, and its screen, keyboard and mouse are served the
   same way. 9P is the only protocol between processes and the servers they
