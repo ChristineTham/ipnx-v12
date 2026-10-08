@@ -68,7 +68,15 @@ ABI. The conformance suite binds all three.
   creates land in the element carrying `MCREATE`, and a union with none refuses
   creates. Flagless `rfork` **shares** the namespace; `RFNAMEG` copies;
   `RFCNAMEG` starts it empty — the same three-way rule the fd table and the
-  environment follow.
+  environment follow. It is kept as Plan 9 keeps it: `MNTHASH` chains of
+  mount heads (`portdat.h:474`, `:490`), each a reference, and every channel
+  in it — the one mounted upon, each one mounted — a reference too, which a
+  copy shares (`pgrpcpy`, `pgrp.c:128`) and the last close lets go.
+  `cmount` refuses an inconsistent mount, `Emount` (`chan.c:654`, `:662`,
+  `:686`); `cunmount` answers `Eunmount` or `Eunion` (`:792`, `:812`); a
+  mount point is neither removed nor renamed, `Eismtpt` (`sysfile.c:1151`,
+  `:1181`). The kernel processes share one namespace group, `kpgrp`
+  (`proc.c:1469`).
 - **The Dev table** is `struct Dev` (`portdat.h:241`): a letter, a name and
   seventeen function pointers, **and no state**. That is why it can be reached
   from anywhere: a device's own state lives in its file's globals, outside the
@@ -114,10 +122,12 @@ ABI. The conformance suite binds all three.
   (`dev.c:169`). Not a qid: a channel through `#M` carries the FID the server
   knows it by, and a walk is what mints one.
 - **A union is a LIST, and every part of it is Plan 9's**: `cmount` puts the
-  directory itself in first when a union is made on it (`chan.c:707`), and
-  copies a union when one is bound onto a directory (`:719`); a walk tries
+  directory itself in first when a union is made on it (`chan.c:708`), and
+  copies a union when one is bound onto a directory (`:725`); a walk tries
   each element in turn when the first has no such name (`:1027`); a read of
-  such a directory reads every element (`unionread`, `sysfile.c:323`); and
+  such a directory reads every element (`unionread`, `sysfile.c:323`) — of
+  the list as it stands, because the open channel holds the mount HEAD
+  (`Chan.umh`), not a copy of it; and
   `Amount` and `Atodir` do NOT step onto a mount, so a second bind attaches
   to the original directory and `cd` is left before the mount point
   (`:1532`, `:1522`).
@@ -138,7 +148,11 @@ ABI. The conformance suite binds all three.
   the mount driver for `Rclunk`, as `cclose` waits in `mntclunk`. A call
   that leaves the processor keeps the rest of itself, and where a close is
   made the closes not yet made are part of that rest. `pexit` closes before
-  the parent is told (`proc.c:1160`, `:1219`).
+  the parent is told (`proc.c:1160`, `:1219`): the descriptors, then `dot`,
+  then the namespace (`:1166`, `:1168`), each at its last reference, and it
+  leaves them nil — so `#p/<n>/ns` of a process that has exited is
+  `Eprocdied` (`devproc.c:958`). `rfork` without `RFPROC` closes the tables
+  it replaces (`sysproc.c:61`, `:70`), and `chdir` the `dot` it leaves.
 - **What a walk makes, it closes.** Each step through a mount is a fid on
   the server; a walk closes the channel it steps from and the one it holds
   when it fails (`chan.c:1109`), and `namec` answers, with its channel,

@@ -3,21 +3,23 @@
 **Role: a *when* — the single authoritative statement of build status.** No
 other document carries it.
 
-Measured 2026-09-20; the kernel's size and the test counts 2026-10-07.
+Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 
-## The kernel — 18,669 lines of Rust, no dependencies
+## The kernel — 19,853 lines of Rust, no dependencies
+
+11,049 of them before each file's tests.
 
 | | |
 |---|---|
-| `chan.rs` | `Chan` — the object every name resolves to |
+| `chan.rs` | `Chan` — the object every name resolves to; `ismtpt`, so a mount point is neither removed nor renamed (`sysfile.c:1151`, `:1181`) |
 | `dev.rs` | the device table, Plan 9's `struct Dev`; eleven letters (`/ \| s M p d e c ¤ 9 t`); `devdir`, `devdirread`, `cclone`, `devpermcheck`, which `devopen` runs for every file in a device's table (`dev.c:371`), and `devstat`'s answer for a directory (`dev.c:281`). And the kernel's libc and `parse.c`: `atoi`, `strtoul`, `tokenize`, `parsecmd`, `lookupcmd` and `cmderror` |
-| `ns.rs` | the namespace, keyed by the identity of the channel mounted upon — and a union is a LIST: `cmount` puts the directory itself in first, and copies a union when one is bound onto a directory |
+| `ns.rs` | the namespace, keyed by the identity of the channel mounted upon, in `MNTHASH` chains of mount heads held by reference (`portdat.h:490`) — and a union is a LIST: `cmount` puts the directory itself in first, copies a union when one is bound onto a directory, and refuses an inconsistent mount (`Emount`); `cunmount` and its two errors; `pgrpcpy`'s copy, sharing the channels and numbering the mounts again in order; `closepgrp` |
 | `devroot.rs` | `#/` — `#/` and `boot` from `rootdir[]`, plus the ten empty directories `rootreset` adds for a first process to bind onto; every file is eve's `0555`, so an open for writing is `devopen`'s `Eperm` |
 | `qio.rs` | `qio.c`'s queues, for every device that streams: `qread`, `qwrite`, `qproduce`, `qconsume`, the kick, `qhangup`, `qclose`, `qreopen`, `qflush`, `qsetlimit`, `qnoblock`, and `Qcoalesce` |
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed. Each end is a `qio` queue: a read of an empty pipe **sleeps** on `q->rr` until a write wakes it, and the last close of an end hangs up the other (`pipeclose`, `devpipe.c:247`), which is end of file once what was queued is read. Eve may change both ends' mode (`pipewstat`, `devpipe.c:181`) |
 | `devproc.rs` | `#p` — the process table as files: **twelve of `procdir[]`'s eighteen** (`devproc.c:79`), and the table says why each of the other six is absent. Each file's mode is `procgen`'s — `ctl`, `note` and `notepg` take the process's `procmode`, `0640` — checked at the open (`devproc.c:471`), and changed by `procwstat`. `ns` prints the bind lines that rebuild the namespace — paths, `int2flag`'s letters, and `mount <flag> <server> <on> <spec>` with `srvname`. `ctl` is `lookupcmd` over `proccmd[]` (`devproc.c:102`); the real-time scheduler's messages are not built |
 | `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user. Eve removing `caphash` hides it for good (`capremove`, `devcap.c:64`) |
-| `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, and a clunk that waits for `Rclunk`. Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
+| `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, and a clunk that waits for `Rclunk`. A walk the server refuses leaves no fid to clunk (`devmnt.c:410`). Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
 | `devsrv.rs` | `#s` — post a file descriptor's NUMBER (`strtoul`'s), and an open of the name answers the posted channel itself, shared with the poster (`devsrv.c:135`). Its owner or eve renames it (`srvwstat`); it is removed by `srvremove`'s rules, and removing it closes what was posted |
 | `devuart.rs` | `#t` — serial lines, `port/devuart.c`: `eia%d`, `eia%dctl` and `eia%dstatus` for each; input staged and `qproduce`d by `uartclock` every 22ms, output `qconsume`d by the transmitter; all of `uartctl`'s commands, with the ones that wait for output to drain sleeping on the uart's `Rendez`. The hardware is a `PhysUart` the host supplies; its interrupt handler is called at clock time, and a last close cannot wait for output to drain (RESEARCH §16.20) |
@@ -26,13 +28,13 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-10-07.
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares; and `#ec`, the kernel configuration group, which nothing fills yet |
 | `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. `boot` names the host owner by writing `#c/hostowner` (`bootauth.c:56`), so `$user` is `kitty` — the host's `plan9.ini` says `user=kitty` (`plan9ini`, `hosts/ipnx/src/lib.rs`); Plan 9's fallback, `glenda`, is for one that names none — and not the role's own name |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators. `kprint` is a queue that takes the console's output while it is open (`devcons.c:166`) |
-| `namec.rs` | name → channel, with the mount check at every component, closing each channel a walk makes once it steps past it (`chan.c:1109`); all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk, where a device's walk that errs is a miss, as `ewalk`'s is (`chan.c:948`; 2026-09-24) |
-| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s. **And the clock** (2026-09-22): `Mach` (`pc/dat.h:206`, the fields `port/` reads), `timersinit`, `hzclock`, `accounttime`, `hzsched`, `rebalance`, `anyhigher`, and `sched`'s tail with `m->schedticks`. `exits` does `closefgrp` (`proc.c:1160`), queuing what reaches a device on `clunkq` (`chan.c:517`). The descriptor table grows `DELTAFD` at a time to 5000 (`growfd`, `sysfile.c:25`) and holds references: a channel's device is closed at its last |
+| `namec.rs` | name → channel, with the mount check at every component, closing each channel a walk makes once it steps past it (`chan.c:1109`); all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk, where a device's walk that errs is a miss, as `ewalk`'s is (`chan.c:948`; 2026-09-24); `validname`'s characters (`chan.c:1731`) and `namelenerror`'s form of a name in an error (`:1250`) |
+| `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s. **And the clock** (2026-09-22): `Mach` (`pc/dat.h:206`, the fields `port/` reads), `timersinit`, `hzclock`, `accounttime`, `hzsched`, `rebalance`, `anyhigher`, and `sched`'s tail with `m->schedticks`. `pexit` takes the descriptor table, `dot` and the namespace (`proc.c:1145`) and answers what was their last reference, for the kernel to close; `rfork` without `RFPROC` the same of the tables it replaces; `clunkq` (`chan.c:517`) takes what a kill leaves unclosed and what `#p`'s `ctl` closes. The kernel processes share `kpgrp` (`proc.c:1469`) and have no descriptor table. The descriptor table grows `DELTAFD` at a time to 5000 (`growfd`, `sysfile.c:25`) and holds references: a channel's device is closed at its last |
 | `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 31 calls, `exec`, and `unionread` |
 
-267 kernel tests, and 67 in `hosts/ipnx`.
+279 kernel tests, and 67 in `hosts/ipnx`.
 
 ## The host — `hosts/ipnx`, five files
 
@@ -459,7 +461,20 @@ last close keeps the rest of its call while it waits — `close`, `dup`,
 parent hears. A walk closes the channels it steps past, and a call the
 channel it is done with: the host's server held 182 fids after a session of
 one command line and four more for every line, and now holds 10 however many
-lines ran. Not built: closing a namespace's channels and `dot` when the last
-process holding them exits — the 10 — the wire's release after it, `Tflush`
-for an interrupted RPC, several names to a `Twalk`, `Eismtpt`, and the
-uart's drain.
+lines ran.
+
+**The namespace by reference; what `pexit` closes** (2026-10-08; RESEARCH
+§16.25). A mount head, each channel in it, and `dot` are references a copy
+shares, so `pexit` closes `dot` and the namespace at their last reference,
+as `chdir`, an `MREPL` bind, `unmount` and `rfork` without `RFPROC` close
+what they replace — and a session ends holding **no** fid on the host's
+server. A union directory's channel holds the mount head, not a copy;
+closing it closes the element a read had open. `cmount` refuses an
+inconsistent mount; `unmount` answers `Eunmount` and `Eunion` and resolves
+the name mounted by opening it; `bind` answers the mount's id and checks
+its flag; `mount` is refused under `RFNOMNT`; a name with a control
+character is `Ebadchar`; a mount point is neither removed nor renamed; and
+a walk the server refuses no longer clunks a fid it never had. Not built:
+the wire's release when the last channel through its mount goes (`chanfree`,
+`chan.c:475`), `Tflush` for an interrupted RPC, several names to a `Twalk`,
+and the uart's drain.

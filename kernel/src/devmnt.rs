@@ -422,10 +422,15 @@ impl MntDev {
         let newfid = self.newfid(t);
         let m = self.mnt(c)?;
         let (fid, qids) = m.walk(t, c.fid, newfid, &[name])?;
+        // The server managed none: no such file, and **no fid to clunk** —
+        // *"newfid is not affected"* unless every name was walked (walk(5)),
+        // and `mntwalk` makes the channel `nc->type = 0` for the time
+        // between: *"Until the other side accepts this fid, we can't
+        // mntclose it"* (`devmnt.c:410`), so the `cclose(nc)` of a short
+        // walk (`:434`) is `rootclose`, which sends nothing. A clunk here
+        // was a message about a fid the server never had — and one whose
+        // wait was dropped, so the call ran on with the process asleep.
         if qids.is_empty() {
-            // The server managed none: no such file. Clunk the fid we asked
-            // for, or the server keeps it.
-            let _ = m.clunk(t, fid);
             return Ok(None);
         }
         let mut nc = c.walked(name, qids[0]);
@@ -607,6 +612,8 @@ mod tests {
         msize: u32,
         /// Every fid ever handed out, so a leak is visible.
         handed: usize,
+        /// Clunks of a fid it never had.
+        strays: usize,
         /// How many times each was asked for, so joining a session is visible.
         versions: usize,
         attaches: usize,
@@ -621,7 +628,7 @@ mod tests {
             let mut files = HashMap::new();
             files.insert("hello".into(), b"from a server".to_vec());
             files.insert("big".into(), vec![b'x'; 5000]);
-            Server { files, fids: HashMap::new(), msize, handed: 0, versions: 0, attaches: 0, reads: 0, authed: Vec::new(), attached_with: Vec::new() }
+            Server { files, fids: HashMap::new(), msize, handed: 0, strays: 0, versions: 0, attaches: 0, reads: 0, authed: Vec::new(), attached_with: Vec::new() }
         }
 
         fn reply(&mut self, req: &[u8]) -> Vec<u8> {
@@ -664,7 +671,7 @@ mod tests {
                         return err("unknown fid");
                     }
                     let mut qids = Vec::new();
-                    let mut at = String::new();
+                    let mut at = self.fids[&from].clone();
                     for _ in 0..n {
                         let name = r.s().unwrap();
                         if !self.files.contains_key(name) {
@@ -673,9 +680,16 @@ mod tests {
                         at = name.to_string();
                         qids.push(Qid { qtype: 0, vers: 0, path: 1 });
                     }
-                    // a fid is handed out even for a partial walk
-                    self.fids.insert(newfid, at);
-                    self.handed += 1;
+                    // walk(5): *"If the first element cannot be walked for
+                    // any reason, Rerror is returned"*, and *newfid* is made
+                    // only when the whole walk succeeds
+                    if n > 0 && qids.is_empty() {
+                        return err("file does not exist");
+                    }
+                    if qids.len() == n as usize {
+                        self.fids.insert(newfid, at);
+                        self.handed += 1;
+                    }
                     let mut w = W::new().u16(qids.len() as u16);
                     for q in &qids {
                         w = w.raw(&q.write(W::new()).into_body());
@@ -708,7 +722,10 @@ mod tests {
                 }
                 x if x == T::Clunk as u8 => {
                     let fid = r.u32().unwrap();
-                    self.fids.remove(&fid);
+                    if self.fids.remove(&fid).is_none() {
+                        self.strays += 1;
+                        return err("unknown fid");
+                    }
                     W::new().frame(T::Clunk.reply(), tag)
                 }
                 _ => err("not implemented by this server"),
@@ -844,17 +861,19 @@ mod tests {
         assert_eq!(s.borrow().versions, 1, "one session: fauth versioned it, the attaches joined");
     }
 
-    /// A failed walk must clunk the fid it asked for. A server keeps every
-    /// fid it hands out, so a client that leaks them runs it out — which is a
-    /// bug that only shows under load.
+    /// A failed walk leaves nothing on the server, and the client says
+    /// nothing about it: walk(5)'s *newfid* exists only once every name is
+    /// walked, and `mntwalk` cannot close a channel the server has not
+    /// accepted (`devmnt.c:410`). It used to clunk the fid anyway — a
+    /// message about a fid the server never had.
     #[test]
-    fn a_failed_walk_does_not_leak_a_fid() {
+    fn a_failed_walk_leaves_no_fid_and_clunks_none() {
         let (mut d, mut t, root, s) = mounted(MAXRPC);
         for _ in 0..50 {
-            assert!(d.walk(&mut t, &root, "nothing").unwrap().is_none());
+            assert_eq!(d.walk(&mut t, &root, "nothing"), Err("file does not exist".into()));
         }
-        assert!(s.borrow().handed > 50, "the server did hand them out");
-        assert_eq!(s.borrow().fids.len(), 1, "only the attach fid is still held");
+        assert_eq!(s.borrow().fids.len(), 1, "only the attach fid is held");
+        assert_eq!(s.borrow().strays, 0, "and no clunk of one it never had");
     }
 
     /// `Rerror` carries a sentence, which is why a 9P failure says what went

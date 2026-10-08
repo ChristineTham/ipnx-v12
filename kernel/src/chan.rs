@@ -111,17 +111,17 @@ pub struct Chan {
     /// clears this and allows no offset but 0 on a directory
     /// (`sysfile.c:820`).
     pub dri: u32,
-    /// `Chan.umh` (`portdat.h`) — the UNION this channel was reached through,
-    /// whole, with the element it landed on first. `namec` keeps it for two
-    /// things, and Plan 9 keeps it for the same two:
+    /// `Chan.umh` (`portdat.h`) — the mount head this channel was reached
+    /// through, held by reference ([`crate::ns::Head`]). `namec` keeps it
+    /// for two things, and Plan 9 keeps it for the same two:
     ///
-    /// * `Abind` (`chan.c:1462`), because `cmount` copies a union when
-    ///   binding it onto a directory (`:719`) — so `bind -a /root /` carries
+    /// * `Abind` (`chan.c:1464`), because `cmount` copies a union when
+    ///   binding it onto a directory (`:725`) — so `bind -a /root /` carries
     ///   all of `/root` and not just whichever element answered first;
-    /// * `Aopen` (`chan.c:1502`), *"only save the mount head if it's a
+    /// * `Aopen` (`chan.c:1501`), *"only save the mount head if it's a
     ///   multiple element union"*, because reading such a directory means
     ///   reading every element (`unionread`, `sysfile.c:323`).
-    pub umh: Vec<crate::ns::Element>,
+    pub umh: Option<crate::ns::Head>,
     /// `Chan.uri` — which element of `umh` a union read is on.
     pub uri: u32,
     /// `Chan.umc` — that element, opened. One at a time, and closed when it
@@ -142,6 +142,11 @@ pub struct Chan {
     /// `mchan` — the channel to the mounted server, and `mqid`, the qid of the
     /// mount root (`portdat.h`).
     pub mchan: Option<Box<Chan>>,
+    /// `Chan.ismtpt` (`portdat.h:215`) — *"record whether c is on a mount
+    /// point"* (`chan.c:1485`), as `namec` reached it for `Aaccess`,
+    /// `Aremove` or `Aopen`: such a file is not removed or renamed
+    /// (`sysfile.c:1151`, `:1181`).
+    pub ismtpt: bool,
     pub mqid: Qid,
     /// The name this channel was reached by. Plan 9 keeps a `Path` so that
     /// `fd2path` can answer and `..` can be resolved without asking a server.
@@ -178,13 +183,14 @@ impl Chan {
             flag: 0,
             offset: 0,
             dri: 0,
-            umh: Vec::new(),
+            umh: None,
             uri: 0,
             umc: None,
             iounit: 0,
             fid: crate::ninep::NOFID,
             mux: None,
             mchan: None,
+            ismtpt: false,
             mqid: Qid { qtype: 0, vers: 0, path: 0 },
             path: format!("#{}{}", dev.letter(), spec),
             aux: 0,
@@ -202,7 +208,7 @@ impl Chan {
         let path = addelem(&self.path, name);
         // A walked channel is not the one the union was found on, so it
         // carries no union of its own (`devclone` copies no `umh`).
-        Chan { qid, path, offset: 0, umh: Vec::new(), uri: 0, umc: None, ..self.clone() }
+        Chan { qid, path, offset: 0, umh: None, uri: 0, umc: None, ismtpt: false, ..self.clone() }
     }
 }
 
@@ -233,4 +239,12 @@ pub fn addelem(path: &str, name: &str) -> String {
     } else {
         format!("{path}/{name}")
     }
+}
+
+/// `cclose`'s *"if(decref(c)) return;"* (`chan.c:496`), for each reference
+/// in turn: the channels whose last reference this was — the ones whose
+/// device's close is the caller's to make. The rest are only one reference
+/// fewer.
+pub fn lastrefs(refs: Vec<std::rc::Rc<Chan>>) -> Vec<Chan> {
+    refs.into_iter().filter_map(|c| std::rc::Rc::try_unwrap(c).ok()).collect()
 }

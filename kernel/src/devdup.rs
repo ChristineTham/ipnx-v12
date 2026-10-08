@@ -244,7 +244,7 @@ mod tests {
         let mut c = Chan::attach(DevId::Pipe, devno);
         c.qid = Qid { qtype: 0, vers: 0, path: qid };
         c.mode = ORDWR;
-        procs.borrow().get(1).unwrap().fds.borrow_mut().add(c)
+        procs.borrow().get(1).unwrap().fds.as_ref().unwrap().borrow_mut().add(c)
     }
 
     /// The device's whole reason: opening `#d/3` answers with **the channel
@@ -257,7 +257,7 @@ mod tests {
         let dir = d.attach("").unwrap();
         let c = d.walk(&dir, &fd.to_string()).unwrap().expect("no such slot");
         let got = d.dupopen(&c, OREAD).unwrap();
-        let held = procs.borrow().get(1).unwrap().fds.borrow().get(fd).cloned().unwrap();
+        let held = procs.borrow().get(1).unwrap().fds.as_ref().unwrap().borrow().get(fd).cloned().unwrap();
         assert!(Rc::ptr_eq(&got, &held), "the fd's own channel, not a copy of it");
         assert!(d.open(c, OREAD).is_err(), "and never a copy");
     }

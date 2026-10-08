@@ -402,7 +402,7 @@ impl Kernel {
             }
         }
         let mut last = Vec::new();
-        let fds = self.procs.borrow().get(pid).map(|p| p.fds.clone());
+        let fds = self.procs.borrow().get(pid).and_then(|p| p.fds.clone());
         if let Some(fds) = fds {
             let n = fds.borrow().slots();
             for fd in 0..n {
@@ -468,11 +468,15 @@ impl Kernel {
                     // `exits`, so nothing recorded a status.
                     (machine::Left::Exited, _) => {
                         drop(procs);
-                        let closing = |k: &Kernel| k.procs.borrow().get(pid).is_some_and(|p| p.closingfgrp);
-                        if !closing(self) && self.procs.borrow().status(pid).is_none() {
+                        // In `pexit` is a process whose namespace it has
+                        // taken (*"up->pgrp = nil"*, `proc.c:1154`) and whose
+                        // wait record is not yet made.
+                        let begun = |k: &Kernel| k.procs.borrow().get(pid).is_some_and(|p| p.ns.is_none());
+                        let ended = |k: &Kernel| k.procs.borrow().status(pid).is_some();
+                        if !begun(self) {
                             let _ = self.pexit(pid, "", true);
                         }
-                        if closing(self) {
+                        if begun(self) && !ended(self) {
                             // Its `pexit` is waiting on a close, and the
                             // image is gone: the rest runs as kernel code.
                             let mut procs = self.procs.borrow_mut();
@@ -616,11 +620,7 @@ impl Kernel {
     /// process's namespace and open for execution. A reference, as every
     /// open answers: `exec` of `/fd/3` reads fd 3's own channel.
     fn exec_open(&mut self, pid: Pid, path: &str) -> Result<std::rc::Rc<std::cell::RefCell<Chan>>, String> {
-        let (slash, dot, ns) = {
-            let procs = self.procs.borrow();
-            let p = procs.get(pid).ok_or("no such process")?;
-            (p.slash.clone(), p.dot.clone(), p.ns.clone())
-        };
+        let (slash, dot, ns) = self.names(pid)?;
         let ns = ns.borrow();
         namec::open(&mut self.tab, &ns, &slash, &dot, path, chan::mode::OEXEC)
     }
@@ -1625,7 +1625,7 @@ impl Kernel {
         // shows whichever element answered the walk and nothing else —
         // which, once `/` is a union of the kernel's root and a file server,
         // is most of the system missing.
-        let d = if c.is_dir() && !c.umh.is_empty() {
+        let d = if c.is_dir() && c.umh.is_some() {
             self.unionread(&mut c, n)?
         } else {
             self.tab.dread(&mut c, n, at)?
@@ -1673,23 +1673,39 @@ impl Kernel {
     /// it closes waits for nothing: `forceclosefgrp` (`pgrp.c:245`) hands
     /// what is left to the close queue.
     pub fn pexit(&mut self, pid: Pid, status: &str, freemem: bool) -> Result<Ret, String> {
-        let last = self.procs.borrow_mut().closefgrp(pid);
+        // *"nil out all the resources under lock (free later)"*
+        // (`proc.c:1145`), and of each, what was its last reference
+        let (fds, rest) = {
+            let mut procs = self.procs.borrow_mut();
+            (procs.closefgrp(pid), procs.closedotpgrp(pid))
+        };
         let status = status.to_string();
-        self.tab.endcall(pid);
-        // *"up->closingfgrp = f"* … *"up->closingfgrp = nil"* (`pgrp.c:222`).
-        if let Some(p) = self.procs.borrow_mut().get_mut(pid) {
+        self.closefgrp(pid, fds, Box::new(move |k, pid| {
+            // *"if(dot) cclose(dot); if(pgrp) closepgrp(pgrp);"* (`:1165`)
+            k.closing(pid, rest, Box::new(move |k, pid| {
+                k.procs.borrow_mut().exits(pid, &status);
+                k.tab.forget(pid);
+                if !freemem {
+                    k.procs.borrow_mut().addbroken(pid);
+                }
+                Ok(Ret::Ok)
+            }))
+        }))
+    }
+
+    /// `closefgrp` (`pgrp.c:207`) once the table's last reference has
+    /// gone: *"up->closingfgrp = f"* … *"up->closingfgrp = nil"*
+    /// (`:222`) around the closes, then `then`.
+    fn closefgrp(&mut self, up: Pid, cs: Vec<Chan>, then: Label) -> Result<Ret, String> {
+        self.tab.endcall(up);
+        if let Some(p) = self.procs.borrow_mut().get_mut(up) {
             p.closingfgrp = true;
         }
-        self.closingfgrp(pid, last, Box::new(move |k, pid| {
-            if let Some(p) = k.procs.borrow_mut().get_mut(pid) {
+        self.closingfgrp(up, cs, Box::new(move |k, up| {
+            if let Some(p) = k.procs.borrow_mut().get_mut(up) {
                 p.closingfgrp = false;
             }
-            k.procs.borrow_mut().exits(pid, &status);
-            k.tab.forget(pid);
-            if !freemem {
-                k.procs.borrow_mut().addbroken(pid);
-            }
-            Ok(Ret::Ok)
+            then(k, up)
         }))
     }
 
@@ -1889,17 +1905,20 @@ impl Kernel {
             // Without the `ready` a child exists and nothing can ever pick
             // it; without the `sched` the parent runs on. The `sched` is
             // the machine's, when the parent's `rfork` returns.
+            //
+            // Without `RFPROC` the tables it replaced are closed
+            // (`closefgrp(ofg)`, `closepgrp(opg)`, `sysproc.c:61`, `:70`),
+            // and each close may wait.
             Call::Rfork { flags } => {
-                let child = self.procs.borrow_mut().rfork(up, flags);
-                match child {
-                    Some(pid) => {
+                let forked = self.procs.borrow_mut().sysrfork(up, flags)?;
+                match forked {
+                    proc::Forked::Child(pid) => {
                         self.procs.borrow_mut().ready(pid);
                         Ok(Ret::Pid(pid))
                     }
-                    None => {
-                        proc::Procs::rforkcheck(flags)?;
-                        Ok(Ret::Pid(0))
-                    }
+                    proc::Forked::Same { fds, ns } => self.closefgrp(up, fds, Box::new(move |k, up| {
+                        k.closing(up, ns, Box::new(|_, _| Ok(Ret::Pid(0))))
+                    })),
                 }
             }
             // **`exec` does not return** (`sysproc.c:259`). It gives the
@@ -1953,37 +1972,64 @@ impl Kernel {
             Call::Errstr { buf } => Ok(Ret::Str(self.procs.borrow_mut().errstr(up, &buf))),
 
             // ---- the namespace
-            // `bindmount` (`sysfile.c`): the SOURCE is `Abind` and the
-            // TARGET is `Amount` (`:51`, `:60`). Neither is `Atodir`, so a
-            // file binds over a file — `bind /bin/rc /bin/sh`.
+            // `bindmount` (`sysfile.c:989`): the SOURCE is `Abind` and the
+            // TARGET is `Amount` (`:1039`, `:1048`), in that order. Neither
+            // is `Atodir`, so a file binds over a file — `bind /bin/rc
+            // /bin/sh`. *"ret = cmount(&c0, c1, flag, spec)"* (`:1054`):
+            // the namespace takes its own references to both, the call's
+            // are closed — *"cclose(c1); … cclose(c0)"* — and so is what an
+            // `MREPL` replaced. It answers the new mount's id (`chan.c:760`).
             Call::Bind { name, old, flag } => {
-                let (on, _) = self.walk(up, &old, namec::A::Mount, 0)?;
-                let (to, _) = self.walk(up, &name, namec::A::Bind, 0)?;
-                let procs = self.procs.borrow();
-                let p = procs.get(up).ok_or("no such process")?;
-                p.ns.borrow_mut().mount(&on, element_of(to, flag, ""), bind_of(flag));
-                Ok(Ret::Ok)
+                bindflag(flag)?;
+                let (c0, src0) = self.walk(up, &name, namec::A::Bind, 0)?;
+                let union = c0.umh.as_ref().map(|h| h.borrow().mount.clone()).unwrap_or_default();
+                let c0 = src0.unwrap_or_else(|| std::rc::Rc::new(c0));
+                let c1 = match self.walk(up, &old, namec::A::Mount, 0) {
+                    Ok((c1, src1)) => src1.unwrap_or_else(|| std::rc::Rc::new(c1)),
+                    Err(e) => return self.unwind(up, e, vec![c0]),
+                };
+                let r = self.ns(up)?.borrow_mut().cmount(c1.clone(), ns::Element::shared(c0.clone(), flag, ""), union, bind_of(flag));
+                self.mounted(up, r, c1, c0, None)
             }
-            // `sysunmount` (`sysfile.c:1087`): the two channels named are
-            // the call's, and `cclose`d when it is done with them.
+            // `sysunmount` (`sysfile.c:1087`): the name mounted on is
+            // `Amount`; the one mounted is *"namec(..., Aopen, ...)
+            // because if arg[0] is something like /srv/cs or /fd/0, opening
+            // it is the only way to get at the real Chan underneath"*
+            // (`:1104`). Then `cunmount`, and both are the call's to close.
             Call::Unmount { name, old } => {
-                let on = self.walk(up, &old, namec::A::Mount, 0)?;
-                let what = match &name {
-                    Some(n) => Some(self.walk(up, n, namec::A::Bind, 0)?),
+                let (on, onsrc) = self.walk(up, &old, namec::A::Mount, 0)?;
+                let on = onsrc.unwrap_or_else(|| std::rc::Rc::new(on));
+                let mounted = match &name {
+                    Some(n) => match self.walk_open(up, n, chan::mode::OREAD) {
+                        Ok(c) => Some(c),
+                        Err(e) => return self.unwind(up, e, vec![on]),
+                    },
                     None => None,
                 };
-                {
-                    let procs = self.procs.borrow();
-                    let p = procs.get(up).ok_or("no such process")?;
-                    p.ns.borrow_mut().unmount(&on.0, what.as_ref().map(|w| &w.0));
-                }
-                let mine: Vec<Chan> = [Some(on), what].into_iter().flatten().filter(|c| c.1).map(|c| c.0).collect();
-                self.closethen(up, mine, Box::new(|_, _| Ok(Ret::Ok)))
+                let m = mounted.as_ref().map(|c| c.borrow().clone());
+                // *"eqchan(f->to, mounted, 1) || (f->to->mchan &&
+                // eqchan(f->to->mchan, mounted, 1))"* (`chan.c:812`)
+                let matches = m.map(|m| {
+                    move |to: &Chan| ns::eqchan(to, &m) || to.mchan.as_deref().is_some_and(|w| ns::eqchan(w, &m))
+                });
+                let r = self.ns(up)?.borrow_mut().cunmount(&on, matches);
+                let (r, mut gone) = match r {
+                    Ok(gone) => (Ok(Ret::Ok), gone),
+                    Err(e) => (Err(e), Vec::new()),
+                };
+                gone.push(on);
+                let mut last = chan::lastrefs(gone);
+                last.extend(mounted.and_then(|c| std::rc::Rc::try_unwrap(c).ok()).map(|c| c.into_inner()));
+                self.closethen(up, last, Box::new(move |_, _| r))
             }
+            // `syschdir` (`sysfile.c:976`): *"cclose(up->dot); up->dot =
+            // c"* — the new `dot` is the reference `namec` answered, and
+            // the old one's close may wait.
             Call::Chdir { path } => {
-                let (c, _) = self.walk(up, &path, namec::A::Todir, 0)?;
-                self.procs.borrow_mut().chdir(up, c);
-                Ok(Ret::Ok)
+                let (c, src) = self.walk(up, &path, namec::A::Todir, 0)?;
+                let c = src.unwrap_or_else(|| std::rc::Rc::new(c));
+                let old = self.procs.borrow_mut().chdir(up, c);
+                self.closethen(up, chan::lastrefs(old.into_iter().collect()), Box::new(|_, _| Ok(Ret::Ok)))
             }
 
             // ---- channels
@@ -2016,7 +2062,7 @@ impl Kernel {
                 let last = {
                     let procs = self.procs.borrow();
                     let p = procs.get(up).ok_or("no such process")?;
-                    let r = p.fds.borrow_mut().close(fd);
+                    let r = p.fds.as_ref().ok_or(EBADFD)?.borrow_mut().close(fd);
                     r.ok_or(EBADFD)?
                 };
                 self.closethen(up, last.into_iter().collect(), Box::new(|_, _| Ok(Ret::Ok)))
@@ -2092,10 +2138,7 @@ impl Kernel {
                 self.closethen(up, umc.into_iter().map(|b| *b).collect(), Box::new(move |_, _| Ok(Ret::N(new as usize))))
             }
             Call::Dup { old, new } => {
-                let fds = {
-                    let procs = self.procs.borrow();
-                    procs.get(up).ok_or("no such process")?.fds.clone()
-                };
+                let fds = self.fgrp(up)?;
                 let (r, oc) = fds.borrow_mut().dup(old, new).ok_or(EBADFD)?;
                 self.closethen(up, oc.into_iter().collect(), Box::new(move |_, _| Ok(Ret::Fd(r))))
             }
@@ -2127,10 +2170,7 @@ impl Kernel {
                 // *"if(newfd2(fd, c) < 0) error(Enofd)"* (`sysfile.c:215`):
                 // `data` in the lowest free slot and `data1` in the next, or
                 // neither — and both closed.
-                let fds = {
-                    let procs = self.procs.borrow();
-                    procs.get(up).ok_or("no such process")?.fds.clone()
-                };
+                let fds = self.fgrp(up)?;
                 let data1 = ends.pop().unwrap();
                 let data = ends.pop().unwrap();
                 let r = fds.borrow_mut().newfd2([data, data1]);
@@ -2145,8 +2185,14 @@ impl Kernel {
             }
             // `sysremove` (`sysfile.c:1141`): *"Remove clunks the fid"*, so
             // the channel is not closed after.
+            //
+            // *"Removing mount points is disallowed to avoid surprises"*
+            // (`:1148`): *"if(c->ismtpt){ cclose(c); error(Eismtpt); }"*.
             Call::Remove { path } => {
                 let (mut c, _) = self.walk(up, &path, namec::A::Remove, 0)?;
+                if c.ismtpt {
+                    return self.closethen(up, vec![c], Box::new(|_, _| Err(namec::EISMTPT.into())));
+                }
                 self.tab.dremove(&mut c)?;
                 Ok(Ret::Ok)
             }
@@ -2155,8 +2201,8 @@ impl Kernel {
             // named as it was reached, not as its server calls it. `fstat`
             // does not (`:932`).
             Call::Stat { path } => {
-                let (c, owned) = self.walk(up, &path, namec::A::Access, 0)?;
-                let d = self.done(c.clone(), owned, |k, c| k.tab.dstat(c))?;
+                let (c, src) = self.walk(up, &path, namec::A::Access, 0)?;
+                let d = self.done(c.clone(), src.is_none(), |k, c| k.tab.dstat(c))?;
                 Ok(Ret::Data(match pathlast(&c.path) {
                     Some(name) => dirsetname(name, d),
                     None => d,
@@ -2168,8 +2214,8 @@ impl Kernel {
             // down by `packoldstat`. What does not fit is *"old stat system
             // call - recompile"*.
             Call::OldStat { path } => {
-                let (c, owned) = self.walk(up, &path, namec::A::Access, 0)?;
-                let d = self.done(c.clone(), owned, |k, c| k.tab.dstat(c))?;
+                let (c, src) = self.walk(up, &path, namec::A::Access, 0)?;
+                let d = self.done(c.clone(), src.is_none(), |k, c| k.tab.dstat(c))?;
                 oldstat(&c, d, "old stat system call - recompile")
             }
             Call::OldFstat { fd } => {
@@ -2181,14 +2227,21 @@ impl Kernel {
                 let c = self.chan(up, fd)?;
                 Ok(Ret::Data(self.tab.dstat(&c)?))
             }
+            // `wstat` (`sysfile.c:1172`), for both: *"Renaming mount points
+            // is disallowed to avoid surprises"* — a new name for a file on
+            // a mount point is `Eismtpt`, with its path (`:1181`).
             Call::Wstat { path, edir } => {
-                let (c, owned) = self.walk(up, &path, namec::A::Access, 0)?;
-                self.done(c, owned, |k, c| k.tab.dwstat(c, &edir))?;
+                let (c, src) = self.walk(up, &path, namec::A::Access, 0)?;
+                self.done(c, src.is_none(), |k, c| {
+                    renamesmtpt(c, &edir)?;
+                    k.tab.dwstat(c, &edir)
+                })?;
                 Ok(Ret::Ok)
             }
             Call::Fwstat { fd, edir } => {
                 // *"c = fdtochan(arg[0], -1, 1, 1)"* (`sysfile.c:1219`).
                 let mut c = self.fdtochan(up, fd, None, true)?.borrow().clone();
+                renamesmtpt(&c, &edir)?;
                 self.tab.dwstat(&mut c, &edir)?;
                 Ok(Ret::Ok)
             }
@@ -2209,6 +2262,13 @@ impl Kernel {
             // (`devmnt.c:239`) — in the copy the mount keeps and in the
             // descriptor, which are one channel in Plan 9.
             Call::Mount { fd, afd, old, flag, aname } => {
+                bindflag(flag)?;
+                // *"spec = validnamedup(spec, 1)"* (`sysfile.c:1005`)
+                namec::validname(&aname, true)?;
+                // *"if(up->pgrp->noattach) error(Enoattach)"* (`:1011`)
+                if self.ns(up)?.borrow().noattach() {
+                    return Err(namec::ENOATTACH.into());
+                }
                 let cell = self.fdtochan(up, fd, Some(chan::mode::ORDWR), false)?;
                 let mut wire = cell.borrow().clone();
                 wire.flag |= chan::flag::CMSG;
@@ -2217,25 +2277,18 @@ impl Kernel {
                 } else {
                     ninep::NOFID
                 };
-                // *"c1 = namec(arg1, Amount, 0, 0)"* (`sysfile.c:1048`).
-                let (on, _) = self.walk(up, &old, namec::A::Mount, 0)?;
+                // *"c0 = devtab[ret]->attach((char*)&bogus)"* (`:1031`)
                 let user = self.procs.borrow().user(up).unwrap_or_default();
-                let to = self.tab.dmount(wire, &user, &aname, afid)?;
+                let c0 = std::rc::Rc::new(self.tab.dmount(wire, &user, &aname, afid)?);
                 cell.borrow_mut().flag |= chan::flag::CMSG;
                 self.tab.keepwire(cell);
-                let id = {
-                    let procs = self.procs.borrow();
-                    let p = procs.get(up).ok_or("no such process")?;
-                    let id = p.ns.borrow_mut().mount(&on, element_of(to, flag, &aname), bind_of(flag));
-                    id
+                // *"c1 = namec(arg1, Amount, 0, 0)"* (`:1048`)
+                let c1 = match self.walk(up, &old, namec::A::Mount, 0) {
+                    Ok((c1, src1)) => src1.unwrap_or_else(|| std::rc::Rc::new(c1)),
+                    Err(e) => return self.unwind(up, e, vec![c0]),
                 };
-                let last = {
-                    let procs = self.procs.borrow();
-                    let p = procs.get(up).ok_or("no such process")?;
-                    let r = p.fds.borrow_mut().close(fd);
-                    r.flatten()
-                };
-                self.closethen(up, last.into_iter().collect(), Box::new(move |_, _| Ok(Ret::N(id as usize))))
+                let r = self.ns(up)?.borrow_mut().cmount(c1.clone(), ns::Element::shared(c0.clone(), flag, &aname), Vec::new(), bind_of(flag));
+                self.mounted(up, r, c1, c0, Some(fd))
             }
             // `sysfversion` (`auth.c:23`): `mntversion` on the descriptor,
             // answering the version agreed, which the machine copies into
@@ -2488,8 +2541,8 @@ impl Kernel {
     /// | `stat` / `wstat` | the buffer, then the name (`:958`–`:959`, `:1203`–`:1205`) |
     /// | `fstat` / `fwstat` | the buffer (`:938`, `:1217`) |
     /// | `pread` / `pwrite` | the buffer, `n` long (`:635`, `:726`) |
-    /// | `bind` | both names (`:1038`, `:1047`) |
-    /// | `mount` | the spec, then the name mounted on (`:1004`–`:1005`, `:1047`) |
+    /// | `bind` | the flag (`:1000`), then both names (`:1038`, `:1047`) |
+    /// | `mount` | the flag, the spec, then the name mounted on (`:1000`, `:1004`–`:1005`, `:1047`) |
     /// | `unmount` | the name, then the mounted one if not nil (`:1093`, `:1109`) |
     /// | `pipe` | two `int`s, aligned (`:193`–`:194`) |
     /// | `exec` | the name (`sysproc.c:286`–`:287`), then `argv`: aligned, each pointer, each string (`:401`–`:408`) |
@@ -2531,11 +2584,14 @@ impl Kernel {
             }
             Call::OldFstat { .. } => self.validaddr(up, a(1), 116, pc),
             Call::Pread { .. } | Call::Pwrite { .. } => self.validaddr(up, a(1), a(2), pc),
-            Call::Bind { .. } => {
+            // `bindmount` checks the flag before any address (`sysfile.c:1000`)
+            Call::Bind { flag, .. } => {
+                bindflag(*flag)?;
                 self.validname(up, a(0), pc)?;
                 self.validname(up, a(1), pc)
             }
-            Call::Mount { .. } => {
+            Call::Mount { flag, .. } => {
+                bindflag(*flag)?;
                 self.validname(up, a(4), pc)?;
                 self.validname(up, a(2), pc)
             }
@@ -2979,49 +3035,93 @@ impl Kernel {
         r
     }
 
+    /// The calling process's `slash`, `dot` and namespace, which every name
+    /// it gives is resolved through.
+    fn names(&self, up: Pid) -> Result<(std::rc::Rc<Chan>, std::rc::Rc<Chan>, std::rc::Rc<std::cell::RefCell<ns::Ns>>), String> {
+        let procs = self.procs.borrow();
+        let p = procs.get(up).ok_or("no such process")?;
+        match (&p.dot, &p.ns) {
+            (Some(dot), Some(ns)) => Ok((p.slash.clone(), dot.clone(), ns.clone())),
+            _ => Err("no such process".into()),
+        }
+    }
+
+    /// `up->pgrp`.
+    fn ns(&self, up: Pid) -> Result<std::rc::Rc<std::cell::RefCell<ns::Ns>>, String> {
+        self.procs.borrow().get(up).and_then(|p| p.ns.clone()).ok_or_else(|| "no such process".into())
+    }
+
+    /// `up->fgrp`.
+    fn fgrp(&self, up: Pid) -> Result<std::rc::Rc<std::cell::RefCell<proc::Fds>>, String> {
+        self.procs.borrow().get(up).and_then(|p| p.fds.clone()).ok_or_else(|| "no such process".into())
+    }
+
     /// `namec` for the calling process: its namespace, its `slash`, its `dot`
-    /// — and whether the channel is the caller's to close ([`namec::namec`]).
-    fn walk(&mut self, up: Pid, path: &str, a: namec::A, mode: u16) -> Result<(Chan, bool), String> {
+    /// — and, with the channel, the reference it is when it is not the
+    /// call's own ([`namec::namec`]).
+    fn walk(&mut self, up: Pid, path: &str, a: namec::A, mode: u16) -> Result<(Chan, Option<std::rc::Rc<Chan>>), String> {
         // The process table is let go before the walk: a walk through a
         // server a process runs sleeps, and sleeping is the table's.
-        let (slash, dot, ns) = {
-            let procs = self.procs.borrow();
-            let p = procs.get(up).ok_or("no such process")?;
-            (p.slash.clone(), p.dot.clone(), p.ns.clone())
-        };
+        let (slash, dot, ns) = self.names(up)?;
         let ns = ns.borrow();
         namec::namec(&mut self.tab, &ns, &slash, &dot, path, a, mode)
     }
 
     /// `namec(name, Aopen, …)` for the calling process — a reference.
     fn walk_open(&mut self, up: Pid, path: &str, mode: u16) -> Result<std::rc::Rc<std::cell::RefCell<Chan>>, String> {
-        let (slash, dot, ns) = {
-            let procs = self.procs.borrow();
-            let p = procs.get(up).ok_or("no such process")?;
-            (p.slash.clone(), p.dot.clone(), p.ns.clone())
-        };
+        let (slash, dot, ns) = self.names(up)?;
         let ns = ns.borrow();
         namec::open(&mut self.tab, &ns, &slash, &dot, path, mode)
     }
 
     fn walk_create(&mut self, up: Pid, path: &str, mode: u16, perm: u32) -> Result<std::rc::Rc<std::cell::RefCell<Chan>>, String> {
-        let (slash, dot, ns) = {
-            let procs = self.procs.borrow();
-            let p = procs.get(up).ok_or("no such process")?;
-            (p.slash.clone(), p.dot.clone(), p.ns.clone())
-        };
+        let (slash, dot, ns) = self.names(up)?;
         let ns = ns.borrow();
         namec::create(&mut self.tab, &ns, &slash, &dot, path, mode, perm)
+    }
+
+    /// A call's error with channels of its own to close first — its
+    /// *"if(waserror()){ cclose(c); nexterror(); }"* — unless the call has
+    /// left the processor: it runs again from the top, and its record makes
+    /// the same channels again.
+    fn unwind(&mut self, up: Pid, e: String, refs: Vec<std::rc::Rc<Chan>>) -> Result<Ret, String> {
+        if e == devmnt::SLEPT {
+            return Err(e);
+        }
+        self.closethen(up, chan::lastrefs(refs), Box::new(move |_, _| Err(e)))
+    }
+
+    /// The end of `bindmount` (`sysfile.c:1054`), once `cmount` has
+    /// answered: *"cclose(c1); … cclose(c0)"*, after what an `MREPL`
+    /// replaced, then for a mount *"fdclose(fd, 0)"* — the mount holds the
+    /// server's channel now, not the descriptor. The mount's id, or
+    /// `cmount`'s error.
+    fn mounted(
+        &mut self,
+        up: Pid,
+        r: Result<(u32, Vec<std::rc::Rc<Chan>>), String>,
+        c1: std::rc::Rc<Chan>,
+        c0: std::rc::Rc<Chan>,
+        fd: Option<Fd>,
+    ) -> Result<Ret, String> {
+        let (r, mut refs) = match r {
+            Ok((id, gone)) => (Ok(Ret::N(id as usize)), gone),
+            Err(e) => (Err(e), Vec::new()),
+        };
+        refs.push(c1);
+        refs.push(c0);
+        let mut last = chan::lastrefs(refs);
+        if let (Ok(_), Some(fd)) = (&r, fd) {
+            last.extend(self.fgrp(up)?.borrow_mut().close(fd).flatten());
+        }
+        self.closethen(up, last, Box::new(move |_, _| r))
     }
 
     /// `newfd(c)` (`sysfile.c:74`): the reference goes into the lowest free
     /// slot — and with none, *"if(fd < 0) error(Enofd)"*, the caller's
     /// `waserror` closing it (`sysopen`, `sysfile.c:1135`).
     fn newfd(&mut self, up: Pid, c: std::rc::Rc<std::cell::RefCell<Chan>>) -> Result<Fd, String> {
-        let fds = {
-            let procs = self.procs.borrow();
-            procs.get(up).ok_or("no such process")?.fds.clone()
-        };
+        let fds = self.fgrp(up)?;
         let r = fds.borrow_mut().newfd(c);
         match r {
             Ok(fd) => Ok(fd),
@@ -3051,19 +3151,36 @@ impl Kernel {
     /// is why a union read does not disturb the channel it was reached
     /// through.
     fn unionread(&mut self, c: &mut Chan, n: usize) -> Result<Vec<u8>, String> {
-        while (c.uri as usize) < c.umh.len() {
+        let Some(m) = c.umh.clone() else { return Ok(Vec::new()) };
+        // *"bring mount in sync with c->uri and c->umc"* (`sysfile.c:334`):
+        // the head's list as it is now, not as it was at the open.
+        while let Some(to) = m.borrow().mount.get(c.uri as usize).map(|e| e.chan.clone()) {
+            // *"Error causes component of union to be skipped"*
+            // (`sysfile.c:340`) — unless the error is the process leaving
+            // the processor, when the read is made again.
             if c.umc.is_none() {
-                let alt = c.umh[c.uri as usize].chan.clone();
-                let cl = self.tab.dcclone(&alt)?;
+                let cl = match self.tab.dcclone(&to) {
+                    Ok(cl) => cl,
+                    Err(e) if e == devmnt::SLEPT => return Err(e),
+                    Err(_) => {
+                        c.uri += 1;
+                        continue;
+                    }
+                };
                 // A union's elements are directories (`bind` refuses a file
                 // on a directory, `Emount`), and only `#d`'s and `#s`'s
                 // files open as a channel that already exists — so this one
                 // is the element's own.
+                //
+                // An open that fails leaves the clone to be closed, as
+                // *"if(c->umc){ cclose(c->umc); …"* (`:356`) closes it.
+                let keep = cl.clone();
                 match self.tab.dopen(cl, chan::mode::OREAD).map(std::rc::Rc::try_unwrap) {
                     Ok(Ok(o)) => c.umc = Some(Box::new(o.into_inner())),
-                    // *"Error causes component of union to be skipped"*
-                    // (`sysfile.c:340`).
+                    Err(e) if e == devmnt::SLEPT => return Err(e),
                     Ok(Err(_)) | Err(_) => {
+                        let mut keep = keep;
+                        self.tab.dclose(&mut keep);
                         c.uri += 1;
                         continue;
                     }
@@ -3077,6 +3194,11 @@ impl Kernel {
                     c.umc = Some(umc);
                     return Ok(d);
                 }
+                Err(e) if e == devmnt::SLEPT => {
+                    c.umc = Some(umc);
+                    return Err(e);
+                }
+                // *"Advance to next element"* (`:354`), closing this one
                 _ => {
                     self.tab.dclose(&mut umc);
                     c.uri += 1;
@@ -3089,7 +3211,7 @@ impl Kernel {
     fn chancell(&mut self, up: Pid, fd: Fd) -> Result<std::rc::Rc<std::cell::RefCell<Chan>>, String> {
         let procs = self.procs.borrow();
         let p = procs.get(up).ok_or("no such process")?;
-        let fds = p.fds.clone();
+        let fds = p.fds.clone().ok_or(EBADFD)?;
         let cell = fds.borrow().get(fd).cloned().ok_or(EBADFD)?;
         Ok(cell)
     }
@@ -3119,6 +3241,25 @@ const ENODEV: &str = "no such device";
 /// `Enofd` (`error.h:32`).
 const ENOFD: &str = "no free file descriptors";
 
+/// *"if(c->ismtpt){ dirname(d, &namelen); if(namelen)
+/// nameerror(chanpath(c), Eismtpt); }"* (`sysfile.c:1181`).
+fn renamesmtpt(c: &Chan, edir: &[u8]) -> Result<(), String> {
+    if c.ismtpt && ninep::Dir::conv_m2d(edir).is_some_and(|d| !d.name.is_empty()) {
+        return Err(namec::nameerror(&c.path, namec::EISMTPT));
+    }
+    Ok(())
+}
+
+/// *"if((flag&~MMASK) || (flag&MORDER)==(MBEFORE|MAFTER))
+/// error(Ebadarg)"* (`sysfile.c:1000`).
+fn bindflag(flag: i32) -> Result<(), String> {
+    let morder = ns::mflag::MBEFORE | ns::mflag::MAFTER;
+    if flag & !ns::mflag::MMASK != 0 || flag & morder == morder {
+        return Err(proc::Procs::EBADARG.into());
+    }
+    Ok(())
+}
+
 /// `MREPL`, `MBEFORE`, `MAFTER` (`<libc.h>:556`) — the low two bits.
 fn bind_of(flag: i32) -> ns::Bind {
     match flag & 3 {
@@ -3134,14 +3275,6 @@ const ENOCHILD: &str = "no living children";
 /// `TK2MS(1)` — the shortest sleep there is.
 const TK2MS1: u64 = proc::tk2ms(1);
 
-
-/// The element as `bind`/`mount` made it. **The flag WORD is kept**
-/// (`Mount.mflag`, `portdat.h:303`), not just its `MCREATE` bit, because
-/// `#p/<n>/ns` prints it back with `int2flag`. `spec` is `mount`'s aname and
-/// empty for a bind.
-fn element_of(chan: Chan, flag: i32, spec: &str) -> ns::Element {
-    ns::Element::with(chan, flag, spec)
-}
 
 #[cfg(test)]
 mod syscalls {
@@ -4032,8 +4165,15 @@ mod syscalls {
     /// One flat file, served in 9P2000.
     fn serve9p(req: &[u8]) -> Vec<u8> {
         use ninep::{unframe, Qid, R, T, W, QTDIR};
+        thread_local! {
+            /// What each fid is, as a server keeps it: the root after an
+            /// attach, what a whole walk reached, gone at a clunk.
+            static FIDS: std::cell::RefCell<std::collections::HashMap<u32, Qid>> = Default::default();
+        }
+        let root = Qid { qtype: QTDIR, vers: 0, path: 0 };
         let m = unframe(req).expect("malformed");
         let mut r = R::new(m.body);
+        let error = |e: &str| W::new().s(e).frame(T::Error.reply(), m.tag);
         match m.ty {
             x if x == T::Version as u8 => {
                 let msize = r.u32().unwrap();
@@ -4041,17 +4181,34 @@ mod syscalls {
                 W::new().u32(msize.min(8192)).s("9P2000").frame(T::Version.reply(), m.tag)
             }
             x if x == T::Attach as u8 => {
-                let q = Qid { qtype: QTDIR, vers: 0, path: 0 };
-                W::new().raw(&q.write(W::new()).into_body()).frame(T::Attach.reply(), m.tag)
+                let fid = r.u32().unwrap();
+                FIDS.with(|f| f.borrow_mut().insert(fid, root));
+                W::new().raw(&root.write(W::new()).into_body()).frame(T::Attach.reply(), m.tag)
             }
+            // walk(5): *"If the first element cannot be walked for any
+            // reason, Rerror is returned"*, and *newfid* is made only when
+            // every name was walked
             x if x == T::Walk as u8 => {
-                let (_from, _newfid) = (r.u32().unwrap(), r.u32().unwrap());
+                let (from, newfid) = (r.u32().unwrap(), r.u32().unwrap());
+                let Some(mut at) = FIDS.with(|f| f.borrow().get(&from).copied()) else {
+                    return error("unknown fid");
+                };
                 let n = r.u16().unwrap();
                 let mut qids = Vec::new();
                 for _ in 0..n {
-                    if r.s().unwrap() == "answer" {
-                        qids.push(Qid { qtype: 0, vers: 0, path: 1 });
-                    }
+                    let q = match (at.path, r.s().unwrap()) {
+                        (0, "answer") => Qid { qtype: 0, vers: 0, path: 1 },
+                        (0, "sub") => Qid { qtype: QTDIR, vers: 0, path: 2 },
+                        _ => break,
+                    };
+                    qids.push(q);
+                    at = q;
+                }
+                if n > 0 && qids.is_empty() {
+                    return error("file does not exist");
+                }
+                if qids.len() == n as usize {
+                    FIDS.with(|f| f.borrow_mut().insert(newfid, at));
                 }
                 let mut w = W::new().u16(qids.len() as u16);
                 for q in &qids {
@@ -4060,19 +4217,44 @@ mod syscalls {
                 w.frame(T::Walk.reply(), m.tag)
             }
             x if x == T::Open as u8 => {
-                let q = Qid { qtype: 0, vers: 0, path: 1 };
+                let fid = r.u32().unwrap();
+                let Some(q) = FIDS.with(|f| f.borrow().get(&fid).copied()) else {
+                    return error("unknown fid");
+                };
                 W::new().raw(&q.write(W::new()).into_body()).u32(0).frame(T::Open.reply(), m.tag)
             }
             x if x == T::Read as u8 => {
-                let (_fid, off, count) = (r.u32().unwrap(), r.u64().unwrap(), r.u32().unwrap());
-                let data = b"served over 9P";
+                let (fid, off, count) = (r.u32().unwrap(), r.u64().unwrap(), r.u32().unwrap());
+                let Some(q) = FIDS.with(|f| f.borrow().get(&fid).copied()) else {
+                    return error("unknown fid");
+                };
+                // the root reads as its one file's entry
+                let entry = ninep::Dir {
+                    qid: Qid { qtype: 0, vers: 0, path: 1 },
+                    mode: 0o444,
+                    length: 14,
+                    name: "answer".into(),
+                    ..Default::default()
+                }
+                .conv_d2m();
+                let data: &[u8] = match q.path {
+                    0 => &entry,
+                    2 => &[],
+                    _ => b"served over 9P",
+                };
                 let off = off as usize;
                 let end = (off + count as usize).min(data.len());
                 let slice = if off >= data.len() { &[][..] } else { &data[off..end] };
                 W::new().u32(slice.len() as u32).raw(slice).frame(T::Read.reply(), m.tag)
             }
-            x if x == T::Clunk as u8 => W::new().frame(T::Clunk.reply(), m.tag),
-            _ => W::new().s("not implemented").frame(T::Error.reply(), m.tag),
+            x if x == T::Clunk as u8 => {
+                let fid = r.u32().unwrap();
+                if FIDS.with(|f| f.borrow_mut().remove(&fid)).is_none() {
+                    return error("unknown fid");
+                }
+                W::new().frame(T::Clunk.reply(), m.tag)
+            }
+            _ => error("not implemented"),
         }
     }
 
@@ -4277,8 +4459,9 @@ mod syscalls {
                     flag: 0
                 }
             )
-            .unwrap(),
-            Ret::Ok
+            .map(|r| matches!(r, Ret::N(id) if id > 0)),
+            Ok(true),
+            "the mount's id, as `bind(2)` answers it"
         );
         // and the name now answers with what was bound over it
         let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/boot/init".into(), mode: 0 }).unwrap()
@@ -4644,13 +4827,6 @@ mod syscalls {
         req
     }
 
-    /// How much the client has sent that the server has not read —
-    /// `pipestat`'s length (`devpipe.c:154`).
-    fn queued(k: &mut Kernel, server: Pid, fd: Fd) -> u64 {
-        let Ok(Ret::Data(d)) = k.syscall(server, Call::Fstat { fd }) else { panic!("fstat") };
-        ninep::Dir::conv_m2d(&d).unwrap().length
-    }
-
     /// A call of `pid`'s through a mount whose server is `server`, run until
     /// it finishes: each time the client leaves the processor, the server
     /// answers what it sent.
@@ -4784,19 +4960,194 @@ mod syscalls {
         // `/` is the mount before the root, so the walk asks the server too;
         // the last thing the call waits for is the clunk.
         let exec = Call::Exec { path: "/boot/init".into(), args: vec!["init".into()] };
-        let mut r = k.syscall(1, exec);
-        let mut last = 0;
-        for _ in 0..64 {
-            if r != Ok(Ret::Sched) {
-                break;
-            }
-            if queued(&mut k, server, end) > 0 {
-                last = answer(&mut k, server, end)[4];
-            }
-            r = k.resume(1);
-        }
+        let (r, ts) = served_t(&mut k, 1, server, end, exec);
         assert_eq!(r, Ok(Ret::Ok));
-        assert_eq!(last, ninep::T::Clunk as u8, "the call ended once the server let the file go");
+        assert_eq!(ts.last(), Some(&(ninep::T::Clunk as u8)), "the call ended once the server let the file go");
         assert_eq!(k.syscall(1, Call::Pread { fd: cx, n: 1, off: 0 }), Err(EBADFD.into()), "closed on exec");
+    }
+
+    /// [`served`], and the type of every request the server answered.
+    fn served_t(k: &mut Kernel, pid: Pid, server: Pid, fd: Fd, call: Call) -> (Result<Ret, String>, Vec<u8>) {
+        let mut r = k.syscall(pid, call);
+        let mut ts = Vec::new();
+        while r == Ok(Ret::Sched) {
+            ts.push(answer(k, server, fd)[4]);
+            r = k.resume(pid);
+        }
+        (r, ts)
+    }
+
+    fn clunks(ts: &[u8]) -> usize {
+        ts.iter().filter(|&&t| t == ninep::T::Clunk as u8).count()
+    }
+
+    /// **`pexit` closes `dot` and the namespace** (*"cclose(dot)"*,
+    /// `closepgrp`, `proc.c:1166`): a file bound into a namespace of the
+    /// process's own is the namespace's to close, and the server is told
+    /// before the parent hears.
+    #[test]
+    fn exits_closes_the_namespace_it_held_last() {
+        let mut k = booted();
+        let (server, end, fd) = mounted(&mut k);
+        assert_eq!(served_t(&mut k, 1, server, end, Call::Close { fd }).0, Ok(Ret::Ok));
+        let flags = rf::PROC | rf::NAMEG | rf::FDG;
+        let Ret::Pid(child) = k.syscall(1, Call::Rfork { flags }).unwrap() else { panic!() };
+        let bind = Call::Bind { name: "/answer".into(), old: "/boot/init".into(), flag: 0 };
+        let (r, _) = served_t(&mut k, child, server, end, bind);
+        assert!(matches!(r, Ok(Ret::N(_))), "{r:?}");
+        let (r, ts) = served_t(&mut k, child, server, end, Call::Exits { status: String::new() });
+        assert_eq!(r, Ok(Ret::Ok));
+        assert_eq!(clunks(&ts), 1, "the bound file, which only the child's namespace held");
+        let Ok(Ret::Str(w)) = k.syscall(1, Call::Await) else { panic!("no wait record") };
+        assert!(w.starts_with(&format!("{child} ")), "{w}");
+    }
+
+    /// `syschdir`'s *"cclose(up->dot)"* (`sysfile.c:983`): the directory
+    /// left is closed if this was its last reference.
+    #[test]
+    fn chdir_closes_the_directory_it_leaves() {
+        let mut k = booted();
+        let (server, end, _fd) = mounted(&mut k);
+        let (r, ts) = served_t(&mut k, 1, server, end, Call::Chdir { path: "/sub".into() });
+        assert_eq!((r, clunks(&ts)), (Ok(Ret::Ok), 0));
+        let (r, ts) = served_t(&mut k, 1, server, end, Call::Chdir { path: "/".into() });
+        assert_eq!((r, clunks(&ts)), (Ok(Ret::Ok), 1), "the server's directory let go");
+    }
+
+    /// `cmount`'s *"mountfree(m->mount)"* (`chan.c:739`): an `MREPL` bind
+    /// closes what it replaces.
+    #[test]
+    fn a_bind_that_replaces_closes_what_was_there() {
+        let mut k = booted();
+        let (server, end, _fd) = mounted(&mut k);
+        let bind = |name: &str| Call::Bind { name: name.into(), old: "/boot/init".into(), flag: 0 };
+        let (r, ts) = served_t(&mut k, 1, server, end, bind("/answer"));
+        assert!(matches!(r, Ok(Ret::N(_))));
+        let before = clunks(&ts);
+        let (r, ts) = served_t(&mut k, 1, server, end, bind("/boot/hello"));
+        assert!(matches!(r, Ok(Ret::N(_))));
+        assert_eq!(clunks(&ts), before + 1, "the file the first bind put there");
+    }
+
+    /// `cunmount` (`chan.c:764`): with nothing mounted it is `Eunmount`,
+    /// with no such element `Eunion`, and without a name the whole mount
+    /// point goes — its channels closed, the server's root among them.
+    #[test]
+    fn unmount_refuses_what_is_not_mounted_and_closes_what_it_takes() {
+        let mut k = booted();
+        let (server, end, fd) = mounted(&mut k);
+        let (r, _) = served_t(&mut k, 1, server, end, Call::Unmount { name: None, old: "/boot".into() });
+        assert_eq!(r, Err("not mounted".into()));
+        let un = Call::Unmount { name: Some("/boot/hello".into()), old: "/".into() };
+        let (r, _) = served_t(&mut k, 1, server, end, un);
+        assert_eq!(r, Err("not in union".into()));
+        let (r, _) = served_t(&mut k, 1, server, end, Call::Close { fd });
+        assert_eq!(r, Ok(Ret::Ok));
+        let (r, ts) = served_t(&mut k, 1, server, end, Call::Unmount { name: None, old: "/".into() });
+        assert_eq!((r, clunks(&ts)), (Ok(Ret::Ok), 1), "the mount's root");
+        assert!(k.syscall(1, Call::Open { path: "/answer".into(), mode: 0 }).is_err());
+    }
+
+    /// `rfork` without `RFPROC` closes the tables it replaces
+    /// (`closefgrp(ofg)`, `closepgrp(opg)`, `sysproc.c:61`, `:70`) — what
+    /// they held last, and nothing another process still shares.
+    #[test]
+    fn rfork_without_a_child_closes_the_tables_it_replaces() {
+        let mut k = booted();
+        let (server, end, _fd) = mounted(&mut k);
+        // the server shares pid 1's tables: copies of its own first, then a
+        // file open only in the copy, and one bound only into it
+        let (r, _) = served_t(&mut k, 1, server, end, Call::Rfork { flags: rf::FDG | rf::NAMEG });
+        assert_eq!(r, Ok(Ret::Pid(0)));
+        let (r, _) = served_t(&mut k, 1, server, end, Call::Open { path: "/answer".into(), mode: 0 });
+        assert!(matches!(r, Ok(Ret::Fd(_))), "{r:?}");
+        let bind = Call::Bind { name: "/answer".into(), old: "/boot/init".into(), flag: 0 };
+        let (r, _) = served_t(&mut k, 1, server, end, bind);
+        assert!(matches!(r, Ok(Ret::N(_))), "{r:?}");
+        let (r, ts) = served_t(&mut k, 1, server, end, Call::Rfork { flags: rf::CFDG });
+        assert_eq!((r, clunks(&ts)), (Ok(Ret::Pid(0)), 1), "the file open only in the table replaced");
+        let (r, ts) = served_t(&mut k, 1, server, end, Call::Rfork { flags: rf::CNAMEG });
+        assert_eq!((r, clunks(&ts)), (Ok(Ret::Pid(0)), 1), "the file bound only into the namespace replaced");
+    }
+
+    /// `chanfree`'s *"cclose(c->umc)"* (`chan.c:467`): a union directory
+    /// closed in the middle of a read closes the element it had open.
+    #[test]
+    fn closing_a_union_mid_read_closes_the_element_it_had_open() {
+        let mut k = booted();
+        let (server, end, _fd) = mounted(&mut k);
+        let (r, _) = served_t(&mut k, 1, server, end, Call::Open { path: "/".into(), mode: 0 });
+        let Ok(Ret::Fd(dir)) = r else { panic!("{r:?}") };
+        let (r, _) = served_t(&mut k, 1, server, end, Call::Pread { fd: dir, n: 512, off: -1 });
+        assert!(matches!(r, Ok(Ret::Data(ref d)) if !d.is_empty()), "{r:?}");
+        let (r, ts) = served_t(&mut k, 1, server, end, Call::Close { fd: dir });
+        assert_eq!((r, clunks(&ts)), (Ok(Ret::Ok), 2), "the directory, and the element read");
+    }
+
+    /// `bindmount`'s first check (`sysfile.c:1000`): a flag outside `MMASK`,
+    /// or both `MBEFORE` and `MAFTER`, is `Ebadarg`. And `bind` answers the
+    /// mount's id, as `mount` does (`:1054`).
+    #[test]
+    fn bind_checks_its_flag_and_answers_the_mounts_id() {
+        let mut k = booted();
+        for flag in [3, 0x100] {
+            let r = k.syscall(1, Call::Bind { name: "/boot/hello".into(), old: "/boot/init".into(), flag });
+            assert_eq!(r, Err(proc::Procs::EBADARG.into()), "{flag:#x}");
+        }
+        let id = |r| match r {
+            Ok(Ret::N(id)) => id,
+            r => panic!("{r:?}"),
+        };
+        let a = id(k.syscall(1, Call::Bind { name: "/boot/hello".into(), old: "/boot/init".into(), flag: 0 }));
+        let b = id(k.syscall(1, Call::Bind { name: "/boot/hello".into(), old: "/boot/init".into(), flag: 0 }));
+        assert!(b > a, "{a} then {b}");
+    }
+
+    /// *"if(up->pgrp->noattach) error(Enoattach)"* (`sysfile.c:1011`):
+    /// `RFNOMNT`'s sandbox refuses `mount`, before any descriptor is looked
+    /// at.
+    #[test]
+    fn a_namespace_without_attach_refuses_mount() {
+        let mut k = booted();
+        k.syscall(1, Call::Rfork { flags: rf::NOMNT }).unwrap();
+        let r = k.syscall(1, Call::Mount { fd: 99, afd: -1, old: "/".into(), flag: 0, aname: String::new() });
+        assert_eq!(r, Err(namec::ENOATTACH.into()));
+    }
+
+    /// `namec`'s *"aname = validnamedup(aname, 1)"* (`chan.c:1330`): a
+    /// control character is `Ebadchar`, with the name quoted.
+    #[test]
+    fn a_name_with_a_control_character_is_refused() {
+        let mut k = booted();
+        let r = k.syscall(1, Call::Open { path: "/boot/i\u{1}nit".into(), mode: 0 });
+        assert_eq!(r, Err("bad character in file name: '/boot/i\u{1}nit'".into()));
+    }
+
+    /// **Kernel processes share one namespace group** (`kpgrp`,
+    /// `proc.c:1469`) and have no descriptor table.
+    #[test]
+    fn kernel_processes_share_a_namespace_group() {
+        let mut k = booted();
+        let a = k.kproc("one", alarmkproc);
+        let b = k.kproc("two", alarmkproc);
+        let procs = k.procs.borrow();
+        assert_eq!(procs.pgrpid(a), procs.pgrpid(b));
+        assert_ne!(procs.pgrpid(a), procs.pgrpid(1));
+        assert!(procs.get(a).unwrap().fds.is_none());
+    }
+
+    /// `sysremove` and `wstat` (`sysfile.c:1151`, `:1181`): a mount point
+    /// is not removed, nor renamed — *"which should be removed: the mount
+    /// point or the mounted Chan?"* — and a rename says which name.
+    #[test]
+    fn a_mount_point_is_neither_removed_nor_renamed() {
+        let mut k = booted();
+        k.syscall(1, Call::Bind { name: "/boot/hello".into(), old: "/boot/init".into(), flag: 0 }).unwrap();
+        assert_eq!(k.syscall(1, Call::Remove { path: "/boot/init".into() }), Err(namec::EISMTPT.into()));
+        let rename = ninep::Dir { name: "other".into(), mode: !0, ..Default::default() }.conv_d2m();
+        assert_eq!(
+            k.syscall(1, Call::Wstat { path: "/boot/init".into(), edir: rename }),
+            Err("'/boot/init' is a mount point".into())
+        );
     }
 }

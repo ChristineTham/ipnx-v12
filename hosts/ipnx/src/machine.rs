@@ -1656,7 +1656,12 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
         c.data_mut().s = [n.word(), o.word(), flag.word(), 0, 0];
         let r = async {
         let (name, old) = (cstr(&mut c, n).unwrap_or_default(), cstr(&mut c, o).unwrap_or_default());
-        or_fail(kcall(&mut c, Call::Bind { name, old, flag }).await, |_| 0)
+        // *"ret = cmount(&c0, c1, flag, spec)"* … *"return ret"*
+        // (`sysfile.c:1054`): the mount's id, as `mount` answers
+        or_fail(kcall(&mut c, Call::Bind { name, old, flag }).await, |v| match v {
+            Ret::N(id) => id as i32,
+            _ => 0,
+        })
     }
         .await;
         deliver(&mut c).await?;

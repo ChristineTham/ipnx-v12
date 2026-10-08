@@ -5517,3 +5517,113 @@ that. `mount`'s target is `Amount` (`sysfile.c:1048`), as `bind`'s is.
 - **`remove` of a mount point** is *"Eismtpt"* (`sysfile.c:1151`); here it is
   not refused.
 - **The uart's last close does not drain** (§16.20).
+
+### 16.25 The namespace by reference, and what `pexit` closes (2026-10-08)
+
+**The 10 fids were the namespace and `dot`.** `pexit` closes `dot` and
+`closepgrp`s the namespace (`proc.c:1166`, `:1168`) after the descriptors,
+and it can because every channel a namespace holds is a reference:
+`newmhead`'s *"incref(from)"* (`chan.c:641`), `newmount`'s *"incref(to)"*
+(`pgrp.c:273`), and a child's *"incref(p->dot)"* (`sysproc.c:101`). Here
+they were copies — a copied namespace held copies of the channels — so
+closing one would have clunked a fid another process still walked from.
+Now the mount heads are Plan 9's: `MNTHASH` chains (`portdat.h:474`,
+`:490`), each head held by reference, each channel in it a reference that a
+copy shares; `dot` is one too, and `slash` is the one `#/` channel `init0`
+made (`pc/main.c:242`), shared and never closed, as `sysrfork` shares it
+without an `incref` (`sysproc.c:99`). `pexit` takes the three tables at its
+start — *"nil out all the resources under lock (free later)"*
+(`proc.c:1145`) — closes what each held last, and leaves them nil, so
+`#p/<n>/ns` of a process that has exited is `Eprocdied` (`devproc.c:958`),
+its `fd` is empty (`:581`), and its `notepg` will not open (`:448`). The
+same session as §16.24's now ends with **no fid held**, and the test
+holds it to that.
+
+**What else closed nothing, and now does:**
+
+| | Plan 9 | was here |
+|---|---|---|
+| `chdir` | *"cclose(up->dot); up->dot = c"* (`sysfile.c:983`) | the old `dot` dropped |
+| an `MREPL` bind or mount | *"mountfree(m->mount)"* in `cmount` (`chan.c:739`) | the list replaced, dropped |
+| `unmount` | `mountfree`, and *"cclose(m->from)"* when the head goes (`chan.c:801`, `:817`); then *"cclose(cmount); … cclose(cmounted)"* (`sysfile.c:1114`) | dropped |
+| `rfork` without `RFPROC` | `closefgrp(ofg)`, `closepgrp(opg)` (`sysproc.c:61`, `:70`) | the old tables dropped |
+| a union directory closed mid-read | `chanfree`'s *"cclose(c->umc)"* (`chan.c:467`) | the element open for the read dropped |
+| a union element whose open fails | `cclose(c->umc)` of the clone (`sysfile.c:356`) | dropped |
+
+**A union directory holds the head, not a copy of it.** `Chan.umh` is a
+counted `Mhead*` (`putmhead`, `chan.c:1789`), and `unionread` reads
+`m->mount` as it is when it reads (`sysfile.c:333`). Here a channel held a
+snapshot of the list, and with references in it that snapshot would have
+held the last reference to a channel the namespace had let go — which nobody
+would then close. Now it holds the head, which the namespace empties when it
+lets the channels go.
+
+**What `cmount`, `cunmount` and `bindmount` refuse — none of it was here:**
+
+- `Emount`, *"inconsistent mount"* (`error.h:2`): a directory over a file or
+  a file over a directory (`chan.c:654`), a union onto a file (`:662`), and a
+  `-c` bind of a union or of a mount not itself creatable (`:686`).
+- `Eunmount` and `Eunion` (`chan.c:792`, `:812`): `unmount` of what is not
+  mounted answered success. And the name mounted is resolved by opening it —
+  *"if arg[0] is something like /srv/cs or /fd/0, opening it is the only way
+  to get at the real Chan underneath"* (`sysfile.c:1104`) — and matched
+  against each element or the wire its mount is on (`chan.c:812`).
+- `Ebadarg` for a flag outside `MMASK`, or both `MBEFORE` and `MAFTER`
+  (`sysfile.c:1000`), checked before any address.
+- **`Enoattach` for `mount` in an `RFNOMNT` namespace** (`sysfile.c:1011`):
+  `#` names were refused, but `mount` itself was not, so the sandbox let a
+  process mount a server it held a descriptor to.
+- `Ebadchar` for a name with a control character (`namec`'s
+  `validnamedup`, `chan.c:1330`; `isfrog`, `:1678`), and a mount's spec
+  (`sysfile.c:1005`).
+- `Eismtpt` for `remove` of a mount point, and for a `wstat` that renames
+  one (`sysfile.c:1151`, `:1181`), by Plan 9's `Chan.ismtpt` (`chan.c:1486`).
+
+And `bind` answers the mount's id, as `mount` does (`sysfile.c:1054`); it
+answered 0. Its two names are resolved source first, as `bindmount` does
+(`:1039`, `:1048`), not target first.
+
+**A walk the server refuses clunked a fid the server never had.** walk(5):
+*"If the full sequence of nwname elements is walked successfully, newfid
+will represent the file that results. If not, newfid (and fid) will be
+unaffected"*; and `mntwalk` marks its new channel `type = 0` until the
+reply — *"Until the other side accepts this fid, we can't mntclose it"*
+(`devmnt.c:410`) — so a short walk's `cclose(nc)` (`:434`) sends nothing.
+The driver here sent `Tclunk`, and ignored that the clunk had left the
+processor, so the walk ran on while the process slept, and the next RPC
+found the wire's read lock held: the `Queueing` the `exec` test had been
+written around (§16.24). Two test servers in the kernel's suite broke walk(5)
+the same way — answering a missing first name with an empty `Rwalk`, and
+making `newfid` for a partial one — and the driver's test asserted the clunk;
+they are walk(5)'s now.
+
+**Smaller differences, found doing this:**
+
+- `pgrpcpy` numbers the copy's mounts twice — `newmount`'s *"incref(&mountid)"*
+  for each, then again *"in the same sequence as the parent group"*
+  (`pgrp.c:156`); a copy here kept the parent's ids.
+- The kernel processes share one namespace group, `kpgrp` (`proc.c:1438`,
+  `:1469`), and have no descriptor table (`newproc`'s *"p->fgrp = 0"*,
+  `proc.c:691`); here each had an empty one of its own.
+- `rfork` without `RFPROC` draws a note group id only for `RFNOTEG`
+  (`sysproc.c:88`); here every such call drew one.
+- A name in an error is `namelenerror`'s: *"%#q %s"*, a long one cut to a
+  suffix after `...` (`chan.c:1250`).
+
+**What remains:**
+
+- **A mount's wire is never let go** (`Devtab::wires`). Plan 9 closes it
+  when the last channel through the mount is freed (`chanfree`'s
+  *"cclose(c->mchan)"*, `chan.c:475`), and its `muxclose` then; the server
+  reads end of file. Here every `#M` channel carries a copy of the wire,
+  not a reference to it, which is the same change as this section's, one
+  level down.
+- **An interrupted RPC is dropped, not flushed** (§16.24).
+- **A walk sends one name per `Twalk`** (§16.24).
+- **The uart's last close does not drain** (§16.20).
+- **A kernel process has an environment and a rendezvous group** where
+  Plan 9's has neither (`proc.c:690`, `:692`); nothing reaches them.
+- `bind` checks its second name's address with its first's, before either
+  is resolved; `bindmount` resolves the first before it checks the second
+  (`sysfile.c:1038`–`:1048`), so the two orders differ only in which error a
+  call with two bad names reports.

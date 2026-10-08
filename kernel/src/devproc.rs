@@ -400,7 +400,9 @@ impl Dev for ProcDev {
                 self.nonone(pid)?;
                 let procs = self.up.borrow().procs.clone();
                 let procs = procs.borrow();
-                if mode != crate::chan::mode::OWRITE || procs.pgrpid(pid) == Some(1) {
+                // *"pg = p->pgrp; if(pg == nil) error(Eprocdied)"*
+                let pg = procs.pgrpid(pid).ok_or(EPROCDIED)?;
+                if mode != crate::chan::mode::OWRITE || pg == 1 {
                     return Err(EPERM.into());
                 }
                 c.aux = procs.get(pid).map_or(0, |p| p.noteid) as u64;
@@ -571,9 +573,15 @@ impl Dev for ProcDev {
                 // *"%3d %.2s %C %4ld (%.16llux %*lud %.2ux) %5ld %8lld %s"*
                 // — the mode, the device, the qid (its version as wide as
                 // the widest, `procqidwidth`), the iounit and the offset.
+                //
+                // *"f = p->fgrp; if(f == nil){ qunlock(&p->debug); return
+                // 0; }"* (`devproc.c:581`): a process that has exited, or a
+                // kernel process, has no descriptors and no `fd`.
                 Q::Fd => {
-                    let mut s = format!("{}\n", proc.dot.path);
-                    let fds = proc.fds.borrow();
+                    let Some(fds) = &proc.fds else { return Ok(Vec::new()) };
+                    let dot = proc.dot.as_ref().map(|d| d.path.as_str()).unwrap_or_default();
+                    let mut s = format!("{dot}\n");
+                    let fds = fds.borrow();
                     let chans: Vec<(i32, crate::chan::Chan)> =
                         (0..fds.slots()).filter_map(|fd| fds.get(fd).map(|c| (fd, c.borrow().clone()))).collect();
                     let w = chans.iter().map(|(_, c)| procqidwidth(c)).max().unwrap_or(0);
@@ -602,9 +610,13 @@ impl Dev for ProcDev {
                 // reader going forward advances by exactly the line it was
                 // given — `ns` reads so (`cmd/ns.c:70`), and tokenizes each
                 // read as one line.
+                //
+                // *"if(p->pgrp == nil || p->pid != PID(c->qid))
+                // error(Eprocdied)"* (`devproc.c:958`).
                 Q::Ns => {
+                    let Some(ns) = &proc.ns else { return Err(EPROCDIED.into()) };
                     let mut lines: Vec<(u32, String)> = Vec::new();
-                    for h in proc.ns.borrow().heads() {
+                    for h in ns.borrow().heads() {
                         let Some(from) = &h.from else { continue };
                         for e in &h.mount {
                             let flag = int2flag(e.mflag);
@@ -622,7 +634,8 @@ impl Dev for ProcDev {
                         }
                     }
                     lines.sort_by_key(|(id, _)| *id);
-                    lines.push((0, format!("cd {}\n", proc.dot.path)));
+                    let dot = proc.dot.as_ref().map(|d| d.path.as_str()).unwrap_or_default();
+                    lines.push((0, format!("cd {dot}\n")));
                     let mut at = 0u64;
                     for (_, l) in lines {
                         let end = at + l.len() as u64;
@@ -731,13 +744,15 @@ impl Dev for ProcDev {
                 let fd: Fd = crate::dev::atoi(&cb[1]);
                 let mut p = procs.borrow_mut();
                 let proc = p.get(pid).ok_or(EPROCDIED)?;
-                let last = proc.fds.borrow_mut().close(fd).flatten();
+                // *"f = p->fgrp; if(f == nil) error(Eprocdied)"*
+                // (`devproc.c:1272`)
+                let last = proc.fds.as_ref().ok_or(EPROCDIED)?.borrow_mut().close(fd).flatten();
                 p.clunkq.extend(last);
             }
             (Q::Ctl, Some(Cm::Closefiles)) => {
                 let mut p = procs.borrow_mut();
                 let proc = p.get(pid).ok_or(EPROCDIED)?;
-                let fds = proc.fds.clone();
+                let fds = proc.fds.clone().ok_or(EPROCDIED)?;
                 let mut fds = fds.borrow_mut();
                 for fd in 0..fds.slots() {
                     if let Some(Some(c)) = fds.close(fd) {
@@ -1097,6 +1112,8 @@ mod tests {
             .get(1)
             .unwrap()
             .ns
+            .as_ref()
+            .unwrap()
             .borrow_mut()
             .mount(&on, crate::ns::Element::new(to), crate::ns::Bind::Replace);
         // read as `ns` reads (`cmd/ns.c:70`): until a read answers nothing,
@@ -1147,7 +1164,7 @@ mod tests {
         wire.qid = Qid { qtype: 0, vers: 0, path: 3 };
         to.mchan = Some(Box::new(wire.clone()));
 
-        procs.borrow().get(1).unwrap().ns.borrow_mut().mount(
+        procs.borrow().get(1).unwrap().ns.as_ref().unwrap().borrow_mut().mount(
             &on,
             crate::ns::Element::with(to, MREPL | MCREATE, "main"),
             crate::ns::Bind::Replace,
@@ -1171,7 +1188,7 @@ mod tests {
     #[test]
     fn fd_lists_the_open_descriptors() {
         let (mut d, procs) = proc();
-        procs.borrow().get(1).unwrap().fds.borrow_mut().add(Chan::attach(DevId::Pipe, 2));
+        procs.borrow().get(1).unwrap().fds.as_ref().unwrap().borrow_mut().add(Chan::attach(DevId::Pipe, 2));
         let s = read(&mut d, 1, "fd");
         assert!(s.lines().count() >= 2, "the cwd, then one line per fd: {s}");
         assert!(s.contains('|'), "the device letter is there: {s}");
@@ -1259,7 +1276,7 @@ mod tests {
     #[test]
     fn ctl_can_close_one_descriptor_or_all_of_them() {
         let (mut d, procs) = proc();
-        let fds = procs.borrow().get(1).unwrap().fds.clone();
+        let fds = procs.borrow().get(1).unwrap().fds.clone().unwrap();
         fds.borrow_mut().add(Chan::attach(DevId::Pipe, 1));
         fds.borrow_mut().add(Chan::attach(DevId::Pipe, 2));
         let mut ctl = open(&mut d, 1, "ctl", OWRITE);

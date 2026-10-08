@@ -281,8 +281,9 @@ mod userspace {
     /// a walk steps past and every one a call is done with (`chan.c:1109`,
     /// `sysstat`'s *"cclose(c)"*); here they were dropped, and the host's
     /// server held four more fids for every line typed — 182 after one line,
-    /// 198 after five (2026-10-08). What a session still holds at its end
-    /// must not depend on how much it did.
+    /// 198 after five (2026-10-08). Then 10 after either, until `pexit`
+    /// closed `dot` and the namespace (*"cclose(dot)"*, `closepgrp`,
+    /// `proc.c:1166`). A session that has ended holds nothing.
     #[test]
     fn a_session_leaves_no_fid_for_what_it_did() {
         use std::cell::Cell;
@@ -316,7 +317,7 @@ mod userspace {
             startboot(&[BOOT.to_string()], &[], &plan9ini(&[]), Box::new(term), Some(Box::new(store))).unwrap();
             n.get()
         };
-        assert_eq!(held(1), held(5), "fids left behind by the commands");
+        assert_eq!((held(1), held(5)), (0, 0), "fids left behind");
     }
 
     /// The same, on a filesystem of this test's own.

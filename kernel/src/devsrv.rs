@@ -428,7 +428,7 @@ mod tests {
         // something worth posting — a channel with a recognisable qid
         let mut served = Chan::attach(DevId::Pipe, 7);
         served.qid = Qid { qtype: 0, vers: 0, path: 99 };
-        let fd = procs.borrow().get(1).unwrap().fds.borrow_mut().add(served);
+        let fd = procs.borrow().get(1).unwrap().fds.as_ref().unwrap().borrow_mut().add(served);
 
         let mut dir = d.attach("").unwrap();
         d.create(&mut dir, "store", OWRITE, 0o600).unwrap();
@@ -438,7 +438,7 @@ mod tests {
         let dir2 = d.attach("").unwrap();
         let c = d.walk(&dir2, "store").unwrap().expect("not posted");
         let got = d.srvopen(&c, OREAD).unwrap();
-        let held = procs.borrow().get(1).unwrap().fds.borrow().get(fd).cloned().unwrap();
+        let held = procs.borrow().get(1).unwrap().fds.as_ref().unwrap().borrow().get(fd).cloned().unwrap();
         assert!(Rc::ptr_eq(&got, &held), "the posted channel itself, not a copy");
         assert!(d.open(c, OREAD).is_err(), "and never a copy");
     }
@@ -452,7 +452,7 @@ mod tests {
         let (mut d, procs) = srv();
         let mut served = Chan::attach(DevId::Pipe, 7);
         served.mode = OREAD;
-        let fd = procs.borrow().get(1).unwrap().fds.borrow_mut().add(served);
+        let fd = procs.borrow().get(1).unwrap().fds.as_ref().unwrap().borrow_mut().add(served);
         let mut dir = d.attach("").unwrap();
         d.create(&mut dir, "ro", OWRITE, 0o666).unwrap();
         d.write(&mut dir, fd.to_string().as_bytes(), 0).unwrap();
@@ -520,7 +520,7 @@ mod tests {
             let (mut d, procs) = srv();
             let mut c = Chan::attach(DevId::Pipe, 7);
             c.flag = bad;
-            let fd = procs.borrow().get(1).unwrap().fds.borrow_mut().add(c);
+            let fd = procs.borrow().get(1).unwrap().fds.as_ref().unwrap().borrow_mut().add(c);
             let mut dir = d.attach("").unwrap();
             d.create(&mut dir, "x", OWRITE, 0o600).unwrap();
             let e = d.write(&mut dir, fd.to_string().as_bytes(), 0).unwrap_err();

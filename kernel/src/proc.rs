@@ -467,8 +467,14 @@ pub struct Proc {
     /// The three shareable tables. `Rc` is the sharing: two processes holding
     /// the same `Rc` after `rfork` without the `G` bit is not a metaphor for
     /// sharing, it is the sharing.
-    pub ns: Rc<RefCell<Ns>>,
-    pub fds: Rc<RefCell<Fds>>,
+    ///
+    /// **`None` once `pexit` has them** — *"nil out all the resources under
+    /// lock (free later)"* (`proc.c:1145`) — so `#p/<n>/ns` of a process
+    /// that has exited is `Eprocdied` (`devproc.c:958`) and its `fd` is
+    /// empty (`:582`). A kernel process never has a descriptor table:
+    /// `newproc`'s *"p->fgrp = 0"* (`proc.c:691`) stands.
+    pub ns: Option<Rc<RefCell<Ns>>>,
+    pub fds: Option<Rc<RefCell<Fds>>>,
     /// `up->egrp`. **Values are bytes**, as Plan 9's `Evalue` is — a `char*`
     /// with a length, not a C string — so a variable can hold anything.
     pub env: Rc<RefCell<HashMap<String, Vec<u8>>>>,
@@ -580,8 +586,14 @@ pub struct Proc {
     /// a name is resolved from a channel, so the process's idea of "/" and "."
     /// is a channel too. An earlier version here kept `cwd` as a String, which
     /// is the same mistake as keying the namespace by path.
-    pub slash: Chan,
-    pub dot: Chan,
+    ///
+    /// Both are shared, not copied: *"p->slash = up->slash; p->dot =
+    /// up->dot; incref(p->dot)"* (`sysproc.c:99`). `dot` is counted and
+    /// closed — by `chdir`, and by `pexit`, which takes it (`None`) — and
+    /// `slash` is neither: the one `#/` channel `init0` made
+    /// (`pc/main.c:242`), never closed.
+    pub slash: Rc<Chan>,
+    pub dot: Option<Rc<Chan>>,
     /// Set once the process has exited; `await` reports it and reaps.
     pub status: Option<String>,
     /// `RFNOWAIT`: the parent abandoned it, so no wait record is kept.
@@ -670,11 +682,12 @@ impl Proc {
             hang: false,
             psstate: None,
             errstr: String::new(),
-            ns: Rc::new(RefCell::new(Ns::new())),
-            fds: Rc::new(RefCell::new(Fds::default())),
+            ns: Some(Rc::new(RefCell::new(Ns::new()))),
+            fds: Some(Rc::new(RefCell::new(Fds::default()))),
             env: Rc::new(RefCell::new(HashMap::new())),
-            dot: slash.clone(),
-            slash,
+            // *"up->dot = cclone(up->slash)"* (`pc/main.c:245`)
+            dot: Some(Rc::new(slash.clone())),
+            slash: Rc::new(slash),
             status: None,
             waited: true,
             state: State::Running,
@@ -713,7 +726,7 @@ impl Up {
 
     /// `up->fgrp`.
     pub fn fgrp(&self) -> Option<Rc<RefCell<Fds>>> {
-        self.procs.borrow().get(self.pid).map(|p| p.fds.clone())
+        self.procs.borrow().get(self.pid).and_then(|p| p.fds.clone())
     }
 
     /// `up->egrp`.
@@ -835,15 +848,19 @@ pub struct Procs {
     /// gone, waiting to be closed by someone who can reach `devtab`.
     ///
     /// Plan 9 queues a channel here with `ccloseq` when the closer must not
-    /// close it itself, and `closeproc` does the `cclose`. Here that is
-    /// `exits`, which runs where `devtab` cannot be reached — from
-    /// `/proc/n/ctl`'s kill inside a device — so every channel `closefgrp`
-    /// lets go of comes here, and the kernel closes them on its way out of
-    /// the call.
+    /// close it itself, and `closeproc` does the `cclose`: what
+    /// `forceclosefgrp` hands over when a process is killed while it closes
+    /// (`pgrp.c:245`). Here also what `/proc/n/ctl`'s `close` and
+    /// `closefiles` let go of, since `#p` cannot reach `devtab`; the kernel
+    /// closes those on its way out of the call.
     pub clunkq: Vec<Chan>,
     /// `ccloseq` found no `closeproc` waiting and one must be made
     /// (`chan.c:541`) — which the kernel does at the end of the call.
     pub closeproc: bool,
+    /// `kpgrp` (`proc.c:1438`) — the one namespace group every kernel
+    /// process shares, made by the first `kproc` (*"if(kpgrp == 0) kpgrp =
+    /// newpgrp()"*, `:1469`).
+    kpgrp: Option<Rc<RefCell<Ns>>>,
     /// `noteidalloc` (`proc.c:12`).
     noteidalloc: u32,
     /// `broken` (`proc.c:1064`).
@@ -859,6 +876,41 @@ pub struct Procs {
 
 /// `profclock`'s period, in milliseconds (`devproc.c:309`).
 const PROFMS: u64 = 113;
+
+/// What `rfork` did: a child, or — without `RFPROC` — the caller's own
+/// tables replaced, with the channels whose last reference went with the
+/// old ones, for the caller to close: the descriptors' as `closefgrp` closes
+/// them, then the namespace's.
+#[derive(Debug)]
+pub enum Forked {
+    Child(Pid),
+    Same { fds: Vec<Chan>, ns: Vec<Chan> },
+}
+
+/// `closefgrp` (`pgrp.c:207`): nothing unless this was the table's last
+/// reference — *"if(decref(f) != 0) return"* (`:215`) — and then the
+/// channels in it whose last reference this was (`cclose`, `chan.c:496`).
+fn closefgrp(f: Option<Rc<RefCell<Fds>>>) -> Vec<Chan> {
+    let mut last = Vec::new();
+    if let Some(Ok(fds)) = f.map(Rc::try_unwrap) {
+        for c in fds.into_inner().slots.into_iter().flatten() {
+            if let Ok(c) = Rc::try_unwrap(c) {
+                last.push(c.into_inner());
+            }
+        }
+    }
+    last
+}
+
+/// `closepgrp` (`pgrp.c:75`): nothing unless this was the namespace's last
+/// reference (*"if(decref(p) != 0) return"*), and then the channels of its
+/// mounts whose last reference this was.
+fn closepgrp(p: Option<Rc<RefCell<Ns>>>) -> Vec<Chan> {
+    match p.map(Rc::try_unwrap) {
+        Some(Ok(ns)) => crate::chan::lastrefs(ns.into_inner().closepgrp()),
+        _ => Vec::new(),
+    }
+}
 
 impl Procs {
     /// A fresh table with pid 1 in it. It takes the channel that is pid 1's
@@ -877,6 +929,7 @@ impl Procs {
             rr: HashMap::new(),
             clunkq: Vec::new(),
             closeproc: false,
+            kpgrp: None,
             noteidalloc: 1,
             broken: Vec::new(),
             alarms: Vec::new(),
@@ -894,9 +947,6 @@ impl Procs {
         self.tab.len()
     }
 
-    /// `rfork(2)`. With `RFPROC` a new process; without it, the flags act on
-    /// the caller — which is how a process gives ITSELF a private namespace,
-    /// and why `rfork` is one call rather than two.
     /// `Ebadarg` — Plan 9's error string, checked before anything is
     /// committed (`sysproc.c:43`, *"Check flags before we commit"*).
     pub const EBADARG: &'static str = "bad arg in system call";
@@ -1620,42 +1670,45 @@ impl Procs {
         Ok(())
     }
 
+    /// [`Procs::sysrfork`] for a test: the child, if one was made.
+    #[cfg(test)]
     pub fn rfork(&mut self, pid: Pid, flags: i32) -> Option<Pid> {
-        Self::rforkcheck(flags).ok()?;
-        let parent = self.tab.get(&pid)?.clone();
+        match self.sysrfork(pid, flags) {
+            Ok(Forked::Child(c)) => Some(c),
+            _ => None,
+        }
+    }
+
+    /// `rfork(2)` (`sysproc.c:32`). With `RFPROC` a new process; without it,
+    /// the flags act on the caller — which is how a process gives ITSELF a
+    /// private namespace, and why `rfork` is one call rather than two.
+    pub fn sysrfork(&mut self, pid: Pid, flags: i32) -> Result<Forked, String> {
+        Self::rforkcheck(flags)?;
+        if flags & rf::PROC == 0 {
+            return self.rforkself(pid, flags);
+        }
+        let parent = self.tab.get(&pid).ok_or("no such process")?.clone();
 
         let ns = Self::table(&parent.ns, flags & rf::CNAMEG != 0, flags & rf::NAMEG != 0);
-        // `sysproc.c:38` — a copied namespace carries `noattach`; `:42` —
+        // `sysproc.c:143` — a copied namespace carries `noattach`; `:150` —
         // `RFNOMNT` sets it. It is never cleared, which is what makes it a
         // sandbox rather than a mode.
-        if flags & (rf::NAMEG | rf::CNAMEG) != 0 {
-            let inherited = parent.ns.borrow().noattach();
-            ns.borrow_mut().set_noattach(inherited);
+        if let Some(ns) = &ns {
+            if flags & (rf::NAMEG | rf::CNAMEG) != 0 {
+                let inherited = parent.ns.as_ref().is_some_and(|p| p.borrow().noattach());
+                ns.borrow_mut().set_noattach(inherited);
+            }
+            if flags & rf::NOMNT != 0 {
+                ns.borrow_mut().set_noattach(true);
+            }
         }
-        if flags & rf::NOMNT != 0 {
-            ns.borrow_mut().set_noattach(true);
-        }
-        let env = Self::table(&parent.env, flags & rf::CENVG != 0, flags & rf::ENVG != 0);
+        let env = Self::table(&Some(parent.env.clone()), flags & rf::CENVG != 0, flags & rf::ENVG != 0)
+            .expect("an environment");
         let fds = Self::table(&parent.fds, flags & rf::CFDG != 0, flags & rf::FDG != 0);
 
-        // `newproc`'s *"p->noteid = incref(&noteidalloc)"* (`proc.c:720`),
-        // and without `RFPROC`, `RFNOTEG` gives the caller a new one
-        // (`sysproc.c:87`).
+        // `newproc`'s *"p->noteid = incref(&noteidalloc)"* (`proc.c:720`).
         self.noteidalloc += 1;
         let noteid = self.noteidalloc;
-        if flags & rf::PROC == 0 {
-            let me = self.tab.get_mut(&pid)?;
-            me.ns = ns;
-            me.env = env;
-            me.fds = fds;
-            if flags & rf::NOTEG != 0 {
-                me.noteid = noteid;
-            }
-            if flags & rf::REND != 0 {
-                me.rgrp = Rc::new(RefCell::new(Vec::new()));
-            }
-            return None;
-        }
 
         let child = Proc {
             pid: self.next,
@@ -1739,25 +1792,70 @@ impl Procs {
         let cpid = child.pid;
         self.tab.insert(cpid, child);
         self.next += 1;
-        Some(cpid)
+        Ok(Forked::Child(cpid))
     }
 
-    /// Clear, copy or share — the rule all three tables follow.
-    fn table<T: Clone + Default>(src: &Rc<RefCell<T>>, clear: bool, copy: bool) -> Rc<RefCell<T>> {
+    /// `sysrfork` without `RFPROC` (`sysproc.c:52`–`:89`): the caller's own
+    /// tables, each replaced and **the old one closed** — `closefgrp(ofg)`
+    /// (`:61`), `closepgrp(opg)` (`:70`) — and a new note group only for
+    /// `RFNOTEG`.
+    fn rforkself(&mut self, pid: Pid, flags: i32) -> Result<Forked, String> {
+        let me = self.tab.get(&pid).ok_or("no such process")?;
+        let fds = Self::table(&me.fds, flags & rf::CFDG != 0, flags & rf::FDG != 0);
+        let ns = Self::table(&me.ns, flags & rf::CNAMEG != 0, flags & rf::NAMEG != 0);
+        let env = Self::table(&Some(me.env.clone()), flags & rf::CENVG != 0, flags & rf::ENVG != 0)
+            .expect("an environment");
+        let noattach = me.ns.as_ref().is_some_and(|n| n.borrow().noattach());
+        let me = self.tab.get_mut(&pid).expect("found");
+        let (mut fdlast, mut nslast) = (Vec::new(), Vec::new());
+        if flags & (rf::FDG | rf::CFDG) != 0 {
+            fdlast = closefgrp(std::mem::replace(&mut me.fds, fds));
+        }
+        if flags & (rf::NAMEG | rf::CNAMEG) != 0 {
+            // *"up->pgrp->noattach = opg->noattach"* (`sysproc.c:69`)
+            if let Some(ns) = &ns {
+                ns.borrow_mut().set_noattach(noattach);
+            }
+            nslast = closepgrp(std::mem::replace(&mut me.ns, ns));
+        }
+        if flags & rf::NOMNT != 0 {
+            if let Some(ns) = &me.ns {
+                ns.borrow_mut().set_noattach(true);
+            }
+        }
+        if flags & rf::REND != 0 {
+            me.rgrp = Rc::new(RefCell::new(Vec::new()));
+        }
+        if flags & (rf::ENVG | rf::CENVG) != 0 {
+            me.env = env;
+        }
+        // *"if(flag & RFNOTEG) up->noteid = incref(&noteidalloc)"* (`:88`) —
+        // and only then: there is no child for `newproc` to number.
+        if flags & rf::NOTEG != 0 {
+            self.noteidalloc += 1;
+            let noteid = self.noteidalloc;
+            self.tab.get_mut(&pid).expect("found").noteid = noteid;
+        }
+        Ok(Forked::Same { fds: fdlast, ns: nslast })
+    }
+
+    /// Clear, copy or share — the rule all three tables follow. A copy of
+    /// none is a cleared one, as `dupfgrp(nil)` is (`pgrp.c:173`).
+    fn table<T: Clone + Default>(src: &Option<Rc<RefCell<T>>>, clear: bool, copy: bool) -> Option<Rc<RefCell<T>>> {
         if clear {
-            Rc::new(RefCell::new(T::default()))
+            Some(Rc::new(RefCell::new(T::default())))
         } else if copy {
-            Rc::new(RefCell::new(src.borrow().clone()))
+            Some(Rc::new(RefCell::new(src.as_ref().map(|s| s.borrow().clone()).unwrap_or_default())))
         } else {
             src.clone()
         }
     }
 
     /// `chdir(2)`: `up->dot` is a CHANNEL, so this replaces it.
-    pub fn chdir(&mut self, pid: Pid, dot: Chan) {
-        if let Some(p) = self.tab.get_mut(&pid) {
-            p.dot = dot;
-        }
+    /// `syschdir`'s *"cclose(up->dot); up->dot = c"* (`sysfile.c`): the
+    /// new `dot`, and the old one answered for the caller to close.
+    pub fn chdir(&mut self, pid: Pid, dot: Rc<Chan>) -> Option<Rc<Chan>> {
+        self.tab.get_mut(&pid)?.dot.replace(dot)
     }
 
     /// `errstr(2)`: the per-process error string. Plan 9 exchanges it —
@@ -1795,7 +1893,7 @@ impl Procs {
 
     /// `up->pgrp->pgrpid` — the namespace group's number.
     pub fn pgrpid(&self, pid: Pid) -> Option<u32> {
-        self.tab.get(&pid).map(|p| p.ns.borrow().id())
+        self.tab.get(&pid).and_then(|p| p.ns.as_ref()).map(|ns| ns.borrow().id())
     }
 
     /// `up->user`, for the device that reports it.
@@ -1858,15 +1956,19 @@ impl Procs {
     pub fn closefgrp(&mut self, pid: Pid) -> Vec<Chan> {
         let Some(p) = self.tab.get_mut(&pid) else { return Vec::new() };
         p.alarm = 0;
-        let fgrp = std::mem::replace(&mut p.fds, Rc::new(RefCell::new(Fds::default())));
-        let mut last = Vec::new();
-        if let Ok(fds) = Rc::try_unwrap(fgrp) {
-            for c in fds.into_inner().slots.into_iter().flatten() {
-                if let Ok(c) = Rc::try_unwrap(c) {
-                    last.push(c.into_inner());
-                }
-            }
-        }
+        closefgrp(p.fds.take())
+    }
+
+    /// The rest of what `pexit` takes — *"pgrp = up->pgrp; up->pgrp = nil;
+    /// dot = up->dot; up->dot = nil"* (`proc.c:1153`) — and of it, what was
+    /// the last reference: `dot` (*"cclose(dot)"*, `:1166`), then the
+    /// namespace's channels if this was the namespace's last reference
+    /// (`closepgrp`, `:1168`).
+    pub fn closedotpgrp(&mut self, pid: Pid) -> Vec<Chan> {
+        let Some(p) = self.tab.get_mut(&pid) else { return Vec::new() };
+        let (dot, pgrp) = (p.dot.take(), p.ns.take());
+        let mut last = crate::chan::lastrefs(dot.into_iter().collect());
+        last.extend(closepgrp(pgrp));
         last
     }
 
@@ -1924,8 +2026,8 @@ impl Procs {
     }
 
     /// `kproc` (`proc.c:1436`)'s table half: a process whose body is kernel
-    /// code — no image, no parent to wait for it, eve's, at `PriKproc`, in a
-    /// namespace group of its own with nothing in it.
+    /// code — no image, no parent to wait for it, eve's, at `PriKproc`, in
+    /// the namespace group the kernel processes share.
     pub fn kproc(&mut self, up: Pid, name: &str, user: &str) -> Pid {
         let pid = self.next;
         self.next += 1;
@@ -1938,8 +2040,11 @@ impl Procs {
         p.text = name.to_string();
         p.user = user.to_string();
         p.procmode = 0o640;
-        p.ns = Rc::new(RefCell::new(Ns::new()));
-        p.fds = Rc::new(RefCell::new(Fds::default()));
+        // *"if(kpgrp == 0) kpgrp = newpgrp(); p->pgrp = kpgrp;
+        // incref(kpgrp)"* (`proc.c:1469`), and no descriptor table
+        let kpgrp = self.kpgrp.get_or_insert_with(|| Rc::new(RefCell::new(Ns::new())));
+        p.ns = Some(kpgrp.clone());
+        p.fds = None;
         p.env = Rc::new(RefCell::new(HashMap::new()));
         p.time = [0, 0, ticks, 0, 0, 0];
         p.status = None;
@@ -2190,24 +2295,24 @@ mod tests {
     fn rfork_shares_copies_or_clears_the_descriptors() {
         // share — the parent's later open is visible to the child
         let mut p = one();
-        p.tab.get(&1).unwrap().fds.borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
+        p.tab.get(&1).unwrap().fds.as_ref().unwrap().borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
         let c = p.rfork(1, rf::PROC).unwrap();
-        p.tab.get(&1).unwrap().fds.borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
-        assert_eq!(p.tab.get(&c).unwrap().fds.borrow().count(), 2, "no bit means SHARE");
+        p.tab.get(&1).unwrap().fds.as_ref().unwrap().borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
+        assert_eq!(p.tab.get(&c).unwrap().fds.as_ref().unwrap().borrow().count(), 2, "no bit means SHARE");
 
         // copy — the child starts with what the parent had, and diverges
         let mut p = one();
-        p.tab.get(&1).unwrap().fds.borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
+        p.tab.get(&1).unwrap().fds.as_ref().unwrap().borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
         let c = p.rfork(1, rf::PROC | rf::FDG).unwrap();
-        p.tab.get(&1).unwrap().fds.borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
-        assert_eq!(p.tab.get(&c).unwrap().fds.borrow().count(), 1, "RFFDG means COPY");
-        assert_eq!(p.tab.get(&1).unwrap().fds.borrow().count(), 2);
+        p.tab.get(&1).unwrap().fds.as_ref().unwrap().borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
+        assert_eq!(p.tab.get(&c).unwrap().fds.as_ref().unwrap().borrow().count(), 1, "RFFDG means COPY");
+        assert_eq!(p.tab.get(&1).unwrap().fds.as_ref().unwrap().borrow().count(), 2);
 
         // clear — the child starts with none
         let mut p = one();
-        p.tab.get(&1).unwrap().fds.borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
+        p.tab.get(&1).unwrap().fds.as_ref().unwrap().borrow_mut().add(Chan::attach(crate::dev::DevId::Root, 0));
         let c = p.rfork(1, rf::PROC | rf::CFDG).unwrap();
-        assert_eq!(p.tab.get(&c).unwrap().fds.borrow().count(), 0, "RFCFDG means CLEAR");
+        assert_eq!(p.tab.get(&c).unwrap().fds.as_ref().unwrap().borrow().count(), 0, "RFCFDG means CLEAR");
     }
 
     /// The same rule, on the environment group — which is the whole reason
@@ -2238,15 +2343,15 @@ mod tests {
     fn rfork_shares_copies_or_clears_the_namespace() {
         let mut p = one();
         let c = p.rfork(1, rf::PROC).unwrap();
-        assert!(Rc::ptr_eq(&p.tab[&1].ns, &p.tab[&c].ns), "no bit means SHARE");
+        assert!(Rc::ptr_eq(p.tab[&1].ns.as_ref().unwrap(), p.tab[&c].ns.as_ref().unwrap()), "no bit means SHARE");
 
         let mut p = one();
         let c = p.rfork(1, rf::PROC | rf::NAMEG).unwrap();
-        assert!(!Rc::ptr_eq(&p.tab[&1].ns, &p.tab[&c].ns), "RFNAMEG means COPY");
+        assert!(!Rc::ptr_eq(p.tab[&1].ns.as_ref().unwrap(), p.tab[&c].ns.as_ref().unwrap()), "RFNAMEG means COPY");
 
         let mut p = one();
         let c = p.rfork(1, rf::PROC | rf::CNAMEG).unwrap();
-        assert!(!Rc::ptr_eq(&p.tab[&1].ns, &p.tab[&c].ns), "RFCNAMEG means CLEAR");
+        assert!(!Rc::ptr_eq(p.tab[&1].ns.as_ref().unwrap(), p.tab[&c].ns.as_ref().unwrap()), "RFCNAMEG means CLEAR");
     }
 
     /// `RFNOMNT` sets `noattach` and it is never cleared; a copied namespace
@@ -2255,14 +2360,14 @@ mod tests {
     #[test]
     fn nomnt_sets_noattach_and_a_copy_carries_it() {
         let mut p = one();
-        assert!(!p.tab[&1].ns.borrow().noattach());
+        assert!(!p.tab[&1].ns.as_ref().unwrap().borrow().noattach());
         p.rfork(1, rf::NOMNT);
-        assert!(p.tab[&1].ns.borrow().noattach(), "RFNOMNT sets it");
+        assert!(p.tab[&1].ns.as_ref().unwrap().borrow().noattach(), "RFNOMNT sets it");
 
         let c = p.rfork(1, rf::PROC | rf::NAMEG).unwrap();
-        assert!(p.tab[&c].ns.borrow().noattach(), "a copy carries it");
+        assert!(p.tab[&c].ns.as_ref().unwrap().borrow().noattach(), "a copy carries it");
         let c2 = p.rfork(1, rf::PROC | rf::CNAMEG).unwrap();
-        assert!(p.tab[&c2].ns.borrow().noattach(), "and so does a cleared one");
+        assert!(p.tab[&c2].ns.as_ref().unwrap().borrow().noattach(), "and so does a cleared one");
     }
 
     /// `ERRMAX` (`libc.h:553`) bounds an error string and an exit status —
@@ -2342,7 +2447,7 @@ mod tests {
         let before = p.tab[&1].ns.clone();
         assert_eq!(p.rfork(1, rf::NAMEG), None, "no child");
         assert_eq!(p.count(), 1);
-        assert!(!Rc::ptr_eq(&p.tab[&1].ns, &before), "the caller's own namespace was replaced");
+        assert!(!Rc::ptr_eq(p.tab[&1].ns.as_ref().unwrap(), before.as_ref().unwrap()), "the caller's own namespace was replaced");
     }
 
     /// `exits` then `await`: the parent reaps the child and gets its status.
