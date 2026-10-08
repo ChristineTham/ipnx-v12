@@ -3,9 +3,9 @@
 **Role: a *when* — the single authoritative statement of build status.** No
 other document carries it.
 
-Measured 2026-09-20; the kernel's size and the test counts 2026-09-29.
+Measured 2026-09-20; the kernel's size and the test counts 2026-10-07.
 
-## The kernel — 17,005 lines of Rust, no dependencies
+## The kernel — 17,820 lines of Rust, no dependencies
 
 | | |
 |---|---|
@@ -15,14 +15,14 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-09-29.
 | `devroot.rs` | `#/` — `#/` and `boot` from `rootdir[]`, plus the ten empty directories `rootreset` adds for a first process to bind onto; every file is eve's `0555`, so an open for writing is `devopen`'s `Eperm` |
 | `qio.rs` | `qio.c`'s queues, for every device that streams: `qread`, `qwrite`, `qproduce`, `qconsume`, the kick, `qhangup`, `qclose`, `qreopen`, `qflush`, `qsetlimit`, `qnoblock`, and `Qcoalesce` |
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed. Each end is a `qio` queue: a read of an empty pipe **sleeps** on `q->rr` until a write wakes it, and the last close of an end hangs up the other (`pipeclose`, `devpipe.c:247`), which is end of file once what was queued is read |
-| `devproc.rs` | `#p` — the process table as files: **nine of `procdir[]`'s eighteen** (`devproc.c:79`), and the table says why each of the other nine is absent. `ns` prints the bind lines that rebuild the namespace — paths, `int2flag`'s letters, and `mount <flag> <server> <on> <spec>` with `srvname` |
+| `devproc.rs` | `#p` — the process table as files: **twelve of `procdir[]`'s eighteen** (`devproc.c:79`), and the table says why each of the other six is absent. Each file's mode is `procgen`'s — `ctl`, `note` and `notepg` take the process's `procmode`, `0640` — checked at the open (`devproc.c:471`), and changed by `procwstat`. `ns` prints the bind lines that rebuild the namespace — paths, `int2flag`'s letters, and `mount <flag> <server> <on> <spec>` with `srvname` |
 | `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user |
 | `devmnt.rs` | `#M` — the 9P client: version, attach, walk, open, read and write in a loop, clunk. Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
 | `devsrv.rs` | `#s` — post a file descriptor's NUMBER, and an open of the name answers with the channel behind it |
 | `devuart.rs` | `#t` — serial lines, `port/devuart.c`: `eia%d`, `eia%dctl` and `eia%dstatus` for each; input staged and `qproduce`d by `uartclock` every 22ms, output `qconsume`d by the transmitter; all of `uartctl`'s commands, with the ones that wait for output to drain sleeping on the uart's `Rendez`. The hardware is a `PhysUart` the host supplies; its interrupt handler is called at clock time, and a last close cannot wait for output to drain (RESEARCH §16.20) |
 | `devvirtio9p.rs` | `#9` — a channel to a 9P server the MACHINE provides. It marshals nothing: `#M` writes a T-message down it and reads the R-message back, as it would down a TCP connection |
-| `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` returns the channel fd 3 holds, so a dup IS an open |
+| `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` returns the channel fd 3 holds, in the mode it is open in (`devdup.c:86`), so a dup IS an open — a copy here, counted by its device, so its offset is its own where Plan 9's is shared |
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares; and `#ec`, the kernel configuration group, which nothing fills yet |
 | `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. `boot` names the host owner by writing `#c/hostowner` (`bootauth.c:56`), so `$user` is `kitty` — the host's `plan9.ini` says `user=kitty` (`plan9ini`, `hosts/ipnx/src/lib.rs`); Plan 9's fallback, `glenda`, is for one that names none — and not the role's own name |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators. `kprint` is a queue that takes the console's output while it is open (`devcons.c:166`) |
@@ -32,7 +32,7 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-09-29.
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
 | `lib.rs` | the 31 calls, `exec`, and `unionread` |
 
-236 kernel tests, and 65 in `hosts/ipnx`.
+247 kernel tests, and 66 in `hosts/ipnx`.
 
 ## The host — `hosts/ipnx`, five files
 
@@ -387,7 +387,12 @@ one it claims**: it boots the whole system on a scripted console and types at
 it, so a line reads `reached` only when a person really can do the thing, on
 this boot. The five: boot to a shell, list a directory, read a file, a
 pipeline, and per-process namespaces (`@{rfork n; bind /tmp/alt /etc}` sees
-the bind; the shell outside it does not). The other seven are P7 and P8.
+the bind; the shell outside it does not). Of the other seven, three are P8's
+— several windows, actions by kind, the browser — and **four are built by no
+phase of [implementation.md](implementation.md)**: a Go program, Python, a
+package available without installing into the tree (P7's `pkg` copies into
+`/pkg`), and a toolchain arriving during a session. The suite labelled them
+P7 and P8; it says *gap* now (2026-10-07).
 
 It still fails, and will until all twelve are reached.
 
@@ -417,3 +422,22 @@ ends it. Tested: `exportfs_serves_a_tree_down_the_serial_line`,
 `the_line_is_in_dev_after_boot`, and the device's own eight. Steps 2–5 —
 emca's IPNX half, the demo's types, `hosts/web`, the page as the surface —
 are not built.
+
+**A channel's mode, and who may open what** (2026-10-07; RESEARCH §16.21).
+`read` and `write` check a descriptor's open mode, `mount`, `fversion` and
+`fauth` want `ORDWR`, and a mount's message channel is `CMSG` — all
+`fdtochan`'s (`sysfile.c:120`). Every device's open stores `openmode`;
+`namec` keeps `OCEXEC` from devices and servers and sets the channel flags
+on a create as on an open; `#d` and `#s` hand back a channel only in the
+mode it is open in; `#p`'s files carry `procgen`'s mode with `procmode`,
+and `procwstat` is built; `#e`'s `OTRUNC` empties the variable; `dup`
+closes what it replaces; `exec` closes the close-on-exec descriptors; and a
+copy of an open channel is counted by `#c`, `#9` and `#M` as by `#|` and
+`#t`. Not built: a last close that waits — the uart's drain and the mount
+driver's `Rclunk` (§16.14) — and a `#d` open sharing the original's offset.
+
+**A forked child is not entered before it is made** (2026-10-07; RESEARCH
+§16.22): a clock interrupt in a fork's unwind could switch the parent and
+hand the processor to a child with no fiber yet, ending the system with
+*"no such process"* under load. The tests boot on a copy of the built root
+each, not on `userspace/root`.

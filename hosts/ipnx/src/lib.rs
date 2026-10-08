@@ -349,6 +349,65 @@ fn rcquote(w: &str) -> String {
     format!("'{}'", w.replace('\'', "''"))
 }
 
+/// **A copy of the built root for this process alone** — what the tests and
+/// the conformance suite boot on, rather than on `userspace/root` itself.
+/// A boot writes (`/tmp`, `/env`, a test's own files), so two test
+/// processes at once shared one tree and corrupted each other's files — the
+/// same test in each wrote one `/tmp/long.rc` (2026-10-07) — a build that
+/// replaced a program under a running test could fail its boot, and what a
+/// test wrote was left in the root `ipnx` boots from.
+///
+/// Made on first use, removed when the process exits; a copy left by a
+/// process that is gone — killed by a timeout — is removed by the next.
+pub fn rootcopy() -> &'static std::path::Path {
+    static COPY: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    extern "C" fn removed() {
+        if let Some(p) = COPY.get() {
+            let _ = std::fs::remove_dir_all(p);
+        }
+    }
+    COPY.get_or_init(|| {
+        let tmp = std::env::temp_dir();
+        // the copies of processes that are gone
+        if let Ok(entries) = std::fs::read_dir(&tmp) {
+            for e in entries.flatten() {
+                let name = e.file_name().to_string_lossy().into_owned();
+                let Some(pid) = name.strip_prefix("ipnx-root-").and_then(|p| p.parse::<i32>().ok()) else { continue };
+                // SAFETY: `kill` with signal 0 sends nothing; it asks whether
+                // the process exists.
+                let gone = unsafe { libc::kill(pid, 0) } != 0
+                    && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+                if gone {
+                    let _ = std::fs::remove_dir_all(e.path());
+                }
+            }
+        }
+        let from = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../userspace/root");
+        let to = tmp.join(format!("ipnx-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&to);
+        copytree(&from, &to).unwrap_or_else(|e| panic!("{}: {e} — run userspace/mk.sh", from.display()));
+        // SAFETY: registers a plain function to run at `exit`.
+        unsafe {
+            libc::atexit(removed);
+        }
+        to
+    })
+}
+
+fn copytree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for e in std::fs::read_dir(from)? {
+        let e = e?;
+        let dst = to.join(e.file_name());
+        if e.file_type()?.is_dir() {
+            copytree(&e.path(), &dst)?;
+        } else {
+            std::fs::copy(e.path(), dst)?;
+        }
+    }
+    Ok(())
+}
+
 /// The first process, and the only file `#/boot` carries — as a Plan 9
 /// kernel carries `/boot/boot` and nothing else (`initcode.c:11`).
 pub const BOOT: &str = "/boot/boot";

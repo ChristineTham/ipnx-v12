@@ -817,7 +817,7 @@ impl Dev for UartDev {
     /// is never 0 under them and `uartenable` has nothing to do.
     fn open(&mut self, mut c: Chan, omode: u16) -> Result<Chan, String> {
         if c.qid.is_dir() {
-            if omode & 3 != mode::OREAD {
+            if omode != mode::OREAD {
                 return Err(EPERM.into());
             }
         } else {
@@ -833,7 +833,7 @@ impl Dev for UartDev {
             }
         }
         c.offset = 0;
-        c.mode = omode;
+        c.mode = crate::chan::openmode(omode)?;
         c.flag |= COPEN;
         // *"c->iounit = qiomaxatomic"*.
         c.iounit = MAXATOMIC as u32;

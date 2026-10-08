@@ -22,6 +22,9 @@ pub const ERRMAX: usize = 128;
 /// `NFD` — *"per process file descriptors"* (`portdat.h:476`).
 pub const NFD: usize = 100;
 
+/// `DELTAFD` — *"incremental increase in Fgrp.fd's"* (`portdat.h:530`).
+pub const DELTAFD: usize = 20;
+
 /// `Proc.time`'s slots (`portdat.h:630`).
 pub const TUSER: usize = 0;
 pub const TSYS: usize = 1;
@@ -98,24 +101,38 @@ impl Fds {
             Err(_) => None,
         })
     }
-    /// `dup(2)`: to a given slot, or to the lowest free one when `new` is -1.
-    pub fn dup(&mut self, old: Fd, new: Fd) -> Option<Fd> {
+    /// `dup(2)` (`sysdup`, `sysfile.c:224`): to a given slot, or to the
+    /// lowest free one when `new` is -1 — any other negative is `Ebadfd`.
+    ///
+    /// **What was in the slot is closed** — *"oc = f->fd[fd]; f->fd[fd] = c;
+    /// … if(oc) cclose(oc)"* — so the channel it held comes back when that
+    /// was its last reference, for the device to be told. It was dropped
+    /// unseen, and a pipe end replaced that way never reached end of file.
+    pub fn dup(&mut self, old: Fd, new: Fd) -> Option<(Fd, Option<Chan>)> {
         let c = self.get(old)?.clone();
-        if new < 0 {
+        if new == -1 {
             for (i, s) in self.slots.iter_mut().enumerate() {
                 if s.is_none() {
                     *s = Some(c);
-                    return Some(i as Fd);
+                    return Some((i as Fd, None));
                 }
             }
             self.slots.push(Some(c));
-            return Some((self.slots.len() - 1) as Fd);
+            return Some(((self.slots.len() - 1) as Fd, None));
+        }
+        // `growfd` (`sysfile.c:25`): the table is `nfd` slots, `DELTAFD`
+        // at a time, and grows by one step — *"if(fd >= f->nfd+DELTAFD)
+        // return -1"*, and never past 5000.
+        let nfd = self.slots.len().div_ceil(DELTAFD).max(1) * DELTAFD;
+        if new < 0 || new as usize >= nfd + DELTAFD || (new as usize >= nfd && nfd >= 5000) {
+            return None;
         }
         while self.slots.len() <= new as usize {
             self.slots.push(None);
         }
-        self.slots[new as usize] = Some(c);
-        Some(new)
+        let oc = self.slots[new as usize].replace(c);
+        let last = oc.and_then(|oc| Rc::try_unwrap(oc).ok()).map(|cell| cell.into_inner());
+        Some((new, last))
     }
     pub fn count(&self) -> usize {
         self.slots.iter().filter(|s| s.is_some()).count()
@@ -418,6 +435,12 @@ pub struct Proc {
     /// `up->user` — Plan 9's whole identity field (`portdat.h:664`). One
     /// name. No uid, no gid, no euid/ruid pair.
     pub user: String,
+    /// `p->procmode` — *"p->procmode determines default mode for files in
+    /// /proc"* (`devproc.c:254`): `0640` for the first process
+    /// (`pc/main.c:283`) and a kernel process (`proc.c:1442`), the parent's
+    /// for a child (`sysproc.c:172`), and changed by a `wstat` of any of
+    /// its files (`devproc.c:518`).
+    pub procmode: u32,
     /// `Proc.time[6]` (`portdat.h:694`): user, sys, real, and child user,
     /// sys, real — **in ticks**. `accounttime` charges `time[insyscall]` a
     /// tick at a time; `time[TReal]` holds the tick the process was made
@@ -567,6 +590,7 @@ impl Proc {
             // `#c/hostowner` once. It was `"eve"`, a constant, which is the
             // role's name rather than anybody's.
             user: String::new(),
+            procmode: 0o640,
             time: [0; 6],
             text: "*init*".into(),
             insyscall: false,
@@ -1586,6 +1610,7 @@ impl Procs {
             pid: self.next,
             ppid: pid,
             user: parent.user.clone(),
+            procmode: parent.procmode,
             // *"p->time[TReal] = MACHP(0)->ticks"* (`sysproc.c:193`).
             time: [0, 0, self.m.ticks, 0, 0, 0],
             text: parent.text.clone(),
@@ -1854,6 +1879,7 @@ impl Procs {
         p.kp = true;
         p.text = name.to_string();
         p.user = user.to_string();
+        p.procmode = 0o640;
         p.ns = Rc::new(RefCell::new(Ns::new()));
         p.fds = Rc::new(RefCell::new(Fds::default()));
         p.env = Rc::new(RefCell::new(HashMap::new()));
@@ -1933,19 +1959,39 @@ mod tests {
     fn dup_to_a_named_slot_and_to_the_lowest_free_one() {
         let mut f = Fds::default();
         let a = f.add(Chan::attach(crate::dev::DevId::Root, 0));
-        assert_eq!(f.dup(a, 9), Some(9));
+        assert_eq!(f.dup(a, 9), Some((9, None)));
         assert!(
             f.close(a).expect("an open descriptor").is_none(),
             "fd 9 still holds the channel, so this was not the last reference"
         );
-        assert_eq!(f.dup(9, -1), Some(0), "the lowest free slot");
+        assert_eq!(f.dup(9, -1), Some((0, None)), "the lowest free slot");
+        // `growfd`: one step of `DELTAFD` past the table, and no further;
+        // and a negative slot other than -1 is `Ebadfd`.
+        assert!(f.dup(9, 39).is_some());
+        assert!(f.dup(9, 80).is_none(), "out of range");
+        assert!(f.dup(9, -2).is_none());
+    }
+
+    /// **`dup` onto a slot closes what was there** (`sysfile.c:246`): the
+    /// replaced channel comes back when it was the last reference, for the
+    /// device to be told; and not when another slot still holds it.
+    #[test]
+    fn dup_onto_an_open_slot_closes_what_it_replaces() {
+        let mut f = Fds::default();
+        let a = f.add(Chan::attach(crate::dev::DevId::Root, 0));
+        let b = f.add(Chan::attach(crate::dev::DevId::Pipe, 7));
+        let (_, last) = f.dup(a, b).unwrap();
+        assert_eq!(last.map(|c| c.devno), Some(7), "the pipe's last reference went");
+        let c = f.dup(a, -1).unwrap().0;
+        let (_, last) = f.dup(b, c).unwrap();
+        assert!(last.is_none(), "fd a still holds that channel");
     }
 
     #[test]
     fn a_dup_shares_the_offset_it_does_not_copy_it() {
         let mut f = Fds::default();
         let a = f.add(Chan::attach(crate::dev::DevId::Root, 0));
-        let b = f.dup(a, -1).unwrap();
+        let b = f.dup(a, -1).unwrap().0;
         f.get(a).unwrap().borrow_mut().offset = 42;
         assert_eq!(f.get(b).unwrap().borrow().offset, 42);
     }

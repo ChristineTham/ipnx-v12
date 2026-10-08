@@ -176,6 +176,10 @@ pub const QTDIR: u8 = 0x80;
 pub const QTEXCL: u8 = 0x20;
 /// `QTAUTH` (`libc.h:592`) — *"type bit for authentication file"*.
 pub const QTAUTH: u8 = 0x08;
+/// `QTMOUNT` (`libc.h:591`) — *"type bit for mounted channel"*: `devdir`
+/// sets it on a mount's message channel (`dev.c:37`), and so `DMMOUNT` in
+/// the mode.
+pub const QTMOUNT: u8 = 0x10;
 
 /// `DMDIR` — the directory bit in a mode (`libc.h`). `namec`'s `Acreate`
 /// requires it when the name ends in `/` or `/.`.

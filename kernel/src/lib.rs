@@ -378,6 +378,24 @@ impl Kernel {
                 p.procctl = Some(proc::Procctl::Stopme);
             }
         }
+        // *"Close on exec"* (`sysproc.c:592`): *"for(i=0; i<=f->maxfd;
+        // i++) fdclose(i, CCEXEC)"* — every descriptor opened `OCEXEC`, or
+        // marked so, as `fauth`'s is. They had been passed on to the new
+        // image.
+        let fds = self.procs.borrow().get(pid).map(|p| p.fds.clone());
+        if let Some(fds) = fds {
+            let n = fds.borrow().slots();
+            for fd in 0..n {
+                let marked = fds.borrow().get(fd).is_some_and(|c| c.borrow().flag & chan::flag::CCEXEC != 0);
+                if !marked {
+                    continue;
+                }
+                let last = fds.borrow_mut().close(fd);
+                if let Some(Some(mut c)) = last {
+                    self.tab.dclose(&mut c);
+                }
+            }
+        }
         Ok(())
     }
 
@@ -517,7 +535,18 @@ impl Kernel {
                 self.runkproc(pid)
             } else {
                 let m = self.machine.clone();
-                m.gotolabel(pid, self)?
+                // A machine that cannot enter a process ends the system, so
+                // say which process it was and what the kernel held of it.
+                m.gotolabel(pid, self).map_err(|e| {
+                    let procs = self.procs.borrow();
+                    let p = procs.get(pid);
+                    format!(
+                        "{e}: pid {pid} ({}), {:?}, status {:?}",
+                        p.map_or("?", |p| p.text.as_str()),
+                        procs.state(pid),
+                        procs.status(pid),
+                    )
+                })?
             };
             left = Some((pid, how));
         }
@@ -1822,11 +1851,23 @@ impl Kernel {
             }
 
             // ---- channels
+            // *"openmode(arg[1]);	/* error check only */"* (`sysfile.c:270`)
+            // — a mode past `OEXEC` is `Ebadarg` before a name is resolved;
+            // `create` lets `OEXCL` through (`:1126`).
             Call::Open { path, mode } => {
+                // a `ulong` there: nothing above 16 bits is a mode
+                if !(0..=0xffff).contains(&mode) {
+                    return Err(proc::Procs::EBADARG.into());
+                }
+                chan::openmode(mode as u16)?;
                 let c = self.walk(up, &path, namec::A::Open, mode as u16)?;
                 Ok(Ret::Fd(self.newfd(up, c)?))
             }
             Call::Create { path, mode, perm } => {
+                if !(0..=0xffff).contains(&mode) {
+                    return Err(proc::Procs::EBADARG.into());
+                }
+                chan::openmode(mode as u16 & !chan::mode::OEXCL)?;
                 let c = self.walk_create(up, &path, mode as u16, perm)?;
                 Ok(Ret::Fd(self.newfd(up, c)?))
             }
@@ -1847,12 +1888,15 @@ impl Kernel {
                 }
                 Ok(Ret::Ok)
             }
+            // *"c = fdtochan(fd, OREAD, 1, 1)"* (`sysfile.c:637`) and
+            // *"fdtochan(fd, OWRITE, 1, 1)"* (`:728`): the channel must be
+            // open for what is asked of it, and not a mount's.
             Call::Pread { fd, n, off } => {
-                let cell = self.chancell(up, fd)?;
+                let cell = self.fdtochan(up, fd, Some(chan::mode::OREAD), true)?;
                 self.pread(up, cell, n, off)
             }
             Call::Pwrite { fd, data, off } => {
-                let cell = self.chancell(up, fd)?;
+                let cell = self.fdtochan(up, fd, Some(chan::mode::OWRITE), true)?;
                 self.pwrite(up, cell, data, off)
             }
             // `seek` is fd-class, not 9P: the offset is kernel state in the
@@ -1863,11 +1907,8 @@ impl Kernel {
             // one begins. The position is `c->dri`, and a seek clears it
             // (`sysfile.c:856`).
             Call::Seek { fd, off, whence } => {
-                let procs = self.procs.borrow();
-                let p = procs.get(up).ok_or("no such process")?;
-                let fds = p.fds.clone();
-                let cell = fds.borrow().get(fd).cloned().ok_or(EBADFD)?;
-                drop(procs);
+                // *"c = fdtochan(arg[1], -1, 1, 1)"* (`sysfile.c:805`).
+                let cell = self.fdtochan(up, fd, None, true)?;
                 // *"if(devtab[c->type]->dc == '|') error(Eisstream)"*
                 // (`sysfile.c:810`).
                 if cell.borrow().dev == dev::DevId::Pipe {
@@ -1918,10 +1959,14 @@ impl Kernel {
                 Ok(Ret::N(new as usize))
             }
             Call::Dup { old, new } => {
-                let procs = self.procs.borrow();
-                let p = procs.get(up).ok_or("no such process")?;
-                let fds = p.fds.clone();
-                let r = fds.borrow_mut().dup(old, new).ok_or(EBADFD)?;
+                let fds = {
+                    let procs = self.procs.borrow();
+                    procs.get(up).ok_or("no such process")?.fds.clone()
+                };
+                let (r, oc) = fds.borrow_mut().dup(old, new).ok_or(EBADFD)?;
+                if let Some(mut oc) = oc {
+                    self.tab.dclose(&mut oc);
+                }
                 Ok(Ret::Fd(r))
             }
             // `syspipe` (`sysfile.c`): attach `#|`, walk the two ends, open
@@ -1981,7 +2026,8 @@ impl Kernel {
                 Ok(Ret::Ok)
             }
             Call::Fwstat { fd, edir } => {
-                let mut c = self.chan(up, fd)?;
+                // *"c = fdtochan(arg[0], -1, 1, 1)"* (`sysfile.c:1219`).
+                let mut c = self.fdtochan(up, fd, None, true)?.borrow().clone();
                 self.tab.dwstat(&mut c, &edir)?;
                 Ok(Ret::Ok)
             }
@@ -1995,13 +2041,25 @@ impl Kernel {
             // attach's `afid` (`devmnt.c:344`) — then `cmount`, and
             // *"fdclose(fd, 0)"*: the mount holds the channel now, not the
             // descriptor. It answers the new mount's id (`chan.c:760`).
+            //
+            // Both descriptors must be open `ORDWR` (`sysfile.c:1015`,
+            // `:1024`), and the server's is marked a mount's message
+            // channel — *"c->flag |= CMSG"*, at the end of `mntversion`
+            // (`devmnt.c:239`) — in the copy the mount keeps and in the
+            // descriptor, which are one channel in Plan 9.
             Call::Mount { fd, afd, old, flag, aname } => {
-                let cell = self.chancell(up, fd)?;
-                let wire = cell.borrow().clone();
-                let afid = if afd >= 0 { self.chan(up, afd)?.fid } else { ninep::NOFID };
+                let cell = self.fdtochan(up, fd, Some(chan::mode::ORDWR), false)?;
+                let mut wire = cell.borrow().clone();
+                wire.flag |= chan::flag::CMSG;
+                let afid = if afd >= 0 {
+                    self.fdtochan(up, afd, Some(chan::mode::ORDWR), false)?.borrow().fid
+                } else {
+                    ninep::NOFID
+                };
                 let on = self.walk(up, &old, namec::A::Todir, 0)?;
                 let user = self.procs.borrow().user(up).unwrap_or_default();
                 let to = self.tab.dmount(wire, &user, &aname, afid)?;
+                cell.borrow_mut().flag |= chan::flag::CMSG;
                 self.tab.keepwire(cell);
                 let id = {
                     let procs = self.procs.borrow();
@@ -2023,21 +2081,31 @@ impl Kernel {
             // `sysfversion` (`auth.c:23`): `mntversion` on the descriptor,
             // answering the version agreed, which the machine copies into
             // the caller's buffer, and its length.
+            //
+            // *"c = fdtochan(arg[0], ORDWR, 0, 1)"* (`auth.c:36`), and the
+            // channel is a mount's from here (`devmnt.c:239`).
             Call::Fversion { fd, msize, version } => {
-                let cell = self.chancell(up, fd)?;
-                let wire = cell.borrow().clone();
+                let cell = self.fdtochan(up, fd, Some(chan::mode::ORDWR), false)?;
+                let mut wire = cell.borrow().clone();
+                wire.flag |= chan::flag::CMSG;
                 let v = self.tab.dfversion(wire, msize, &version)?;
+                cell.borrow_mut().flag |= chan::flag::CMSG;
                 self.tab.keepwire(cell);
                 Ok(Ret::Str(v))
             }
             // `sysfauth` (`auth.c:62`): `mntauth`, a descriptor on the new
             // channel — *"ac is responsible for keeping c alive"* — and
             // *"always mark it close on exec"*.
+            //
+            // *"c = fdtochan(arg[0], ORDWR, 0, 1)"* (`auth.c:74`); `mntauth`
+            // versions the channel first if it has not been (`devmnt.c:259`).
             Call::Fauth { fd, aname } => {
-                let cell = self.chancell(up, fd)?;
-                let wire = cell.borrow().clone();
+                let cell = self.fdtochan(up, fd, Some(chan::mode::ORDWR), false)?;
+                let mut wire = cell.borrow().clone();
+                wire.flag |= chan::flag::CMSG;
                 let user = self.procs.borrow().user(up).unwrap_or_default();
                 let mut ac = self.tab.dauth(wire, &user, &aname)?;
+                cell.borrow_mut().flag |= chan::flag::CMSG;
                 self.tab.keepwire(cell);
                 ac.flag |= chan::flag::CCEXEC;
                 Ok(Ret::Fd(self.newfd(up, ac)?))
@@ -2838,6 +2906,22 @@ impl Kernel {
         let p = procs.get(up).ok_or("no such process")?;
         let fds = p.fds.clone();
         let cell = fds.borrow().get(fd).cloned().ok_or(EBADFD)?;
+        Ok(cell)
+    }
+
+    /// `fdtochan(fd, mode, chkmnt, iref)` (`sysfile.c:120`): the channel a
+    /// descriptor holds, refused — `Ebadusefd` — if it is not open in the
+    /// mode the call needs or, with `chkmnt`, if it is a mount's message
+    /// channel ([`chan::fdcheck`]). `None` is Plan 9's `-1`.
+    fn fdtochan(
+        &mut self,
+        up: Pid,
+        fd: Fd,
+        mode: Option<u16>,
+        chkmnt: bool,
+    ) -> Result<std::rc::Rc<std::cell::RefCell<Chan>>, String> {
+        let cell = self.chancell(up, fd)?;
+        chan::fdcheck(&cell.borrow(), mode, chkmnt)?;
         Ok(cell)
     }
 
@@ -3730,7 +3814,9 @@ mod syscalls {
         fn walk(&mut self, _c: &Chan, _n: &str) -> Result<Option<Chan>, String> {
             Ok(None)
         }
-        fn open(&mut self, c: Chan, _m: u16) -> Result<Chan, String> {
+        fn open(&mut self, mut c: Chan, m: u16) -> Result<Chan, String> {
+            // every device's open: *"c->mode = openmode(omode)"*
+            c.mode = crate::chan::openmode(m)?;
             Ok(c)
         }
         fn create(&mut self, _c: &mut Chan, _n: &str, _m: u16, _p: u32) -> Result<(), String> {
@@ -4119,6 +4205,103 @@ mod syscalls {
         let (mut k, log) = tests::watched();
         k.schedinit().unwrap();
         assert!(log.borrow().order.is_empty(), "nothing was ready, so nothing ran");
+    }
+
+
+    fn fd(r: Result<Ret, String>) -> Fd {
+        match r {
+            Ok(Ret::Fd(fd)) => fd,
+            r => panic!("{r:?}"),
+        }
+    }
+
+    /// **A descriptor is used in the mode it was opened in** — `fdtochan`'s
+    /// check, which `read` and `write` make with `OREAD` and `OWRITE`
+    /// (`sysfile.c:637`, `:728`, `:152`): a file opened for reading is not
+    /// written through, nor one opened for writing read; `ORDWR` is both;
+    /// `OEXEC` opens for reading (`openmode`, `sysfile.c:167`); and a mode
+    /// past `OEXEC` is `Ebadarg`. Reads and writes checked nothing.
+    #[test]
+    fn a_descriptor_is_used_only_in_the_mode_it_was_opened_in() {
+        let mut k = booted();
+        let w = fd(k.syscall(1, Call::Create { path: "#e/x".into(), mode: 1, perm: 0o666 }));
+        assert_eq!(k.syscall(1, Call::Pread { fd: w, n: 8, off: 0 }), Err(chan::EBADUSEFD.into()));
+        k.syscall(1, Call::Pwrite { fd: w, data: b"abc".to_vec(), off: 0 }).unwrap();
+        let r = fd(k.syscall(1, Call::Open { path: "#e/x".into(), mode: 0 }));
+        assert_eq!(k.syscall(1, Call::Pwrite { fd: r, data: b"z".to_vec(), off: 0 }), Err(chan::EBADUSEFD.into()));
+        assert_eq!(k.syscall(1, Call::Pread { fd: r, n: 8, off: 0 }).unwrap(), Ret::Data(b"abc".to_vec()));
+        let rw = fd(k.syscall(1, Call::Open { path: "#e/x".into(), mode: 2 }));
+        k.syscall(1, Call::Pwrite { fd: rw, data: b"d".to_vec(), off: 3 }).unwrap();
+        assert_eq!(k.syscall(1, Call::Pread { fd: rw, n: 8, off: 0 }).unwrap(), Ret::Data(b"abcd".to_vec()));
+        let x = fd(k.syscall(1, Call::Open { path: "#e/x".into(), mode: 3 }));
+        assert!(k.syscall(1, Call::Pread { fd: x, n: 8, off: 0 }).is_ok(), "OEXEC is OREAD");
+        assert!(k.syscall(1, Call::Pwrite { fd: x, data: b"z".to_vec(), off: 0 }).is_err());
+        assert_eq!(k.syscall(1, Call::Open { path: "#e/x".into(), mode: 4 }), Err("bad arg in system call".into()));
+        assert_eq!(k.syscall(1, Call::Open { path: "#e/x".into(), mode: 0x10000 }), Err("bad arg in system call".into()));
+    }
+
+    /// **`#d` answers the descriptor's channel in its own mode**
+    /// (`devdup.c:86`): opening it by name for another mode is `Ebadusefd`,
+    /// so a descriptor open for reading does not become one open for
+    /// writing — which setting the mode on it made it. The directory opens
+    /// only to read (*"error(Eisdir)"*).
+    #[test]
+    fn opening_a_descriptor_by_name_does_not_change_its_mode() {
+        let mut k = booted();
+        k.tab.add(Box::new(devdup::DupDev::new(k.up.clone())));
+        let w = fd(k.syscall(1, Call::Create { path: "#e/x".into(), mode: 1, perm: 0o666 }));
+        k.syscall(1, Call::Pwrite { fd: w, data: b"kept".to_vec(), off: 0 }).unwrap();
+        let r = fd(k.syscall(1, Call::Open { path: "#e/x".into(), mode: 0 }));
+        assert_eq!(
+            k.syscall(1, Call::Open { path: format!("#d/{r}"), mode: 1 }),
+            Err(chan::EBADUSEFD.into()),
+        );
+        let again = fd(k.syscall(1, Call::Open { path: format!("#d/{r}"), mode: 0 }));
+        assert!(k.syscall(1, Call::Pwrite { fd: again, data: b"z".to_vec(), off: 0 }).is_err());
+        assert_eq!(k.syscall(1, Call::Pread { fd: again, n: 8, off: 0 }).unwrap(), Ret::Data(b"kept".to_vec()));
+        assert!(k.syscall(1, Call::Open { path: "#d".into(), mode: 1 }).is_err());
+    }
+
+    /// **`dup` onto an open descriptor closes it** (`sysfile.c:246`): a
+    /// pipe's only writer replaced that way is gone, and the reader reaches
+    /// end of file rather than waiting for a writer that cannot write.
+    #[test]
+    fn dup_onto_the_only_writer_of_a_pipe_ends_its_reader() {
+        let mut k = booted();
+        let Ok(Ret::Two(a, b)) = k.syscall(1, Call::Pipe) else { panic!() };
+        let other = fd(k.syscall(1, Call::Create { path: "#e/x".into(), mode: 1, perm: 0o666 }));
+        assert_eq!(k.syscall(1, Call::Dup { old: other, new: a }).unwrap(), Ret::Fd(a));
+        assert_eq!(k.syscall(1, Call::Pread { fd: b, n: 8, off: -1 }).unwrap(), Ret::Data(Vec::new()), "end of file");
+    }
+
+    /// **`exec` closes what was opened close-on-exec** (`sysproc.c:592`),
+    /// and leaves the rest.
+    #[test]
+    fn exec_closes_the_descriptors_opened_close_on_exec() {
+        let mut k = booted();
+        let keep = fd(k.syscall(1, Call::Open { path: "/boot/hello".into(), mode: 0 }));
+        let ocexec = (chan::mode::OREAD | chan::mode::OCEXEC) as i32;
+        let gone = fd(k.syscall(1, Call::Open { path: "/boot/hello".into(), mode: ocexec }));
+        k.exec(1, "/boot/init", &[]).unwrap();
+        assert!(k.syscall(1, Call::Pread { fd: keep, n: 1, off: 0 }).is_ok());
+        assert_eq!(k.syscall(1, Call::Pread { fd: gone, n: 1, off: 0 }), Err(EBADFD.into()), "closed by exec");
+    }
+
+    /// **`create` sets the channel flags an open sets** (`chan.c:1616`):
+    /// a `/srv` file created `ORCLOSE` goes when its creator closes it
+    /// (`srvclose`, `devsrv.c:286`) — which is how a server's entry does not
+    /// outlive it — and one created plainly stays.
+    #[test]
+    fn a_srv_file_created_orclose_goes_with_its_creator() {
+        let mut k = booted();
+        k.tab.add(Box::new(devsrv::SrvDev::new(k.up.clone())));
+        let orclose = (chan::mode::OWRITE | chan::mode::ORCLOSE) as i32;
+        let tmp = fd(k.syscall(1, Call::Create { path: "#s/tmp".into(), mode: orclose, perm: 0o600 }));
+        let kept = fd(k.syscall(1, Call::Create { path: "#s/kept".into(), mode: 1, perm: 0o600 }));
+        k.syscall(1, Call::Close { fd: tmp }).unwrap();
+        k.syscall(1, Call::Close { fd: kept }).unwrap();
+        assert!(k.walk(1, "#s/tmp", namec::A::Access, 0).is_err(), "removed on close");
+        assert!(k.walk(1, "#s/kept", namec::A::Access, 0).is_ok());
     }
 
 

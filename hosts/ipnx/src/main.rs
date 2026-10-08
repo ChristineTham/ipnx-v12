@@ -257,7 +257,7 @@ mod userspace {
     /// The rootfs `mk.sh` built — the machine's filesystem, as `ipnx` serves
     /// it by default.
     fn rootfs() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../userspace/root")
+        ipnx::rootcopy().to_path_buf()
     }
 
     /// Boot, type, and answer with what the console was shown.
@@ -519,6 +519,12 @@ mod userspace {
     /// (`devmnt.c:811`), one process at a time reads the wire and each
     /// reply goes to the RPC with its tag (`mountmux`). A rule is written, a
     /// port is read, and `plumb` delivers a message to it.
+    ///
+    /// **The message is sent until it has arrived**, a bounded number of
+    /// times: plumber frees a message for a port nobody has open yet
+    /// (`dispose`, `plumb/fsys.c:539`), and the reader is a process started
+    /// in the background — one `sleep 1` before the send lost the race under
+    /// load (2026-10-07), as it would on Plan 9.
     #[test]
     fn plumber_serves_and_plumb_delivers() {
         let out = typing(
@@ -526,9 +532,7 @@ mod userspace {
              {echo 'type is text'; echo 'data matches hello'; echo 'plumb to edit'} >/mnt/plumb/rules\n\
              ls /mnt/plumb\n\
              cat /mnt/plumb/edit >/tmp/plumbed &\n\
-             sleep 1\n\
-             plumb -d edit -s me hello\n\
-             sleep 1\n\
+             for(i in 1 2 3 4 5 6 7 8 9 10) if(! test -s /tmp/plumbed){ plumb -d edit -s me hello; sleep 1 }\n\
              cat /tmp/plumbed\n",
         );
         assert!(out.contains("/mnt/plumb/edit\n/mnt/plumb/rules\n/mnt/plumb/send\n"), "{out:?}");
@@ -1172,7 +1176,7 @@ mod serial {
     use std::time::Duration;
 
     fn rootfs() -> std::path::PathBuf {
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../userspace/root")
+        ipnx::rootcopy().to_path_buf()
     }
 
     /// One exchange on the line: the message out, the reply read whole.

@@ -24,6 +24,8 @@ use std::rc::Rc;
 
 const EPERM: &str = "permission denied";
 const ESHORT: &str = "short read or write";
+/// `Ebadarg` (`error.h:18`).
+const EBADARG: &str = "bad arg in system call";
 
 /// `Qhash` and `Quse` (`devcap.c:38`), with `caphash` last as its comment
 /// insists.
@@ -98,11 +100,22 @@ impl Dev for CapDev {
     }
 
     /// `capopen` (`devcap.c:95`): `caphash` is eve's alone.
+    /// `capopen` (`devcap.c:83`): the directory opens only to read —
+    /// *"if(omode != OREAD) error(Ebadarg)"* — and `caphash` is eve's.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
+        if c.qid.is_dir() {
+            if mode != crate::chan::mode::OREAD {
+                return Err(EBADARG.into());
+            }
+            c.mode = mode;
+            c.offset = 0;
+            return Ok(c);
+        }
         if c.qid.path == Q::Hash as u64 && !self.iseve() {
             return Err(EPERM.into());
         }
-        c.mode = mode;
+        c.mode = crate::chan::openmode(mode)?;
+        c.offset = 0;
         Ok(c)
     }
 

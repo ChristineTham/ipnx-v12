@@ -107,6 +107,9 @@ pub struct Cons {
     /// `kprintinuse` (`devcons.c`) — the one-reader lock `consopen` takes
     /// with `tas` and `consclose` releases.
     kprintinuse: bool,
+    /// Copies of the open `kprint` beyond the first — the close that frees
+    /// it is the last ([`crate::dev::Dev::incref`]).
+    kprintrefs: u32,
     /// `kprintoq` (`devcons.c:17`) — *"console output, for /dev/kprint"*:
     /// made by the first open, and while it is open what would reach the
     /// screen goes here instead (`putstrn0`, `devcons.c:166`).
@@ -268,6 +271,7 @@ impl Cons {
             sysname: String::new(),
             kmesg: Vec::new(),
             kprintinuse: false,
+            kprintrefs: 0,
             kprintoq: None,
             kprintat: std::collections::HashMap::new(),
             letters,
@@ -537,7 +541,7 @@ impl Dev for Cons {
         // (`devgen`, `dev.c:106`) — and a directory is opened only to read
         // (`dev.c:379`).
         if c.qid.is_dir() {
-            if mode & !crate::chan::mode::OCEXEC != crate::chan::mode::OREAD {
+            if mode != crate::chan::mode::OREAD {
                 return Err(EPERM.into());
             }
         } else if let Some(e) = CONSDIR.iter().find(|e| e.1 as u64 == c.qid.path) {
@@ -548,7 +552,7 @@ impl Dev for Cons {
         // openmode(omode); c->flag |= COPEN;"*. `close` acts on that bit,
         // so a device that does not set it has a `close` that never fires.
         c.offset = 0;
-        c.mode = mode;
+        c.mode = crate::chan::openmode(mode)?;
         c.flag |= crate::chan::flag::COPEN;
         match Q::from_path(c.qid.path) {
             Some(Q::Consctl) => {
@@ -889,6 +893,10 @@ impl Dev for Cons {
             // `consclose`: *"case Qkprint: if(c->flag & COPEN){ kprintinuse
             // = 0; ... }"*. The next open gets it.
             Some(Q::Kprint) => {
+                if self.kprintrefs > 0 {
+                    self.kprintrefs -= 1;
+                    return;
+                }
                 self.kprintinuse = false;
                 if let Some(q) = self.kprintoq.as_mut() {
                     q.hangup();
@@ -896,6 +904,20 @@ impl Dev for Cons {
                 let procs = self.up.borrow().procs.clone();
                 procs.borrow_mut().wakeup(Rid::Rr(DevId::Cons, 0, KPRINTQ));
             }
+            _ => {}
+        }
+    }
+
+    /// Another copy of an open channel. `consctl` counts its opens —
+    /// *"incref(&kbd.ctl)"* — so raw mode lasts until the last close; and
+    /// `kprint` is freed by the last.
+    fn incref(&mut self, c: &Chan) {
+        if c.flag & crate::chan::flag::COPEN == 0 {
+            return;
+        }
+        match Q::from_path(c.qid.path) {
+            Some(Q::Consctl) => self.kbd.ctl += 1,
+            Some(Q::Kprint) => self.kprintrefs += 1,
             _ => {}
         }
     }

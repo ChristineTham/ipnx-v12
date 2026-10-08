@@ -5255,3 +5255,122 @@ write to them in any case: both are `0440`.
 m v L P u U '$' Σ κ`. It had been `p d`, which termrc does not bind — `#p`
 and `#d` are `/proc` and `/fd` (`lib/namespace:8`, `:10`). A letter this
 kernel lacks fails silently, as on a terminal without the hardware.
+
+### 16.21 A channel's mode, and who may open what (2026-10-07)
+
+An audit of every device's open against Plan 9's, prompted by `devopen`'s
+permission check being missing from `#c` and `#/` (§16.20), found the
+whole family thin. Each item below is Plan 9's at file and line, and each
+has a test that fails without it.
+
+**A descriptor is used in the mode it was opened in.** Plan 9 reaches every
+descriptor through `fdtochan(fd, mode, chkmnt, iref)` (`sysfile.c:120`):
+`read` asks `OREAD` and `write` `OWRITE` (`:637`, `:728`), `mount`,
+`fversion` and `fauth` `ORDWR` (`:1015`, `:1024`, `auth.c:36`, `:74`), and
+a mismatch is `Ebadusefd` — *"inappropriate use of fd"* — unless the
+channel is open `ORDWR` (`:143`–`:156`). This kernel's `read` and `write`
+checked nothing, so **a file opened for reading could be written
+through**. With `chkmnt`, a mount's message channel — `CMSG`, set at the
+end of `mntversion` (`devmnt.c:239`) — is not read or written directly;
+nothing set `CMSG` here, and now `mount`, `fversion` and `fauth` do, which
+also gives `devdir`'s `QTMOUNT` (`dev.c:37`) and `pipewrite`'s silence on a
+mounted pipe (`devpipe.c:347`).
+
+**A channel is open in `openmode` of the mode it was opened with**
+(`sysfile.c:162`): `OTRUNC`, `OCEXEC` and `ORCLOSE` are flags, not modes;
+`OEXEC` is `OREAD`; anything past `OEXEC` is `Ebadarg`. Every device
+stores it (`c->mode = openmode(omode)`); devices here stored the raw mode,
+so an `OEXEC` open would have compared unequal to `OREAD`. And `namec`
+strips `OCEXEC` before the device sees it — *"open(c, omode&~OCEXEC)"*
+(`chan.c:1513`), *"create(cnew, …, omode&~(OEXCL|OCEXEC), perm)"*
+(`:1613`); `srvcreate` panics if it does not (*"someone broke namec"*,
+`devsrv.c:151`) — where it had been sent on, to 9P servers among others.
+`create` set none of the flags an open sets (`:1616`), so a `/srv` file
+created `ORCLOSE` — how a server's entry is made to go with it — stayed.
+
+**`#d` answers the descriptor's channel as it is**: `dupopen` is
+`fdtochan(fd, openmode(omode), 0, 1)` (`devdup.c:86`). This one set the
+requested mode on the channel it returned, so **`/fd/0`, open for reading,
+could be opened for writing by name**. The directory opens only to read
+(`Eisdir`). `#s` likewise refuses a posted channel in a mode it is not
+open in unless `ORDWR`, and any `OTRUNC` (`devsrv.c:128`–`:131`); `#|` and
+`#¤` refuse a directory open for anything but reading (`Ebadarg`,
+`devpipe.c:219`, `devcap.c:86`).
+
+**`#p` is `devopen`'s too** (`devproc.c:471`), with `procgen`'s mode: a file
+whose `procdir[]` mode is 0 — `ctl`, `note`, `notepg` — takes the
+process's `procmode`, and the rest gain its read bits (`:254`). `procmode`
+is `0640` for the first process and a kernel process (`pc/main.c:283`,
+`proc.c:1442`) and inherited (`sysproc.c:172`), so **another user's
+process is not someone else's to control or kill** — eve, judged by the
+group bits, may read and not write. Its user or eve changes it with
+`procwstat` (`devproc.c:479`), which was refused. And `nonone` applies to
+the files `procopen` names (`:410`–`:446`), not to all of them, nor to
+listing a process's directory (`procread`, `:708`), which `none` was
+refused.
+
+**`#e`'s `OTRUNC` empties the variable at the open** (`devenv.c:121`);
+`envwrite` never shortens one (`:285`). Without it, `create(2)` of a
+variable that exists — an open with `OTRUNC` (`chan.c:1550`) — wrote a
+shorter value over a longer one and kept the longer one's tail.
+
+**`dup` onto an open descriptor closes it** — *"oc = f->fd[fd]; f->fd[fd]
+= c; … if(oc) cclose(oc)"* (`sysfile.c:246`) — and the slot may be at most
+one `DELTAFD` past the table (`growfd`, `:31`). The channel replaced was
+dropped unseen, so a pipe's last writer replaced that way left its reader
+waiting for ever. **`exec` closes the descriptors marked close-on-exec**
+(`sysproc.c:592`), which nothing did.
+
+**A copy of an open channel is counted by its device.** Plan 9 hands back
+the same `Chan` with one more reference (`fdtochan`'s `iref`, `srvopen`'s
+`incref`), and the device's close runs at the last. Here a channel is a
+value, and a device that counts its opens counts the copy through
+`incref`; `#d`'s copies were not counted at all, and `#c` (`consctl`,
+`kprint`), `#9` (in use) and `#M` (the fid) did not count them — so a
+copy's close could turn raw mode off, free `#9`, or clunk a fid the
+original was still using.
+
+**What remains different, and is put to Christine rather than built**: a
+last close here cannot wait. Plan 9's `uartclose` sleeps until the line
+has taken what is queued (`devuart.c:342`), and `mntclunk` for `Rclunk`;
+here the uart kicks once and the clunk's reply is dropped (§16.14). Making
+close resumable — `close`, `dup`, `exec`'s close-on-exec, `mount`,
+`closeproc`, and exit's `closefgrp`, with `forceclosefgrp`'s handing-off
+(`pgrp.c:245`) for a process that cannot wait — is the faithful fix. A
+`#d` open is also a copy rather than the same channel, so its offset is
+its own (Plan 9's is shared).
+
+**`init: rc exit status: rc N: false` at the end of a session with no
+input is Plan 9's.** `rcmain`'s *"if(! ~ $#* 0) . $*"* (`rc/lib/rcmain:26`)
+leaves `!`'s *"false"* (`rc/exec.c:340`) in `$status` for a shell started
+without arguments; an interactive one that reads nothing exits with it, and
+`init` prints a non-empty status (`init.c:174`).
+
+### 16.22 A child chosen before it was made; and the tests' shared root (2026-10-07)
+
+**The system could end with *"no such process"* under load**, from
+`gotolabel` — the scheduler had chosen a process the machine had no fiber
+for. Caught with the pid named: *"pid 28 (init), Running, status None"*,
+a child `init` had just forked and not yet `exec`d. `sysrfork`
+readies the child as its last act, when the child is whole
+(`sysproc.c:210`, *"ready(p); sched();"*); here the kernel readies it in
+the call (`lib.rs`, `Call::Rfork`) and makes it `m->readied`, and the
+machine makes it whole only when the parent's stack has unwound into it.
+`unwind` called two guest functions, `__asyncbuf` and `__asyncbufsize`,
+before it set `busy` — and a clock interrupt that fell in either switched
+the parent (the ready child is what `hzsched` switches for), and the
+scheduler entered the child. Now nothing of the guest runs with interrupts
+on between the kernel's `rfork` and the stack wound back; and a child whose
+making is not finished — a traced `rfork` stops its parent after the call —
+is put back on the queue rather than entered, and one whose making failed
+exits. The failure needed three test suites at once on four processors to
+show once in twelve runs; it was the one of 2026-09-29 whose message was
+not kept.
+
+**The tests booted on the built root itself**, `userspace/root`, and a boot
+writes: two test processes at once wrote one `/tmp/long.rc` and corrupted
+it — the right length, the wrong words — and the plumber's `/tmp/plumbed`
+likewise; a build that replaced a program under a running test could fail
+its boot; and every run left its `/tmp` files in the root `ipnx` boots
+from. Each test process now boots on a copy of its own
+(`ipnx::rootcopy`), removed when it exits.

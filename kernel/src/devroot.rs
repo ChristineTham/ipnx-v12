@@ -177,13 +177,14 @@ impl Dev for Root {
     /// to nobody, whoever asks; and a directory opens only to read
     /// (`dev.c:379`).
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
-        if c.qid.is_dir() && mode & !crate::chan::mode::OCEXEC != crate::chan::mode::OREAD {
+        if c.qid.is_dir() && mode != crate::chan::mode::OREAD {
             return Err(EPERM.into());
         }
         if mode & 3 != crate::chan::mode::OREAD && mode & 3 != crate::chan::mode::OEXEC {
             return Err(EPERM.into());
         }
-        c.mode = mode;
+        c.mode = crate::chan::openmode(mode)?;
+        c.offset = 0;
         Ok(c)
     }
 

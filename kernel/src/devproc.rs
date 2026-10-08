@@ -90,6 +90,18 @@ fn proclen(procs: &crate::proc::Procs, pid: Pid, q: Q) -> u64 {
 /// `QID(c->qid)`.
 const SHIFT: u64 = 8;
 
+/// A file's mode as `procgen` gives it (`devproc.c:254`): *"p->procmode
+/// determines default mode for files in /proc"* — a file whose `procdir[]`
+/// mode is 0 takes the process's `procmode`, any other gains its read bits.
+fn procperm(procs: &crate::proc::Procs, pid: Pid, perm: u32) -> u32 {
+    let procmode = procs.get(pid).map_or(0, |p| p.procmode);
+    if perm == 0 {
+        procmode
+    } else {
+        perm | (procmode & 0o444)
+    }
+}
+
 fn qid_of(pid: Pid, q: Q) -> u64 {
     ((pid as u64) << SHIFT) | q as u64
 }
@@ -259,28 +271,63 @@ impl Dev for ProcDev {
 
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
         let (pid, q) = split_qid(c.qid.path);
-        if pid != 0 {
-            if !self.alive(pid) {
-                return Err(EPROCDIED.into());
-            }
-            self.nonone(pid)?;
-            if matches!(q, Q::Ns | Q::Profile) && mode & 3 != crate::chan::mode::OREAD {
+        // *"if(c->qid.type & QTDIR) return devopen(c, omode, 0, 0,
+        // procgen)"* (`devproc.c:356`): a directory opens to read, and that
+        // is all.
+        if c.qid.is_dir() {
+            if mode != crate::chan::mode::OREAD {
                 return Err(EPERM.into());
             }
-            // `procopen`'s `Qnotepg` (`devproc.c:446`): write only, never
-            // the boot namespace group's, and the note group is remembered
-            // in the channel — *"c->pgrpid.vers = p->noteid"* — so a write
-            // reaches the group as it was when opened.
-            if q == Q::Notepg {
+            c.mode = mode;
+            c.offset = 0;
+            return Ok(c);
+        }
+        if !self.alive(pid) {
+            return Err(EPROCDIED.into());
+        }
+        // *"omode = openmode(omode)"* (`:396`), then each file's own case.
+        let mode = crate::chan::openmode(mode)?;
+        let read = crate::chan::mode::OREAD;
+        match q {
+            Q::Proc | Q::Profile | Q::Fd | Q::Ns => {
+                if mode != read {
+                    return Err(EPERM.into());
+                }
+            }
+            // `Qnote`: *"if(p->privatemem) error(Eperm)"*, and nothing here
+            // is private memory.
+            Q::Note => {}
+            Q::Ctl | Q::Args | Q::Noteid | Q::Status | Q::Wait | Q::Syscall => self.nonone(pid)?,
+            // `Qnotepg` (`devproc.c:446`): write only, never the boot
+            // namespace group's, and the note group is remembered in the
+            // channel — *"c->pgrpid.vers = p->noteid"* — so a write reaches
+            // the group as it was when opened.
+            Q::Notepg => {
+                self.nonone(pid)?;
                 let procs = self.up.borrow().procs.clone();
                 let procs = procs.borrow();
-                if mode & 3 != crate::chan::mode::OWRITE || procs.pgrpid(pid) == Some(1) {
+                if mode != crate::chan::mode::OWRITE || procs.pgrpid(pid) == Some(1) {
                     return Err(EPERM.into());
                 }
                 c.aux = procs.get(pid).map_or(0, |p| p.noteid) as u64;
             }
+            Q::Root => return Err("it's a mystery to me".into()),
         }
+        // *"tc = devopen(c, omode, 0, 0, procgen)"* (`devproc.c:471`) —
+        // `devpermcheck` of the file's mode for its process's user: the
+        // `procmode` most files take is `0640`, so another user's process is
+        // not someone else's to control or kill (`dev.c:371`).
+        let (owner, perm) = {
+            let procs = self.up.borrow().procs.clone();
+            let procs = procs.borrow();
+            let owner = procs.user(pid).ok_or(EPROCDIED)?;
+            let perm = PROCDIR.iter().find(|e| e.1 == q).map_or(0, |e| procperm(&procs, pid, e.2));
+            (owner, perm)
+        };
+        let user = self.up.borrow().user();
+        crate::dev::permcheck(&user, &owner, &self.eve.borrow(), perm, mode)?;
         c.mode = mode;
+        c.offset = 0;
         Ok(c)
     }
 
@@ -321,16 +368,18 @@ impl Dev for ProcDev {
             drop(p);
             return Ok(crate::dev::devdirread(c, n, &entries));
         }
-        // A process's own directory: `procdir[]`, one entry per file.
+        // A process's own directory: `procdir[]`, one entry per file, each
+        // with `procgen`'s mode. *"if(c->qid.type & QTDIR) return
+        // devdirread(…, procgen)"* (`devproc.c:708`) — anyone may list it.
         if q == Q::Root && c.qid.is_dir() {
-            self.nonone(pid)?;
             let user = procs.borrow().user(pid).ok_or(EPROCDIED)?;
             let p = procs.borrow();
             let entries: Vec<crate::ninep::Dir> = PROCDIR
                 .iter()
                 .map(|(name, q, perm)| {
                     let qid = Qid { qtype: 0, vers: 0, path: qid_of(pid, *q) };
-                    crate::dev::devdir(c, qid, name, proclen(&p, pid, *q), &user, &self.eve.borrow(), *perm)
+                    let perm = procperm(&p, pid, *perm);
+                    crate::dev::devdir(c, qid, name, proclen(&p, pid, *q), &user, &self.eve.borrow(), perm)
                 })
                 .collect();
             return Ok(crate::dev::devdirread(c, n, &entries));
@@ -715,7 +764,7 @@ impl Dev for ProcDev {
             (pid.to_string(), crate::ninep::DMDIR | 0o555)
         } else {
             let e = PROCDIR.iter().find(|e| e.1 == q).ok_or("no such file")?;
-            (e.0.to_string(), e.2)
+            (e.0.to_string(), procperm(&self.up.borrow().procs.borrow(), pid, e.2))
         };
         let user = if pid == 0 {
             self.eve.borrow().clone()
@@ -726,8 +775,38 @@ impl Dev for ProcDev {
         Ok(crate::dev::devdir(c, c.qid, &name, len, &user, &self.eve.borrow(), perm).conv_d2m())
     }
 
-    fn wstat(&mut self, _c: &mut Chan, _e: &[u8]) -> Result<(), String> {
-        Err(EPERM.into())
+    /// `procwstat` (`devproc.c:479`): the process's user or eve may set its
+    /// `procmode` — the mode its files take — and only eve may give it to
+    /// another user.
+    fn wstat(&mut self, c: &mut Chan, edir: &[u8]) -> Result<(), String> {
+        if c.qid.is_dir() {
+            return Err(EPERM.into());
+        }
+        let (pid, _) = split_qid(c.qid.path);
+        self.nonone(pid)?;
+        if !self.alive(pid) {
+            return Err(EPROCDIED.into());
+        }
+        let me = self.up.borrow().user();
+        let eve = self.eve.borrow().clone();
+        let procs = self.up.borrow().procs.clone();
+        let owner = procs.borrow().user(pid).ok_or(EPROCDIED)?;
+        if me != owner && me != eve {
+            return Err(EPERM.into());
+        }
+        let d = crate::ninep::Dir::conv_m2d(edir).ok_or("stat buffer too small")?;
+        let mut procs = procs.borrow_mut();
+        let p = procs.get_mut(pid).ok_or(EPROCDIED)?;
+        if !d.uid.is_empty() && d.uid != owner {
+            if me != eve {
+                return Err(EPERM.into());
+            }
+            p.user = d.uid.clone();
+        }
+        if d.mode != !0 {
+            p.procmode = d.mode & 0o777;
+        }
+        Ok(())
     }
 
     fn remove(&mut self, _c: &mut Chan) -> Result<(), String> {
@@ -770,6 +849,89 @@ mod tests {
         let dir = d.walk(&root, &pid.to_string()).unwrap().expect("no such pid");
         let c = d.walk(&dir, name).unwrap().expect(name);
         d.open(c, mode).unwrap()
+    }
+
+    /// The open alone, for a test that wants its refusal.
+    fn try_open(d: &mut ProcDev, pid: Pid, name: &str, mode: u16) -> Result<Chan, String> {
+        let root = d.attach("").unwrap();
+        let dir = d.walk(&root, &pid.to_string()).unwrap().expect("no such pid");
+        let c = d.walk(&dir, name).unwrap().expect(name);
+        d.open(c, mode)
+    }
+
+    /// **Another user's process is not someone else's to control**:
+    /// `procopen` ends in `devopen` (`devproc.c:471`), which checks the
+    /// file's mode as `procgen` gives it — `ctl`'s and `note`'s are the
+    /// process's `procmode`, `0640` (`pc/main.c:283`), so eve, judged by
+    /// the group bits, may read and not write, and anyone else may do
+    /// neither. The process's user may change `procmode` with `wstat`
+    /// (`devproc.c:518`), and a child inherits it (`sysproc.c:172`).
+    #[test]
+    fn another_users_process_is_not_someone_elses_to_control() {
+        let (mut d, procs) = proc();
+        let c = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
+        procs.borrow_mut().get_mut(c).unwrap().user = "glenda".into();
+        assert!(try_open(&mut d, c, "ctl", OWRITE).is_err(), "eve may not write it");
+        assert!(try_open(&mut d, c, "note", OWRITE).is_err());
+        assert!(try_open(&mut d, c, "status", OREAD).is_ok(), "0444 is anyone's to read");
+        // its own user may, and may open the process up
+        d.up.borrow_mut().pid = c;
+        assert!(try_open(&mut d, c, "ctl", OWRITE).is_ok());
+        let mut ctl = open(&mut d, c, "ctl", OWRITE);
+        let mut dir = crate::ninep::Dir::default();
+        dir.mode = 0o666;
+        dir.atime = !0;
+        dir.mtime = !0;
+        dir.length = !0;
+        d.wstat(&mut ctl, &dir.conv_d2m()).unwrap();
+        assert_eq!(procs.borrow().get(c).unwrap().procmode, 0o666);
+        d.up.borrow_mut().pid = 1;
+        assert!(try_open(&mut d, c, "ctl", OWRITE).is_ok(), "now anyone's");
+        // `stat` reports the mode the open is checked against
+        let st = crate::ninep::Dir::conv_m2d(&d.stat(&ctl).unwrap()).unwrap();
+        assert_eq!(st.mode & 0o777, 0o666);
+        let grandchild = procs.borrow_mut().rfork(c, rf::PROC).unwrap();
+        assert_eq!(procs.borrow().get(grandchild).unwrap().procmode, 0o666, "inherited");
+    }
+
+    /// `procwstat` (`devproc.c:479`): only the process's user or eve may
+    /// change it, and only eve may give it away.
+    #[test]
+    fn only_a_processs_user_or_eve_may_wstat_it() {
+        let (mut d, procs) = proc();
+        let c = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
+        procs.borrow_mut().get_mut(c).unwrap().user = "glenda".into();
+        let other = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
+        procs.borrow_mut().get_mut(other).unwrap().user = "kitty".into();
+        let mut st = try_open(&mut d, c, "status", OREAD).unwrap();
+        let mut dir = crate::ninep::Dir::default();
+        dir.mode = !0;
+        dir.atime = !0;
+        dir.mtime = !0;
+        dir.length = !0;
+        dir.uid = "kitty".into();
+        d.up.borrow_mut().pid = other;
+        assert!(d.wstat(&mut st, &dir.conv_d2m()).is_err(), "not kitty's process");
+        d.up.borrow_mut().pid = c;
+        assert!(d.wstat(&mut st, &dir.conv_d2m()).is_err(), "its user may not give it away");
+        d.up.borrow_mut().pid = 1;
+        d.wstat(&mut st, &dir.conv_d2m()).unwrap();
+        assert_eq!(procs.borrow().user(c).as_deref(), Some("kitty"), "eve may");
+    }
+
+    /// `procread` lists a process's directory for anyone (`devproc.c:708`)
+    /// — `none` included, which was refused.
+    #[test]
+    fn none_may_list_a_process() {
+        let (mut d, procs) = proc();
+        let c = procs.borrow_mut().rfork(1, rf::PROC).unwrap();
+        procs.borrow_mut().get_mut(c).unwrap().user = "none".into();
+        d.up.borrow_mut().pid = c;
+        let root = d.attach("").unwrap();
+        let dir = d.walk(&root, "1").unwrap().unwrap();
+        let mut dir = d.open(dir, OREAD).unwrap();
+        assert!(!d.read(&mut dir, 4096, 0).unwrap().is_empty());
+        assert!(try_open(&mut d, 1, "ctl", OWRITE).is_err(), "and nonone still keeps it from ctl");
     }
 
     fn read(d: &mut ProcDev, pid: Pid, name: &str) -> String {

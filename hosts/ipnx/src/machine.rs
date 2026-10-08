@@ -26,7 +26,7 @@ use ipnx_kernel::proc::rf;
 use ipnx_kernel::{Call, Pid, Ret};
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
@@ -232,6 +232,13 @@ pub struct Wasm {
     /// machine keeps each sharer's copy and puts the running one's in place
     /// ([`Wasm::occupy`]). A process not sharing has no entry.
     sharing: RefCell<HashMap<Pid, Rc<RefCell<Sharing>>>>,
+    /// **Children whose fork is not finished** ([`FORKING`]), and those
+    /// whose fork failed. Plan 9's `sysrfork` readies a child as its last
+    /// act, when the child is whole; here the kernel readies it in the call,
+    /// and the machine makes it whole when the parent's stack has unwound.
+    /// A child chosen to run in between is put back, not entered.
+    forking: RefCell<HashSet<Pid>>,
+    unforked: RefCell<HashSet<Pid>>,
     /// The clock: what raises this machine's interrupt. Stopped when the
     /// machine goes.
     _clock: Clock,
@@ -633,6 +640,11 @@ thread_local! {
     /// store — so [`Machine::gotolabel`] takes them in when the poll ends,
     /// before the scheduler can choose one to run.
     static FORKED: RefCell<Vec<Fork>> = const { RefCell::new(Vec::new()) };
+    /// The children the kernel has made — and readied, as `sysrfork` does
+    /// — whose stacks are not wound into them yet: the parent is still
+    /// unwinding. And the children whose fork failed after the kernel had
+    /// made them, which have nothing to run.
+    static FORKING: RefCell<Vec<(Pid, bool)>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Puts [`UMEM`] back as it was.
@@ -849,6 +861,8 @@ impl Wasm {
             procs: RefCell::new(HashMap::new()),
             modules: RefCell::new(HashMap::new()),
             sharing: RefCell::new(HashMap::new()),
+            forking: RefCell::new(HashSet::new()),
+            unforked: RefCell::new(HashSet::new()),
             _clock: clock,
         })
     }
@@ -938,6 +952,14 @@ impl Machine for Wasm {
     /// new fiber in, which this must not then overwrite with the one it is
     /// holding.
     fn gotolabel(&self, pid: Pid, sys: &mut dyn Syscalls) -> Result<Left, String> {
+        // A child its parent has not finished making: back on the queue.
+        if self.forking.borrow().contains(&pid) && !self.procs.borrow().contains_key(&pid) {
+            return Ok(Left::Sched);
+        }
+        // A child whose making failed: it never ran, and it is done.
+        if self.unforked.borrow_mut().remove(&pid) {
+            return Ok(Left::Exited);
+        }
         let mut f = self.procs.borrow_mut().remove(&pid).ok_or("no such process")?;
         if f.run.is_none() {
             let (image, args) = f.image.take().ok_or("the process has no image")?;
@@ -954,8 +976,17 @@ impl Machine for Wasm {
         };
         // The processes `fork` made during the poll: fibers of their own
         // now, before the scheduler can choose one.
+        for (child, failed) in FORKING.with(|q| std::mem::take(&mut *q.borrow_mut())) {
+            if failed {
+                self.forking.borrow_mut().remove(&child);
+                self.unforked.borrow_mut().insert(child);
+            } else {
+                self.forking.borrow_mut().insert(child);
+            }
+        }
         for k in FORKED.with(|q| std::mem::take(&mut *q.borrow_mut())) {
             let child = k.pid;
+            self.forking.borrow_mut().remove(&child);
             if let ForkMem::Share(mem, stack) = &k.mem {
                 self.share(&k, mem, stack.clone());
             }
@@ -1365,15 +1396,29 @@ async fn unwind(c: &mut Caller<'_, Guest>, op: Op) -> wasmtime::Result<()> {
     let func = |c: &mut Caller<'_, Guest>, n: &str| {
         c.get_export(n).and_then(|e| e.into_func()).ok_or_else(|| wasmtime::Error::msg(format!("the module exports no {n}: not asyncified")))
     };
-    let b = func(c, "__asyncbuf")?.typed::<(), i32>(&*c)?.call_async(&mut *c, ()).await?;
-    let n = func(c, "__asyncbufsize")?.typed::<(), i32>(&*c)?.call_async(&mut *c, ()).await?;
-    let mem = memory(c)?;
-    mem.write(&mut *c, b as usize, &((b + 8) as u32).to_le_bytes())?;
-    mem.write(&mut *c, b as usize + 4, &((b + n) as u32).to_le_bytes())?;
-    c.data_mut().op = Some((op, sp));
+    // **No interrupt from here until the stack is wound back** — not even
+    // in `__asyncbuf`, which is guest code with an epoch check in it. For a
+    // `fork` the kernel has already readied the child, so a clock that
+    // switched the parent here handed the processor to a child the machine
+    // had not made yet, and the system ended (*"no such process"*,
+    // 2026-10-07). `sysrfork` is one act until its `sched()`.
     c.data_mut().busy = true;
-    func(c, "asyncify_start_unwind")?.typed::<i32, ()>(&*c)?.call_async(&mut *c, b).await?;
-    Ok(())
+    let r = async {
+        let b = func(c, "__asyncbuf")?.typed::<(), i32>(&*c)?.call_async(&mut *c, ()).await?;
+        let n = func(c, "__asyncbufsize")?.typed::<(), i32>(&*c)?.call_async(&mut *c, ()).await?;
+        let mem = memory(c)?;
+        mem.write(&mut *c, b as usize, &((b + 8) as u32).to_le_bytes())?;
+        mem.write(&mut *c, b as usize + 4, &((b + n) as u32).to_le_bytes())?;
+        c.data_mut().op = Some((op, sp));
+        func(c, "asyncify_start_unwind")?.typed::<i32, ()>(&*c)?.call_async(&mut *c, b).await?;
+        Ok(())
+    }
+    .await;
+    if r.is_err() {
+        c.data_mut().op = None;
+        c.data_mut().busy = false;
+    }
+    r
 }
 
 /// If the calling import is the one a stack was wound back into, finish the
@@ -1799,7 +1844,11 @@ fn imports(l: &mut Linker<Guest>) -> Result<(), wasmtime::Error> {
                 Ok(Ret::Pid(p)) => p,
                 _ => return -1,
             };
+            // The kernel has made the child and readied it; until the
+            // stack is wound into it, it is not to be entered.
+            FORKING.with(|q| q.borrow_mut().push((child, false)));
             if unwind(&mut c, Op::Fork { child, share }).await.is_err() {
+                FORKING.with(|q| q.borrow_mut().push((child, true)));
                 return -1;
             }
             return 0;
@@ -2096,6 +2145,25 @@ fn statlike(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **A child its parent has not finished making is not entered**: the
+    /// kernel readies it in `rfork`, and until the parent's stack has been
+    /// wound into it the scheduler is told it left (and so puts it back),
+    /// not that the system is over. A child whose making failed has run its
+    /// course. Choosing such a child ended the whole system with *"no such
+    /// process"* when the clock fell in the fork (2026-10-07).
+    #[test]
+    fn a_child_still_being_made_goes_back_on_the_queue() {
+        let w = std::rc::Rc::new(Wasm::new().unwrap());
+        let mut k = ipnx_kernel::Kernel::new(ipnx_kernel::devroot::Root::new(), w.clone()).unwrap();
+        w.forking.borrow_mut().insert(7);
+        assert_eq!(w.gotolabel(7, &mut k), Ok(Left::Sched));
+        w.forking.borrow_mut().clear();
+        w.unforked.borrow_mut().insert(8);
+        assert_eq!(w.gotolabel(8, &mut k), Ok(Left::Exited));
+        assert!(w.unforked.borrow().is_empty(), "and only once");
+        assert!(w.gotolabel(9, &mut k).is_err(), "a process that never was is still an error");
+    }
 
     /// `call_async` needs the store's data to be `Send`, and `Guest` now is
     /// by construction — this fails to compile if a field ever makes it not.

@@ -48,6 +48,51 @@ pub mod mode {
     pub const OEXCL: u16 = 0x1000;
 }
 
+/// `Ebadarg` (`error.h:18`).
+const EBADARG: &str = "bad arg in system call";
+
+/// `openmode` (`sysfile.c:162`) — the mode a channel is open in, from the
+/// mode it was opened with: the bits that are flags on the channel and not
+/// modes of it go — `OTRUNC`, `OCEXEC`, `ORCLOSE` — anything else past
+/// `OEXEC` is `Ebadarg`, and **`OEXEC` is `OREAD`**. Every device's open
+/// stores this in `c->mode` (`devcons.c` through `devopen`, `dev.c:381`),
+/// and `fdtochan` compares a call's mode with it.
+pub fn openmode(omode: u16) -> Result<u16, String> {
+    let o = omode & !(mode::OTRUNC | mode::OCEXEC | mode::ORCLOSE);
+    if o > mode::OEXEC {
+        return Err(EBADARG.into());
+    }
+    if o == mode::OEXEC {
+        return Ok(mode::OREAD);
+    }
+    Ok(o)
+}
+
+/// `Ebadusefd` (`error.h:17`).
+pub const EBADUSEFD: &str = "inappropriate use of fd";
+
+/// `fdtochan`'s checks on the channel it found (`sysfile.c:137`–`:156`):
+/// with `chkmnt`, a mount's message channel is not for reading or writing
+/// directly — the mount driver is having a conversation on it; and the mode
+/// a call needs must be the mode the channel is open in, unless it is open
+/// `ORDWR`. `None` is fdtochan's `-1`: any mode will do.
+pub fn fdcheck(c: &Chan, mode: Option<u16>, chkmnt: bool) -> Result<(), String> {
+    if chkmnt && c.flag & flag::CMSG != 0 {
+        return Err(EBADUSEFD.into());
+    }
+    let Some(m) = mode else { return Ok(()) };
+    if c.mode == mode::ORDWR {
+        return Ok(());
+    }
+    if m & mode::OTRUNC != 0 && c.mode == mode::OREAD {
+        return Err(EBADUSEFD.into());
+    }
+    if m & !mode::OTRUNC != c.mode {
+        return Err(EBADUSEFD.into());
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Chan {
     /// Which device serves this channel — Plan 9's `type`.

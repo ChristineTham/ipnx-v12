@@ -29,9 +29,10 @@ use std::fmt;
 ///
 /// It needs `userspace/mk.sh` to have run, as the host's own tests do.
 fn typing(keys: &str) -> String {
-    let store = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../userspace/root");
+    // a copy of the built root, this process's own ([`ipnx::rootcopy`])
+    let store = ipnx::rootcopy();
     let term = ipnx::Term::typing(keys);
-    let fs = ipnx::store::Store::new(&store).expect("no userspace/root — run userspace/mk.sh");
+    let fs = ipnx::store::Store::new(store).expect("no userspace/root — run userspace/mk.sh");
     ipnx::startboot(
         &[ipnx::BOOT.to_string()],
         &[],
@@ -60,6 +61,11 @@ enum State {
     Reached,
     /// Not yet, and this is the phase that will deliver it.
     Pending(&'static str),
+    /// Not yet, and **no phase of `docs/implementation.md` delivers it** —
+    /// a gap, in the sense of the triage rule (CLAUDE.md): undesigned, and
+    /// needing a proposal before it is built. Naming a phase that does not
+    /// build it was a claim with nothing behind it.
+    Gap,
 }
 
 impl fmt::Display for State {
@@ -67,6 +73,7 @@ impl fmt::Display for State {
         match self {
             State::Reached => write!(f, "reached"),
             State::Pending(p) => write!(f, "not yet  ({p})"),
+            State::Gap => write!(f, "not yet  (gap: no phase builds it)"),
         }
     }
 }
@@ -130,19 +137,22 @@ fn demo() -> Vec<Behaviour> {
         },
         Behaviour {
             what: "run a Go program",
-            state: Pending("P7"),
+            state: Gap,
             how: "it runs and prints what it printed before",
             check: None,
         },
         Behaviour {
             what: "run Python",
-            state: Pending("P7"),
+            state: Gap,
             how: "it starts, imports from its library, and computes",
             check: None,
         },
         Behaviour {
+            // P7's `pkg` copies a package into `/pkg/<name>/<version>/`
+            // (docs/packages.md), so the tree is bigger after it: P7's own
+            // acceptance — a package installs as a bind — is not this.
             what: "a package becomes available without installing anything into the tree",
-            state: Pending("P7"),
+            state: Gap,
             how: "the program runs afterwards; the tree is no bigger than before",
             check: None,
         },
@@ -186,7 +196,7 @@ fn demo() -> Vec<Behaviour> {
         },
         Behaviour {
             what: "a language toolchain becomes usable during a session, not before it",
-            state: Pending("P8"),
+            state: Gap,
             how: "the system is usable first; the toolchain works later in the same session",
             check: None,
         },

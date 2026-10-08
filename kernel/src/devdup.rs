@@ -25,6 +25,8 @@ const EPERM: &str = "permission denied";
 /// (`devdup.c:44`: `dupgen` reads `c->mode` and answers 0400, 0200 or 0600).
 const PERM: [u32; 4] = [0o400, 0o200, 0o600, 0];
 const EBADFD: &str = "fd out of range or not open";
+/// `Eisdir` (`error.h:13`).
+const EISDIR: &str = "file is a directory";
 
 pub struct DupDev {
     /// `eve` — the kernel-wide host owner (`auth.c:10`), shared rather than
@@ -103,19 +105,34 @@ impl Dev for DupDev {
 
     /// **The whole device.** `dupopen` returns the channel the fd holds, so
     /// `open("#d/3", ...)` and `dup(3, -1)` are the same act by two names.
+    ///
+    /// `dupopen` (`devdup.c:61`): the directory opens only to read, *"if(omode
+    /// != 0) error(Eisdir)"*; the ctl file is this device's own; and the fd
+    /// file is **`fdtochan(fd, openmode(omode), 0, 1)`** — the channel as it
+    /// is, refused unless it is open in the mode asked for. A channel open
+    /// for reading does not become one open for writing by being opened
+    /// again here, which is what setting the mode on it did.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
         if c.qid.is_dir() {
-            c.mode = mode;
+            if mode != 0 {
+                return Err(EISDIR.into());
+            }
+            c.mode = 0;
+            c.flag |= crate::chan::flag::COPEN;
+            c.offset = 0;
             return Ok(c);
         }
         let (fd, ctl) = Self::slot(c.qid.path).ok_or(EBADFD)?;
+        let m = crate::chan::openmode(mode)?;
         if ctl {
             // the ctl file is this device's own, and reports the mode
-            c.mode = mode;
+            c.mode = m;
+            c.flag |= crate::chan::flag::COPEN;
+            c.offset = 0;
             return Ok(c);
         }
-        let mut got = self.chan(fd).ok_or(EBADFD)?;
-        got.mode = mode;
+        let got = self.chan(fd).ok_or(EBADFD)?;
+        crate::chan::fdcheck(&got, Some(m), false)?;
         Ok(got)
     }
 

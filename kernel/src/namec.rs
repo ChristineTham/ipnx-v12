@@ -155,15 +155,17 @@ impl Devtab {
 
     pub fn dopen(&mut self, c: Chan, mode: u16) -> Result<Chan, String> {
         // `srvopen` answers the posted channel, *"incref(sp->chan)"*
-        // (`devsrv.c:135`): a copy here, which its own device counts.
-        if c.dev == DevId::Srv && !c.qid.is_dir() {
-            let posted = self.get(c.dev).ok_or("no such device")?.open(c, mode)?;
-            if posted.dev != DevId::Srv {
-                if let Some(d) = self.get(posted.dev) {
-                    d.incref(&posted);
-                }
+        // (`devsrv.c:135`), and `dupopen` the descriptor's,
+        // *"fdtochan(fd, openmode(omode), 0, 1)"* (`devdup.c:86`) — the `1`
+        // is a reference. A copy here, which its own device counts.
+        let foreign = !c.qid.is_dir()
+            && (c.dev == DevId::Srv || (c.dev == DevId::Dup && (c.qid.path - 1) & 1 == 0));
+        if foreign {
+            let got = self.get(c.dev).ok_or("no such device")?.open(c, mode)?;
+            if let Some(d) = self.get(got.dev) {
+                d.incref(&got);
             }
-            return Ok(posted);
+            return Ok(got);
         }
         if c.dev == DevId::Mnt {
             return self.with_mnt(|m, tab| {
@@ -530,19 +532,26 @@ pub fn namec(
             if omode & 3 == crate::chan::mode::OEXEC && c.is_dir() {
                 return Err("cannot exec directory".into());
             }
-            c = tab.dopen(c, omode)?;
-            // `namec`'s `Aopen`: the open modes that are really channel flags
-            // (`<libc.h>`, and `devdup.c`'s `if(omode & OCEXEC)`).
-            if omode & crate::chan::mode::ORCLOSE != 0 {
-                c.flag |= crate::chan::flag::CRCLOSE;
-            }
-            if omode & crate::chan::mode::OCEXEC != 0 {
-                c.flag |= crate::chan::flag::CCEXEC;
-            }
-            c.flag |= crate::chan::flag::COPEN;
+            // *"c = devtab[c->type]->open(c, omode&~OCEXEC)"* (`chan.c:1513`)
+            // — close-on-exec is the channel's business, not the device's,
+            // and a 9P server is never sent it.
+            c = tab.dopen(c, omode & !crate::chan::mode::OCEXEC)?;
+            opened(&mut c, omode);
         }
     }
     Ok(c)
+}
+
+/// `namec`'s `Aopen` and `Acreate` after the device has opened or created:
+/// the open modes that are really channel flags (`chan.c:1515`, `:1616`).
+fn opened(c: &mut Chan, omode: u16) {
+    if omode & crate::chan::mode::OCEXEC != 0 {
+        c.flag |= crate::chan::flag::CCEXEC;
+    }
+    if omode & crate::chan::mode::ORCLOSE != 0 {
+        c.flag |= crate::chan::flag::CRCLOSE;
+    }
+    c.flag |= crate::chan::flag::COPEN;
 }
 
 /// `Enocreate` (`port/error.h:8`).
@@ -592,10 +601,16 @@ pub fn create(
     // subshells simultaneously update the same environment variable."* Here
     // it was not even a race — one rc, writing `/env/status` twice, told it
     // could not create what it had just created.
+    //
+    // *"omode |= OTRUNC; goto Open"* (`chan.c:1550`): the open is `Aopen`'s,
+    // `OCEXEC` and all.
     if omode & crate::chan::mode::OEXCL == 0 {
         match walk(tab, ns, parent.clone(), &[last.to_string()], false) {
             Ok(existing) => {
-                return tab.dopen(existing, (omode & !crate::chan::mode::OEXCL) | crate::chan::mode::OTRUNC);
+                let omode = omode | crate::chan::mode::OTRUNC;
+                let mut c = tab.dopen(existing, omode & !crate::chan::mode::OCEXEC)?;
+                opened(&mut c, omode);
+                return Ok(c);
             }
             Err(e) if e == crate::devmnt::SLEPT => return Err(e),
             Err(_) => {}
@@ -621,7 +636,10 @@ pub fn create(
     // "unknown fid" — and a create in a union moved the mount's channel.
     let mut target = tab.dcclone(&target)?;
     target.path = parent.path.clone();
-    tab.dcreate(&mut target, last, omode & !crate::chan::mode::OEXCL, perm)?;
+    // *"devtab[cnew->type]->create(cnew, …, omode&~(OEXCL|OCEXEC), perm)"*
+    // (`chan.c:1613`), and then the flags, as an open has them.
+    tab.dcreate(&mut target, last, omode & !(crate::chan::mode::OEXCL | crate::chan::mode::OCEXEC), perm)?;
+    opened(&mut target, omode);
     Ok(target)
 }
 

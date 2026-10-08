@@ -27,6 +27,9 @@ const PIPEQSIZE: usize = 32 * 1024;
 /// What `pipewrite` posts to a writer whose write failed (`devpipe.c:349`).
 const EPIPENOTE: &str = "sys: write on closed pipe";
 
+/// `Ebadarg` (`error.h:18`).
+const EBADARG: &str = "bad arg in system call";
+
 /// `struct Pipe` (`devpipe.c:12`): two queues, and how many opens of each
 /// end there are. Plan 9 hangs it off `c->aux`; here the channel's `devno`
 /// is the pipe's index.
@@ -89,12 +92,17 @@ impl PipeDev {
 
     /// `qwrite` (`qio.c:1270`) to the queue the other end reads; a failure
     /// posts *"sys: write on closed pipe"* (`devpipe.c:349`).
-    fn qwrite(&mut self, devno: u32, to: usize, data: &[u8]) -> Result<usize, String> {
+    ///
+    /// *"avoid notes when pipe is a mounted queue"* (`devpipe.c:347`): a
+    /// mount's message channel posts nothing — the mount driver is writing,
+    /// on some process's behalf, and the error reaches it as one.
+    fn qwrite(&mut self, devno: u32, to: usize, data: &[u8], mounted: bool) -> Result<usize, String> {
         let (pid, procs) = self.up();
         let mut procs = procs.borrow_mut();
         let q = &mut self.pipes[devno as usize].q[to];
         let id = Qid3 { dev: DevId::Pipe, devno, which: to };
-        qio::qwrite(q, &mut self.at, &mut procs, pid, id, data, Some(EPIPENOTE), &mut |_, _| {})
+        let note = if mounted { None } else { Some(EPIPENOTE) };
+        qio::qwrite(q, &mut self.at, &mut procs, pid, id, data, note, &mut |_, _| {})
     }
 
     /// `wakeup(&q->rr); wakeup(&q->wr);` — what `qhangup` and `qclose` end
@@ -139,13 +147,27 @@ impl Dev for PipeDev {
         .map(|q| c.walked(name, q)))
     }
 
-    /// `pipeopen` (`devpipe.c:214`): count the open against its end.
+    /// `pipeopen` (`devpipe.c:214`): the directory opens only to read —
+    /// *"if(omode != OREAD) error(Ebadarg)"* — and a data end counts the
+    /// open against its end; *"c->iounit = qiomaxatomic"*.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
+        if c.qid.path == QDIR {
+            if mode != crate::chan::mode::OREAD {
+                return Err(EBADARG.into());
+            }
+            c.mode = mode;
+            c.flag |= COPEN;
+            c.offset = 0;
+            return Ok(c);
+        }
+        let m = crate::chan::openmode(mode)?;
         if let Some((end, _)) = Self::ends(c.qid.path) {
             self.pipe(&c)?.qref[end] += 1;
         }
-        c.mode = mode;
+        c.mode = m;
         c.flag |= COPEN;
+        c.offset = 0;
+        c.iounit = qio::MAXATOMIC as u32;
         Ok(c)
     }
 
@@ -194,7 +216,7 @@ impl Dev for PipeDev {
     fn write(&mut self, c: &mut Chan, data: &[u8], _off: u64) -> Result<usize, String> {
         let (_, to) = Self::ends(c.qid.path).ok_or("cannot write that")?;
         self.pipe(c)?;
-        self.qwrite(c.devno, to, data)
+        self.qwrite(c.devno, to, data, c.flag & crate::chan::flag::CMSG != 0)
     }
 
     fn stat(&mut self, c: &Chan) -> Result<Vec<u8>, String> {

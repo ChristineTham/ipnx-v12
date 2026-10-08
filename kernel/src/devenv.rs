@@ -164,12 +164,27 @@ impl Dev for EnvDev {
     }
 
     /// `envopen` (`devenv.c:96`): the directory opens for reading only, and a
-    /// file opens for writing only if `envwriteable` says so.
+    /// file opens for writing only if `envwriteable` says so; a variable
+    /// that has gone is `Enonexist`, and **`OTRUNC` empties it**
+    /// (`devenv.c:121`) — `envwrite` never shortens a value (`:285`), so
+    /// without it a shorter value written over a longer one kept the
+    /// longer one's tail.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
         if mode != crate::chan::mode::OREAD && (c.qid.is_dir() || !self.writeable(&c)) {
             return Err(EPERM.into());
         }
-        c.mode = mode;
+        if !c.qid.is_dir() {
+            let name = self.name(c.qid.path).ok_or(ENONEXIST)?.clone();
+            let eg = self.egrp(&c);
+            let mut g = eg.borrow_mut();
+            let v = g.get_mut(&name).ok_or(ENONEXIST)?;
+            if mode & crate::chan::mode::OTRUNC != 0 {
+                v.clear();
+            }
+        }
+        c.mode = crate::chan::openmode(mode)?;
+        c.flag |= crate::chan::flag::COPEN;
+        c.offset = 0;
         Ok(c)
     }
 
@@ -179,13 +194,21 @@ impl Dev for EnvDev {
         if !c.qid.is_dir() {
             return Err(EPERM.into());
         }
+        // *"if(strlen(name) >= sizeof up->genbuf) error("name too long")"*
+        // (`devenv.c:149`) — `genbuf` is 128 bytes (`portdat.h`).
+        if name.len() >= 128 {
+            return Err("name too long".into());
+        }
+        let m = crate::chan::openmode(mode)?;
         if self.egrp(c).borrow().contains_key(name) {
             return Err(EEXIST.into());
         }
         self.egrp(c).borrow_mut().insert(name.to_string(), Vec::new());
         let path = self.qid(name);
         c.qid = Qid { qtype: 0, vers: 0, path };
-        c.mode = mode;
+        c.offset = 0;
+        c.mode = m;
+        c.flag |= crate::chan::flag::COPEN;
         Ok(())
     }
 
@@ -286,6 +309,30 @@ mod tests {
         let dir = d.attach("").unwrap();
         let mut c = d.walk(&dir, "path").unwrap().expect("no /env/path");
         assert_eq!(d.read(&mut c, 64, 0).unwrap(), b"/bin");
+    }
+
+    /// **`OTRUNC` empties a variable at the open** (`devenv.c:121`), since a
+    /// write never shortens one (`envwrite`, `:285`): a shorter value
+    /// written over a longer one is the shorter value — which is what
+    /// `create(2)` of a name that exists does (`chan.c:1550`).
+    #[test]
+    fn otrunc_empties_a_variable_before_it_is_written() {
+        let (mut d, _) = env();
+        make(&mut d, "x", b"hello");
+        let dir = d.attach("").unwrap();
+        let c = d.walk(&dir, "x").unwrap().unwrap();
+        let mut c = d.open(c, OWRITE | crate::chan::mode::OTRUNC).unwrap();
+        d.write(&mut c, b"hi", 0).unwrap();
+        let c = d.walk(&dir, "x").unwrap().unwrap();
+        let mut c = d.open(c, OREAD).unwrap();
+        assert_eq!(d.read(&mut c, 64, 0).unwrap(), b"hi");
+        // and without it, the tail stays, as Plan 9's does
+        let c = d.walk(&dir, "x").unwrap().unwrap();
+        let mut w = d.open(c, OWRITE).unwrap();
+        d.write(&mut w, b"H", 0).unwrap();
+        let c = d.walk(&dir, "x").unwrap().unwrap();
+        let mut r = d.open(c, OREAD).unwrap();
+        assert_eq!(d.read(&mut r, 64, 0).unwrap(), b"Hi");
     }
 
     /// The group is what `rfork` shares. Two devices over the same `Egrp` see

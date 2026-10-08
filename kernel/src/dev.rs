@@ -418,6 +418,11 @@ pub fn devdir(
     eve: &str,
     perm: u32,
 ) -> crate::ninep::Dir {
+    // *"if(c->flag&CMSG) qid.type |= QTMOUNT"* (`dev.c:37`).
+    let mut qid = qid;
+    if c.flag & crate::chan::flag::CMSG != 0 {
+        qid.qtype |= crate::ninep::QTMOUNT;
+    }
     crate::ninep::Dir {
         dtype: c.dev.letter() as u16,
         dev: c.devno,

@@ -65,6 +65,10 @@ struct Server {
     /// (`devvirtio9p.c:1110`). One mount at a time, because one reply stream
     /// cannot be shared.
     inuse: bool,
+    /// Copies of the open channel beyond the first — Plan 9 has one `Chan`
+    /// and its reference count, and `v9close` runs at the last
+    /// ([`crate::dev::Dev::incref`]).
+    refs: u32,
     /// The reply being handed out, and how much of it has gone. `v9read`
     /// answers bytes of ONE R-message and never spans two
     /// (`devvirtio9p.c:1171`), which is what lets `#M` reassemble by the
@@ -87,7 +91,7 @@ impl Virtio9p {
     /// `v9probe` (`v9reset`, `devvirtio9p.c:1066`) — what the machine found.
     /// Each one becomes a file, in the order it was added.
     pub fn add(&mut self, host: Box<dyn Nineserver>) {
-        self.servers.push(Server { host, inuse: false, reply: Vec::new(), rp: 0 });
+        self.servers.push(Server { host, inuse: false, refs: 0, reply: Vec::new(), rp: 0 });
     }
 
     /// `ctlrindex(c->qid.path - 1)` — the qid path is the index plus one,
@@ -140,20 +144,26 @@ impl Dev for Virtio9p {
     /// `v9open` (`devvirtio9p.c:1090`): the directory reads only, and a
     /// server takes one client.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
+        // `v9open` (`pc/devvirtio9p.c:1090`): *"if(omode != OREAD)
+        // error(Eperm)"* for the directory, the mode as given.
         if c.qid.is_dir() {
-            if mode & 3 != crate::chan::mode::OREAD {
+            if mode != crate::chan::mode::OREAD {
                 return Err(EPERM.into());
             }
-            c.mode = mode;
+            c.mode = crate::chan::openmode(mode)?;
+            c.flag |= crate::chan::flag::COPEN;
             c.offset = 0;
             return Ok(c);
         }
+        let m = crate::chan::openmode(mode)?;
         let i = self.index(c.qid.path).ok_or(ENONEXIST)?;
         if self.servers[i].inuse {
             return Err(EINUSE.into());
         }
         self.servers[i].inuse = true;
-        c.mode = mode;
+        c.mode = m;
+        c.flag |= crate::chan::flag::COPEN;
+        c.offset = 0;
         Ok(c)
     }
 
@@ -232,9 +242,23 @@ impl Dev for Virtio9p {
         }
         if let Some(i) = self.index(c.qid.path) {
             let s = &mut self.servers[i];
+            if s.refs > 0 {
+                s.refs -= 1;
+                return;
+            }
             s.inuse = false;
             s.reply.clear();
             s.rp = 0;
+        }
+    }
+
+    /// Another copy of an open channel: one more close before `v9close`'s.
+    fn incref(&mut self, c: &Chan) {
+        if c.qid.is_dir() || c.flag & crate::chan::flag::COPEN == 0 {
+            return;
+        }
+        if let Some(i) = self.index(c.qid.path) {
+            self.servers[i].refs += 1;
         }
     }
 }

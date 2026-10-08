@@ -32,6 +32,8 @@ const EPERM: &str = "permission denied";
 const EEXIST: &str = "file already exists";
 const ENONEXIST: &str = "file does not exist";
 const ESHUTDOWN: &str = "channel shut down";
+/// `Eisdir` (`error.h:13`).
+const EISDIR: &str = "file is a directory";
 
 /// Plan 9's `Srv`.
 pub struct Srv {
@@ -151,9 +153,22 @@ impl Dev for SrvDev {
     /// `srvopen`: **returns the posted channel**, not the one it was given.
     /// A name with nothing behind it is `Eshutdown` — the entry exists and
     /// the server is gone, which is a different thing from no such file.
+    ///
+    /// `srvopen` (`devsrv.c:104`): the directory opens only to read, and
+    /// never `ORCLOSE`; a posted file cannot be truncated, and opens only in
+    /// the mode the posted channel is open in, unless that is `ORDWR`
+    /// (`:128`–`:131`) — then `devpermcheck`.
     fn open(&mut self, mut c: Chan, mode: u16) -> Result<Chan, String> {
         if c.qid.is_dir() {
+            if mode & crate::chan::mode::ORCLOSE != 0 {
+                return Err(EPERM.into());
+            }
+            if mode != crate::chan::mode::OREAD {
+                return Err(EISDIR.into());
+            }
             c.mode = mode;
+            c.flag |= crate::chan::flag::COPEN;
+            c.offset = 0;
             return Ok(c);
         }
         let (posted, owner, perm) = {
@@ -162,6 +177,13 @@ impl Dev for SrvDev {
             let posted = sp.chan.as_ref().ok_or(ESHUTDOWN)?.borrow().clone();
             (posted, sp.owner.clone(), sp.perm)
         };
+        if mode & crate::chan::mode::OTRUNC != 0 {
+            return Err("srv file already exists".into());
+        }
+        let m = crate::chan::openmode(mode)?;
+        if m != posted.mode && posted.mode != crate::chan::mode::ORDWR {
+            return Err(EPERM.into());
+        }
         self.permcheck(&owner, perm, mode)?;
         Ok(posted)
     }
@@ -172,7 +194,8 @@ impl Dev for SrvDev {
         if !c.qid.is_dir() {
             return Err(EPERM.into());
         }
-        if mode & 3 != crate::chan::mode::OWRITE {
+        // *"if(openmode(omode) != OWRITE) error(Eperm)"* (`devsrv.c:147`).
+        if crate::chan::openmode(mode)? != crate::chan::mode::OWRITE {
             return Err(EPERM.into());
         }
         if self.srv.borrow().iter().any(|s| s.name == name) {
@@ -184,11 +207,13 @@ impl Dev for SrvDev {
             name: name.to_string(),
             chan: None,
             owner: self.up.borrow().user(),
-            perm,
+            // *"sp->perm = perm&0777"* (`devsrv.c:179`).
+            perm: perm & 0o777,
             path,
         });
         c.qid = Qid { qtype: 0, vers: 0, path };
-        c.mode = mode;
+        c.flag |= crate::chan::flag::COPEN;
+        c.mode = crate::chan::mode::OWRITE;
         Ok(())
     }
 
@@ -318,6 +343,28 @@ mod tests {
         let c = d.walk(&dir2, "store").unwrap().expect("not posted");
         let got = d.open(c, OREAD).unwrap();
         assert_eq!((got.dev, got.devno, got.qid.path), (DevId::Pipe, 7, 99));
+    }
+
+    /// **A posted channel opens only in its own mode** (`devsrv.c:130`):
+    /// one open for reading is not opened for writing by name — unless it is
+    /// `ORDWR` — and a posted file cannot be truncated (`:128`); the
+    /// directory opens only to read.
+    #[test]
+    fn a_posted_channel_opens_only_in_the_mode_it_is_open_in() {
+        let (mut d, procs) = srv();
+        let mut served = Chan::attach(DevId::Pipe, 7);
+        served.mode = OREAD;
+        let fd = procs.borrow().get(1).unwrap().fds.borrow_mut().add(served);
+        let mut dir = d.attach("").unwrap();
+        d.create(&mut dir, "ro", OWRITE, 0o666).unwrap();
+        d.write(&mut dir, fd.to_string().as_bytes(), 0).unwrap();
+        let dir2 = d.attach("").unwrap();
+        let c = d.walk(&dir2, "ro").unwrap().unwrap();
+        assert!(d.open(c.clone(), OWRITE).is_err(), "posted for reading");
+        assert!(d.open(c.clone(), OREAD | crate::chan::mode::OTRUNC).is_err());
+        assert!(d.open(c, OREAD).is_ok());
+        let top = d.attach("").unwrap();
+        assert!(d.open(top, OWRITE).is_err(), "Eisdir");
     }
 
     /// The file is a place to post INTO, so it is created for writing only.
