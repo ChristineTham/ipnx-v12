@@ -39,8 +39,10 @@ binaries are supported natively: a WASI engine runs them, not a personality.
 ```
 kernel/            the kernel core (Rust): pure state machine — syscalls in,
                    effects out — with its own single-threaded async executor
-hosts/macos/       embeds the core over wasmtime/Cranelift; threads as processes
-hosts/{oci,ipados,browser}/   the same contract, per implementation.md milestones
+hosts/ipnx/        a terminal: the machine is wasmtime, each process a fiber;
+                   and the boot and the root's 9P server, which hosts share
+hosts/web/         a browser: the core compiled to wasm32 in a worker, each
+                   process a worker of its own, a call a mailbox in shared memory
 userspace/         the userspace (graduated at M0): libcs, vendored sources
                    (verbatim), commands, citizens, the rootfs seed, mk.sh,
                    VERSIONS (the measured toolchain, drift-warned)

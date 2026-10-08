@@ -35,6 +35,19 @@ cargo run -p ipnx -- rc /bin/<script>.rc
 cargo run -p ipnx -- echo hello   # boot; init runs it with rc -c, then the shell
 ```
 
+**The browser host**, `hosts/web`, wants the `wasm32-unknown-unknown`
+target (`rustup target add wasm32-unknown-unknown`) and Node 22:
+
+```bash
+sh hosts/web/build.sh                  # the kernel for wasm32, the page   ->  hosts/web/dist
+node hosts/web/serve.mjs               # http://localhost:8080/, with COOP and COEP
+node --test hosts/web/test/web.test.mjs   # the system under Node, typed at
+node hosts/web/test/browser.mjs        # the page in Chromium (Playwright)
+```
+
+`hosts/web/dist/` is generated and gitignored; its `root` is a link to
+`userspace/root`, so the page serves what `mk.sh` built last.
+
 `userspace/build/` and `userspace/root/` are generated and gitignored. Userspace
 binaries carry no `.wasm` extension: exec walks the namespace for `/bin/echo`,
 and a freshly built module is indistinguishable from a shipped one.
@@ -50,8 +63,9 @@ and `cargo test -p ipnx`.
 
 `.github/workflows/ci.yml` does exactly the above on every push: bison and a
 pinned wasi-sdk 34.0 and Binaryen 132, `bash userspace/mk.sh`, then the kernel's tests, the
-host's tests on the world just built, and `RUSTFLAGS=-D warnings cargo build
---workspace --all-targets`. Conformance runs with `continue-on-error` so its
+host's tests on the world just built, `RUSTFLAGS=-D warnings cargo build
+--workspace --all-targets`, and the browser host — built with warnings
+denied, its tests under Node, and the page in Chromium. Conformance runs with `continue-on-error` so its
 count is visible without gating the branch.
 
 **A green CI means the system builds and boots, not that it is conformant.**

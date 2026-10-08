@@ -14,6 +14,7 @@
 //! suite drives it the way a person would.
 
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod machine;
 pub mod store;
 
@@ -32,25 +33,31 @@ use ipnx_kernel::{
     dev::DevId,
     Call, Kernel, Ret,
 };
+use ipnx_kernel::machine::Machine;
 use std::rc::Rc;
 
 /// What `#c` reports about the machine underneath. The kernel names these
 /// files; only the host can fill them, which is the arrangement Plan 9 has for
 /// every number `devcons` reports — it reads them from the architecture.
+#[cfg(not(target_arch = "wasm32"))]
 pub struct Host;
 
 /// The interrupt key has been pressed and not yet handed over.
+#[cfg(not(target_arch = "wasm32"))]
 static INTERRUPT: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 
 /// What the terminal has typed, a line at a time, read on a thread of its
 /// own so that waiting for a key holds up nothing else — Plan 9's keyboard
 /// interrupts, as a machine without them has them. `None` is end of input.
+#[cfg(not(target_arch = "wasm32"))]
 static KEYS: std::sync::OnceLock<std::sync::Mutex<std::sync::mpsc::Receiver<Option<Vec<u8>>>>> =
     std::sync::OnceLock::new();
 
 /// The terminal's settings as the host found them.
+#[cfg(not(target_arch = "wasm32"))]
 static TERMIOS: std::sync::OnceLock<libc::termios> = std::sync::OnceLock::new();
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Host {
     /// **Receive `^C`.** The terminal, in its own cooked mode, turns the key
     /// into `SIGINT` to this process; catching it stops it ending the host,
@@ -122,6 +129,7 @@ impl Host {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Console for Host {
     /// `screenputs` (`devcons.c:12`). The screen this machine has is the
     /// terminal it was started from, and it is flushed at once: a prompt has
@@ -352,6 +360,7 @@ fn rcquote(w: &str) -> String {
 ///
 /// Made on first use, removed when the process exits; a copy left by a
 /// process that is gone — killed by a timeout — is removed by the next.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn rootcopy() -> &'static std::path::Path {
     static COPY: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     extern "C" fn removed() {
@@ -387,6 +396,7 @@ pub fn rootcopy() -> &'static std::path::Path {
     })
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn copytree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()> {
     std::fs::create_dir_all(to)?;
     for e in std::fs::read_dir(from)? {
@@ -401,13 +411,23 @@ fn copytree(from: &std::path::Path, to: &std::path::Path) -> std::io::Result<()>
     Ok(())
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn boot(
     root: Root,
     host: Box<dyn Console>,
     store: Option<Box<dyn Nineserver>>,
 ) -> Result<Kernel, String> {
-    let m = machine::Wasm::new()?;
-    let mut k = Kernel::new(root, Rc::new(m))?;
+    boot_with(Rc::new(machine::Wasm::new()?), root, host, store)
+}
+
+/// [`boot`] on a machine the caller supplies — the browser's, or wasmtime.
+pub fn boot_with(
+    machine: Rc<dyn Machine>,
+    root: Root,
+    host: Box<dyn Console>,
+    store: Option<Box<dyn Nineserver>>,
+) -> Result<Kernel, String> {
+    let mut k = Kernel::new(root, machine)?;
     k.tab.add(Box::new(PipeDev::new(k.up.clone())));
     // `#s`'s table is shared with `#p`, because `srvname` (`devsrv.c`) is
     // what `#p/<n>/ns` calls to name the server behind a mount.
@@ -455,12 +475,25 @@ pub fn boot(
 /// It is a function rather than `main`'s body so that a test can run the real
 /// thing — the real kernel, the real namespace, the real binaries — with a
 /// terminal it can script and inspect.
+#[cfg(not(target_arch = "wasm32"))]
 pub fn startboot(
     conf: &[(String, String)],
     host: Box<dyn Console>,
     store: Option<Box<dyn Nineserver>>,
 ) -> Result<String, String> {
-    let mut k = boot(Root::new(), host, store)?;
+    startboot_with(Rc::new(machine::Wasm::new()?), CONFFILE, conf, host, store)
+}
+
+/// [`startboot`] on a machine the caller supplies, whose configuration file
+/// is `conffile` — what `$terminal` names (`pc/main.c:250`).
+pub fn startboot_with(
+    machine: Rc<dyn Machine>,
+    conffile: &str,
+    conf: &[(String, String)],
+    host: Box<dyn Console>,
+    store: Option<Box<dyn Nineserver>>,
+) -> Result<String, String> {
+    let mut k = boot_with(machine, Root::new(), host, store)?;
 
     // `open(cons, OREAD); open(cons, OWRITE); open(cons, OWRITE);` — three
     // opens of `#c/cons`, before the binds, because `/dev` does not exist
@@ -489,7 +522,7 @@ pub fn startboot(
     // puts in the environment, and `$objtype` — which `/profile/start.ns` uses
     // to find the binaries — is init's copy of `cputype`.
     for (name, val) in [
-        ("terminal", format!("{OBJTYPE} {CONFFILE}")),
+        ("terminal", format!("{OBJTYPE} {conffile}")),
         ("cputype", OBJTYPE.to_string()),
         ("service", "terminal".to_string()),
     ] {
@@ -707,9 +740,11 @@ pub fn tokenize(s: &str) -> Vec<String> {
 /// keys are typed when the console is first polled, early in the boot, so
 /// only what the script itself prints can say how far it has got. What
 /// comes after the key is typed once the interrupt has been handed over.
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone, Default)]
 pub struct Term(std::rc::Rc<std::cell::RefCell<Script>>);
 
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
 pub struct Script {
     screen: Vec<u8>,
@@ -728,8 +763,10 @@ pub struct Script {
 }
 
 /// How long after the line before it a scripted `^C` is pressed.
+#[cfg(not(target_arch = "wasm32"))]
 const INTERRUPT_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Term {
     pub fn typing(keys: &str) -> Term {
         let t = Term::default();
@@ -749,6 +786,7 @@ impl Term {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Script {
     /// Whether a marked `^C` may be pressed: the marker shown since the
     /// keys were typed, and the screen still since.
@@ -760,6 +798,7 @@ impl Script {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 impl Console for Term {
     fn putstrn(&mut self, s: &[u8]) {
         let mut t = self.0.borrow_mut();

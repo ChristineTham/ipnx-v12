@@ -71,6 +71,27 @@ jobs:
           RUSTFLAGS: "-D warnings"
         run: cargo build --workspace --all-targets
 
+      # **The browser host**: the same kernel compiled to wasm32, in a
+      # worker, each process a worker of its own (hosts/web). Built with
+      # warnings denied, then run under Node — whose worker_threads are the
+      # page's workers — and in Chromium, the way a person reaches it.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: the browser host
+        env:
+          RUSTFLAGS: "-D warnings"
+        run: |
+          rustup target add wasm32-unknown-unknown
+          sh hosts/web/build.sh
+      - name: the browser host, on the real userspace
+        run: node --test --test-concurrency=4 hosts/web/test/web.test.mjs
+      - name: the browser host, in Chromium
+        run: |
+          npm install -g playwright@1.56.1
+          playwright install --with-deps chromium
+          node hosts/web/test/browser.mjs
+
       # **Expected red**, and deliberately not hidden. The suite asserts
       # functional equivalence with the demo and fails until it is
       # conformant — an earlier version printed "0 of 12" and reported `ok`,

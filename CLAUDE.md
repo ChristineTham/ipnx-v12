@@ -143,6 +143,16 @@ shell, which ends at once when there is no input.
 **Build the userspace first**: the host's tests run the real binaries, and
 `cargo` cannot build a wasm userspace.
 
+The browser host, `hosts/web` — the same kernel compiled to
+`wasm32-unknown-unknown`, in a worker, each process a worker of its own:
+
+```bash
+sh hosts/web/build.sh                     # -> hosts/web/dist
+node hosts/web/serve.mjs                  # serve it with COOP and COEP
+node --test hosts/web/test/web.test.mjs   # the system under Node, typed at
+node hosts/web/test/browser.mjs           # the page in Chromium
+```
+
 Node ≥ 22 where it is used (`worker_threads`, SAB, wasm `try_table` exception
 handling — the legacy EH encoding is *rejected* by these engines, so any new
 wasm emission must use `try_table`).

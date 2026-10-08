@@ -385,18 +385,20 @@ Fifty tests in `hosts/ipnx` (counted 2026-09-24: forty-five in the binary — mo
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
 and say so rather than passing quietly.
 
-## Functional equivalence to the demo — 6 of 12
+## Functional equivalence to the demo — 7 of 12
 
 The conformance suite lists twelve capabilities and **runs a check for every
 one it claims**: it boots the whole system on a scripted console and types at
 it, so a line reads `reached` only when a person really can do the thing, on
-this boot. The six: boot to a shell, list a directory, read a file, a
+this boot. The seven: boot to a shell, list a directory, read a file, a
 pipeline, per-process namespaces (`@{rfork n; bind /tmp/alt /etc}` sees the
-bind; the shell outside it does not), and **installing a package as a bind**
+bind; the shell outside it does not), **installing a package as a bind**
 — a repository made in the session, a package installed with `pkg install
--n` inside `@{rfork n; …}`, run there, and not there outside (P7's `pkg`).
-Of the other six, three are P8's — several windows, actions by kind, the
-browser — one is P9's — building a program with a toolchain, which is the
+-n` inside `@{rfork n; …}`, run there, and not there outside (P7's `pkg`) —
+and **the whole system in a browser**: Chromium loads `hosts/web`'s page and
+is typed at (`hosts/web/test/browser.mjs`, which wants `hosts/web/build.sh`
+run and Playwright's Chromium). Of the other five, two are P8's — several
+windows, actions by kind — one is P9's — building a program with a toolchain, which is the
 host's, typed through `os`, and so there only where the host runs commands
 ([saranos.md](saranos.md), *The host's resources*) — and **two are built by
 no phase of [implementation.md](implementation.md)**: a Go program and
@@ -437,7 +439,27 @@ it is **removed** (2026-10-08, RESEARCH §16.33): it emulated hardware, and
 *"This is WASM we have no hardware we do not want to emulate hardware"*.
 Its steps are now `hosts/web`, emca in the page — a full window manager on
 the host side, text only — the files emca serves to IPNX, and the demo's
-types (Christine, 2026-10-08), and none of them is built.
+types (Christine, 2026-10-08).
+
+**Step 1, `hosts/web`, is built** (2026-10-08; RESEARCH §16.37). The kernel,
+unchanged, compiled to `wasm32-unknown-unknown` — 812,984 bytes, importing
+26 functions from the page and nothing else — runs in a worker of its own,
+and each process in a worker of its own: a call is a message in a mailbox
+in shared memory and an `Atomics.wait` (`hosts/web/src/machine.rs`, and
+`www/proc.mjs` for the process's side). `fork`, `setjmp` and `longjmp` are
+asyncify's as on the terminal; `RFMEM` shares the memory, and two sharers
+never run at once. The boot is `hosts/ipnx`'s, shared (`startboot_with`),
+and the root is served by the same 9P (`Store` over a `Backend`): the built
+root, from an index of its 1,298 entries, each file fetched the first time
+it is read. The page holds the line being typed and echoes it, as rio's
+window does. **Tested**: `hosts/web/test/web.test.mjs`, 33 tests under Node
+— the terminal host's typed tests on this machine, plumber's shared-memory
+threads, `stop`, `^C` and ghostscript among them — and
+`hosts/web/test/browser.mjs`, ten checks in headless Chromium, which boots
+to the prompt in 1.8 s. **Not built**: what is written lasts the session
+only — keeping it in the origin private file system across visits — and
+the page is not deployed; WebKit is not tested. Steps 2–4 — emca, the files
+it serves, the demo's types — are not built.
 
 **P9 is not built.** Host commands are designed ([saranos.md](saranos.md),
 *The host's resources*); nothing of them — the call, its host half, `os` —

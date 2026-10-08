@@ -3,6 +3,9 @@
 # cargo (workspace at repo root)
 /target/
 
+# the browser host's page, as hosts/web/build.sh assembles it
+hosts/web/dist/
+
 # demo build product (assembled by demo/build.sh)
 demo/dist/
 demo/toolchain/cache/

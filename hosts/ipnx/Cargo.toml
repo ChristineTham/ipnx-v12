@@ -7,6 +7,11 @@ edition.workspace = true
 
 [dependencies]
 ipnx-kernel = { path = "../../kernel" }
+
+# The machine and the terminal, which only a terminal host has: the browser's
+# host (`hosts/web`) uses the boot steps and the file server, and neither of
+# these.
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 # The engine. It lives HERE and only here: the kernel's machine trait names no
 # machine, so this dependency cannot reach it.
 # `async` is `wasmtime-fiber`: a host-stack fiber, which is this machine's

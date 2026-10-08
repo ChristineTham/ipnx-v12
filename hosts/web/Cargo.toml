@@ -1,0 +1,15 @@
+# `hosts/web` — Saranos in a browser. The kernel, compiled to wasm32, in a
+# worker of its own; each process a worker of its own; the page the surface.
+# It is built for `wasm32-unknown-unknown` and is empty on any other target.
+[package]
+name = "ipnx-web"
+version = "0.1.0"
+edition.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+ipnx-kernel = { path = "../../kernel" }
+# The boot steps and the file server, which every host shares.
+ipnx = { path = "../ipnx" }

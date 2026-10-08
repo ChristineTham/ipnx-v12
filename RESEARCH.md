@@ -6078,3 +6078,85 @@ half, `emu/port/devcmd.c` and `emu/MacOSX/cmd.c`):
 - **The environment** is not passed: `oscmd` takes the arguments, the
   priority, the directory and the descriptors and nothing else (`cmd.c:88`),
   so the command gets the emulator's own.
+
+### 16.37 The browser host (2026-10-08)
+
+P8's first step, built: `hosts/web`. What building it measured and found.
+
+**The kernel compiles to `wasm32-unknown-unknown` unchanged.** No `std`
+call in `kernel/` needs a host — no `SystemTime`, `Instant`, thread or file
+(searched) — because the clock and the console are the machine's. The
+release build is **812,984 bytes** and imports **26 functions, all from
+module `host`**, and nothing else (`WebAssembly.Module.imports`). The boot
+is `hosts/ipnx`'s, shared: `startboot_with` takes the machine, and `Store`
+serves any `Backend` — a host directory, or the page's tree.
+
+**A process is a worker, and a call is a mailbox.** A worker's code cannot
+be suspended from outside it, so the terminal machine's fiber has no
+counterpart: the process runs in its worker and stops only to call. Each
+call writes its number and words — `sys.h`'s number, as the PC's stub puts
+in `AX` (`libc/9syscall/mkfile`), and each argument as the terminal machine
+records it, a 32-bit value's bits or a `vlong` whole — into shared memory,
+and waits with `Atomics.wait` until the kernel's worker answers. The kernel
+must make every process's memory itself: a worker waiting in
+`Atomics.wait` cannot be sent one. So the image's memory import is read
+from its import section (`hosts/web/src/module.rs`): **273 pages minimum
+(17.5 MB, the 16 MB stack first), 65,536 maximum** — `--max-memory=4294967296`
+(`userspace/mk.sh:75`) — and a shared memory reserves its maximum, 4 GiB of
+address space a process.
+
+**The clock cannot land in a worker.** The terminal machine's interrupt is
+wasmtime's epoch, checked in the program's own code. Here the kernel waits
+on a process at most one tick, `1000/HZ` ms, and takes the interrupt there:
+`timerintr`, then `notify` (`kw/clock.c:46`, `pc/trap.c:438`, `:443`). A
+process the clock takes the processor from **goes on running in its
+worker**, as one on another processor would, until it next calls. `stop`
+makes it `Stopped` for the kernel at the tick (`/proc/n/status` says so,
+and the test of it passes), while the worker runs on to its next call.
+
+**`RFMEM`: two sharers never run at once.** They share one stack region, as
+on the terminal machine (`segment.c:175`). One is entered only when the one
+whose stack is in the region is waiting on the kernel — its mailbox says it
+has spoken and not been answered — and the kernel then saves that stack and
+puts the other's in place. plumber, whose libthread procs share a memory,
+serves 9P and `plumb` delivers through it.
+
+**A fork's child starts when the scheduler first enters it**, not when its
+parent unwinds: a sharer's child rewinds through the shared memory's one
+asyncify buffer, which its parent is still using until it has wound back.
+The parent's unwound stack goes to the page, the kernel makes the child's
+memory, and the page joins the two.
+
+**`ureg->pc` is asked for.** Only a trace, a bad address and a bad call
+number read it (`kernel/src/lib.rs`, `syscall_`, `validaddr`, `dispatch_`),
+so the kernel asks the waiting process, which answers from its own stack:
+V8 and SpiderMonkey print a wasm frame as `wasm-function[N]:0xOFFSET`, the
+offset in the module — the terminal machine's `module_offset`. WebKit
+prints none, and the answer there is 0. `startsyscall` shows `sleep Sleep
+3f6 1000`.
+
+**The interrupt key must not take what comes after it.** `kbdputcclock`
+takes the keyboard's characters, then the interrupt, and clears both
+queues (`kernel/src/devcons.rs:385`), as `rio` drops what was typed before
+DEL (`wind.c:652`). Keys typed straight after `^C` and taken at the same
+tick were cleared too, and `rc` then read end of input. The page now holds
+back what was typed after a pending interrupt until the kernel has taken
+it, as the terminal host's scripted console does.
+
+**Echo is the surface's.** Plan 9's kernel console echoes what is typed
+(`echo`, `echoscreen`, `port/devcons.c:490`); this kernel's does not, and
+the terminal host has relied on its terminal's cooked mode (§15.10). The
+page holds the line and echoes it, as `rio`'s window does and as emca's
+shell window will (`docs/type.md`, *"Only committed text crosses"*). **Seen
+and not done:** the console's own echo, for a host with no surface that
+echoes.
+
+**Seen and not done:** `Ret::N` is a `usize`, which is 32 bits on wasm32,
+so in the browser's kernel a `seek` answer past 4 GiB would be cut short.
+The page's tree holds no such file.
+
+**Measured:** the 33 tests in `hosts/web/test/web.test.mjs` pass under Node
+22 (`worker_threads` for workers, 16 MB stacks), 106 s at concurrency 4;
+the ten checks in `hosts/web/test/browser.mjs` pass in headless Chromium
+(Playwright 1.56.1, Chromium build 1194), and the page boots to the prompt
+in **1.8 s**.

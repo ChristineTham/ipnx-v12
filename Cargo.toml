@@ -3,7 +3,7 @@
 # system, and arrives with its own crates when the plan reaches it.
 [workspace]
 resolver = "2"
-members = ["kernel", "hosts/ipnx", "conformance"]
+members = ["kernel", "hosts/ipnx", "hosts/web", "conformance"]
 
 [workspace.package]
 edition = "2021"

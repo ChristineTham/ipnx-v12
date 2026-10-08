@@ -288,10 +288,13 @@ emca is the host's:
    sharing a `SharedArrayBuffer` memory for `RFMEM`. A call is a message and
    `Atomics.wait`; the images are the asyncified ones `mk.sh` builds.
 2. **The kernel in a worker of its own**, so nothing blocks the page.
-3. **The root file server is the page's storage** — the origin private file
-   system — served over `#9` as `hosts/ipnx` serves a directory, seeded on
-   first visit from the built root shipped as a `disk/mkfs -a` archive, P7's
-   package format.
+3. **The root file server is the page's**, served over `#9` by the same 9P
+   as `hosts/ipnx` serves a directory: the built root, named by an index and
+   **fetched a file at a time the first time it is read** — a page that runs
+   `rc` fetches `rc`, not the 85 MB beside it — with what is written kept in
+   the page, and kept across visits in the origin private file system. *(It
+   was to be seeded whole on first visit from a `disk/mkfs -a` archive;
+   changed 2026-10-08, when the index was measured at 1,298 entries.)*
 4. **What browsers require** (platforms.md, measured): COOP and COEP headers
    for `SharedArrayBuffer`, and worker start-up serialised for WebKit.
 

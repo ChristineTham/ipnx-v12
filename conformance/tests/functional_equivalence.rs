@@ -224,9 +224,23 @@ fn demo() -> Vec<Behaviour> {
         },
         Behaviour {
             what: "the whole system runs in a browser as well as a terminal",
-            state: Pending("P8"),
-            how: "the same userspace, reached through a page",
-            check: None,
+            state: Reached,
+            how: "the same userspace, reached through a page: Chromium loads hosts/web's page and is typed at",
+            // A browser is the only way to be sure, so the check is one: it
+            // wants `hosts/web/build.sh` to have run, as the others want
+            // `userspace/mk.sh`, and Playwright's Chromium.
+            check: Some(|| {
+                let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+                let out = std::process::Command::new("node")
+                    .arg("hosts/web/test/browser.mjs")
+                    .current_dir(&repo)
+                    .output()
+                    .map_err(|e| format!("node: {e}"))?;
+                if out.status.success() {
+                    return Ok(());
+                }
+                Err(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+            }),
         },
         Behaviour {
             // The demo: *"`cc hello.c` then `./a.out` is real clang and real
