@@ -3,5 +3,10 @@
 # user's /home/profile/shell.rc. What every shell of every user should have
 # goes here: it is the configuration Plan 9 keeps in rc's own rcmain
 # (`plan9/rc/lib/rcmain`), whose defaults remain there only for a shell that
-# finds no profile.
-prompt=('% ' '	')
+# finds no profile. As there, an inherited prompt is kept (rcmain:5).
+switch($#prompt){
+case 0
+	prompt=('% ' '	')
+case 1
+	prompt=($prompt '	')
+}

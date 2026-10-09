@@ -11,7 +11,7 @@ cargo build -p ipnx-web --target wasm32-unknown-unknown --release
 out=hosts/web/dist
 rm -rf "$out"
 mkdir -p "$out"
-cp hosts/web/www/* "$out/"
+cp -R hosts/web/www/. "$out/"
 cp target/wasm32-unknown-unknown/release/ipnx_web.wasm "$out/kernel.wasm"
 ln -s ../../../userspace/root "$out/root"
 node hosts/web/index.mjs userspace/root > "$out/root.index"

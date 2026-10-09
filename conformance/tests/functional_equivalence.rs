@@ -41,6 +41,23 @@ fn typing(keys: &str) -> String {
 /// A check: `Ok(())` if a person really can do the thing.
 type Check = fn() -> Result<(), String>;
 
+/// A page in a browser, as a person sees it: the script drives Chromium and
+/// says whether what it read was so. A browser is the only way to be sure of
+/// a page, so the check is one: it wants `hosts/web/build.sh` to have run, as
+/// the others want `userspace/mk.sh`, and Playwright's Chromium.
+fn browser(args: &[&str]) -> Result<(), String> {
+    let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let out = std::process::Command::new("node")
+        .args(args)
+        .current_dir(&repo)
+        .output()
+        .map_err(|e| format!("node: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    Err(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
+}
+
 fn wants(out: &str, want: &str) -> Result<(), String> {
     if out.contains(want) {
         Ok(())
@@ -212,35 +229,24 @@ fn demo() -> Vec<Behaviour> {
         },
         Behaviour {
             what: "the windowing system can show several things at once and act on them",
-            state: Pending("P8"),
-            how: "more than one is open; acting on one leaves the others alone",
-            check: None,
+            state: Reached,
+            how: "more than one is open; acting on one leaves the others alone: in Chromium, \
+                  a command typed into one window, an edit made in another and a third closed, \
+                  and each of the rest shows what it showed",
+            check: Some(|| browser(&["hosts/web/test/emca-browser.mjs", "several things at once"])),
         },
         Behaviour {
             what: "what you can do with a thing depends on what it is",
-            state: Pending("P8"),
-            how: "two kinds of content offer different actions",
-            check: None,
+            state: Reached,
+            how: "two kinds of content offer different actions: in Chromium, text, a listing \
+                  and a shell each offer their own, and each does what it says",
+            check: Some(|| browser(&["hosts/web/test/emca-browser.mjs", "what you can do"])),
         },
         Behaviour {
             what: "the whole system runs in a browser as well as a terminal",
             state: Reached,
-            how: "the same userspace, reached through a page: Chromium loads hosts/web's page and is typed at",
-            // A browser is the only way to be sure, so the check is one: it
-            // wants `hosts/web/build.sh` to have run, as the others want
-            // `userspace/mk.sh`, and Playwright's Chromium.
-            check: Some(|| {
-                let repo = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
-                let out = std::process::Command::new("node")
-                    .arg("hosts/web/test/browser.mjs")
-                    .current_dir(&repo)
-                    .output()
-                    .map_err(|e| format!("node: {e}"))?;
-                if out.status.success() {
-                    return Ok(());
-                }
-                Err(format!("{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr)))
-            }),
+            how: "the same userspace, reached through a page: Chromium loads hosts/web's console and is typed at",
+            check: Some(|| browser(&["hosts/web/test/browser.mjs"])),
         },
         Behaviour {
             // The demo: *"`cc hello.c` then `./a.out` is real clang and real

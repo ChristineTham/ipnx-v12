@@ -4,132 +4,37 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Saranos</title>
-<meta name="description" content="Saranos in a browser: the IPNX kernel in a worker, each process a worker of its own, booting to rc.">
+<meta name="description" content="Saranos in a browser: the IPNX kernel in a worker, each process a worker of its own, and emca, the window manager.">
 <script src="coi-register.js"></script>
-<style>
-  :root { color-scheme: light dark; --bg: #fffff0; --fg: #1a1a1a; --dim: #6b6b5e; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg: #161614; --fg: #e8e6dc; --dim: #8d8b80; } }
-  :root[data-theme="dark"] { --bg: #161614; --fg: #e8e6dc; --dim: #8d8b80; }
-  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); }
-  #screen {
-    margin: 0; padding: 12px 16px; min-height: 100%; box-sizing: border-box;
-    font: 14px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-    white-space: pre-wrap; overflow-wrap: anywhere; outline: none; caret-color: transparent;
-  }
-  #screen .note { color: var(--dim); }
-  #keys { position: fixed; left: 0; bottom: 0; width: 1px; height: 1px; opacity: 0; border: 0; padding: 0; }
-</style>
+<link rel="stylesheet" href="emca.css">
 </head>
 <body>
-<pre id="screen" tabindex="0" aria-live="polite" aria-label="the console"></pre>
-<textarea id="keys" aria-label="the keyboard" autocapitalize="off" autocomplete="off" spellcheck="false"></textarea>
 <script type="module">
-  // The console, as text: what the system writes, and what is typed. This
-  // page is the browser host's first surface; emca replaces it.
-  //
-  // It holds the line being typed, as rio's window does and as emca's shell
-  // window will (type.md, "Only committed text crosses"): the line is shown
-  // and edited here, and goes to the console when Enter commits it — the
-  // terminal host's cooked terminal does the same.
+  // The page: the system booted, and emca — the window manager, which is
+  // the host's — drawing it (docs/emca.md, Boot and the session).
   import { boot } from './saranos.mjs';
-
-  const screen = document.getElementById('screen');
-  const keys = document.getElementById('keys');
-  const log = document.createTextNode('');
-  const held = document.createTextNode('');
-  const caret = document.createElement('span');
-  caret.textContent = '\u2588';
-  caret.className = 'note';
-  screen.append(log, held, caret);
-  const note = (s) => {
-    const n = document.createElement('span');
-    n.className = 'note';
-    n.textContent = s;
-    caret.before(n);
-  };
+  import { Emca } from './emca.mjs';
+  import { Surface } from './surface.mjs';
 
   if (!crossOriginIsolated) {
-    caret.remove();
-    note('This page needs cross-origin isolation for its shared memory, and does not have it yet.\n');
+    document.body.textContent = 'This page needs cross-origin isolation for its shared memory, and does not have it yet.';
   } else {
-    let shown = '';
-    let line = '';
-    let queued = false;
+    const emca = new Emca();
+    window.emca = emca;
+    const kmesg = [];
     const dec = new TextDecoder();
-    const enc = new TextEncoder();
-    const show = () => {
-      queued = false;
-      log.data = shown;
-      held.data = line;
-      window.scrollTo(0, document.body.scrollHeight);
-    };
-    const redraw = () => {
-      if (!queued) {
-        queued = true;
-        requestAnimationFrame(show);
-      }
-    };
+    // the console: what the kernel and the boot write, kept as Plan 9's
+    // kernel keeps its log, and on the browser's own console
     const out = (b) => {
-      shown += dec.decode(b, { stream: true });
-      redraw();
+      const s = dec.decode(b, { stream: true });
+      kmesg.push(s);
+      console.log(s.replace(/\n$/, ''));
     };
-    const sys = boot({ site: new URL('./', location.href), out });
-    // Commit the line: it crosses, and joins what the screen shows.
-    const commit = (end) => {
-      sys.type(enc.encode(line + end));
-      shown += line + (end === '\n' ? '\n' : '');
-      line = '';
-      redraw();
-    };
-    const add = (s) => {
-      const parts = s.replace(/\r\n?/g, '\n').split('\n');
-      line += parts[0];
-      for (const p of parts.slice(1)) {
-        commit('\n');
-        line = p;
-      }
-      redraw();
-    };
-
-    const focus = () => keys.focus({ preventScroll: true });
-    screen.addEventListener('click', focus);
-    focus();
-    keys.addEventListener('keydown', (e) => {
-      if (e.metaKey || e.altKey) return;
-      if (e.ctrlKey) {
-        const k = e.key.toLowerCase();
-        if (k === 'c') {
-          // the interrupt key; what was typed and not sent is dropped, as
-          // rio drops it (wind.c:652)
-          line = '';
-          sys.interrupt();
-        } else if (k === 'd') commit('\x04');
-        else if (k === 'u') line = '';
-        else if (k === 'w') line = line.replace(/\S*\s*$/, '');
-        else return;
-        e.preventDefault();
-        redraw();
-        return;
-      }
-      if (e.key === 'Enter') commit('\n');
-      else if (e.key === 'Backspace') line = [...line].slice(0, -1).join('');
-      else if (e.key === 'Tab') line += '\t';
-      else return;
-      e.preventDefault();
-      redraw();
-    });
-    // printable keys, and what a phone's keyboard composes
-    keys.addEventListener('input', () => {
-      if (keys.value) add(keys.value);
-      keys.value = '';
-    });
-    keys.addEventListener('paste', (e) => {
-      add(e.clipboardData.getData('text'));
-      e.preventDefault();
-    });
+    const sys = boot({ site: new URL('./', location.href), out, emca, halt: () => (document.body.textContent = 'Halted.') });
+    window.kmesg = kmesg;
+    new Surface(document.body, emca, sys);
     sys.done.then(({ status, ok }) => {
-      caret.remove();
-      note(`\n${ok ? 'The system is over' : 'The system stopped'}${status ? `: ${status}` : '.'}\n`);
+      if (!ok) document.body.textContent = `The system stopped: ${status}`;
     });
   }
 </script>

@@ -1,0 +1,10 @@
+codemirror.bundle.mjs — CodeMirror 6.0.1, MIT licence, Marijn Haverbeke and
+others. A prebuilt self-contained ESM bundle (esm.sh), vendored unmodified so
+the page works offline: it is the surface's text editor, the host half of
+text/plain's manager (docs/type.md). https://codemirror.net/
+https://github.com/codemirror/dev
+
+LICENSE beside this file is codemirror@6.0.1's, verbatim. The packages the
+bundle includes — @codemirror/view, @codemirror/state and the rest — carry
+the same licence, their copyright line reading "Copyright (C) 2018-2021 by
+Marijn Haverbeke <marijn@haverbeke.berlin> and others".

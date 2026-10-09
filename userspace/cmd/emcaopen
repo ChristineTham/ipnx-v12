@@ -1,0 +1,114 @@
+#!/bin/rc
+# emcaopen [-w id] path [role] — open a window on path, and print its id
+# (docs/type.md, emcaopen).
+#
+# The type comes from recognition — the path, then the content, file(1) —
+# and the role from permissions, so a caller states neither; a role given
+# is the one override. `-w id` fills a window the window manager has made
+# already: its layout's, or one Open made.
+
+rfork e
+fn usage {
+	echo 'usage: emcaopen [-w id] path [role]' >[1=2]
+	exit usage
+}
+w=/mnt/wsys
+if(! test -d $w/wsys)
+	mount -c /srv/emca $w >[2]/dev/null || {
+		echo 'emcaopen: no window manager' >[1=2]
+		exit 'no window manager'
+	}
+id=()
+if(~ $1 -w){
+	id=$2
+	shift
+	shift
+}
+if(! ~ $#* 1 2)
+	usage
+name=$1
+role=$2
+
+# what it is: / is inode/system and a directory inode/directory — what the
+# window manager hardcodes, and file(1) gives a directory nothing — and
+# anything else what file(1) says, from its bytes; what does not exist yet
+# is text/plain, the default (type.md, Settled earlier)
+if(~ $name /)
+	type=inode/system
+if not if(test -d $name)
+	type=inode/directory
+if not if(test -e $name)
+	type=`{file -m $name}
+if not
+	type=text/plain
+
+# how: an executable is run — `manage` on it, and the window is `shell` on
+# its console; otherwise `edit` where you may write it and `look` where
+# you may not (type.md, What a type declares). Executable is the mode's x:
+# `test -x` is an open for OEXEC (libc/9sys/access.c:27), and a server of a
+# host's files opens that for reading (u9fs.c:1564), so to it whatever can
+# be read can be executed.
+mode=`{ls -ld $name >[2]/dev/null}
+if(~ $#role 0){
+	if(~ $type inode/system)
+		role=manage
+	if not if(! ~ $type inode/* && ~ $mode(1) *x*)
+		role=manage
+	if not if(test -w $name || ! test -e $name)
+		role=edit
+	if not
+		role=look
+}
+
+# a window, if none was given: an open of new/ctl makes one (acme(4))
+if(~ $#id 0){
+	ctl=`{cat $w/new/ctl}
+	id=$ctl(1)
+}
+d=$w/wsys/$id
+echo -n $name >$d/title
+echo -n $type >$d/type
+
+if(~ $role manage && ! ~ $type inode/*){
+	# `manage` on an executable runs it, and the window is `shell` on its
+	# console: the program's /dev is the window's, as rio binds itself over
+	# /dev (rio/fsys.c:241), in a note group of its own. One fork, not
+	# `@{…} &`'s two, so $apid is the program and its note group the
+	# window's: Interrupt and Close are notes to it (rio/wind.c, Deleted)
+	echo -n shell >$d/role
+	if(test -r /type/shell/verbs)
+		cat /type/shell/verbs >$d/verbs
+	dir=`{pwd}
+	{
+		rfork ns
+		mount -b /srv/emca /dev $id
+		cd $dir
+		# the window manager's half runs with no prompt (emca); a shell
+		# here makes its own, as a new shell does (/profile/shell.rc)
+		prompt=()
+		exec $name </dev/cons >/dev/cons >[2=1]
+	} &
+	echo set -pid $apid >$d/wctl
+	echo $id
+	exit ''
+}
+
+# the role last: a window is edited once what it holds is in it, so
+# nothing typed into it early is written over
+if(test -r /type/$type/verbs)
+	cat /type/$type/verbs >$d/verbs
+switch($type){
+case inode/system
+	# its body is children, which the layout names
+	;
+case inode/directory
+	# one name per line, a directory's with a slash (type.md, the listing format)
+	ls -pF $name | sed 's/\*$//' >$d/body
+case *
+	if(test -e $name)
+		cat $name >$d/body
+	if not
+		echo -n >$d/body
+}
+echo -n $role >$d/role
+echo $id

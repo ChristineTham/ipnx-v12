@@ -1,0 +1,4 @@
+#!/bin/rc
+# starts emca — that is all it does (docs/type.md, "And emca's startup is
+# one line"): the windows come from /type/inode/system/layout
+emca &

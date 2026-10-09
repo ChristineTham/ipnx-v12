@@ -25,6 +25,9 @@ use ipnx_kernel::ninep::{unframe, Dir, Qid, R, T, W, DMDIR, QTDIR, QTEXCL};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+/// `ORCLOSE`, of an open's mode: remove the file when the fid is clunked.
+const ORCLOSE: u8 = 0x40;
+
 /// `Emaxmsg` — what this server will accept. `mntversion` asks for `MAXRPC`
 /// and the server answers what it can do (`devmnt.c:153`: `f.msize = msize`).
 const MSIZE: u32 = 8192 + 24;
@@ -555,9 +558,15 @@ impl<B: Backend> Nineserver for Store<B> {
             // read, so there is never one outstanding to abandon.
             x if x == T::Flush as u8 => W::new().frame(T::Flush.reply(), tag),
 
+            // `rclunk` (`u9fs.c:866`): a file opened or made `ORCLOSE` is
+            // removed when its fid goes — *"else if(fid->omode != -1 &&
+            // fid->omode&ORCLOSE) … remove(rpath)"*. sam's temporary file is
+            // made so (`sam/disk.c:16`).
             x if x == T::Clunk as u8 => {
-                if let Some(fid) = r.u32() {
-                    self.fids.remove(&fid);
+                if let Some(f) = r.u32().and_then(|fid| self.fids.remove(&fid)) {
+                    if f.open && f.mode & ORCLOSE != 0 {
+                        let _ = self.files.remove(&f.path);
+                    }
                 }
                 W::new().frame(T::Clunk.reply(), tag)
             }
@@ -575,5 +584,34 @@ impl<B: Backend> Nineserver for Store<B> {
 
             _ => err("not implemented", tag),
         })
+    }
+}
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod tests {
+    use super::*;
+
+    /// A file made `ORCLOSE` is there while it is open and gone when its fid
+    /// is clunked; one made without it stays (`u9fs.c:866`).
+    #[test]
+    fn a_file_made_orclose_goes_when_its_fid_is_clunked() {
+        let dir = std::env::temp_dir().join(format!("ipnx-orclose-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let mut s = Store::new(&dir).unwrap();
+        let mut rpc = |b: W, t: T| {
+            let r = s.rpc(&b.frame(t as u8, 1)).unwrap();
+            assert_ne!(r[4], T::Error as u8, "{t:?}: {}", String::from_utf8_lossy(&r[9..]));
+        };
+        rpc(W::new().u32(MSIZE).s("9P2000"), T::Version);
+        rpc(W::new().u32(0).u32(!0).s("kitty").s(""), T::Attach);
+        for (fid, name, mode) in [(1, "gone", 1 | ORCLOSE), (2, "kept", 1)] {
+            rpc(W::new().u32(0).u32(fid).u16(0), T::Walk);
+            rpc(W::new().u32(fid).s(name).u32(0o644).u8(mode), T::Create);
+            assert!(dir.join(name).exists(), "{name} was not made");
+            rpc(W::new().u32(fid), T::Clunk);
+        }
+        assert!(!dir.join("gone").exists(), "a file made ORCLOSE outlived its fid");
+        assert!(dir.join("kept").exists(), "a file made without ORCLOSE went");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

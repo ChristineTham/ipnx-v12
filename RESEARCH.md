@@ -6160,3 +6160,104 @@ The page's tree holds no such file.
 the ten checks in `hosts/web/test/browser.mjs` pass in headless Chromium
 (Playwright 1.56.1, Chromium build 1194), and the page boots to the prompt
 in **1.8 s**.
+
+### 16.38 emca in the page (2026-10-09)
+
+P8's steps 2–4, built: emca, the window manager, in the page; the files it
+serves IPNX over `#9/1`; and the demo's types. What building them found.
+
+**`#9` answers when it can, as the virtqueue does.** A window manager
+answers a read of `cons` when a person types, and of `events` when it has
+something to ask, so its replies cannot come in the call that asked.
+Plan 9's device already has that shape: `submit` (`devvirtio9p.c:597`) puts
+a request on the queue; the device's interrupt (`v9interrupt`, `:508`)
+harvests what has completed (`vqharvest`, `:470`) and wakes the readers; a
+reader sleeps in `getreply` (`:569`) uninterruptibly — *"while(waserror())"*
+(`:578`) — and replies come back in any order, which `#M` sorts by tag.
+Here `Nineserver::submit` answers `None` for a reply that must wait, and
+`harvest` gives it later; the kernel harvests at the clock, after the
+keyboard, as `kbdputcclock` takes its characters. A request whose `Tflush`
+is answered is not waited for (flush(5)), and the idle clock keeps ticking
+while a server holds one.
+
+**A window's note group is its program's: `{…} &`, not `@{…} &`.** rc's
+`&` forks once (`Xasync`, `rc/havefork.c:9`) and `@` again (`Xsubshell`,
+`:191`), so `@{rfork ns; …; exec prog} &` left `$apid` naming the middle
+process, waiting, whose note group was the session's: Interrupt posted
+`interrupt` to the window manager's IPNX half and to the console's shell,
+and Close `hangup`. One fork makes `$apid` the program, in a group of its
+own.
+
+**A shell that is not interactive ends at its first error.** `Xerror`
+(`rc/exec.c:1012`) unwinds to the nearest interactive frame — *"while(!runq->iflag)
+Xreturn();"* (`:1022`) — and a shell reading a file has none, so one
+`hangup` to a window whose program had already exited — *"can't open:
+'/proc/136/notepg' process exited"* — ended the IPNX half. It is `rc -i`,
+with an empty prompt; a new shell keeps an inherited prompt now, because
+`/profile/shell.rc` sets one only where none came, as rcmain does
+(`rc/lib/rcmain:5`). It had set one always.
+
+**No `interrupted` message is needed.** A reader of a window's console
+that a note finds waiting is the kernel's to end: its read is flushed
+(`mountio`, `devmnt.c:782`; `kernel/src/namec.rs:1501`), and emca drops a
+flushed read. A message emca had made for it — `interrupted` to `wctl`,
+failing the console's waiting reads — ended rc's NEXT read whenever it
+arrived after the note had already done its work, and it is gone.
+
+**`test -x` is an open.** `test -x` is `access(AEXEC)` (`test.c:152`,
+`tio`), which opens for `OEXEC` (`libc/9sys/access.c:27`), and a server of
+a host's files opens that for reading (`u9fs.c:1564`), its access check
+commented out — *"This is wrong because access used the real uid and not
+the effective uid. Let the open sort it out."* (`:1587`). So whatever can
+be read can be executed, and `/etc/motd` was run — *"exec header invalid"*.
+`emcaopen` takes the mode's `x` from `ls -ld`.
+
+**The store kept files made `ORCLOSE`.** `u9fs` removes one when its fid
+is clunked (`rclunk`, `u9fs.c:866`); `store.rs` did not, and every `sam -d`
+left its temporary file (`sam/disk.c:16`) in `/tmp`. Fixed and tested
+(`a_file_made_orclose_goes_when_its_fid_is_clunked`).
+
+**`service` read a start script ending in `&` as failed.** `&` sets no
+status (`havefork.c:9`), so after `emca &` the status was that of the
+`if(test -r start.env)` before it — false, where there is no `start.env`.
+`service` clears the status before the script runs.
+
+**Edit is `sam -d`.** Plan 9 has no `ssam`, which is plan9port's; `sam -d`
+is sam without its terminal, reading commands from its input (`sam.c:45`).
+The text goes to a temporary file, the command and `w` and `q` to sam, and
+the file comes back as the window's `replace`.
+
+**Chromium holds about 125 shared memories at once** — 125 made in one
+page, at any maximum from 4,096 pages to 65,536; Node made 400 — so a dead
+process's memory must be let go. Two things held them. The page held each
+one on its way to its worker; and a worker ended while it waits in
+`Atomics.wait` is never collected, nor the memory it holds (measured: of
+memories sent to workers which were then ended, 300 went by when the
+workers were idle, and the 126th failed when each was waiting). A
+process's memory now goes to its worker down a `MessageChannel` of its
+own, and a worker is woken — `gone` in its mailbox — before it is ended.
+The waiting workers had also kept Node's test runner from exiting.
+
+**The plumber's ports are names, and a MIME type is two of them.** A port
+is one entry in `/mnt/plumb` (`addport`, `plumb/fsys.c:161`), and `plumb to
+text/plain` makes one no walk can reach, `/` separating names. So type.md's
+dispatch — *"A type's name is a plumb port"*, agreed *"for now until we
+find an issue"* — is not built; the question is in proposals.md.
+
+**Seen and not done: the store's owners and permissions.** `store.rs`
+reports every file as the attaching user's, and says *"u9fs does the
+same"*; it does not — `u9fs` names the host owner (`stat2dir`,
+`u9fs.c:708`), and runs each request as the attaching user (`userchange`,
+`:1373`, from `:1314`), so the host refuses what that user may not do. The
+store checks nothing, so `test -w /etc/motd` is true and motd opens `edit`.
+
+**What a page needs that Node does not.** The stylesheet served as
+`text/css` — `serve.mjs` served it as `application/octet-stream`, which
+Chromium refuses; a container's children put back only when they change,
+because a node taken out and put back loses the focus, and the line being
+typed with it; and a shell's input line reached through its window's body,
+since an empty line has no width to click.
+
+**Measured:** under Node every window is filled in about 15 s — each
+`emcaopen` starts some fifteen processes, each a worker — and in headless
+Chromium in **5.0 s**.

@@ -233,6 +233,13 @@ impl Web {
         let period = 1000.0 / HZ as f64;
         loop {
             let now = unsafe { js::now() };
+            // A reply from the page's server is taken in now rather than at
+            // the next tick: `timerintr` fires only what is due, so calling
+            // it early is harmless (`Syscalls::timerintr`), and the reader
+            // waiting for the reply wakes without waiting out a tick.
+            if unsafe { js::answered() } != 0 && sys.timerintr(&nopc) {
+                return Ok(Left::Sched);
+            }
             if now >= self.tick.get() {
                 self.tick.set(now + period);
                 // `clockintr` (`kw/clock.c:46`): `timerintr`, then what

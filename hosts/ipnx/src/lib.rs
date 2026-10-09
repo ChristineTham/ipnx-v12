@@ -417,15 +417,17 @@ pub fn boot(
     host: Box<dyn Console>,
     store: Option<Box<dyn Nineserver>>,
 ) -> Result<Kernel, String> {
-    boot_with(Rc::new(machine::Wasm::new()?), root, host, store)
+    boot_with(Rc::new(machine::Wasm::new()?), root, host, store.into_iter().collect())
 }
 
-/// [`boot`] on a machine the caller supplies — the browser's, or wasmtime.
+/// [`boot`] on a machine the caller supplies — the browser's, or wasmtime —
+/// with the 9P servers it provides, which are `#9/0`, `#9/1`, … in order:
+/// the root's store first.
 pub fn boot_with(
     machine: Rc<dyn Machine>,
     root: Root,
     host: Box<dyn Console>,
-    store: Option<Box<dyn Nineserver>>,
+    servers: Vec<Box<dyn Nineserver>>,
 ) -> Result<Kernel, String> {
     let mut k = Kernel::new(root, machine)?;
     k.tab.add(Box::new(PipeDev::new(k.up.clone())));
@@ -441,9 +443,9 @@ pub fn boot_with(
     k.tab.add(Box::new(CapDev::new(k.up.clone())));
     // `v9probe` (`v9reset`, `devvirtio9p.c:1066`) — what the machine found.
     // One server, so one file: `#9/0`.
-    let mut v9 = Virtio9p::new();
-    if let Some(store) = store {
-        v9.add(store);
+    let mut v9 = Virtio9p::new(k.up.clone());
+    for server in servers {
+        v9.add(server);
     }
     k.tab.add(Box::new(v9));
     // **`eve` starts EMPTY**, as `userinit` leaves it (`pc/main.c:285`:
@@ -481,19 +483,20 @@ pub fn startboot(
     host: Box<dyn Console>,
     store: Option<Box<dyn Nineserver>>,
 ) -> Result<String, String> {
-    startboot_with(Rc::new(machine::Wasm::new()?), CONFFILE, conf, host, store)
+    startboot_with(Rc::new(machine::Wasm::new()?), CONFFILE, conf, host, store.into_iter().collect())
 }
 
 /// [`startboot`] on a machine the caller supplies, whose configuration file
-/// is `conffile` — what `$terminal` names (`pc/main.c:250`).
+/// is `conffile` — what `$terminal` names (`pc/main.c:250`) — and the 9P
+/// servers it provides, the root's store first ([`boot_with`]).
 pub fn startboot_with(
     machine: Rc<dyn Machine>,
     conffile: &str,
     conf: &[(String, String)],
     host: Box<dyn Console>,
-    store: Option<Box<dyn Nineserver>>,
+    servers: Vec<Box<dyn Nineserver>>,
 ) -> Result<String, String> {
-    let mut k = boot_with(machine, Root::new(), host, store)?;
+    let mut k = boot_with(machine, Root::new(), host, servers)?;
 
     // `open(cons, OREAD); open(cons, OWRITE); open(cons, OWRITE);` — three
     // opens of `#c/cons`, before the binds, because `/dev` does not exist

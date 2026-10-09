@@ -536,7 +536,14 @@ impl Kernel {
                     .get(dev::DevId::Cons)
                     .and_then(|d| d.as_any().downcast_mut::<devcons::Cons>())
                     .is_some_and(|c| c.waiting());
-                let Some(alarm) = alarm.or(if keyboard { hz } else { None }) else {
+                // And one waiting for a server the machine provides: its
+                // reply is coming, and the clock brings it in.
+                let server = self
+                    .tab
+                    .get(dev::DevId::Virtio9p)
+                    .and_then(|d| d.as_any().downcast_mut::<devvirtio9p::Virtio9p>())
+                    .is_some_and(|v| v.waiting());
+                let Some(alarm) = alarm.or(if keyboard || server { hz } else { None }) else {
                     return Ok(());
                 };
                 let when = hz.map_or(alarm, |h| h.min(alarm));
@@ -593,6 +600,11 @@ impl Kernel {
         // clock routine, which takes the keyboard in.
         if let Some(c) = self.tab.get(dev::DevId::Cons).and_then(|d| d.as_any().downcast_mut::<devcons::Cons>()) {
             c.kbdputcclock(now);
+        }
+        // `v9interrupt` (`devvirtio9p.c:508`): what the machine's 9P servers
+        // have answered, taken in at the clock as the keyboard is.
+        if let Some(v) = self.tab.get(dev::DevId::Virtio9p).and_then(|d| d.as_any().downcast_mut::<devvirtio9p::Virtio9p>()) {
+            v.interrupt();
         }
         let mut procs = self.procs.borrow_mut();
         // `intrtime`: the time spent in the handler, taken out of the idle
@@ -751,7 +763,7 @@ mod tests {
         all.extend_from_slice(files);
         let mut k = Kernel::new(devroot::Root::new(), machine).unwrap();
         k.tab.add(Box::new(devmnt::MntDev::new()));
-        let mut v9 = devvirtio9p::Virtio9p::new();
+        let mut v9 = devvirtio9p::Virtio9p::new(k.up.clone());
         v9.add(Box::new(testfs::Files::new(&all)));
         k.tab.add(Box::new(v9));
         let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "#9/0".into(), mode: 2 }).unwrap() else {
@@ -4497,7 +4509,7 @@ mod syscalls {
         }
 
         let mut k = bare();
-        let mut d = devvirtio9p::Virtio9p::new();
+        let mut d = devvirtio9p::Virtio9p::new(k.up.clone());
         d.add(Box::new(Host9P));
         k.tab.add(Box::new(d));
         k.tab.add(Box::new(devmnt::MntDev::new()));
@@ -4540,7 +4552,7 @@ mod syscalls {
             }
         }
         let mut k = bare();
-        let mut d = devvirtio9p::Virtio9p::new();
+        let mut d = devvirtio9p::Virtio9p::new(k.up.clone());
         d.add(Box::new(Quiet));
         k.tab.add(Box::new(d));
 
@@ -4554,6 +4566,146 @@ mod syscalls {
         );
         k.syscall(1, Call::Close { fd: first }).unwrap();
         assert!(k.syscall(1, Call::Open { path: "#9/0".into(), mode: 2 }).is_ok());
+    }
+
+    /// A server that holds every read's reply until the test releases it —
+    /// as a window's console holds a read until a line is typed — and
+    /// answers everything else at once.
+    #[derive(Clone, Default)]
+    struct Holding(std::rc::Rc<std::cell::RefCell<HoldingState>>);
+
+    #[derive(Default)]
+    struct HoldingState {
+        /// the replies held, by tag
+        held: Vec<(u16, Vec<u8>)>,
+        /// the replies the server has completed, for the next harvest
+        done: Vec<Vec<u8>>,
+    }
+
+    impl Holding {
+        /// Complete the held reply to the read with this tag.
+        fn release(&self, tag: u16) {
+            let mut st = self.0.borrow_mut();
+            let i = st.held.iter().position(|(t, _)| *t == tag).expect("a held read");
+            let (_, r) = st.held.remove(i);
+            st.done.push(r);
+        }
+        fn tags(&self) -> Vec<u16> {
+            self.0.borrow().held.iter().map(|(t, _)| *t).collect()
+        }
+    }
+
+    impl devvirtio9p::Nineserver for Holding {
+        fn rpc(&mut self, t: &[u8]) -> Result<Vec<u8>, String> {
+            Ok(serve9p(t))
+        }
+        fn submit(&mut self, t: &[u8]) -> Result<Option<Vec<u8>>, String> {
+            let m = ninep::unframe(t).expect("a message");
+            if m.ty == ninep::T::Read as u8 {
+                self.0.borrow_mut().held.push((m.tag, serve9p(t)));
+                return Ok(None);
+            }
+            // `Tflush`: the read it names is answered no more (flush(5))
+            if m.ty == ninep::T::Flush as u8 {
+                let old = ninep::R::new(m.body).u16().expect("oldtag");
+                self.0.borrow_mut().held.retain(|(t, _)| *t != old);
+                return Ok(Some(ninep::W::new().frame(ninep::T::Flush.reply(), m.tag)));
+            }
+            Ok(Some(serve9p(t)))
+        }
+        fn harvest(&mut self) -> Vec<Vec<u8>> {
+            std::mem::take(&mut self.0.borrow_mut().done)
+        }
+    }
+
+    /// A kernel with `#9/0` served by `h`, mounted on `/root`.
+    fn holding(h: &Holding) -> Kernel {
+        let mut k = bare();
+        let mut d = devvirtio9p::Virtio9p::new(k.up.clone());
+        d.add(Box::new(h.clone()));
+        k.tab.add(Box::new(d));
+        k.tab.add(Box::new(devmnt::MntDev::new()));
+        let Ret::Fd(wire) = k.syscall(1, Call::Open { path: "#9/0".into(), mode: 2 }).unwrap() else { panic!() };
+        let mount = Call::Mount { fd: wire, afd: -1, old: "/root".into(), flag: MCREATE, aname: String::new() };
+        k.syscall(1, mount).expect("mount");
+        k
+    }
+
+    fn waiting(k: &mut Kernel) -> bool {
+        k.tab.get(dev::DevId::Virtio9p).and_then(|d| d.as_any().downcast_mut::<devvirtio9p::Virtio9p>()).unwrap().waiting()
+    }
+
+    /// **A reply the server holds is waited for, and the clock brings it
+    /// in** — `getreply` sleeping until `vqharvest` wakes it
+    /// (`devvirtio9p.c:569`, `:470`). The read leaves the processor rather
+    /// than answering nothing, which would be end of file; the machine is
+    /// told a reply is coming, so it does not take an idle system for a
+    /// finished one; and when the server answers, the next tick takes it
+    /// in and the read carries on with it.
+    #[test]
+    fn a_reply_the_server_holds_comes_in_at_the_clock() {
+        let h = Holding::default();
+        let mut k = holding(&h);
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/root/answer".into(), mode: 0 }).unwrap() else { panic!() };
+        assert_eq!(k.syscall(1, Call::Pread { fd, n: 64, off: -1 }), Ok(Ret::Sched), "it waits for the reply");
+        assert_eq!(k.procs.borrow().state(1), proc::State::Wakeme);
+        assert!(waiting(&mut k), "the machine must keep its clock going");
+        k.timerintr(0, None);
+        assert_eq!(k.procs.borrow().state(1), proc::State::Wakeme, "nothing has come yet");
+        let tag = h.tags()[0];
+        h.release(tag);
+        k.timerintr(0, None);
+        assert_eq!(k.procs.borrow().state(1), proc::State::Ready, "the clock took the reply in");
+        assert_eq!(k.resume(1), Ok(Ret::Data(b"served over 9P".to_vec())));
+        assert!(!waiting(&mut k), "nothing is held now");
+    }
+
+    /// **Replies come back in the order the server completes them**, and
+    /// each goes to the call it answers (`mountmux`, `devmnt.c:940`): the
+    /// process reading the wire takes in the other's reply, hands it over,
+    /// and goes on waiting for its own.
+    #[test]
+    fn replies_held_and_answered_out_of_order_go_to_their_own_calls() {
+        let h = Holding::default();
+        let mut k = holding(&h);
+        let Ret::Pid(child) = k.syscall(1, Call::Rfork { flags: rf::PROC }).unwrap() else { panic!() };
+        let Ret::Fd(a) = k.syscall(1, Call::Open { path: "/root/answer".into(), mode: 0 }).unwrap() else { panic!() };
+        let Ret::Fd(b) = k.syscall(child, Call::Open { path: "/root/answer".into(), mode: 0 }).unwrap() else { panic!() };
+        assert_eq!(k.syscall(1, Call::Pread { fd: a, n: 14, off: -1 }), Ok(Ret::Sched));
+        assert_eq!(k.syscall(child, Call::Pread { fd: b, n: 6, off: -1 }), Ok(Ret::Sched));
+        let tags = h.tags();
+        assert_eq!(tags.len(), 2, "both reads are with the server");
+        // the second is answered first
+        h.release(tags[1]);
+        k.timerintr(0, None);
+        assert_eq!(k.resume(1), Ok(Ret::Sched), "the reader hands it over and waits on");
+        assert_eq!(k.procs.borrow().state(child), proc::State::Ready);
+        assert_eq!(k.resume(child), Ok(Ret::Data(b"served".to_vec())));
+        h.release(tags[0]);
+        k.timerintr(0, None);
+        assert_eq!(k.resume(1), Ok(Ret::Data(b"served over 9P".to_vec())));
+        assert!(!waiting(&mut k));
+    }
+
+    /// A request whose `Tflush` has been answered is not waited for: the
+    /// server answers it no more (flush(5)), so the machine is not kept
+    /// ticking for it.
+    #[test]
+    fn a_flushed_request_is_not_waited_for() {
+        let h = Holding::default();
+        let mut k = holding(&h);
+        let Ret::Fd(fd) = k.syscall(1, Call::Open { path: "/root/answer".into(), mode: 0 }).unwrap() else { panic!() };
+        assert_eq!(k.syscall(1, Call::Pread { fd, n: 64, off: -1 }), Ok(Ret::Sched));
+        let old = h.tags()[0];
+        // the flush, as the mount driver writes it onto the wire
+        let flush = ninep::W::new().u16(old).frame(ninep::T::Flush as u8, 900);
+        {
+            let v = k.tab.get(dev::DevId::Virtio9p).unwrap();
+            let mut c = chan::Chan::attach(dev::DevId::Virtio9p, 0);
+            c.qid = ninep::Qid { qtype: 0, vers: 0, path: 1 };
+            v.write(&mut c, &flush, 0).unwrap();
+        }
+        assert!(!waiting(&mut k), "the flushed read and its flush are both answered");
     }
 
     /// `bindmount` resolves the source with `Abind` and the target with

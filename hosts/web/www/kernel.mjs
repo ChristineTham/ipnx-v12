@@ -10,18 +10,20 @@
 // keyboard is a ring in shared memory, and the processes' workers are made
 // by the page, which it asks.
 
-import { ev, mailbox } from './mailbox.mjs';
+import { ev, mailbox, gone } from './mailbox.mjs';
 
 const node = typeof process === 'object' && !!process.versions?.node;
 const port = node ? (await import('node:worker_threads')).parentPort : self;
 const fs = node ? await import('node:fs') : null;
-const post = (m) => port.postMessage(m);
+const post = (m, transfer = []) => port.postMessage(m, transfer);
 if (node) port.on('message', boot);
 else self.onmessage = (e) => boot(e.data);
 
 const enc = new TextEncoder(), dec = new TextDecoder();
 
 let K;            // the kernel's exports
+let N, NB;        // emca's replies: the ring's counters, and its bytes
+const NRING = 1 << 20;
 let site;         // where the page is: its files are beside it
 let C, R;         // the keyboard: counters, and the ring
 const RING = 1 << 16;
@@ -114,6 +116,27 @@ const host = {
     last = null;
   },
 
+  // ---- emca's file server, the page's: `#9/1` ----
+  submit(p, n) {
+    post({ nine: K8().slice(p >>> 0, (p >>> 0) + (n >>> 0)) });
+  },
+  // The next reply in the ring the page writes: each an R-message, whose
+  // size[4] says how long it is.
+  harvest(p, cap) {
+    const w = Atomics.load(N, 0), r = N[1];
+    if (w === r) return 0;
+    const at = (i) => NB[(r + i) & (NRING - 1)];
+    const size = at(0) | (at(1) << 8) | (at(2) << 16) | (at(3) << 24);
+    if (size > (cap >>> 0)) return -size;
+    const k = K8();
+    for (let i = 0; i < size; i++) k[(p >>> 0) + i] = at(i);
+    Atomics.store(N, 1, (r + size) | 0);
+    return size;
+  },
+  answered() {
+    return Atomics.load(N, 0) !== N[1] ? 1 : 0;
+  },
+
   // ---- the processes ----
   compile(p, n) {
     try {
@@ -128,8 +151,12 @@ const host = {
     const args = str(a, n).split('\0');
     args.pop();
     const box = mailbox();
+    // an exec: the old image waits for an answer it will not have
+    const old = procs.get(pid);
+    if (old) gone(old.box);
     procs.set(pid, { mem, maximum, module, box });
-    post({ start: true, pid, module: modules[module], mem, box: box.sab, args });
+    const ch = carry(mem);
+    post({ start: true, pid, module: modules[module], port: ch, box: box.sab, args }, [ch]);
   },
   wait(pid, ms) {
     const b = procs.get(pid);
@@ -223,19 +250,36 @@ const host = {
   },
   child(pid) {
     const c = procs.get(pid);
-    post({ child: true, pid, module: modules[c.module], mem: c.mem, box: c.box.sab });
+    const ch = carry(c.mem);
+    post({ child: true, pid, module: modules[c.module], port: ch, box: c.box.sab }, [ch]);
   },
   kill(pid) {
+    const p = procs.get(pid);
+    if (p) gone(p.box);
     procs.delete(pid);
     post({ kill: true, pid });
   },
 };
+
+// A process's memory goes to its worker straight, down a channel of its
+// own, and the page passes on only the far end. A shared memory reserves
+// its maximum — 4 GiB of address space and its guard — until every thread
+// that has held it has let it go and collected its garbage, and a page that
+// held each one on the way, and seldom collects, ran out of address space
+// after a hundred or so processes (RESEARCH §16.38).
+function carry(mem) {
+  const ch = new MessageChannel();
+  ch.port1.postMessage({ mem });
+  return ch.port2;
+}
 
 function boot(m) {
   if (!m.boot) return;
   site = m.boot.site;
   C = new Int32Array(m.boot.ctl, 0, 16);
   R = new Uint8Array(m.boot.ctl, 64, RING);
+  N = new Int32Array(m.boot.nine, 0, 2);
+  NB = new Uint8Array(m.boot.nine, 64, NRING);
   const wasm = get('kernel.wasm'), index = get('root.index');
   if (!wasm || !index) {
     post({ status: `cannot fetch ${wasm ? 'root.index' : 'kernel.wasm'} beside ${site}`, ok: false });
@@ -250,7 +294,7 @@ function boot(m) {
   const [cp, cn] = put(enc.encode(m.boot.cmd.map((w) => `${w}\0`).join('')));
   const [ip, iN] = put(index);
   try {
-    K.web_boot(cp, cn, ip, iN);
+    K.web_boot(cp, cn, ip, iN, m.boot.wm ? 1 : 0);
   } catch (e) {
     post({ status: `the kernel stopped: ${e?.message ?? e}`, ok: false });
   }

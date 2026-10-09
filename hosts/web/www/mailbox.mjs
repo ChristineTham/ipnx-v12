@@ -3,9 +3,11 @@
 // waits; the kernel answers and the process goes on. The numbers are
 // `hosts/web/src/js.rs`'s `ev` and `rep`, and must stay them.
 //
-// I[0]  the state: 0 the process runs, 1 it has said something, 2 answered
+// I[0]  the state: 0 the process runs, 1 it has said something, 2 answered,
+//       3 the process is gone
 // I[1]  what it said (ev)          I[2]  the answer's kind (rep)
 // I[3]  the answer's other word    I[4]  how many bytes are in the transfer
+// I[5]  set when the process is gone, and never cleared
 // W[0..5]  a call's number and its words, or an event's details
 // W[6]  the lowest address of its stack region in use, when it said it
 // W[7]  where it is, when the kernel asked (rep.PC)
@@ -31,6 +33,17 @@ export const SIZE = 4096;
 
 export function mailbox(sab = new SharedArrayBuffer(SIZE)) {
   return { sab, I: new Int32Array(sab, 0, 8), W: new BigInt64Array(sab, 32, 16), T: new Uint8Array(sab, 256) };
+}
+
+// The process is gone, and nothing will answer it: its worker is to stop
+// waiting before it is ended. A worker ended while it waits in Atomics.wait
+// is never collected, nor is the memory it holds — 4 GiB of address space
+// reserved, of a renderer's 1 TiB (RESEARCH §16.38). I[5] first, then the
+// state, so a process about to wait finds the state changed and looks.
+export function gone(b) {
+  Atomics.store(b.I, 5, 1);
+  Atomics.store(b.I, 0, 3);
+  Atomics.notify(b.I, 0);
 }
 
 // Say something that is not answered — the image has ended, or trapped —

@@ -143,6 +143,59 @@ instantiated first. The project it makes gets `project.cfg`
 for each template and the packages and services). The alternative is a
 verb of `pkg`'s.
 
+**emca's files and its IPNX half, as P8 built them** — proposed
+2026-10-09, built, awaiting review. The design gives a window's view
+(rio's, `rio/fsys.c:25`), `/output` (emca.md), `emcaopen <path> [role]`
+(type.md) and the layout file; these are what building them needed, and
+none has a counterpart in Plan 9 or in the agreed design:
+
+1. **The root window's `events` carries rc command lines** — what emca
+   asks of IPNX: fill a window (`emcaopen`), run a command, post a note —
+   and `/bin/emca`, the root's manager, is `rc -i` reading it. window.md has
+   `events` carry *"input not consumed by the surface"* to a window's
+   manager, and acme's `event` carries what a person did in its own format
+   (acme(4): `c1 c2 q0 q1 flag nr text`). The alternative is that format,
+   and a program in IPNX that reads it and acts.
+2. **`layout` at emca's root**, which the IPNX half writes
+   `/type/inode/system/layout` into; emca makes the tree from it and asks
+   IPNX to fill each window. emca is the host's and cannot read IPNX's
+   namespace itself.
+3. **`emcaopen -w <id>`**, which fills a window emca has already made — the
+   layout's, or Open's — where type.md's `emcaopen` makes one.
+4. **A window's files beyond window.md's** (`body`, `dirty`, `events`,
+   `rect`, `role`, `status`, `title`, `type`, `verbs`, `wctl`): acme's `ctl`
+   and `tag`; rio's `cons`, `consctl`, `label`, `wdir`, `winid` and
+   `winname` in a window's view (`rio/fsys.c:25`); and **`selection` and
+   `replace`**, what a filter or Edit is given and what replaces it. acme
+   does that with `addr` and `data` (acme(4)); the alternative is those.
+5. **`/type/shell/verbs`** — the shell role's toolbar in `/type`, though
+   `shell` is a role and not a type.
+6. **The root's column count is the surface's**, from `breakpoints`'
+   numbers; type.md's `leaves <n>`, written by the root's manager, is
+   itself proposed.
+
+   **The question:** are these right, and if not, which go — `addr` and
+   `data` in place of `selection` and `replace` above all?
+
+**A type's name is not a port name** — found 2026-10-09 (RESEARCH §16.38).
+type.md: *"A type's name is a plumb port"*, agreed *"for now until we find
+an issue"*. A port is one name in `/mnt/plumb` (`addport`,
+`plumb/fsys.c:161`), and a MIME type holds a `/`: `plumb to text/plain`
+makes a port no walk can reach. Plan 9's own rules name a port for what
+listens — `edit`, `image`, `web`, `postscript`, `seemail`
+(`/sys/lib/plumb/basic`).
+
+- **A. A port for each manager** (recommended): a type's `rules` end
+  `plumb to <manager>`, and carry the type in the message —
+  `attr add type=text/plain` (`plumb/rules.c:60`) — so a manager learns
+  what it was given. Plan 9's own use of ports.
+- **B. A port for each type, its `/` written as another character** — a
+  name convention of our own.
+- **C. No plumbing for a window's type**, as built: `emcaopen` reads
+  `/type/<type>/` itself, and the types' `rules` are loaded by nothing.
+
+  **The question:** A, B or C?
+
 *A proposal is written here, reviewed, and then **leaves**. Adding to this file
 instead of emptying it is how stale blocks accumulate and how a reader ends up
 re-reading settled material to find what actually needs them.*

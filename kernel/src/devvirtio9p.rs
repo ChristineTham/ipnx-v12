@@ -19,10 +19,22 @@
 //! So the device marshals nothing and understands nothing. `#M` is still the
 //! only place wire 9P exists; this is the wire.
 //!
+//! **The conversation is Plan 9's: a write submits, and a read takes the
+//! oldest reply the server has completed, sleeping until there is one**
+//! (`submit`, `getreply`, `devvirtio9p.c:597`, `:569`). Many requests may be
+//! outstanding, and replies come back in the order the server completes
+//! them, not the order they were sent — the mount driver hands each to its
+//! RPC by tag (`mountmux`). A server that answers at once answers in the
+//! submit; one whose answer must wait — a window's console read before
+//! anything is typed — answers later.
+//!
 //! **Where it differs, and why:** Plan 9's submits a descriptor chain to a
-//! virtqueue and harvests completions in an interrupt. There is no virtqueue
-//! and no interrupt here, so a submit is a call outward and the reply comes
-//! back from it — the same difference, in the same place, as `#c`'s keyboard.
+//! virtqueue and harvests completions in its interrupt (`v9interrupt`,
+//! `vqharvest`). There is no virtqueue and no interrupt here: a submit is a
+//! call outward, and the clock harvests what the server has answered since
+//! — the same difference, in the same place, as `#c`'s keyboard
+//! (`kbdputcclock`). And the queue has no fixed size: a virtqueue's slots
+//! are the hardware's, and there is no hardware.
 //!
 //! Plan 9's also carries a 9P2000.u shim (`tshim`, `rfixup`) *"because qemu's
 //! 9pfs speaks only 9P2000.u, Plan 9 speaks plain 9P2000"*. There is none
@@ -35,6 +47,10 @@
 use crate::chan::Chan;
 use crate::dev::{Dev, DevId, Eve};
 use crate::ninep::{Qid, QTDIR};
+use crate::proc::{Rid, Up};
+use std::cell::RefCell;
+use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 
 /// What the machine must supply: one 9P exchange.
 ///
@@ -46,6 +62,22 @@ pub trait Nineserver {
     /// One `T`-message in, one `R`-message out. An `Err` is the transport
     /// failing — a server that wants to refuse a request answers `Rerror`.
     fn rpc(&mut self, t: &[u8]) -> Result<Vec<u8>, String>;
+
+    /// **`submit`** (`devvirtio9p.c:597`): one `T`-message onto the queue,
+    /// and the reply if the server has it now. A server whose reply must
+    /// wait answers `None`, and gives it later through
+    /// [`Nineserver::harvest`]. A server that always answers at once
+    /// needs only [`Nineserver::rpc`].
+    fn submit(&mut self, t: &[u8]) -> Result<Option<Vec<u8>>, String> {
+        self.rpc(t).map(Some)
+    }
+
+    /// **`vqharvest`** (`devvirtio9p.c:470`), which the device's interrupt
+    /// calls (`v9interrupt`): the replies completed since it was last
+    /// asked, in the order they were completed.
+    fn harvest(&mut self) -> Vec<Vec<u8>> {
+        Vec::new()
+    }
 }
 
 const QDIR: u64 = 0;
@@ -57,6 +89,8 @@ pub struct Virtio9p {
     /// copied, because writing `#c/hostowner` renames it for everyone.
     eve: Eve,
     servers: Vec<Server>,
+    /// `up`, for a read that must wait for a reply.
+    up: Rc<RefCell<Up>>,
 }
 
 struct Server {
@@ -65,29 +99,82 @@ struct Server {
     /// (`devvirtio9p.c:1110`). One mount at a time, because one reply stream
     /// cannot be shared.
     inuse: bool,
-    /// The reply being handed out, and how much of it has gone. `v9read`
-    /// answers bytes of ONE R-message and never spans two
+    /// `cl->cur` — the reply being handed out, and how much of it has gone.
+    /// `v9read` answers bytes of ONE R-message and never spans two
     /// (`devvirtio9p.c:1171`), which is what lets `#M` reassemble by the
     /// `size[4]` prefix.
-    reply: Vec<u8>,
-    rp: usize,
+    cur: Option<(Vec<u8>, usize)>,
+    /// `c->donehd` — replies completed and not yet read, oldest first.
+    done: VecDeque<Vec<u8>>,
+    /// The requests whose replies have not come, by tag — the chains the
+    /// host still holds. A `Tflush` names the tag it flushes: its `Rflush`
+    /// is the end of both, since the flushed request is answered no more.
+    held: HashMap<u16, Option<u16>>,
 }
 
-impl Default for Virtio9p {
-    fn default() -> Self {
-        Virtio9p::new()
+impl Server {
+    /// `v9flush` (`devvirtio9p.c:626`): the queued and half-read replies
+    /// go — *"start the conversation clean"*.
+    fn flush(&mut self) {
+        self.cur = None;
+        self.done.clear();
+    }
+
+    /// A reply has come: it is no longer held, nor is what it flushed.
+    fn answered(&mut self, r: &[u8]) {
+        let Some(tag) = r.get(5..7).map(|t| u16::from_le_bytes([t[0], t[1]])) else { return };
+        if let Some(Some(flushed)) = self.held.remove(&tag) {
+            self.held.remove(&flushed);
+        }
     }
 }
 
+/// `Tflush`'s type and `Rflush`'s, from `fcall.h`.
+const TFLUSH: u8 = 108;
+
 impl Virtio9p {
-    pub fn new() -> Virtio9p {
-        Virtio9p { servers: Vec::new(), eve: Eve::default() }
+    pub fn new(up: Rc<RefCell<Up>>) -> Virtio9p {
+        Virtio9p { servers: Vec::new(), eve: Eve::default(), up }
     }
 
     /// `v9probe` (`v9reset`, `devvirtio9p.c:1066`) — what the machine found.
     /// Each one becomes a file, in the order it was added.
     pub fn add(&mut self, host: Box<dyn Nineserver>) {
-        self.servers.push(Server { host, inuse: false, reply: Vec::new(), rp: 0 });
+        self.servers.push(Server { host, inuse: false, cur: None, done: VecDeque::new(), held: HashMap::new() });
+    }
+
+    /// **`v9interrupt`** (`devvirtio9p.c:508`) — what the host has answered,
+    /// queued, and the reader waiting for it woken (`vqharvest`'s
+    /// *"wakeup(&c->rwait)"*). The machine has no interrupt for it, so the
+    /// clock calls this, as it takes in the keyboard.
+    pub fn interrupt(&mut self) {
+        let mut woken = Vec::new();
+        for (i, s) in self.servers.iter_mut().enumerate() {
+            let got = s.host.harvest();
+            if got.is_empty() {
+                continue;
+            }
+            for r in got {
+                s.answered(&r);
+                s.done.push_back(r);
+            }
+            woken.push(i);
+        }
+        if woken.is_empty() {
+            return;
+        }
+        let procs = self.up.borrow().procs.clone();
+        let mut procs = procs.borrow_mut();
+        for i in woken {
+            procs.wakeup(Rid::Rr(DevId::Virtio9p, i as u32, 0));
+        }
+    }
+
+    /// Whether a conversation is waiting on its server: a reply is still
+    /// to come on a channel that is open. The machine must go on taking
+    /// clock ticks while one is, because the clock is what brings it in.
+    pub fn waiting(&self) -> bool {
+        self.servers.iter().any(|s| s.inuse && !s.held.is_empty())
     }
 
     /// `ctlrindex(c->qid.path - 1)` — the qid path is the index plus one,
@@ -157,6 +244,8 @@ impl Dev for Virtio9p {
             return Err(EINUSE.into());
         }
         self.servers[i].inuse = true;
+        // *"v9flush(cl); /* start the conversation clean */"*
+        self.servers[i].flush();
         c.mode = m;
         c.flag |= crate::chan::flag::COPEN;
         c.offset = 0;
@@ -180,17 +269,27 @@ impl Dev for Virtio9p {
                 .collect();
             return Ok(crate::dev::devdirread(c, n, &entries));
         }
-        let i = self.index(c.qid.path).ok_or(ENONEXIST)?;
-        let s = &mut self.servers[i];
-        if s.rp >= s.reply.len() {
+        if n == 0 {
             return Ok(Vec::new());
         }
-        let k = n.min(s.reply.len() - s.rp);
-        let out = s.reply[s.rp..s.rp + k].to_vec();
-        s.rp += k;
-        if s.rp >= s.reply.len() {
-            s.reply.clear();
-            s.rp = 0;
+        let i = self.index(c.qid.path).ok_or(ENONEXIST)?;
+        if self.servers[i].cur.is_none() {
+            // `getreply` (`devvirtio9p.c:569`): the oldest completed reply,
+            // harvesting first *"in case the irq was missed"*, and sleeping
+            // until one comes.
+            if self.servers[i].done.is_empty() {
+                self.interrupt();
+            }
+            let Some(r) = self.servers[i].done.pop_front() else { return self.getreply(i) };
+            self.servers[i].cur = Some((r, 0));
+        }
+        let s = &mut self.servers[i];
+        let (reply, rp) = s.cur.as_mut().expect("a reply in hand");
+        let k = n.min(reply.len() - *rp);
+        let out = reply[*rp..*rp + k].to_vec();
+        *rp += k;
+        if *rp >= reply.len() {
+            s.cur = None;
         }
         Ok(out)
     }
@@ -206,10 +305,22 @@ impl Dev for Virtio9p {
             return Err("invalid 9P message".into());
         }
         let i = self.index(c.qid.path).ok_or(ENONEXIST)?;
-        let reply = self.servers[i].host.rpc(data)?;
         let s = &mut self.servers[i];
-        s.reply = reply;
-        s.rp = 0;
+        let tag = u16::from_le_bytes([data[5], data[6]]);
+        // a `Tflush` names the tag it flushes: `oldtag[2]`
+        let flushes = (data[4] == TFLUSH && data.len() >= 9).then(|| u16::from_le_bytes([data[7], data[8]]));
+        s.held.insert(tag, flushes);
+        match s.host.submit(data) {
+            Ok(Some(r)) => {
+                s.answered(&r);
+                s.done.push_back(r);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                s.held.remove(&tag);
+                return Err(e);
+            }
+        }
         Ok(data.len())
     }
 
@@ -237,9 +348,33 @@ impl Dev for Virtio9p {
         }
         if let Some(i) = self.index(c.qid.path) {
             let s = &mut self.servers[i];
+            s.flush();
             s.inuse = false;
-            s.reply.clear();
-            s.rp = 0;
         }
+    }
+}
+
+impl Virtio9p {
+    /// **Wait for a reply** — `getreply`'s *"tsleep(&c->rwait, havereply,
+    /// c, 1000)"* — and come back here when the clock has brought one in.
+    /// The read answers nothing now, and is made again when the process
+    /// is entered.
+    ///
+    /// A note does not end the wait: *"while(waserror()) ;"* takes it and
+    /// sleeps again, and the note is delivered when the call is over. The
+    /// server's reply is what ends it.
+    fn getreply(&mut self, i: usize) -> Result<Vec<u8>, String> {
+        let (pid, procs) = {
+            let up = self.up.borrow();
+            (up.pid, up.procs.clone())
+        };
+        let mut procs = procs.borrow_mut();
+        let r = Rid::Rr(DevId::Virtio9p, i as u32, 0);
+        while !procs.sleep(pid, r, false) {
+            if !procs.interrupted(pid) {
+                return Err("no reply from the server".into());
+            }
+        }
+        Ok(Vec::new())
     }
 }

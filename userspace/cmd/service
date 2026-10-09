@@ -71,7 +71,9 @@ fn run {
 	cfg=$d/service.cfg
 	u=`{ndb/query -f $cfg service $1 user >[2]/dev/null}
 	ns=`{ndb/query -f $cfg service $1 namespace >[2]/dev/null}
-	cmd='cd '^$d^'; if(test -r start.env) . ./start.env; . ./'^$2
+	# status cleared before the script: an `if` whose test failed leaves
+	# that status, and a script ending `server &` sets none (havefork.c:9)
+	cmd='cd '^$d^'; if(test -r start.env) . ./start.env; status=''''; . ./'^$2
 	if(~ $u none){
 		if(~ $#ns 0)
 			auth/none rc -c $cmd

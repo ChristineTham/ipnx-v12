@@ -183,13 +183,22 @@ rm -rf "$pkg/rc/bin/termrc" "$pkg/rc/bin/termrc.local" "$pkg/rc/bin/cpurc" \
 	"$pkg/rc/bin/cpurc.local" "$pkg/rc/bin/service" "$pkg/rc/bin/service.auth"
 cp -f "$here/pkg/system/pkg.cfg" "$pkg/pkg.cfg"
 # and the commands written in rc that are not Plan 9's — `pkg`, `service`,
-# `template`, `su`, `sudo` (docs/packages.md), in `cmd/`
-for c in pkg service template su sudo; do
+# `template`, `su`, `sudo` (docs/packages.md), emca's IPNX half, `emca` and
+# `emcaopen` (docs/emca.md), and `tour` — in `cmd/`
+for c in pkg service template su sudo emca emcaopen tour; do
 	if [ -f "$here/cmd/$c" ]; then cp -f "$here/cmd/$c" "$pkg/rc/bin/$c"; chmod 755 "$pkg/rc/bin/$c"; fi
 done
 # where a repository is mounted (`/profile/repository`), and where the
 # system's services and templates are
 mkdir -p "$root/n/pkg" "$root/service" "$root/template"
+cp -R "$here/service/." "$root/service/"
+# the window types (docs/type.md): /type/<name>/, each a few text files
+rm -rf "$root/type"
+cp -R "$here/type" "$root/type"
+# where command output is (docs/emca.md, Where command output goes), and
+# kitty's README, which the root's layout opens
+mkdir -p "$root/output"
+cp -f "$here/usr/kitty/README" "$root/usr/kitty/README"
 # what is installed to the system (docs/packages.md): `ndb`, one tuple each
 echo "pkg=system version=$VERSION" >"$root/profile/pkg"
 

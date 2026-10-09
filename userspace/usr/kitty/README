@@ -1,0 +1,31 @@
+Welcome home. You are kitty, and /usr/kitty is yours: it is /home in
+every window.
+
+What you are looking at is emca. Every window is a file, or a program
+running on one: the listing is your home, these tabs are /etc/motd, the
+tour and this file, and rc runs below them.
+
+Every window has the same rows:
+
+  the title      a path. Edit it, and the window shows what it names
+  the tag line   text you type, and the six verbs that take it:
+                 New  Open  Run  Find  Edit  Add
+                 with nothing typed, they take what you have selected
+  the toolbar    what this kind of thing offers: a file Save, Revert,
+                 Undo and Redo; a shell Interrupt; a listing Revert
+  the status     what the window reports about itself
+
+Try:
+
+  tap a name in the listing             it opens, as a tab
+  type /etc in a tag line, press Open    a listing of /etc
+  type ls -l in a tag line, press Run    its output, in /output/1/log
+  type motd, press Find                  every match selected
+  in rc:  ls /type                       the kinds of thing, as files
+          cat /type/text/plain/verbs     what a file's toolbar offers
+          emcaopen /etc/motd             a window, from the shell
+          @{rfork n; bind /tmp /etc; ls /etc}
+                                         a namespace of its own
+
+The tour, again: tour
+Everything runs in this browser tab, and a reload forgets it.

@@ -34,6 +34,16 @@ extern "C" {
     /// The bytes of the last fetch.
     pub fn fetched(p: *mut u8, n: usize);
 
+    // ---- emca's file server: `#9/1`, the page's ----
+    /// A T-message for the page's server.
+    pub fn submit(p: *const u8, n: usize);
+    /// The next R-message the page has completed, copied to `p`: its
+    /// length; 0 when there is none; its length negated when `cap` is too
+    /// small to hold it.
+    pub fn harvest(p: *mut u8, cap: usize) -> i32;
+    /// Whether the page has completed a reply not yet harvested.
+    pub fn answered() -> i32;
+
     // ---- the machine: the processes' workers and memories ----
     /// An image made a module: its number, or -1 if it is not one.
     pub fn compile(p: *const u8, n: usize) -> i32;

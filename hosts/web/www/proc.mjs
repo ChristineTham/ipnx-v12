@@ -28,6 +28,8 @@ const JMPBUFSP = 0, JMPBUFPC = 1;
 // A fault: its message is the note. And noted(NCONT), leaving a handler.
 class Trap extends Error {}
 class Noted extends Error {}
+// The process is gone (mailbox.mjs, `gone`): stop, and say nothing.
+class Gone extends Error {}
 
 let pid, mem, X, box;
 const st = {
@@ -48,8 +50,15 @@ post({ ready: true });
 
 function begin(m) {
   if (!m.start && !m.child) return;
+  // its memory comes down a channel of its own (kernel.mjs, `carry`)
+  if (node) m.port.once('message', (x) => go(m, x.mem));
+  else m.port.onmessage = (e) => go(m, e.data.mem);
+}
+
+function go(m, memory) {
+  m.port.close();
   pid = m.pid;
-  mem = m.mem;
+  mem = memory;
   box = mailbox(m.box);
   try {
     const imports = { sys: sys() };
@@ -74,6 +83,7 @@ function begin(m) {
     }
     tell(box, ev.EXITED);
   } catch (e) {
+    if (e instanceof Gone) return;
     tell(box, ev.FAULT, e instanceof Trap ? e.message : `sys: trap: ${e?.message ?? e}`);
   }
 }
@@ -86,7 +96,10 @@ function say(kind) {
   Atomics.store(I, 0, 1);
   Atomics.notify(I, 0);
   for (;;) {
-    for (let s; (s = Atomics.load(I, 0)) !== 2; ) Atomics.wait(I, 0, s);
+    for (let s; (s = Atomics.load(I, 0)) !== 2; ) {
+      if (Atomics.load(I, 5)) throw new Gone();
+      Atomics.wait(I, 0, s);
+    }
     if (I[2] !== rep.PC) break;
     // the kernel asks where the call was made from, and still owes it
     W[7] = BigInt(userpc());

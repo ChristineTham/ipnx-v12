@@ -1,0 +1,6 @@
+# Save only while there are unsaved changes; Undo and Redo here and nowhere
+# else (docs/emca.md, The window toolbar, by type)
+Save	host:save
+Revert	host:revert
+Undo	host:undo
+Redo	host:redo

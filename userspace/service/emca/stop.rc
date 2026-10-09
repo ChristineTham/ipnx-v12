@@ -1,0 +1,3 @@
+#!/bin/rc
+# what emca posted goes with it
+rm -f /srv/emca

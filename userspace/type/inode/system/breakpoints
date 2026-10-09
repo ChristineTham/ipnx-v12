@@ -1,0 +1,5 @@
+# columns	minimum width, in CHARACTERS — the 72-column measure keeps
+#	WCAG 1.4.4 by construction (docs/type.md, inode/system)
+1	0
+2	144
+3	216

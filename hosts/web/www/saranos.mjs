@@ -14,12 +14,13 @@
 // The same file runs under Node, with worker_threads for workers, which is
 // how the host's tests drive it.
 
-import { ev, mailbox, tell } from './mailbox.mjs';
+import { ev, mailbox, tell, gone } from './mailbox.mjs';
 
 const node = typeof process === 'object' && !!process.versions?.node;
 const NodeWorker = node ? (await import('node:worker_threads')).Worker : null;
 
 const RING = 1 << 16;
+const NRING = 1 << 20;
 
 // A worker, the same on both: post, hear, hear it fail, end it.
 function worker(name) {
@@ -28,7 +29,7 @@ function worker(name) {
     // Plan 9's user stack, as the terminal machine gives it (pc/mem.h:51)
     const w = new NodeWorker(url, { resourceLimits: { stackSizeMb: 16 } });
     return {
-      post: (m) => w.postMessage(m),
+      post: (m, transfer = []) => w.postMessage(m, transfer),
       hear: (f) => w.on('message', f),
       failed: (f) => w.on('error', (e) => f(e?.message ?? String(e))),
       end: () => w.terminate(),
@@ -36,7 +37,7 @@ function worker(name) {
   }
   const w = new Worker(url, { type: 'module' });
   return {
-    post: (m) => w.postMessage(m),
+    post: (m, transfer = []) => w.postMessage(m, transfer),
     hear: (f) => w.addEventListener('message', (e) => f(e.data)),
     failed: (f) =>
       w.addEventListener('error', (e) => {
@@ -56,10 +57,32 @@ function worker(name) {
 // `cmd` is what init runs, or nothing for the shell alone; `out` is given
 // what the system writes to its screen. Answers the keyboard, and `done`:
 // pid 1's status when the system is over.
-export function boot({ site, cmd = [], out, halt }) {
+export function boot({ site, cmd = [], out, halt, emca }) {
   const ctl = new SharedArrayBuffer(64 + RING);
   const C = new Int32Array(ctl, 0, 16);
   const R = new Uint8Array(ctl, 64, RING);
+  // emca's replies, for the kernel's worker to harvest: a ring of
+  // R-messages, each its own length first (kernel.mjs, `harvest`)
+  const nine = new SharedArrayBuffer(64 + NRING);
+  const N = new Int32Array(nine, 0, 2);
+  const NB = new Uint8Array(nine, 64, NRING);
+  const waiting = [];
+  function answer(r) {
+    if (r) waiting.push(r);
+    while (waiting.length) {
+      const m = waiting[0];
+      const w = N[0];
+      if (NRING - ((w - Atomics.load(N, 1)) | 0) < m.length) {
+        setTimeout(answer, 5);
+        return;
+      }
+      for (let i = 0; i < m.length; i++) NB[(w + i) & (NRING - 1)] = m[i];
+      Atomics.store(N, 0, (w + m.length) | 0);
+      waiting.shift();
+    }
+    wake();
+  }
+  if (emca) emca.reply = answer;
   const procs = new Map();     // pid → its worker
   const queue = [];            // workers to start, in order
   let starting = null;         // the one starting now
@@ -71,7 +94,11 @@ export function boot({ site, cmd = [], out, halt }) {
   const kernel = worker('kernel.mjs');
   const everything = () => {
     kernel.end();
-    for (const p of procs.values()) p.end();
+    for (const p of procs.values()) {
+      // woken first: a worker ended in Atomics.wait is never collected
+      if (p.box) gone(p.box);
+      p.end();
+    }
     procs.clear();
   };
 
@@ -83,6 +110,7 @@ export function boot({ site, cmd = [], out, halt }) {
     procs.set(m.pid, w);
     starting = w;
     const box = mailbox(m.box);
+    w.box = box;
     w.hear((x) => {
       if (x.ready) {
         if (starting === w) starting = null;
@@ -99,7 +127,8 @@ export function boot({ site, cmd = [], out, halt }) {
       tell(box, ev.FAULT, `sys: trap: ${e}`);
       next();
     });
-    w.post(m);
+    // the far end of the channel its memory is coming down (kernel.mjs)
+    w.post(m, [m.port]);
   }
 
   function join(child) {
@@ -112,7 +141,8 @@ export function boot({ site, cmd = [], out, halt }) {
   }
 
   kernel.hear((m) => {
-    if (m.out) out(m.out);
+    if (m.nine) emca?.serve(m.nine);
+    else if (m.out) out(m.out);
     else if (m.start) {
       queue.push(m);
       next();
@@ -138,12 +168,12 @@ export function boot({ site, cmd = [], out, halt }) {
     everything();
     finish({ status: `the kernel's worker failed: ${e}`, ok: false });
   });
-  kernel.post({ boot: { site: String(site), cmd, ctl } });
+  kernel.post({ boot: { site: String(site), cmd, ctl, nine, wm: !!emca } });
 
-  const wake = () => {
+  function wake() {
     Atomics.add(C, 4, 1);
     Atomics.notify(C, 4);
-  };
+  }
   return {
     done,
     // What is typed, as bytes: how many the ring took.

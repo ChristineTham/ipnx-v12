@@ -1,0 +1,2 @@
+# text/plain is the default and the fallback — the other fact the window
+# manager hardcodes (docs/type.md) — so no rule is needed to reach it

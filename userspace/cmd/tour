@@ -1,0 +1,47 @@
+#!/bin/rc
+# tour — a walk through Saranos, in its own shell.
+
+echo '── Saranos: the tour ──────────────────────────────────────────'
+echo 'The kernel is IPNX, a subset of Plan 9''s in Rust, compiled to wasm and'
+echo 'running in this page. Every command is Plan 9''s own, built from source.'
+echo
+
+echo '── 1 · everything is a file'
+echo '% ls /'
+ls /
+echo
+
+echo '── 2 · the namespace is per process'
+echo 'A subshell binds /tmp over /etc; out here, /etc is as it was.'
+echo '% @{rfork n; bind /tmp /etc; ls /etc}'
+@{rfork n; bind /tmp /etc; ls /etc}
+echo '% ls /etc'
+ls /etc
+echo
+
+echo '── 3 · pipelines'
+echo '% echo the quick brown fox | sed s/quick/QUICK/ | tr a-z A-Z'
+echo the quick brown fox | sed s/quick/QUICK/ | tr a-z A-Z
+echo
+
+echo '── 4 · sam, the editor, as a filter'
+f=/tmp/tour.$pid
+echo horses for courses >$f
+{echo ',x/courses/c/COURSES/'; echo w; echo q} | sam -d $f >/dev/null >[2=1]
+echo '% ,x/courses/c/COURSES/   over: horses for courses'
+cat $f
+rm -f $f
+echo
+
+echo '── 5 · windows are files'
+echo 'This window is a program running on a file. Its own files are'
+echo '/dev/window, and every window''s are in /dev/wsys:'
+echo '% ls /dev/window'
+ls /dev/window >[2]/dev/null || echo '(not in a window)'
+echo
+
+echo '── 6 · the kinds of thing are files too'
+echo '% ls /type /type/*'
+ls /type /type/* >[2]/dev/null
+echo
+echo 'The README tab says what to try next.'

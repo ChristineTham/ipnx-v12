@@ -51,6 +51,10 @@ MIT grant above does not extend to it — and this note says where. The V10
 measurements in RESEARCH.md are recorded as data, taken in the parent
 repository.
 
+CodeMirror (hosts/web/www/vendor/codemirror.bundle.mjs), the page's text
+editor, is under its authors' MIT licence, per hosts/web/www/vendor/LICENSE
+and NOTICE.
+
 Plan 9 sources are vendored under userspace/ — sys/, each architecture's
 include/, rc/ and lib/ — under the Plan 9 Foundation's MIT licence, per
 userspace/NOTICE and userspace/LICENSE, which are the Foundation's own.

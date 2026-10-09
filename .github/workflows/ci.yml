@@ -86,18 +86,23 @@ jobs:
           sh hosts/web/build.sh
       - name: the browser host, on the real userspace
         run: node --test --test-concurrency=4 hosts/web/test/web.test.mjs
+      # emca, the window manager: alone, then with the whole system
+      - name: emca, under Node
+        run: node --test hosts/web/test/emca.test.mjs hosts/web/test/emca-system.test.mjs
       - name: the browser host, in Chromium
         run: |
           npm install -g playwright@1.56.1
           playwright install --with-deps chromium
           node hosts/web/test/browser.mjs
+          node hosts/web/test/emca-browser.mjs
 
       # **Expected red**, and deliberately not hidden. The suite asserts
       # functional equivalence with the demo and fails until it is
       # conformant — an earlier version printed "0 of 12" and reported `ok`,
-      # which is the false signal it exists to prevent. It turns green at
-      # P8, not before; the count in the log is the distance.
-      - name: "conformance (red until P8)"
+      # which is the false signal it exists to prevent. It stays red past
+      # P8: Go and Python are proposed, and the toolchain is P9's. The
+      # count in the log is the distance.
+      - name: "conformance (red until conformant)"
         continue-on-error: true
         run: cargo test -p conformance -- --nocapture
 

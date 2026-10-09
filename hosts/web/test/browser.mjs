@@ -1,6 +1,8 @@
 // The browser host in a browser: Chromium, driven by Playwright, loads the
-// page from serve.mjs — with the headers that give it shared memory — and is
-// typed at through the page's own keyboard handling, as a person would.
+// console page from serve.mjs — with the headers that give it shared memory —
+// and is typed at through the page's own keyboard handling, as a person
+// would. The system with no window manager: the console, and rc on it.
+// emca's page, the site's own, is emca-browser.mjs's.
 //
 //   sh hosts/web/build.sh && node hosts/web/test/browser.mjs
 //
@@ -23,7 +25,7 @@ async function playwright() {
 
 const { chromium } = await playwright();
 const server = await serve(0);
-const url = `http://localhost:${server.address().port}/`;
+const url = `http://localhost:${server.address().port}/console.html`;
 const browser = await chromium.launch();
 const page = await browser.newPage();
 const errors = [];

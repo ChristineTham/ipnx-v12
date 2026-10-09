@@ -42,8 +42,19 @@ target (`rustup target add wasm32-unknown-unknown`) and Node 22:
 sh hosts/web/build.sh                  # the kernel for wasm32, the page   ->  hosts/web/dist
 node hosts/web/serve.mjs               # http://localhost:8080/, with COOP and COEP
 node --test hosts/web/test/web.test.mjs   # the system under Node, typed at
-node hosts/web/test/browser.mjs        # the page in Chromium (Playwright)
+node hosts/web/test/browser.mjs        # the console page in Chromium (Playwright)
+node --test hosts/web/test/emca.test.mjs          # emca and its 9P, alone
+node --test hosts/web/test/emca-system.test.mjs   # emca with the system, under Node
+node hosts/web/test/emca-browser.mjs [check…]     # emca's page in Chromium
 ```
+
+The site's page, `index.html`, boots into emca, the window manager
+(`www/emca.mjs`, drawn by `www/surface.mjs`); `console.html` is the system
+with no window manager — the console, and `rc` on it. emca's IPNX half is
+rc scripts — `userspace/cmd/emca` and `emcaopen`, started by
+`/service/emca` at login where the host serves `#9/1` — and its types are
+`userspace/type/`. `mk.sh` installs them; a change to one alone can be
+copied into `userspace/root/pkg/system/*/rc/bin/` and the page rebuilt.
 
 `hosts/web/dist/` is generated and gitignored; its `root` is a link to
 `userspace/root`, so the page serves what `mk.sh` built last.

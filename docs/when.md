@@ -3,12 +3,13 @@
 **Role: a *when* — the single authoritative statement of build status.** No
 other document carries it.
 
-Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
+Measured 2026-09-20; the kernel's size and the test counts 2026-10-09.
 
-## The kernel — 19,581 lines of Rust, no dependencies
+## The kernel — 19,868 lines of Rust, no dependencies
 
-13,681 of them outside the test modules (2026-10-08, after the uart and
-`#/boot` went; `testfs.rs`, the tests' file server, is a test module).
+13,813 of them outside the test modules (2026-10-09, after `#9` became
+asynchronous; every line not in a `#[cfg(test)]` item, and `testfs.rs`, the
+tests' file server, is a test module).
 
 | | |
 |---|---|
@@ -24,7 +25,7 @@ Measured 2026-09-20; the kernel's size and the test counts 2026-10-08.
 | `devmnt.rs` | `#M` — the 9P client: version, attach, a walk of up to `MAXWELEM` names, open, read and write in a loop, and a clunk that waits for `Rclunk`; an RPC a note interrupts is flushed (`mountio`, `devmnt.c:782`). A walk the server refuses leaves no fid to clunk (`devmnt.c:410`). Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
 | `devsrv.rs` | `#s` — post a file descriptor's NUMBER (`strtoul`'s), and an open of the name answers the posted channel itself, shared with the poster (`devsrv.c:135`). Its owner or eve renames it (`srvwstat`); it is removed by `srvremove`'s rules, and removing it closes what was posted |
-| `devvirtio9p.rs` | `#9` — a channel to a 9P server the MACHINE provides. It marshals nothing: `#M` writes a T-message down it and reads the R-message back, as it would down a TCP connection |
+| `devvirtio9p.rs` | `#9` — a channel to each 9P server the MACHINE provides, `0`, `1`, … (`v9gen`, `devvirtio9p.c:1059`). It marshals nothing: `#M` writes a T-message down it and reads the R-message back, as it would down a TCP connection. **A reply may come later** (2026-10-09), as the virtqueue's does: a write is `submit` (`:597`), a server that cannot answer yet holds the request, the clock harvests what it has answered (`vqharvest`, `:470`, from `v9interrupt`, `:508`) and wakes the reader, which sleeps for one as `getreply` does (`:569`); replies come back in any order and `#M` sorts them by tag. A request whose `Tflush` is answered is not waited for, and the clock keeps ticking while a server holds one |
 | `devdup.rs` | `#d` — a process's fds as files; opening `#d/3` answers the channel fd 3 holds — the same one, offset and all — in the mode it is open in (`devdup.c:86`), so a dup IS an open. A ctl file reads as the descriptor's `/proc/n/fd` line |
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares; and `#ec`, the kernel configuration group, which nothing fills yet |
 | `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. The host names the host owner by writing `#c/hostowner`, as Plan 9's `boot` does (`bootauth.c:56`), so `$user` is `kitty` — the host's `plan9.ini` says `user=kitty` (`plan9ini`, `hosts/ipnx/src/lib.rs`); Plan 9's fallback, `glenda`, is for one that names none — and not the role's own name |
@@ -46,7 +47,9 @@ image run again is not compiled again (2026-09-24; RESEARCH §15.12) — a
 booted session running three `echo`s went from 19.5s to 9.2s in a debug
 build; what is left is compiling each distinct image once per boot. `store.rs` is the
 filesystem the machine serves — qemu's `-fsdev local` half, a host directory
-exported over 9P. `lib.rs` is `startboot` (`initcode.c:21`): the device
+exported over 9P — a file opened `ORCLOSE` is removed when its fid is
+clunked, as `u9fs` does (`u9fs.c:866`; sam's temporary file is made so,
+2026-10-09). `lib.rs` is `startboot` (`initcode.c:21`): the device
 table — which is what a Plan 9 kernel's configuration file is, `mkdevc`
 turning a `dev` list into `devtab[]` — three opens of `#c/cons`, the binds,
 then Plan 9's `boot`'s part — the host owner, the root posted as `#s/root`
@@ -385,20 +388,25 @@ Fifty tests in `hosts/ipnx` (counted 2026-09-24: forty-five in the binary — mo
 `userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
 and say so rather than passing quietly.
 
-## Functional equivalence to the demo — 7 of 12
+## Functional equivalence to the demo — 9 of 12
 
 The conformance suite lists twelve capabilities and **runs a check for every
 one it claims**: it boots the whole system on a scripted console and types at
 it, so a line reads `reached` only when a person really can do the thing, on
-this boot. The seven: boot to a shell, list a directory, read a file, a
+this boot. The nine: boot to a shell, list a directory, read a file, a
 pipeline, per-process namespaces (`@{rfork n; bind /tmp/alt /etc}` sees the
 bind; the shell outside it does not), **installing a package as a bind**
 — a repository made in the session, a package installed with `pkg install
 -n` inside `@{rfork n; …}`, run there, and not there outside (P7's `pkg`) —
-and **the whole system in a browser**: Chromium loads `hosts/web`'s page and
-is typed at (`hosts/web/test/browser.mjs`, which wants `hosts/web/build.sh`
-run and Playwright's Chromium). Of the other five, two are P8's — several
-windows, actions by kind — one is P9's — building a program with a toolchain, which is the
+**the whole system in a browser**: Chromium loads `hosts/web`'s console page
+and is typed at (`hosts/web/test/browser.mjs`) — and P8's two, on the site's
+own page, emca's: **several windows, each acted on alone** — a command typed
+into `rc`, an edit made in `/etc/motd` and the tour's tab closed, and every
+other window shows what it showed — and **actions by kind** — text offers
+Revert, Undo and Redo, a listing Revert, a shell Interrupt, and each does
+what it says (`hosts/web/test/emca-browser.mjs`). The browser checks want
+`hosts/web/build.sh` run and Playwright's Chromium. Of the other three, one
+is P9's — building a program with a toolchain, which is the
 host's, typed through `os`, and so there only where the host runs commands
 ([saranos.md](saranos.md), *The host's resources*) — and **two are built by
 no phase of [implementation.md](implementation.md)**: a Go program and
@@ -433,33 +441,129 @@ fixtures, because a behaviour is reached when a person can do it.
 
 **P7 is built but for identity** (2026-09-29). Step 1, the profiles: `/profile` and `/home/profile` with `start.ns`, and `start`, `shell` and `stop` each as a `.env` and a `.rc`, run in the order docs/packages.md gives — the user's `start.ns` added at login by `addns` — `/home` bound to `/usr/$user`, and `/rc` gone. Step 2, the `system` package (above). **Step 3, `pkg`**: install, remove, list and prune, to the system, the user or the namespace; `disk/mkfs -a` archives from a repository at `/n/pkg` named in `/profile/repository`, found in its ndb `index`, refused unless `sha1sum -2 256` matches, unpacked by `disk/mkext` into `/pkg/<name>/<version>/`, their `depend=`s first and marked `auto`; bound at once and from `/profile/pkg.ns` at every boot. **P7's acceptance passes**: a package installs as a bind, `pkg remove` unbinds it, and its files survive. **Step 4, `service`**: enable, disable, start and stop, `/service/<name>/`, `/profile/service` with Plan 9's `!`; the system's start at boot and stop at shutdown, the user's at login and logout; `user=none` runs one through `auth/none`. **Step 5, `template`**: instantiate — an included template first, the scaffolding, `project.cfg`, `install.rc` — and remove; a project is promoted by its own `pkg.rc` (the window type is P8's). **Step 6, identity, is not built**: `su` and `sudo` are defined over `auth/login`, which needs an authentication server over `/net` (docs/packages.md, *The forms*). Tested: `a_package_installs_as_a_bind_and_removes_as_an_unbind`, `an_enabled_service_starts_at_boot_and_stops_at_shutdown`, `a_template_makes_a_project_and_the_project_a_package`.
 
-**P8 is not built.** Its first step was the serial line — `#t` in the
-kernel and `eia0` on a host line, built 2026-09-29 (RESEARCH §16.20) — and
-it is **removed** (2026-10-08, RESEARCH §16.33): it emulated hardware, and
-*"This is WASM we have no hardware we do not want to emulate hardware"*.
-Its steps are now `hosts/web`, emca in the page — a full window manager on
-the host side, text only — the files emca serves to IPNX, and the demo's
-types (Christine, 2026-10-08).
+**P8's acceptance passes** (2026-10-09; RESEARCH §16.37, §16.38): the site's
+page boots into emca and shows the listing, the three tabs and `rc` below
+them, and the suite's three P8 lines are reached. Its first step was once
+the serial line — `#t` in the kernel and `eia0` on a host line, built
+2026-09-29 (RESEARCH §16.20) — and it is **removed** (2026-10-08, RESEARCH
+§16.33): it emulated hardware, and *"This is WASM we have no hardware we do
+not want to emulate hardware"*. Its steps are `hosts/web`, emca in the page
+— a full window manager on the host side, text only — the files emca serves
+to IPNX, and the demo's types (Christine, 2026-10-08).
 
-**Step 1, `hosts/web`, is built** (2026-10-08; RESEARCH §16.37). The kernel,
-unchanged, compiled to `wasm32-unknown-unknown` — 812,984 bytes, importing
-26 functions from the page and nothing else — runs in a worker of its own,
+**Step 1, `hosts/web`** (2026-10-08; RESEARCH §16.37). The kernel — the
+terminal's own source — compiled to `wasm32-unknown-unknown` — 822,923 bytes, importing
+28 functions from the page and nothing else — runs in a worker of its own,
 and each process in a worker of its own: a call is a message in a mailbox
 in shared memory and an `Atomics.wait` (`hosts/web/src/machine.rs`, and
 `www/proc.mjs` for the process's side). `fork`, `setjmp` and `longjmp` are
 asyncify's as on the terminal; `RFMEM` shares the memory, and two sharers
-never run at once. The boot is `hosts/ipnx`'s, shared (`startboot_with`),
-and the root is served by the same 9P (`Store` over a `Backend`): the built
-root, from an index of its 1,298 entries, each file fetched the first time
-it is read. The page holds the line being typed and echoes it, as rio's
-window does. **Tested**: `hosts/web/test/web.test.mjs`, 33 tests under Node
-— the terminal host's typed tests on this machine, plumber's shared-memory
+never run at once. A process's memory goes to its worker down a channel of
+its own, and a worker is woken before it is ended (2026-10-09): Chromium
+holds about 125 shared memories at once, and an ended worker still waiting
+kept its own. The boot is `hosts/ipnx`'s, shared (`startboot_with`), and
+the root is served by the same 9P (`Store` over a `Backend`): the built
+root, from an index of its 1,331 entries, each file fetched the first time
+it is read. `console.html` is the system with no window manager: the
+console, the line held and echoed by the page, as rio's window does.
+**Tested**: `hosts/web/test/web.test.mjs`, 33 tests under Node — the
+terminal host's typed tests on this machine, plumber's shared-memory
 threads, `stop`, `^C` and ghostscript among them — and
-`hosts/web/test/browser.mjs`, ten checks in headless Chromium, which boots
-to the prompt in 1.8 s. **Not built**: what is written lasts the session
-only — keeping it in the origin private file system across visits — and
-the page is not deployed; WebKit is not tested. Steps 2–4 — emca, the files
-it serves, the demo's types — are not built.
+`hosts/web/test/browser.mjs`, ten checks of the console in headless
+Chromium, which boots to the prompt in 2.0 s.
+
+**Step 2, emca in the page** (2026-10-09). `www/emca.mjs` is the window
+manager — its tree of windows and what each holds — and `www/surface.mjs`
+draws it. The root window `/`, laid out from `/type/inode/system/layout`:
+`/home`, a listing, and beside it a column of three tabs — `/etc/motd`,
+`/bin/tour`, `/home/README` — above `/bin/rc`. `row`, `column` and `tabs`;
+sizes by compositor.md's allocation — every window its minimum (a leaf 72
+columns, a body ten lines and its furniture), the rest by slack, then
+equally — and what does not fit a tab; the root's columns by
+`breakpoints`' 144 and 216 characters. Every window has its title and
+window controls (close, minimise, maximise, duplicate as a column, a row
+or a tab; the title edited retargets it), the tag line and the six verbs,
+the toolbar from its type's `verbs` — Save only while there are unsaved
+changes, Undo and Redo only in `edit` — what it holds, and its status line;
+the outermost window's chrome is the page's own toolbar, the root's verbs.
+Text is CodeMirror's, read-only for `look`, every edit mirrored into
+emca's buffer; a listing is one name a line, each one tap from Open, and
+selectable; a shell window is its transcript and the line held until Enter
+(^C, ^D, ^U, and keys as they come under `rawon`). The verbs: New, Open,
+Run — into `/output/<n>/log` — Find, every match a selection, Edit, a sam
+command by `sam -d`, Add, the filters `|`, `<` and `>`, Save, Save All,
+Revert, Undo, Redo, Interrupt, Reset, New Shell, Reboot and Halt.
+
+**Step 3, the files emca serves** (2026-10-09), over `#9/1`, whose replies
+come when they come (the kernel table, above). Its root: `layout`,
+`new/ctl` (acme's), `output/` (emca.md, *Where command output goes*: each
+`<n>/` holds `0`, `1`, `2`, `cmd`, `dir`, `log` and `status`) and `wsys/`.
+A window's own view, attached by its number and bound over a program's
+`/dev` as rio binds itself (`rio/fsys.c:241`): `cons`, `consctl`, `label`,
+`wctl`, `wdir`, `winid`, `winname`, `window/` its files and `wsys/` every
+window's. A window's files: window.md's — `body`, `dirty`, `events`, `rect`,
+`role`, `status`, `title`, `type`, `verbs` and `wctl` — with acme's `ctl`
+and `tag`, and `selection` and `replace` for what a filter or Edit
+replaces. `wctl` takes
+rio's `set -pid`, `delete`, `hide`, `unhide` and `current`, and acme's
+`clean`, `dirty` and `name`. The IPNX half is `/bin/emca`, a service
+(`/service/emca`, started at login where the host serves a window
+manager): it posts `/srv/emca`, mounts it on `/mnt/wsys`, opens `/` and
+gives emca the layout, then is `rc -i` reading what emca asks of IPNX in
+the root window's `events`. `emcaopen [-w id] path [role]` names the
+type (`/` is `inode/system`, a directory `inode/directory`, anything else
+`file -m`'s) and the role (an executable — the mode's `x` — is run, its
+window `shell`; otherwise `edit` where it can be written and `look` where
+not), and fills the window, its role last. **What the design does not
+give is proposed, built and awaiting review** ([proposals.md](proposals.md),
+*emca's files*): the root's `events` as emca's requests, `layout`,
+`emcaopen -w`, `selection` and `replace`, `/type/shell`, and the column
+count kept by the surface.
+
+**Step 4, the demo's types** (2026-10-09): `/type/inode/system` — with its
+`layout` and `breakpoints` — `/type/inode/directory`, `/type/text/plain`,
+and the shell role's verbs at `/type/shell`, each with its `rules`,
+`manager`, `namespace` and `verbs`. `/bin/tour` and kitty's `README` are
+two of the tabs.
+
+**Tested**: `hosts/web/test/emca.test.mjs`, 15 tests of the window manager
+and its 9P; `emca-system.test.mjs`, 4 tests of emca with the whole system
+under Node — the layout filled, a shell window, the interrupt, and Open,
+Run, Save, Revert, Edit and a filter through IPNX; `emca-browser.mjs`, six
+checks in headless Chromium — every window filled in 5.0 s — two of which
+the conformance suite runs; and the kernel's `#9` tests
+(`a_reply_the_server_holds_comes_in_at_the_clock`,
+`replies_held_and_answered_out_of_order_go_to_their_own_calls`,
+`a_flushed_request_is_not_waited_for`).
+
+**Not built** (P8):
+
+- **A listing edited as names** — `edit` on `inode/directory` (type.md, *the
+  listing format*): a changed line a rename, a deleted one a delete, an
+  added one a create, and the plan in the status line until Save. A
+  listing here is one tap from Open (compositor.md, *Single tap*); how a
+  tap that opens is told from one that places the cursor is not designed.
+- **Dispatch through the plumber** (type.md, *Dispatch*): a type's name is a
+  plumb port, and a port is one name in `/mnt/plumb` (`plumb/fsys.c:161`),
+  which a MIME type, holding a `/`, cannot be. `emcaopen` reads
+  `/type/<type>/` itself, and the types' `rules` are loaded by nothing
+  ([proposals.md](proposals.md)).
+- **A manager per window, posted in `/srv`** (type.md, *The manager*): the
+  demo's types' managers are `host` — emca's own — and run no process;
+  `inode/system`'s is `/bin/emca`, posted as `/srv/emca`.
+- **acme's `addr` and `data`** (type.md, *The manager*): the content is
+  `body`, read and written whole, and a filter's and Edit's are `selection`
+  and `replace` ([proposals.md](proposals.md)).
+- **`inode/system`'s Save Layout, Restore Layout and Home…** (emca.md, *The
+  window toolbar, by type*), and **the column count by the root's
+  manager** — the surface reads `breakpoints`' numbers as its own; `leaves
+  <n>` is proposed in type.md.
+- **A container's own chrome**, **the selection's verbs** (emca.md), **the
+  keyboard grammar** past ⌘S, ⌘↵ and ⌘⇧↵ (compositor.md), and **the
+  `properties` role**.
+- **Deploying the site** — `gh-pages` is Christine's — and **keeping what is
+  written** across visits, in the origin private file system; **WebKit** is
+  not tested.
 
 **P9 is not built.** Host commands are designed ([saranos.md](saranos.md),
 *The host's resources*); nothing of them — the call, its host half, `os` —

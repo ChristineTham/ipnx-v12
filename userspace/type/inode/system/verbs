@@ -1,0 +1,8 @@
+# inode/system's own (docs/type.md): on the global toolbar, since the
+# outermost window's content is the system (docs/surface.md).
+# <label>	<action> — manager:, host: or run: (docs/type.md, The /type file syntax)
+Save All	host:saveall
+Reset	host:reset
+New Shell	host:newshell
+Reboot	host:reboot
+Halt	run:echo halt >/dev/reboot

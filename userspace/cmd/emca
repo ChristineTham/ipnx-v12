@@ -1,0 +1,34 @@
+#!/bin/rc
+# emca — the window manager's IPNX half (docs/emca.md, "The half that lives
+# in IPNX"), and the root window's manager (docs/type.md, inode/system).
+#
+# The window manager is the host's: it draws every window and the text in
+# it, and serves IPNX its files over 9P on #9/1 (docs/surface.md). This half
+# posts them at /srv/emca and mounts them on /mnt/wsys, gives the window
+# manager the root's layout — /type/inode/system/layout, which says what
+# the windows are — and then does what the window manager asks of IPNX:
+# what a path is and what is in it, a command run, a program started, a
+# note posted. Each is an rc command, a line at a time, in the root
+# window's `events` (docs/window.md) — so this half is rc, reading it.
+
+rfork ne
+if(! test -e '#9/1'){
+	echo 'emca: the host serves no window manager' >[1=2]
+	exit 'no window manager'
+}
+if(! test -e /srv/emca)
+	echo 0 >/srv/emca <>'#9/1'
+mount -c /srv/emca /mnt/wsys || exit mount
+# where command output is (docs/emca.md, Where command output goes)
+if(test -d /output)
+	bind /mnt/wsys/output /output
+# the root window is / — inode/system, opened as any window is — and its
+# manager opens what its layout names (docs/emca.md, Boot and the session)
+emcaopen -w 1 / >/dev/null
+cat /type/inode/system/layout >/mnt/wsys/layout
+# interactive, so that a command that fails — a redirection to a window
+# already gone — ends that command and not this half (rc's Xerror unwinds
+# to the interactive frame, exec.c:1022); and with an empty prompt, which
+# a new shell keeps (/profile/shell.rc, as rcmain)
+prompt=('' '')
+exec rc -i </mnt/wsys/wsys/1/events

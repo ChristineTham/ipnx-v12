@@ -1,0 +1,3 @@
+# the shell role: Interrupt, and nothing else — Clear would truncate the
+# log, which is content (docs/type.md, The window)
+Interrupt	host:interrupt

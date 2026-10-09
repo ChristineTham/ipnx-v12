@@ -100,6 +100,41 @@ mod page {
         }
     }
 
+    /// **emca's file server — `#9/1`** — which is the page's: the window
+    /// manager is the host's (docs/emca.md), and serves IPNX its files over
+    /// 9P as the store is served (docs/surface.md). Every reply is the
+    /// page's to give when it has it — a window's console read waits for a
+    /// line — so each T-message is submitted and its reply harvested at the
+    /// clock, as Plan 9's virtio9p harvests its queue (`#9`).
+    struct Wsys;
+
+    impl ipnx_kernel::devvirtio9p::Nineserver for Wsys {
+        fn rpc(&mut self, _t: &[u8]) -> Result<Vec<u8>, String> {
+            Err("the page answers when it has an answer".into())
+        }
+
+        fn submit(&mut self, t: &[u8]) -> Result<Option<Vec<u8>>, String> {
+            unsafe { js::submit(t.as_ptr(), t.len()) };
+            Ok(None)
+        }
+
+        fn harvest(&mut self) -> Vec<Vec<u8>> {
+            let mut out = Vec::new();
+            let mut b = vec![0u8; 64 * 1024];
+            loop {
+                let n = unsafe { js::harvest(b.as_mut_ptr(), b.len()) };
+                if n == 0 {
+                    return out;
+                }
+                if n < 0 {
+                    b.resize((-n) as usize, 0);
+                    continue;
+                }
+                out.push(b[..n as usize].to_vec());
+            }
+        }
+    }
+
     /// Room in the kernel's memory for the page to write into: the
     /// command and the root's index, before [`web_boot`].
     #[no_mangle]
@@ -114,12 +149,13 @@ mod page {
     /// to the page. `cmd` is the command `init` runs, its words each ended
     /// by a NUL, or nothing for the interactive shell alone: the terminal
     /// host's command line (`ipnx::plan9ini`). `index` is the built root's
-    /// index ([`crate::tree::Tree::new`]).
+    /// index ([`crate::tree::Tree::new`]). `wm` says the page has a window
+    /// manager, emca, which serves `#9/1`.
     ///
     /// # Safety
     /// Both are ranges [`web_alloc`] gave, written by the page.
     #[no_mangle]
-    pub unsafe extern "C" fn web_boot(cmd: *const u8, ncmd: usize, index: *const u8, nindex: usize) {
+    pub unsafe extern "C" fn web_boot(cmd: *const u8, ncmd: usize, index: *const u8, nindex: usize, wm: i32) {
         std::panic::set_hook(Box::new(|info| {
             let s = format!("ipnx-web: {info}\n");
             unsafe { js::putstr(s.as_ptr(), s.len()) };
@@ -133,7 +169,9 @@ mod page {
             CONFFILE,
             &ipnx::plan9ini(&words),
             Box::new(Page),
-            Some(Box::new(store)),
+            // `#9/1` is emca's, where the page has a window manager: a page
+            // with none is the console alone, as a terminal is
+            if wm != 0 { vec![Box::new(store), Box::new(Wsys)] } else { vec![Box::new(store)] },
         );
         let (s, ok) = match r {
             Ok(s) => (s, 1),

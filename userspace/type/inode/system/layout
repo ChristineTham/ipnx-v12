@@ -1,0 +1,7 @@
+/home
+column
+	tabs
+		/etc/motd
+		/bin/tour
+		/home/README
+	/bin/rc

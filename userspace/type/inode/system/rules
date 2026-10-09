@@ -1,0 +1,2 @@
+# inode/system is `/` — one of the two facts the window manager hardcodes
+# (docs/type.md, Settled earlier) — so no rule recognises it.

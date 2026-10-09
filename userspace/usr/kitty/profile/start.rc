@@ -9,3 +9,13 @@
 if(test -r /home/profile/service)
 	for(s in `{sed '/^[!#]/d' /home/profile/service})
 		service start -u $s
+
+# the window manager, where the host has one (docs/emca.md, Boot and the
+# session): it serves its files on #9/1, and emca's IPNX half is a service,
+# started at login as Plan 9's profile starts rio on a terminal
+# — and where it has none, nothing to report: init prints the status a
+# profile ends with (`init.c:164`), and a test that failed is one
+if(test -e '#9/1')
+	service start -s emca
+if not
+	status=''

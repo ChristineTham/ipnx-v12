@@ -37,20 +37,22 @@ binaries are supported natively: a WASI engine runs them, not a personality.
 ## The component map
 
 ```
-kernel/            the kernel core (Rust): pure state machine — syscalls in,
-                   effects out — with its own single-threaded async executor
+kernel/            the kernel core (Rust, no dependencies): Plan 9's kernel,
+                   a subset — processes, their tables, the namespace, the
+                   devices below — over a machine each host supplies
 hosts/ipnx/        a terminal: the machine is wasmtime, each process a fiber;
                    and the boot and the root's 9P server, which hosts share
 hosts/web/         a browser: the core compiled to wasm32 in a worker, each
-                   process a worker of its own, a call a mailbox in shared memory
+                   process a worker of its own, a call a mailbox in shared
+                   memory; and emca, the window manager, in the page
 userspace/         the userspace (graduated at M0): libcs, vendored sources
                    (verbatim), commands, citizens, the rootfs seed, mk.sh,
                    VERSIONS (the measured toolchain, drift-warned)
 ```
 
-The kernel core and the JS reference implement the same kernel; a host
-implements the host contract below; every userspace binary implements the
-userspace ABI. The conformance suite binds all three.
+The kernel core implements the kernel; a host implements the host contract
+below; every userspace binary implements the userspace ABI. The conformance
+suite binds all three.
 
 ## The kernel's shape
 
@@ -190,12 +192,14 @@ letter. Eleven:
   | `e` | **devenv** — the environment group, which `rfork`'s `ENVG` and `CENVG` exist to share, copy or clear. **Two groups, and the attach spec picks one**: no spec is the calling process's own, `c` is `confegrp`, *"the global environment group containing the kernel configuration"* (`devenv.c:16`) — so `#ec` — and any other spec is `Ebadarg` (`:73`). Only eve writes the configuration (`envwriteable`, `:377`) |
   | `c` | **devcons** — all 23 of `consdir[]`. The console's line discipline is here because `port/devcons.c` keeps it there; the machine supplies only `screenputs` and the keyboard's characters. The rest is the kernel's own state as files |
   | `¤` | **devcap** — the only way a process becomes another user: eve mints a capability, a process spends it once |
-  | `9` | **devvirtio9p** — a CHANNEL to a 9P server the machine provides, and nothing else. `pc/devvirtio9p.c:1227`; its own comment is this system's situation, *"mount a host directory … with no network in the path"*. A 9legacy device, absent from `plan9-stock` |
+  | `9` | **devvirtio9p** — a CHANNEL to each 9P server the machine provides, and nothing else: `#9/0` the root's store, and `#9/1` a window manager where the host serves one (`hosts/web`'s emca). `pc/devvirtio9p.c:1227`; its own comment is this system's situation, *"mount a host directory … with no network in the path"*. A 9legacy device, absent from `plan9-stock`. **A server may answer later**, as the virtqueue's does: the machine's `Nineserver` takes a request (`submit`, `devvirtio9p.c:597`) and gives what it has answered when asked (`vqharvest`, `:470`), which the kernel does at the clock (`v9interrupt`, `:508`) |
 
 **What is NOT here, and why it is not an omission.** `#i` draw, `#m` mouse
 and `#t` uart are hardware this machine has none of, and none is emulated
 (*"This is WASM we have no hardware we do not want to emulate hardware"*,
-Christine, 2026-10-08); emca is userspace entirely. Any
+Christine, 2026-10-08); and emca is no device — it is the host's window
+manager, serving its files over `#9` as the root's store is served, with a
+half in userspace (`/bin/emca`). Any
 letter Plan 9 lacks — a fetcher, a versioning layer, host files — is not a
 device at all; it is a file server, which is what Plan 9 would have made it.
 

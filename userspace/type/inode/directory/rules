@@ -1,0 +1,5 @@
+# a directory: file(1) gives it application/octet-stream (file.c:284),
+# which carries nothing, so emcaopen recognises it with test -d
+type is text
+arg isdir $data
+plumb to inode/directory
