@@ -177,6 +177,16 @@ test('exec of something that is not a module fails, and the system goes on', asy
   assert.match(out, /still here/);
 });
 
+// The page runs no host commands (docs/saranos.md, The host's resources):
+// `os` loads, and the page answers its call to the host as Plan 9 answers
+// a number with no `systab` entry (`pc/trap.c:716`); the shell goes on.
+test('os is a call the page does not have, and the system goes on', async () => {
+  const out = await typing('os echo hello </dev/null\necho still here\n');
+  assert.match(out, /bad sys call number 54/);
+  assert.doesNotMatch(out, /^hello$/m);
+  assert.match(out, /still here/);
+});
+
 test('a process in a tight loop does not stop the system', async () => {
   assert.match(await typing('{while(~ 1 1) x=1} &\necho kill >/proc/$apid/ctl\necho still here\n'), /still here/);
 });

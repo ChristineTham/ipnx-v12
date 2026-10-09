@@ -12,7 +12,10 @@
 # window's `events` (docs/window.md) — so this half is rc, reading it.
 
 rfork ne
-if(! test -e '#9/1'){
+# a host with a window manager — the page — says so in $terminal, as
+# Plan 9's termrc tells its hosts apart (`~ $terminal *vx32*`, termrc:48),
+# and serves it on #9/1: a terminal's #9/1 is its host's commands
+if(! ~ $terminal *hosts/web* || ! test -e '#9/1'){
 	echo 'emca: the host serves no window manager' >[1=2]
 	exit 'no window manager'
 }

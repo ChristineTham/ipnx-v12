@@ -814,6 +814,38 @@ fn cargv(c: &mut Caller<'_, Proc>, p: i32) -> Result<Vec<String>, wasmtime::Erro
     }
 }
 
+/// A NUL-terminated string's bytes, as they are — what the host is given,
+/// which takes no view of their encoding.
+fn cbytes(c: &mut Caller<'_, Proc>, p: i32) -> Result<Vec<u8>, wasmtime::Error> {
+    let mem = memory(c)?;
+    let d = mem.data(&*c);
+    let start = p.max(0) as usize;
+    if start > d.len() {
+        return Err(wasmtime::Error::msg("address out of range"));
+    }
+    let end = d[start..].iter().position(|&b| b == 0).map(|n| start + n).unwrap_or(d.len());
+    Ok(d[start..end].to_vec())
+}
+
+/// `char **`, as [`cargv`] reads one, each string's bytes as they are.
+fn cbytesv(c: &mut Caller<'_, Proc>, p: i32) -> Result<Vec<Vec<u8>>, wasmtime::Error> {
+    let mut out = Vec::new();
+    let mut at = p.max(0) as usize;
+    loop {
+        let mem = memory(c)?;
+        let d = mem.data(&*c);
+        if at + 4 > d.len() {
+            return Err(wasmtime::Error::msg("address out of range"));
+        }
+        let ptr = i32::from_le_bytes([d[at], d[at + 1], d[at + 2], d[at + 3]]);
+        if ptr == 0 {
+            return Ok(out);
+        }
+        out.push(cbytes(c, ptr)?);
+        at += 4;
+    }
+}
+
 fn read(c: &mut Caller<'_, Proc>, p: i32, n: i32) -> Result<Vec<u8>, wasmtime::Error> {
     let mem = memory(c)?;
     let mut b = vec![0u8; n.max(0) as usize];
@@ -2113,6 +2145,65 @@ fn imports(l: &mut Linker<Proc>) -> Result<(), wasmtime::Error> {
         deliver(&mut c).await?;
         Ok::<_, wasmtime::Error>(r)
     }))?;
+    // **The host's call — not one of Plan 9's** (docs/saranos.md, *The
+    // host's resources*; Christine, 2026-10-08: *"A call to the host"*):
+    // `oscmd(argv, envp, dir, nice, fd)` starts `argv` on the host as
+    // Inferno's emulator starts a command (`emu/MacOSX/cmd.c:88`), and the
+    // kernel opens what the host serves of it into the process's
+    // descriptors ([`Call::Oscmd`]; Christine, 2026-10-09: *"9P over #9"*) —
+    // its standard input, output and error into `fd[0]`, `fd[1]` and
+    // `fd[2]`, unless `fd` is nil, which is `os -b` (`os.b:91`); and the
+    // answer is a descriptor that reads its status when it ends. A host
+    // that serves no commands has no such call, and answers it as Plan 9
+    // answers a number with no `systab` entry (`pc/trap.c:716`).
+    l.func_wrap_async(
+        "sys",
+        "oscmd",
+        |mut c: Caller<'_, Proc>, (a, e, d, nice, fdp): (i32, i32, i32, i32, i32)| {
+            Box::new(async move {
+                c.data_mut().s = [a.word(), e.word(), d.word(), nice.word(), fdp.word()];
+                let r = async {
+                    let argv = cbytesv(&mut c, a).unwrap_or_default();
+                    let envp = if e == 0 { Vec::new() } else { cbytesv(&mut c, e).unwrap_or_default() };
+                    let dir = if d == 0 { None } else { Some(cbytes(&mut c, d).unwrap_or_default()) };
+                    let Some((server, aname)) = crate::oscmd::start(argv, envp, dir, nice != 0, fdp == 0) else {
+                        let _ = kcall(&mut c, Call::Bad { n: ipnx_kernel::sysno::OSCMD }).await;
+                        return -1;
+                    };
+                    use ipnx_kernel::chan::mode::{OREAD, OWRITE};
+                    let files: Vec<(String, i32)> = if fdp == 0 {
+                        vec![("wait".into(), OREAD as i32)]
+                    } else {
+                        // Inferno's `os` opens them in this order
+                        // (`os.b:92`–`:96`, and `wait` at `:78`).
+                        vec![
+                            ("data".into(), OWRITE as i32),
+                            ("data".into(), OREAD as i32),
+                            ("stderr".into(), OREAD as i32),
+                            ("wait".into(), OREAD as i32),
+                        ]
+                    };
+                    let r = kcall(&mut c, Call::Oscmd { server, aname: aname.clone(), files }).await;
+                    crate::oscmd::release(&aname);
+                    let Ok(Ret::Fds(fds)) = r else { return -1 };
+                    if fdp != 0 {
+                        let mut three = [0u8; 12];
+                        for (i, fd) in fds[..3].iter().enumerate() {
+                            three[i * 4..i * 4 + 4].copy_from_slice(&fd.to_le_bytes());
+                        }
+                        if write(&mut c, fdp, &three).is_err() {
+                            return -1;
+                        }
+                    }
+                    fds.last().copied().unwrap_or(-1)
+                }
+                .await;
+                deliver(&mut c).await?;
+                Ok::<_, wasmtime::Error>(r)
+            })
+        },
+    )?;
+
     l.func_wrap_async("sys", "rendezvous", |mut c: Caller<'_, Proc>, (tag, val): (i32, i32)| Box::new(async move {
         c.data_mut().s = [tag.word(), val.word(), 0, 0, 0];
         let r = async {

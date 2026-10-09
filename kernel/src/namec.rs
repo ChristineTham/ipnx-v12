@@ -1552,6 +1552,11 @@ impl Devtab {
         })
     }
 
+    /// A wire held (see [`Devtab::wires`]), by its device and file.
+    pub fn keptwire(&self, dev: DevId, path: u64) -> Option<std::rc::Rc<std::cell::RefCell<Chan>>> {
+        self.wires.iter().find(|((d, _, p), _)| *d == dev && *p == path).map(|(_, c)| c.clone())
+    }
+
     /// Hold a mounted wire (see [`Devtab::wires`]).
     pub fn keepwire(&mut self, cell: std::rc::Rc<std::cell::RefCell<Chan>>) {
         let key = {

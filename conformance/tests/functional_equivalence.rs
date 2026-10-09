@@ -29,12 +29,12 @@ use std::fmt;
 ///
 /// It needs `userspace/mk.sh` to have run, as the host's own tests do.
 fn typing(keys: &str) -> String {
-    // a copy of the built root, this process's own ([`ipnx::rootcopy`])
+    // a copy of the built root, this process's own ([`ipnx::rootcopy`]),
+    // served as the terminal serves it, with the host's commands beside it
     let store = ipnx::rootcopy();
+    assert!(store.join("profile").is_dir(), "no userspace/root — run userspace/mk.sh");
     let term = ipnx::Term::typing(keys);
-    let fs = ipnx::store::Store::new(store).expect("no userspace/root — run userspace/mk.sh");
-    ipnx::startboot(&ipnx::plan9ini(&[]), Box::new(term.clone()), Some(Box::new(fs)))
-        .expect("the system did not boot");
+    ipnx::startboot_at(store, &ipnx::plan9ini(&[]), Box::new(term.clone())).expect("the system did not boot");
     term.screen()
 }
 
@@ -262,9 +262,26 @@ fn demo() -> Vec<Behaviour> {
             // typed through `os`, where the host runs commands, and is not in
             // the browser (docs/saranos.md, "The host's resources"; P9).
             what: "build a program with a language toolchain, and run it",
-            state: Pending("P9"),
+            state: Reached,
             how: "`os go build` makes it with the host's toolchain, and it runs; where the host runs commands",
-            check: None,
+            check: Some(|| {
+                // written in the namespace, built and run on the host, in
+                // the host directory that holds it (`os -d`)
+                let d = format!("{}/usr/kitty/hello-go", ipnx::rootcopy().display());
+                let out = typing(&format!(
+                    "mkdir -p /usr/kitty/hello-go\ncd /usr/kitty/hello-go\n\
+                     echo 'module hello' >go.mod\necho 'go 1.21' >>go.mod\n\
+                     echo 'package main; import \"fmt\"; func main() {{ fmt.Println(\"built by the host\") }}' >main.go\n\
+                     os -d {d} go build </dev/null\n\
+                     os -d {d} ./hello </dev/null\n"
+                ));
+                // typing is not echoed: the output follows the prompt
+                if out.lines().any(|l| l.trim_start_matches("% ") == "built by the host") {
+                    Ok(())
+                } else {
+                    Err(format!("it did not run: {out:?}"))
+                }
+            }),
         },
     ]
 }

@@ -226,8 +226,8 @@ A Plan 9-dialect binary is a wasm32 module that (as built by
 `userspace/mk.sh`; the stubs are `userspace/sys/src/libc/wasm/sys.c`):
 
 - **imports** from `sys` the calls of Plan 9's `libc/9syscall`, one import
-  per call, plus `setjmp` and `longjmp` (`libc/wasm/setjmp.c`) — and
-  nothing else;
+  per call, plus `setjmp` and `longjmp` (`libc/wasm/setjmp.c`) and
+  `oscmd`, the host's call (below) — and nothing else;
 - **imports** its memory — shared, maximum 4 GiB, the stack first at
   `[0, 16M)`, Plan 9's `USTKSIZE` (`pc/mem.h:51`) — which the machine makes
   for each new image, putting the `Tos` at the top of the stack and the
@@ -258,6 +258,31 @@ The machine's obligations, which are Plan 9's semantics:
   `libthread/wasm.c`).
 - **The `Tos`** (`sys/include/tos.h`) is at the top of the stack, the stack
   below it, its `pid` written for each process, as `kexit` writes it.
+- **`oscmd(argv, envp, dir, nice, fd)`, the host's call** — not one of
+  Plan 9's (Christine, 2026-10-08: *"A call to the host"*;
+  [saranos.md](saranos.md), *The host's resources*). The host starts `argv`
+  as Inferno's emulator does (`emu/MacOSX/cmd.c:88`): `execvp`, in `dir` —
+  or, when it is nil, the host directory the root is served from — with
+  `envp`'s `name=value` strings laid over its own environment, in a process
+  group of its own, at a lower priority when `nice` is not 0. It serves the
+  command's input and output as `data`, its error as `stderr` and its
+  status as `wait`, the files of a conversation of a 9P server it provides
+  through `#9` (Christine, 2026-10-09: *"9P over #9"*); and the kernel
+  attaches that server with the conversation's name and opens them into
+  descriptors, changing no namespace (the kernel's entry, 54). **The
+  command starts at that attach**, so nothing runs on the host until the
+  kernel's checks have passed. `fd[0]`
+  writes the command's input, `fd[1]` reads its output and `fd[2]` its
+  error — none of them when `fd` is nil, which is `os -b` — and the answer
+  reads its status when it ends, Inferno's `pid user sys real status`
+  (`cmd.c:198`), or is -1. A command that cannot start fails the call with
+  Inferno's words, *"can't chdir to …"* or *"exec failed: …"*. When the
+  descriptors are gone it is killed — its process group, `SIGTERM`
+  (`cmd.c:183`) — and when `wait` goes, which `os` holds for the command's
+  life as Inferno's holds `ctl` with `killonclose`; not with `fd` nil. A
+  process whose namespace forbids attaching (`RFNOMNT`) cannot make it, as
+  it cannot `mount` (`sysfile.c:1011`). A host that runs no commands
+  answers the call as one it does not have (`pc/trap.c:716`).
 
 **A WASI binary runs natively** — a module importing
 `wasi_snapshot_preview1`, run by an existing WASI engine and understanding

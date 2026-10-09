@@ -137,6 +137,16 @@ pub enum Call {
     /// `sysproc.c:748`). That is what makes `werrstr` a library function and
     /// not a call of its own — it formats into a buffer and hands it here.
     Errstr { buf: String },
+    /// **Not one of Plan 9's calls: the kernel's half of the host's call
+    /// `oscmd`** (`docs/saranos.md`, *The host's resources*; Christine,
+    /// 2026-10-09: *"9P over #9"*). The host serves a command it has started
+    /// as files of the 9P server it provides as `#9/<server>`; this attaches
+    /// that server with `aname`, which names the command, and opens each of
+    /// `files` into the process's descriptors — as `mount` attaches and
+    /// `open` opens, and without changing the namespace. It answers the
+    /// descriptors in the order of `files`. Only the machine makes it, for a
+    /// process in the host's call; no process can.
+    Oscmd { server: u32, aname: String, files: Vec<(String, i32)> },
 }
 
 /// The kernel.
@@ -950,6 +960,10 @@ pub mod sysno {
     pub const PREAD: u32 = 50;
     pub const PWRITE: u32 = 51;
     pub const TSEMACQUIRE: u32 = 52;
+    /// **Not Plan 9's** — [`super::Call::Oscmd`], the kernel's half of the
+    /// host's call, which `sys.h` has no number for: one past its table,
+    /// whose last is `NSEC`, 53, so nothing reads it as one of Plan 9's.
+    pub const OSCMD: u32 = 54;
 }
 
 /// A call's number, `scallnr`.
@@ -993,6 +1007,7 @@ fn scallnr(c: &Call) -> u32 {
         Call::Fauth { .. } => FAUTH,
         Call::Fd2path { .. } => FD2PATH,
         Call::Errstr { .. } => ERRSTR,
+        Call::Oscmd { .. } => OSCMD,
     }
 }
 
@@ -1002,7 +1017,7 @@ fn scallnr(c: &Call) -> u32 {
 fn retval(nr: u32, s: &[u64; machine::MAXSYSARG], r: &Result<Ret, String>) -> i64 {
     let Ok(v) = r else { return -1 };
     match v {
-        Ret::Ok | Ret::Two(..) | Ret::Sched => 0,
+        Ret::Ok | Ret::Two(..) | Ret::Fds(..) | Ret::Sched => 0,
         Ret::Fd(fd) => *fd as i64,
         Ret::N(n) if nr == sysno::SEEK => *n as i64,
         Ret::N(n) => *n as u32 as i32 as i64,
@@ -1159,9 +1174,12 @@ fn sysctab(c: &Call) -> &'static str {
             sysno::SEGDETACH => "Segdetach",
             sysno::SEGFREE => "Segfree",
             sysno::SEGFLUSH => "Segflush",
+            // the host's call, on a host that serves no commands
+            sysno::OSCMD => "Oscmd",
             _ => "huh?",
         },
         Call::Fd2path { .. } => "Fd2path",
+        Call::Oscmd { .. } => "Oscmd",
     }
 }
 
@@ -1294,6 +1312,8 @@ pub enum Ret {
     Pid(Pid),
     Wait(Pid, String),
     Str(String),
+    /// The descriptors [`Call::Oscmd`] opened, in order.
+    Fds(Vec<Fd>),
     /// **The call did not finish: the process must leave.** `sleep`
     /// (`proc.c:815`) commits the process and then `gotolabel(&m->sched)`,
     /// and a machine cannot jump — so the answer travels back instead, and
@@ -2440,6 +2460,54 @@ impl Kernel {
                 let c = self.chan(up, fd)?;
                 Ok(Ret::Str(c.path.clone()))
             }
+            // **The kernel's half of the host's call** ([`Call::Oscmd`]): the
+            // host's server `#9/<server>` attached as `mount` attaches one
+            // (*"c0 = devtab[ret]->attach((char*)&bogus)"*, `sysfile.c:1031`),
+            // and each file walked and opened as an `open` walks and opens one
+            // (`namec`, `chan.c:1317`), into a descriptor. Nothing is mounted
+            // anywhere: the namespace is as it was.
+            //
+            // The descriptors are made last. Everything before them is what
+            // the mount driver keeps of a call it puts to sleep
+            // ([`namec::Record`]) and gives back the same way when the call
+            // runs again; a descriptor made before a sleep would be made twice.
+            Call::Oscmd { server, aname, files } => {
+                // An attach, so `mount`'s sandbox: *"if(up->pgrp->noattach)
+                // error(Enoattach)"* (`sysfile.c:1011`) — before the kept
+                // wire, which would otherwise carry a process `RFNOMNT` has
+                // shut in to a server it may not attach.
+                if self.ns(up)?.borrow().noattach() {
+                    return Err(namec::ENOATTACH.into());
+                }
+                for (_, mode) in &files {
+                    if !(0..=0xffff).contains(mode) {
+                        return Err(proc::Procs::EBADARG.into());
+                    }
+                    chan::openmode(*mode as u16)?;
+                }
+                let wire = self.hostwire(up, server)?;
+                let user = self.procs.borrow().user(up).unwrap_or_default();
+                let w = wire.borrow().clone();
+                let root = self.tab.dmount(w, &user, &aname, ninep::NOFID)?;
+                let mut opened: Vec<std::rc::Rc<std::cell::RefCell<Chan>>> = Vec::new();
+                for (name, mode) in &files {
+                    let c = match self.tab.dwalk(&root, name) {
+                        Ok(Some(c)) => c,
+                        Ok(None) => return self.unopen(opened, root, namec::ENONEXIST.into()),
+                        Err(e) => return self.unopen(opened, root, e),
+                    };
+                    match self.tab.dopen(c, *mode as u16) {
+                        Ok(c) => opened.push(c),
+                        Err(e) => return self.unopen(opened, root, e),
+                    }
+                }
+                self.tab.defer(root);
+                let mut fds = Vec::new();
+                for c in opened {
+                    fds.push(self.newfd(up, c)?);
+                }
+                Ok(Ret::Fds(fds))
+            }
 
             // `syssleep` (`sysproc.c`), and both of its branches are here:
             //
@@ -2676,6 +2744,21 @@ impl Kernel {
     /// **Address 0 is in the process's memory here**, where Plan 9 leaves
     /// the page at 0 unmapped, so a nil pointer is not a bad address unless
     /// what it points at is.
+    /// `sysexec`'s walk of `argv` (`sysproc.c:401`–`:411`): aligned pointers, each
+    /// valid, until a nil one, each to a valid name.
+    fn validargv(&mut self, up: Pid, mut argp: u32, pc: &dyn Fn() -> u64) -> Result<(), String> {
+        self.validalign(up, argp, 4)?;
+        loop {
+            self.validaddr(up, argp, 4, pc)?;
+            let s = self.machine.load(up, argp)? as u32;
+            if s == 0 {
+                return Ok(());
+            }
+            self.validname(up, s, pc)?;
+            argp = argp.wrapping_add(4);
+        }
+    }
+
     fn validargs(&mut self, up: Pid, call: &Call, pc: &dyn Fn() -> u64) -> Result<(), String> {
         let sa = self.procs.borrow().get(up).ok_or("no such process")?.s;
         let a = |i: usize| sa[i] as u32;
@@ -2722,17 +2805,25 @@ impl Kernel {
             }
             Call::Exec { .. } => {
                 self.validname(up, a(0), pc)?;
-                let mut argp = a(1);
-                self.validalign(up, argp, 4)?;
-                loop {
-                    self.validaddr(up, argp, 4, pc)?;
-                    let s = self.machine.load(up, argp)? as u32;
-                    if s == 0 {
-                        return Ok(());
-                    }
-                    self.validname(up, s, pc)?;
-                    argp = argp.wrapping_add(4);
+                self.validargv(up, a(1), pc)
+            }
+            // The host's call's words (`oscmd(argv, envp, dir, nice, fd)`,
+            // `libc/wasm/sys.c`): its vectors as `exec`'s, its directory as
+            // a name, and the three descriptors' room — checked before
+            // anything is opened, so a bad address makes none.
+            Call::Oscmd { .. } => {
+                self.validargv(up, a(0), pc)?;
+                if a(1) != 0 {
+                    self.validargv(up, a(1), pc)?;
                 }
+                if a(2) != 0 {
+                    self.validname(up, a(2), pc)?;
+                }
+                if a(4) != 0 {
+                    self.validaddr(up, a(4), 12, pc)?;
+                    self.validalign(up, a(4), 4)?;
+                }
+                Ok(())
             }
             Call::Await => self.validaddr(up, a(0), a(1), pc),
             // *"validaddr(arg[1], arg[2], 1)"* (`sysfile.c:177`)
@@ -2902,6 +2993,11 @@ impl Kernel {
             Call::OldFstat { .. } => f.push_str(&format!("{} {:#x}", d(0), a(1))),
             Call::Errstr { .. } | Call::Await => f.push_str(&format!("{:#x} {}", a(0), a(1))),
             Call::Fd2path { .. } => f.push_str(&format!("{} {:#x} {}", d(0), a(1), a(2))),
+            // the host's call: what it asked for, as the machine read it
+            Call::Oscmd { server, aname, files } => {
+                let names: Vec<&str> = files.iter().map(|(n, _)| n.as_str()).collect();
+                f.push_str(&format!("#9/{server} {aname:?} {}", names.join(" ")));
+            }
             // `syscallfmt.c:147`
             Call::Fauth { .. } => {
                 f.push_str(&format!("{}", d(0)));
@@ -3189,6 +3285,38 @@ impl Kernel {
         let (slash, dot, ns) = self.names(up)?;
         let ns = ns.borrow();
         namec::create(&mut self.tab, &ns, &slash, &dot, path, mode, perm)
+    }
+
+    /// The wire to the host's server `#9/<server>`: the one a mount or an
+    /// earlier host's call keeps, or the file opened now and kept as a mount
+    /// keeps its wire — *"c->flag |= CMSG"* (`devmnt.c:239`), held while a fid
+    /// of its session lives ([`namec::Devtab::keepwire`]). `#9` opens a server
+    /// once (`v9open`, `devvirtio9p.c:1110`), so every command after the
+    /// first joins the session; and it is kept before anything is sent,
+    /// because a call the mount driver puts to sleep runs again from the top
+    /// and must find the same wire rather than open it a second time.
+    fn hostwire(&mut self, up: Pid, server: u32) -> Result<std::rc::Rc<std::cell::RefCell<Chan>>, String> {
+        if let Some(w) = self.tab.keptwire(dev::DevId::Virtio9p, server as u64 + 1) {
+            return Ok(w);
+        }
+        let cell = self.walk_open(up, &format!("#9/{server}"), chan::mode::ORDWR)?;
+        cell.borrow_mut().flag |= chan::flag::CMSG;
+        self.tab.keepwire(cell.clone());
+        Ok(cell)
+    }
+
+    /// [`Call::Oscmd`]'s failure: what it opened, and the attach, closed —
+    /// unless the mount driver has put it to sleep, when the call runs again
+    /// and its record makes the same channels.
+    fn unopen(&mut self, opened: Vec<std::rc::Rc<std::cell::RefCell<Chan>>>, root: Chan, e: String) -> Result<Ret, String> {
+        if e == devmnt::SLEPT {
+            return Err(e);
+        }
+        for c in opened {
+            self.tab.cclose(c);
+        }
+        self.tab.defer(root);
+        Err(e)
     }
 
     /// A call's error with channels of its own to close first — its
@@ -4685,6 +4813,57 @@ mod syscalls {
         k.timerintr(0, None);
         assert_eq!(k.resume(1), Ok(Ret::Data(b"served over 9P".to_vec())));
         assert!(!waiting(&mut k));
+    }
+
+    /// **The kernel's half of the host's call** opens the files of the
+    /// host's server into the process's descriptors — attached as `mount`
+    /// attaches, opened as `open` opens, and nothing mounted (Christine,
+    /// 2026-10-09: *"9P over #9"*). A read of one is a 9P read, and waits
+    /// for the server as any read does.
+    #[test]
+    fn the_host_call_opens_its_servers_files_into_descriptors() {
+        let h = Holding::default();
+        let mut k = holding(&h);
+        let heads = k.ns(1).unwrap().borrow().heads().len();
+        let files = vec![("answer".to_string(), 0), ("sub".to_string(), 0)];
+        let Ret::Fds(fds) = k.syscall(1, Call::Oscmd { server: 0, aname: String::new(), files }).unwrap() else {
+            panic!("no descriptors")
+        };
+        assert_eq!(fds.len(), 2);
+        // an attach mounted nowhere is named for the mount driver, as
+        // `devattach` names one (`dev.c:139`; `mntattach`, `devmnt.c:373`)
+        assert_eq!(k.syscall(1, Call::Fd2path { fd: fds[0] }), Ok(Ret::Str("#M/answer".into())), "a file of the server");
+        assert_eq!(k.syscall(1, Call::Pread { fd: fds[0], n: 64, off: -1 }), Ok(Ret::Sched), "it waits for the server");
+        h.release(h.tags()[0]);
+        k.timerintr(0, None);
+        assert_eq!(k.resume(1), Ok(Ret::Data(b"served over 9P".to_vec())));
+        assert_eq!(k.ns(1).unwrap().borrow().heads().len(), heads, "nothing was mounted");
+    }
+
+    /// With no mount holding the server's wire, the call opens `#9/<n>`
+    /// itself and keeps it, so a second command joins the session rather
+    /// than opening the server again — `#9` opens a server once
+    /// (`v9open`, `devvirtio9p.c:1110`). A file the server does not have is
+    /// the walk's error, and no descriptor is made.
+    #[test]
+    fn the_host_call_keeps_the_wire_and_makes_nothing_when_it_fails() {
+        let h = Holding::default();
+        let mut k = bare();
+        let mut d = devvirtio9p::Virtio9p::new(k.up.clone());
+        d.add(Box::new(h.clone()));
+        k.tab.add(Box::new(d));
+        k.tab.add(Box::new(devmnt::MntDev::new()));
+        let call = |name: &str| Call::Oscmd { server: 0, aname: String::new(), files: vec![(name.to_string(), 0)] };
+        let Ret::Fds(a) = k.syscall(1, call("answer")).unwrap() else { panic!() };
+        let Ret::Fds(b) = k.syscall(1, call("answer")).expect("the second joins the kept wire") else { panic!() };
+        assert_ne!(a, b);
+        assert_eq!(k.syscall(1, call("nothing")), Err(namec::ENONEXIST.into()));
+        let Ret::Fd(next) = k.syscall(1, Call::Dup { old: a[0], new: -1 }).unwrap() else { panic!() };
+        assert_eq!(next, b[0] + 1, "the failed call left no descriptor behind");
+        // and a namespace `RFNOMNT` has shut may not, though the wire is kept
+        // (`sysfile.c:1011`)
+        k.ns(1).unwrap().borrow_mut().set_noattach(true);
+        assert_eq!(k.syscall(1, call("answer")), Err(namec::ENOATTACH.into()));
     }
 
     /// A request whose `Tflush` has been answered is not waited for: the

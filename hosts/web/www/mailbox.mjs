@@ -18,7 +18,11 @@ export const ev = { TIME: 0, CALL: 1, DELIVER: 2, EXITED: 3, FAULT: 4, FORKED: 5
 export const rep = { RET: 0, HANDLER: 1, NOTED: 2, FORK: 3, GO: 4, PC: 5 };
 
 // sys.h's numbers (plan9/sys/src/libc/9syscall/sys.h; kernel/src/lib.rs,
-// `sysno`): what the PC's stub puts in AX.
+// `sysno`): what the PC's stub puts in AX. And `oscmd`, the host's call,
+// which is not Plan 9's (docs/saranos.md, The host's resources): the page
+// runs no host commands, so the kernel answers it as a call it does not
+// have (`pc/trap.c:716`) — but `os` must still be a program the page can
+// load, and a module whose import is missing is not.
 export const CALLS = {
   sysr1: 0, bind: 2, chdir: 3, close: 4, dup: 5, alarm: 6, exec: 7, exits: 8,
   fauth: 10, _fstat: 11, segbrk: 12, open: 14, sleep: 17, _stat: 18, rfork: 19,
@@ -26,7 +30,7 @@ export const CALLS = {
   segattach: 30, segdetach: 31, segfree: 32, segflush: 33, rendezvous: 34,
   unmount: 35, semacquire: 37, semrelease: 38, seek: 39, fversion: 40,
   errstr: 41, stat: 42, fstat: 43, wstat: 44, fwstat: 45, mount: 46,
-  await: 47, pread: 50, pwrite: 51, tsemacquire: 52,
+  await: 47, pread: 50, pwrite: 51, tsemacquire: 52, oscmd: 54,
 };
 
 export const SIZE = 4096;

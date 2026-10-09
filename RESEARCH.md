@@ -6261,3 +6261,104 @@ since an empty line has no width to click.
 **Measured:** under Node every window is filled in about 15 s — each
 `emcaopen` starts some fifteen processes, each a worker — and in headless
 Chromium in **5.0 s**.
+
+### 16.39 Host commands (2026-10-09)
+
+P9, built: `os`, Inferno's, and the host's call under it — the host
+starts a command and serves its streams over `#9` (Christine, 2026-10-09:
+*"9P over #9"*), and the kernel opens them into descriptors. What building
+it found.
+
+**The server is Inferno's `cmd(3)` device, served over 9P.** A
+conversation per command, as `devcmd`'s `Conv` (`emu/port/devcmd.c:27`);
+its files `data`, `stderr` and `wait`, with `devcmd`'s qids (*"#define
+QID(c, y) (((c)<<4) | (y))"*, `:23`) and modes (`cmd3gen`, `:58`); the
+counts of `data`'s opens for writing and reading, and `stderr`'s, closing
+the command's end of each at the last (`cmdfdclose`, `:296`); one host
+`read` per 9P read (`cmdread`, `:396`) and one `write` per write
+(`cmdwrite`, `:498`), each on a thread of its own, the reply held until it
+comes — so nothing of the command's output leaves its pipe before it is
+asked for. `clone` and `ctl` are the host's call, and so are absent: the
+call names the conversation, and the kernel attaches with that name.
+
+**A command that does not start is the attach's error** — the attach is
+what starts it (below). `devcmd` answers the `ctl` write that asked for the
+`exec` with it — *"if(c->error)
+error(c->error)"* (`devcmd.c:466`) — and here the attach answers with it,
+so the kernel's call fails with Inferno's words — *"can't chdir to %s:
+%s"* (`emu/MacOSX/cmd.c:73`), *"exec failed: %s"* (`:82`) — and sets
+`errstr` itself. The machine sets no error string of its own. (It can
+only do so with an `errstr` call, which the kernel checks against the
+words of the call being answered — `fversion`'s *"i/o count too small"*
+does so on both hosts, and is right only because `fversion`'s first two
+words make a valid address and length.)
+
+**`killonclose` is `ctl`'s, and there is no `ctl`.** `devcmd` kills a
+command at the last close of its files, or at `ctl`'s close when
+`killonclose` was asked for — *"if(r == 0 || (cc->killonclose &&
+TYPE(c->qid) == Qctl))"* (`devcmd.c:336`) — and Inferno's `os` asks for it
+in the foreground (`os.b:85`) on the file it holds for the command's whole
+life. Without it, `echo kill >/proc/<os>/note` ended `os` and left the
+command running, because `os`'s copier of the command's error still held
+`stderr`. Here `wait` is that file — `os` holds it, its copiers close it —
+and its close kills the command. **`-b` follows the manual, not the
+code**: *"The -b (background) option suppresses that behaviour"*
+(`man/1/os`), where `devcmd` still kills at the last close.
+
+**`os.b` can lose a command's last error lines.** When the command's
+output ends it kills the copier of its error (`os.b:118`); a command's
+last words on its error stream can be read and not yet copied then, and a
+failed build's are the ones that matter. `cmd/os.c` waits for that copier
+instead, and kills only the copier of its input, as `os.b:117` does.
+
+**A relative `-d` is relative to the host process's directory.** The
+emulator never changes directory — `emu/port/main.c` has no `chdir`, and
+publishes where it was started as `$emuwdir` (`:322`) — and `childproc`'s
+`chdir` is the child's (`cmd.c:72`). The same here.
+
+**Inferno publishes the default directory; this does not, yet.** Without
+`-d` a command runs in the emulator's root, which Inferno puts in the
+environment as `$emuroot` (`emu/port/main.c:320`). Here nothing says, from
+inside, which host directory that is, so a person cannot name the host
+directory of a file of theirs for `-d`; the conformance suite can, because
+it made the store. A variable for it would be a new name, and is not
+made.
+
+**Inferno runs a command as the host's `nobody` when its emulator is
+root** — `t->uid = uidnobody` for an Inferno user with no host uid, and
+`setuid` that fails is an error only for root (`cmd.c:58`–`:70`). This
+host runs every command as itself; the session that built it runs as root,
+and a command run as `nobody` could not have written the store it builds
+in.
+
+**`v9open` checks no permission** (`devvirtio9p.c:1088`): the `0660`,
+eve's, that `v9gen` shows (`:1059`) is not enforced, so any process may
+open a `#9` server not in use, and a wire kept for the host's call needs
+no check either. **But the call is an attach**, and `RFNOMNT`'s sandbox
+forbids one — *"if(up->pgrp->noattach) error(Enoattach)"* (`sysfile.c:1011`)
+— so a process shut in by it starts no host command, though another
+process has kept the wire; the kept wire had let it through until it was
+checked first. **And the command starts at the attach.** The machine had
+started it before making the kernel's call, so a call the kernel then
+refused had already run something — and with `fd` nil nothing killed it.
+The call now only makes the conversation, as `cmdclone` does, and the
+attach is `ctl`'s `exec` (`devcmd.c:572`): nothing runs on the host until
+the kernel's checks have passed.
+
+**The profile could no longer take `#9/1` to mean a window manager.** On
+the terminal it is the commands. Plan 9's `termrc` tells its hosts apart by
+`$terminal` — *"if(! ~ $terminal *vx32* && …)"* (`termrc:48`, `:57`) — and
+the page's console boots with no `#9/1`, so the test is both: the page,
+and its server there.
+
+**rc's `&` gives a job `/dev/null` for input and a note group of its own**
+(`Xasync`, `rc/havefork.c:11`, `:18`, `:25`), so `os … &` copies no input,
+and an interrupt at the console does not reach it.
+
+**Measured** (debug build, this container, three runs each): a boot that
+runs `echo hello` and ends takes 2.03–2.10 s, and one that runs `os echo
+hello` 2.08–2.22 s — `os`'s image compiled, the call, the host's `fork`
+and `exec`, and the conversation's reads. `go build` of a one-file module
+takes the host 0.40 s, and 0.10 s with its cache warm; the test that
+writes the module in the namespace, builds it with `os -d … go build` and
+runs it, boot and copy of the root included, 3.2 s.

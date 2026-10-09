@@ -103,7 +103,8 @@ uses; here `os` makes a call to the host.
 - **A WASI program cannot make the call**: unmodified, it knows only WASI's
   calls, and WASI has none that starts a process.
 
-Not built; it is P9 of the plan ([implementation.md](implementation.md)).
+It is P9 of the plan ([implementation.md](implementation.md)); what is
+built is [when.md](when.md).
 
 ## The names
 

@@ -16,6 +16,8 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod machine;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod oscmd;
 pub mod store;
 
 use ipnx_kernel::{
@@ -484,6 +486,18 @@ pub fn startboot(
     store: Option<Box<dyn Nineserver>>,
 ) -> Result<String, String> {
     startboot_with(Rc::new(machine::Wasm::new()?), CONFFILE, conf, host, store.into_iter().collect())
+}
+
+/// **[`startboot`] on a terminal**: the root served from the host directory
+/// `dir`, as `#9/0`, and the host's commands as `#9/1`, run without `-d` in
+/// that same directory — *"in the host directory the root is served from,
+/// as Inferno's runs in emu's root"* (docs/saranos.md, *The host's
+/// resources*; `emu/port/devcmd.c:291`).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn startboot_at(dir: &std::path::Path, conf: &[(String, String)], host: Box<dyn Console>) -> Result<String, String> {
+    let root = store::Store::new(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    let cmds = oscmd::Cmds::new(1, dir);
+    startboot_with(Rc::new(machine::Wasm::new()?), CONFFILE, conf, host, vec![Box::new(root), Box::new(cmds)])
 }
 
 /// [`startboot`] on a machine the caller supplies, whose configuration file

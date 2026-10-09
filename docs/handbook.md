@@ -33,7 +33,15 @@ bash userspace/mk.sh     # libc, the commands, rc  ->  userspace/root/pkg/system
 cargo test               # the kernel, the host, and the conformance suite
 cargo run -p ipnx -- rc /bin/<script>.rc
 cargo run -p ipnx -- echo hello   # boot; init runs it with rc -c, then the shell
+cargo run -p ipnx -- os uname -a  # a command run on the host, through os
 ```
+
+**A host command is typed through `os`** ([saranos.md](saranos.md), *The
+host's resources*): `os -d <host directory> go build`. Without `-d` it runs
+in the host directory the root is served from — `userspace/root`, or
+`IPNX_STORE` — and a relative `-d` is relative to the directory `ipnx` was
+started in, as Inferno's is to its emulator's. Its input is `os`'s, so give
+one that takes none `</dev/null`, as Inferno's manual says.
 
 **The browser host**, `hosts/web`, wants the `wasm32-unknown-unknown`
 target (`rustup target add wasm32-unknown-unknown`) and Node 22:
@@ -52,7 +60,8 @@ The site's page, `index.html`, boots into emca, the window manager
 (`www/emca.mjs`, drawn by `www/surface.mjs`); `console.html` is the system
 with no window manager — the console, and `rc` on it. emca's IPNX half is
 rc scripts — `userspace/cmd/emca` and `emcaopen`, started by
-`/service/emca` at login where the host serves `#9/1` — and its types are
+`/service/emca` at login where the host is the page and serves `#9/1` — a
+terminal's `#9/1` is its host's commands — and its types are
 `userspace/type/`. `mk.sh` installs them; a change to one alone can be
 copied into `userspace/root/pkg/system/*/rc/bin/` and the page rebuilt.
 
@@ -66,7 +75,7 @@ and a freshly built module is indistinguishable from a shipped one.
 `cargo test -p conformance -- --nocapture` prints the distance to the demo:
 a checklist of what the system can do, and how much of it is reached. **It
 fails, and is meant to** — the suite asserts equivalence with the demo and
-goes green at P8, not before. `cargo test` therefore reports a failure on a
+goes green when all twelve are reached, not before. `cargo test` therefore reports a failure on a
 perfectly healthy tree; for day-to-day work run `cargo test -p ipnx-kernel`
 and `cargo test -p ipnx`.
 

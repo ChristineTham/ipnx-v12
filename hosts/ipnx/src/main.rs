@@ -1,7 +1,8 @@
 //! `ipnx` — Saranos on a terminal. The binary; the system is [`ipnx`] itself.
 
-use ipnx::{plan9ini, startboot, store, Host};
-use ipnx_kernel::devvirtio9p::Nineserver;
+use ipnx::{plan9ini, startboot_at, Host};
+#[cfg(test)]
+use ipnx::{startboot, store};
 
 #[cfg(test)]
 use ipnx::{boot, Term, CONFFILE};
@@ -33,16 +34,8 @@ fn main() {
     let dir = std::env::var_os("IPNX_STORE").map(std::path::PathBuf::from).unwrap_or_else(|| {
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../userspace/root")
     });
-    let store: Option<Box<dyn Nineserver>> = match store::Store::new(&dir) {
-        Ok(s) => Some(Box::new(s)),
-        Err(e) => {
-            eprintln!("ipnx: {}: {e}", dir.display());
-            None
-        }
-    };
-
     Host::catch_interrupt();
-    let r = startboot(&conf, Box::new(Host), store);
+    let r = startboot_at(&dir, &conf, Box::new(Host));
     Host::restore_terminal();
     match r {
         Ok(status) if status.is_empty() => {}
@@ -295,8 +288,7 @@ mod userspace {
     /// still ([`Term::marked`]).
     pub(super) fn typing_marked(keys: &str, marker: &str) -> String {
         let term = Term::marked(keys, marker);
-        let store = store::Store::new(&rootfs()).expect("a store");
-        match startboot(&plan9ini(&[]), Box::new(term.clone()), Some(Box::new(store))) {
+        match startboot_at(&rootfs(), &plan9ini(&[]), Box::new(term.clone())) {
             Ok(_) => term.screen(),
             Err(e) => panic!("{e}"),
         }
@@ -349,8 +341,7 @@ mod userspace {
     /// The same, on a filesystem of this test's own.
     pub(super) fn typing_at(keys: &str, store: &std::path::Path) -> String {
         let term = Term::typing(keys);
-        let store = store::Store::new(store).expect("a store");
-        match startboot(&plan9ini(&[]), Box::new(term.clone()), Some(Box::new(store))) {
+        match startboot_at(store, &plan9ini(&[]), Box::new(term.clone())) {
             Ok(_) => term.screen(),
             Err(e) => panic!("{e}"),
         }
@@ -361,8 +352,7 @@ mod userspace {
     pub(super) fn commanding(args: &[&str], keys: &str) -> String {
         let args: Vec<String> = args.iter().map(|a| a.to_string()).collect();
         let term = Term::typing(keys);
-        let store = store::Store::new(&rootfs()).expect("a store");
-        match startboot(&plan9ini(&args), Box::new(term.clone()), Some(Box::new(store))) {
+        match startboot_at(&rootfs(), &plan9ini(&args), Box::new(term.clone())) {
             Ok(_) => term.screen(),
             Err(e) => panic!("{e}"),
         }
@@ -1229,5 +1219,178 @@ mod profiles {
         // the shell has; a new shell would have run it once more
         let count = |w: &str| out.lines().find_map(|l| l.split(w).nth(1).map(str::to_string)).expect(&out);
         assert_eq!(count("shell "), count("fork "), "a fork is not a new shell: {out:?}");
+    }
+}
+
+/// **P9's acceptance** (docs/implementation.md): a command run on the host
+/// with `os`, Inferno's (docs/saranos.md, *The host's resources*), its
+/// input, output, error and status files of the host's server on `#9/1`,
+/// opened into descriptors by the kernel.
+#[cfg(test)]
+mod hostcmds {
+    use super::storage::Scratch;
+    use super::userspace::{typing, typing_at, typing_marked};
+
+    /// Whether host process `pid` is gone, given a few seconds: a command
+    /// killed is reaped by the host's server when it next looks.
+    fn gone(pid: i32) -> bool {
+        let t = std::time::Instant::now();
+        // SAFETY: probing a process, which sends it nothing.
+        while unsafe { libc::kill(pid, 0) } == 0 {
+            if t.elapsed() > std::time::Duration::from_secs(10) {
+                return false;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        true
+    }
+
+    /// Whether the screen has the line `want`, after whatever prompts came
+    /// before it: typing is not echoed here, so a command's output follows
+    /// the prompt it was typed at.
+    fn line(out: &str, want: &str) -> bool {
+        out.lines().any(|l| l.trim_start_matches("% ") == want)
+    }
+
+    /// The pid a command printed after `marker`.
+    fn pid_after(out: &str, marker: &str) -> i32 {
+        let at = out.find(marker).unwrap_or_else(|| panic!("no {marker:?}: {out:?}"));
+        out[at + marker.len()..].split_whitespace().next().and_then(|w| w.parse().ok()).expect(out)
+    }
+
+    /// `os echo hello` prints `hello`: a bare name is found on the host's
+    /// `PATH` (`execvp`, `cmd.c:79`). With its input `/dev/null`, as
+    /// Inferno's page says to give a command that takes none, the next line
+    /// is the shell's.
+    #[test]
+    fn os_echo_hello_prints_hello() {
+        let out = typing("os echo hello </dev/null\necho next\n");
+        assert!(line(&out, "hello") && line(&out, "next"), "{out:?}");
+    }
+
+    /// And with its input the console, which `os` copies to the command's
+    /// (`os.b:99`), a command that ends ends it all the same.
+    #[test]
+    fn os_with_the_console_for_input_ends_when_the_command_does() {
+        let out = typing("os echo hello\n");
+        assert!(line(&out, "hello"), "{out:?}");
+    }
+
+    /// `cat x | os sort` sorts: what `os` is given is the command's input,
+    /// and its end the command's.
+    #[test]
+    fn a_pipe_runs_through_a_host_command() {
+        let out = typing("{echo pear; echo apple; echo fig} | os sort | sed 's/^/sorted /'\n");
+        assert!(out.contains("sorted apple\nsorted fig\nsorted pear\n"), "{out:?}");
+    }
+
+    /// `os false` fails with `host: exit: 1` (`os.b:136`); and the error
+    /// stream is `os`'s, as is a status of `os`'s own.
+    #[test]
+    fn its_status_and_error_are_the_commands() {
+        let out = typing(
+            "os false </dev/null\necho $status\n\
+             os sh -c 'echo err >&2; exit 7' </dev/null\necho $status\n\
+             os true </dev/null && echo ok\n",
+        );
+        // rc's `$status` names the process (`pexit`'s *"%s %lud: %s"*)
+        assert!(out.lines().any(|l| l.ends_with(": host: exit: 1")), "{out:?}");
+        assert!(line(&out, "err") && out.lines().any(|l| l.ends_with(": host: exit: 7")), "{out:?}");
+        assert!(line(&out, "ok"), "{out:?}");
+    }
+
+    /// A command that does not start says why, in Inferno's words
+    /// (`cmd.c:73`, `:82`).
+    #[test]
+    fn a_command_that_cannot_start_says_why() {
+        let out = typing("os -d /nonexistent/dir true </dev/null\nos /nonexistent/program </dev/null\n");
+        assert!(out.contains("os: cannot exec: can't chdir to /nonexistent/dir: No such file or directory"), "{out:?}");
+        assert!(out.contains("os: cannot exec: exec failed: No such file or directory"), "{out:?}");
+    }
+
+    /// Its environment is the host's with the process's laid over it, and
+    /// it runs without `-d` in the host directory the root is served from.
+    #[test]
+    fn its_environment_and_where_it_runs() {
+        let s = Scratch::new("os-env");
+        let out = typing_at("greeting=(hi there)\nos sh -c 'echo $greeting; pwd; test -n \"$HOME\" && echo has home' </dev/null\n", s.path());
+        let dir = std::fs::canonicalize(s.path()).unwrap();
+        assert!(out.contains(&format!("hi\x01there\n{}\nhas home\n", dir.display())), "{out:?}");
+    }
+
+    /// **Killing `os` kills the command** — the interrupt key, which ends
+    /// `os` and the processes copying for it, and the command's process
+    /// group with them (`oscmdkill`, `cmd.c:183`).
+    #[test]
+    fn interrupting_os_kills_the_command() {
+        let out = typing_marked("os sh -c 'echo started $$; exec sleep 30'\n\x03echo after\n", "started");
+        let pid = pid_after(&out, "started ");
+        assert!(line(&out, "after"), "{out:?}");
+        assert!(gone(pid), "the host command outlived os: {out:?}");
+    }
+
+    /// **And `os` alone, killed, kills it**, though the processes copying
+    /// its input and error live on: `wait` is what `os` holds for the
+    /// command's life, as Inferno's holds `ctl` with `killonclose`
+    /// (`os.b:85`). With `-b` it lives (`man/1/os`).
+    #[test]
+    fn killing_os_alone_kills_it_unless_in_the_background() {
+        let s = Scratch::new("os-kill");
+        typing_at(
+            "os sh -c 'echo $$ >fg.pid; exec sleep 30' &\nsleep 2\necho kill >/proc/$apid/note\n\
+             os -b sh -c 'echo $$ >bg.pid; exec sleep 30' &\nsleep 2\necho kill >/proc/$apid/note\nsleep 1\n",
+            s.path(),
+        );
+        let pid = |f: &str| std::fs::read_to_string(s.path().join(f)).unwrap().trim().parse::<i32>().unwrap();
+        assert!(gone(pid("fg.pid")), "killing os left its command running");
+        let bg = pid("bg.pid");
+        // SAFETY: probing a process, which sends it nothing; then ending it.
+        let alive = unsafe { libc::kill(bg, 0) } == 0;
+        unsafe { libc::kill(bg, libc::SIGTERM) };
+        assert!(alive, "-b's command was killed with os");
+    }
+
+    /// **A process `RFNOMNT` has shut in starts nothing on the host**: the
+    /// call is an attach, which that sandbox forbids — *"if(up->pgrp->
+    /// noattach) error(Enoattach)"* (`sysfile.c:1011`) — though another
+    /// `os` holds the wire; and the command starts only at the attach.
+    #[test]
+    fn a_shut_in_process_starts_no_host_command() {
+        let s = Scratch::new("os-nomnt");
+        let out = typing_at(
+            "os sleep 4 </dev/null &
+sleep 1
+@{rfork m; os -b sh -c 'echo ran >ran'}
+sleep 1
+",
+            s.path(),
+        );
+        assert!(out.contains("os: cannot exec: mount/attach disallowed"), "{out:?}");
+        assert!(!s.path().join("ran").exists(), "a host command ran from a shut-in process");
+    }
+
+    /// **The toolchain line**: Go's toolchain is the host's — *"some
+    /// toolchains depend on the host"* (Christine, 2026-10-08) — so `os go
+    /// build` builds what was written in the namespace, and `os ./hello`
+    /// runs it. Where the host has no `go`, there is nothing to test.
+    #[test]
+    fn os_go_build_then_run() {
+        if std::process::Command::new("go").arg("version").output().is_err() {
+            eprintln!("no go on this host: skipped");
+            return;
+        }
+        let s = Scratch::new("os-go");
+        let d = format!("{}/usr/kitty/hello", s.path().display());
+        let out = typing_at(
+            &format!(
+                "mkdir /usr/kitty/hello\ncd /usr/kitty/hello\n\
+                 echo 'module hello' >go.mod\necho 'go 1.21' >>go.mod\n\
+                 echo 'package main; import \"fmt\"; func main() {{ fmt.Println(\"hello from go\") }}' >main.go\n\
+                 os -d {d} go build </dev/null\n\
+                 os -d {d} ./hello </dev/null\n"
+            ),
+            s.path(),
+        );
+        assert!(line(&out, "hello from go"), "{out:?}");
     }
 }

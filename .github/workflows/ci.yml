@@ -99,9 +99,9 @@ jobs:
       # **Expected red**, and deliberately not hidden. The suite asserts
       # functional equivalence with the demo and fails until it is
       # conformant — an earlier version printed "0 of 12" and reported `ok`,
-      # which is the false signal it exists to prevent. It stays red past
-      # P8: Go and Python are proposed, and the toolchain is P9's. The
-      # count in the log is the distance.
+      # which is the false signal it exists to prevent. It stays red until
+      # P10 — a Go program and Python, as WASI programs — and its toolchain
+      # line wants the runner's `go`. The count in the log is the distance.
       - name: "conformance (red until conformant)"
         continue-on-error: true
         run: cargo test -p conformance -- --nocapture

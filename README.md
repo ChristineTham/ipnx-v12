@@ -163,9 +163,10 @@ process composes its own namespace:
 ## What is built, and what is next
 
 What is built is [docs/when.md](docs/when.md) — the only document that says.
-The plan is [docs/implementation.md](docs/implementation.md): phases P0–P9 to
+The plan is [docs/implementation.md](docs/implementation.md): phases P0–P10 to
 the first milestone, the demo — `ipnx` booting to `rc` in a terminal, with the
-host's commands through `os`, and the website, with emca in a browser. How to build and run it is
+host's commands through `os` and WASI programs running natively, and the
+website, with emca in a browser. How to build and run it is
 [docs/handbook.md](docs/handbook.md).
 
 ## The documents

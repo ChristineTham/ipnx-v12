@@ -15,9 +15,15 @@ all, and neither does 9legacy.
 The input is Plan 9's `/sys/src/libc/9syscall/sys.h`, recorded verbatim in
 [RESEARCH.md](../RESEARCH.md) §2.
 
-**One call beside these is not the kernel's**: starting a host command is a
+**One call beside these is not Plan 9's**: starting a host command is a
 call to the host (Christine, 2026-10-08; [saranos.md](saranos.md), *The host's
-resources*), and this list does not grow by it.
+resources*). The host starts the command and serves its streams as files of
+a 9P server it provides through `#9`; **the kernel's part is to attach that
+server and open the files into the process's descriptors** (Christine,
+2026-10-09: *"9P over #9"*) — `mount`'s attach and `open`'s walk and open,
+with nothing mounted — as one entry, numbered 54, one past `sys.h`'s last
+(`NSEC`, 53, in 9legacy), so that nothing reads it as one of Plan 9's. The
+subset below does not grow by it.
 
 ## The principle that sorts them
 

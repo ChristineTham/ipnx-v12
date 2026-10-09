@@ -144,6 +144,10 @@ python3 "$here/mkfile.py" cmds
 # `args`, a test's: what a program is given
 cc "$here/cmd/args.c" "$build/args.o"
 link "$pkg/$OBJTYPE/bin/args" "$build/args.o"
+# `os`, which runs a command on the host (docs/saranos.md, The host's
+# resources), after Inferno's
+cc "$here/cmd/os.c" "$build/os.o"
+link "$pkg/$OBJTYPE/bin/os" "$build/os.o"
 
 # ---- the rest of the rootfs -----------------------------------------------
 cp -f "$here"/profile/* "$root/profile/"

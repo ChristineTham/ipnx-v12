@@ -5,11 +5,11 @@ other document carries it.
 
 Measured 2026-09-20; the kernel's size and the test counts 2026-10-09.
 
-## The kernel — 19,868 lines of Rust, no dependencies
+## The kernel — 20,052 lines of Rust, no dependencies
 
-13,813 of them outside the test modules (2026-10-09, after `#9` became
-asynchronous; every line not in a `#[cfg(test)]` item, and `testfs.rs`, the
-tests' file server, is a test module).
+13,946 of them outside the test modules (2026-10-09, after the host's call;
+every line not in a `#[cfg(test)]` item, and `testfs.rs`, the tests' file
+server, is a test module).
 
 | | |
 |---|---|
@@ -34,14 +34,17 @@ tests' file server, is a test module).
 | `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s. **And the clock** (2026-09-22): `Mach` (`pc/dat.h:206`, the fields `port/` reads), `timersinit`, `hzclock`, `accounttime`, `hzsched`, `rebalance`, `anyhigher`, and `sched`'s tail with `m->schedticks`. `pexit` takes the descriptor table, `dot` and the namespace (`proc.c:1145`) and answers what was their last reference, for the kernel to close; `rfork` without `RFPROC` the same of the tables it replaces; `clunkq` (`chan.c:517`) takes what a kill leaves unclosed and what `#p`'s `ctl` closes. The kernel processes share `kpgrp` (`proc.c:1469`) and have no descriptor table. The descriptor table grows `DELTAFD` at a time to 5000 (`growfd`, `sysfile.c:25`) and holds references: a channel's device is closed at its last |
 | `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
-| `lib.rs` | the 31 calls, `exec`, and `unionread` |
+| `lib.rs` | the 31 calls, `exec`, and `unionread`; and **the kernel's half of the host's call** (`Call::Oscmd`, 54 — not Plan 9's; 2026-10-09): `#9/<n>` attached as `mount` attaches (`sysfile.c:1031`) with the conversation's name, and each file walked and opened as `open` does, into descriptors, the namespace unchanged; the wire kept as a mount keeps one, so every command after the first joins its session, and the call's words checked as `exec`'s are |
 
-281 kernel tests, and 65 in `hosts/ipnx` (2026-10-08, after the uart's went).
+286 kernel tests, and 82 in `hosts/ipnx` — 13 in the library, 69 in the
+binary (2026-10-09, after P9).
 
-## The host — `hosts/ipnx`, five files
+## The host — `hosts/ipnx`, six files
 
 `machine.rs` is the machine: `procsetup`, `todget` and `touser` over wasmtime,
-and the import table that is this architecture's `9syscall`. `touser`
+and the import table that is this architecture's `9syscall` — with `oscmd`,
+the host's call, which starts a command through `oscmd.rs` and has the
+kernel open its files (2026-10-09). `touser`
 compiles an image once and keeps the module by the image's bytes, so an
 image run again is not compiled again (2026-09-24; RESEARCH §15.12) — a
 booted session running three `echo`s went from 19.5s to 9.2s in a debug
@@ -49,7 +52,14 @@ build; what is left is compiling each distinct image once per boot. `store.rs` i
 filesystem the machine serves — qemu's `-fsdev local` half, a host directory
 exported over 9P — a file opened `ORCLOSE` is removed when its fid is
 clunked, as `u9fs` does (`u9fs.c:866`; sam's temporary file is made so,
-2026-10-09). `lib.rs` is `startboot` (`initcode.c:21`): the device
+2026-10-09). `oscmd.rs` is **the host's commands** (P9, 2026-10-09):
+Inferno's `cmd(3)` (`emu/port/devcmd.c`) as a 9P server the machine
+provides as `#9/1` — a conversation per command, its files `data`,
+`stderr` and `wait`, one host `read` per 9P read on a thread of its own and
+the reply held until it comes — and the command started, waited for and
+killed as Inferno's emulator does (`emu/MacOSX/cmd.c`): `execvp` in its
+directory, a process group of its own, `SIGTERM` to the group. `lib.rs` is
+`startboot` (`initcode.c:21`): the device
 table — which is what a Plan 9 kernel's configuration file is, `mkdevc`
 turning a `dev` list into `devtab[]` — three opens of `#c/cons`, the binds,
 then Plan 9's `boot`'s part — the host owner, the root posted as `#s/root`
@@ -339,7 +349,7 @@ mkfiles, and every linked image run through `wasm-opt --asyncify` (RESEARCH
 | `mkfile.py` | reads each mkfile as mk does — continuation, comments per physical line, `<` includes, `${VAR:a%b=c%d}`, backquotes (rc's `reduce` done natively), `DIRS` below first, `cc` first in `cmd` — and builds what it declares: `mksyslib`/`mklib` libraries (members added, `ar vu`), `mkone`, `mkmany` (with the prerequisites a recipe-less rule adds, as mk merges them: `plumb/mkfile`'s `$O.plumber: $PLUMBER`), the one-file programs of `cmd/mkfile`, explicit `$O.x:` links and `%.$O: ../cc/%.c` metarules; `init` to `/$objtype/init` (`cmd/mkfile:116`) |
 | `kencc.py` | **Plan 9's C as clang compiles it**, a derivation into `build/kencc/` (RESEARCH §16.10): `-Dconst=`; every unnamed member written `union { T; T T; }` — or only named where kencc's lookup would find another member first; the conversions kencc promotes, written `&(E)->T` from clang's own diagnostics; absolute includes; old designators; block-scope `static`; prototypes that disagree with their definitions; and string literals as writable data, as kencc's are (`8c/swt.c:106`) — IR with the optimiser off, `@.str` made `internal global`, then optimised; a file's `end` is the loader's, which wasm-ld calls `__heap_base` (RESEARCH §16.18) |
 | `wasm/include/u.h`, `wasm/mkfile` | the **wasm32 architecture**: 386's `u.h` with clang's `va_list`, a `jmp_buf` whose address the machine keys its saved stack by, and 386's FP constants |
-| `sys/src/libc/wasm/` | the machine-dependent half of libc, what `libc/386` is for the 386: the call stubs (`sys.c`, which also makes a `notejmp` jump on the way back), `_start` (`main9.c`, given the `Tos` the machine puts at the top of the stack, as `main9.s` is given it in AX), `sbrk`, `setjmp` (calls to the machine that unwind the stack, and the buffer it unwinds into), `tas` and the atomics, `execl`, `notejmp`, `cycles` (0: no counter), the FP control words, and the profiling pair. **libc is all of `port`, `9sys` and `fmt`**, less what this directory replaces — nothing of Plan 9's left out (the cut-down `lock.c` and `mem.c` are gone) |
+| `sys/src/libc/wasm/` | the machine-dependent half of libc, what `libc/386` is for the 386: the call stubs (`sys.c`, which also makes a `notejmp` jump on the way back), `_start` (`main9.c`, given the `Tos` the machine puts at the top of the stack, as `main9.s` is given it in AX), `sbrk`, `setjmp` (calls to the machine that unwind the stack, and the buffer it unwinds into), `tas` and the atomics, `execl`, `notejmp`, `cycles` (0: no counter), the FP control words, and the profiling pair; and `oscmd`, the host's call, which is not Plan 9's (2026-10-09). **libc is all of `port`, `9sys` and `fmt`**, less what this directory replaces — nothing of Plan 9's left out (the cut-down `lock.c` and `mem.c` are gone) |
 | **built** | **all 36 libraries** — libdynld with Plan 9's "unimplemented" machine file, as ten of its architectures have — libsec among them, its curve tables made by the system's own `mpc`, and libthread, its threads coroutines by the machine's `setjmp`/`longjmp`; **APE's 12** (`ap`, `9`, `bsd`, `draw`, `fmt`, `l`, `mp`, `net`, `regexp`, `sec`, `utf`, `v`), `libap` with a wasm machine directory (`ape/lib/ap/wasm`: `_start`, the call stubs, `setjmp`, `brk`, the atomics); and **514 programs** in `/pkg/system/2026.09.24/wasm/bin`, rc and init among them as Plan 9's own, the compilers, loaders and assemblers, awk, APE's `sh`, `sed`, `diff`, `patch` in `bin/ape`; and **Plan 9's rc scripts** (`rc/bin`, vendored whole) in the package's `rc/bin`, bound after the programs as `/lib/namespace:27` binds them, less the startup files `/profile` replaces. Grammars are Plan 9's yacc's and lexers Plan 9's lex's, and a source a recipe makes is made by running the recipe on the system, in the second pass |
 | **not built** | 3 programs, **left out by decision** (Christine, 2026-09-29: *"skip them"*; `build/failed` is the list, with each reason). `aux/vmware`'s two are 386 programs on every machine — their mkfile sets `objtype=386` (`aux/vmware/mkfile:1`) and `backdoor.c` reads 386's registers for VMware's I/O port — and a 386 build here needs Plan 9's 386 toolchain and libraries on the system, which are not installed. `syscall` calls every call through one pointer type, `int (*)(...)` (`syscall.c:32`), which the 386 takes and wasm's typed indirect calls refuse. `7a` does not build on Plan 9 either: `IOUNIT` is defined in no header (`7a/a.h:23`). `gs` is built and renders, to `pbmraw` among others, with Plan 9's fonts (`sys/lib/ghostscript/font`, vendored); `units` and `grap` have their data files (`/lib/units`, `/sys/lib/grap.defines`, vendored) |
 | `sys/src/libthread/wasm.c` | libthread's machine file, after `386.c`: a new thread's stack, and the launcher its `jmp_buf` names |
@@ -347,6 +357,7 @@ mkfiles, and every linked image run through `wasm-opt --asyncify` (RESEARCH
 | `adm/timezone` | Plan 9's, vendored; init copies `local` into `#e/timezone`, and `local` — a site's choice, US_Eastern in the Labs' tree — is GMT's |
 | `profile/`, `usr/kitty/profile/`, `etc/motd`, `pkg/system/pkg.cfg` | the system's configuration and kitty's (P7 step 1; docs/packages.md), and the `system` package's description |
 | `cmd/pkg`, `cmd/service`, `cmd/template` | the commands written in rc that are not Plan 9's (P7 steps 3–5), installed in the `system` package's `rc/bin` |
+| `cmd/os.c` | `os`, which runs a command on the host (P9, 2026-10-09): Inferno's `os(1)`, in C after `appl/cmd/os.b`, without `-m`; one call to the host where Inferno's opens `/cmd/clone`. It waits for the copier of the command's error where `os.b:118` kills it (RESEARCH §16.39) |
 
 **The system boots itself.** `cargo run -p ipnx` is `initcode.c:21` — three
 opens of `#c/cons` and four binds — and then **Plan 9's `boot`, done by the
@@ -384,11 +395,12 @@ exactly as Plan 9's `boot` does (`boot.c:152`). `ls /` shows both halves because
 reads every element. A file written under `/tmp` is a file on the host, so it
 is still there after the next boot.
 
-Fifty tests in `hosts/ipnx` (counted 2026-09-24: forty-five in the binary — most typing at a scripted console after a full boot, some booting into a filesystem of their own — and five in the library), and 220 in `kernel/`. They need
-`userspace/mk.sh` to have run — `cargo test` cannot build a wasm userspace —
-and say so rather than passing quietly.
+The host's tests — counted under *The kernel* above — mostly type at a
+scripted console after a full boot, some booting into a filesystem of their
+own. They need `userspace/mk.sh` to have run — `cargo test` cannot build a
+wasm userspace — and say so rather than passing quietly.
 
-## Functional equivalence to the demo — 9 of 12
+## Functional equivalence to the demo — 10 of 12
 
 The conformance suite lists twelve capabilities and **runs a check for every
 one it claims**: it boots the whole system on a scripted console and types at
@@ -405,10 +417,11 @@ into `rc`, an edit made in `/etc/motd` and the tour's tab closed, and every
 other window shows what it showed — and **actions by kind** — text offers
 Revert, Undo and Redo, a listing Revert, a shell Interrupt, and each does
 what it says (`hosts/web/test/emca-browser.mjs`). The browser checks want
-`hosts/web/build.sh` run and Playwright's Chromium. Of the other three, one
-is P9's — building a program with a toolchain, which is the
-host's, typed through `os`, and so there only where the host runs commands
-([saranos.md](saranos.md), *The host's resources*) — and two are P10's, a
+`hosts/web/build.sh` run and Playwright's Chromium. The tenth is P9's,
+**building a program with a toolchain** — the host's, typed through `os`:
+a Go module written in the namespace, `os -d <its host directory> go build`
+and `os -d … ./hello`, which prints what it was written to (2026-10-09; it
+wants `go` on the host, and fails without it). The other two are P10's, a
 Go program and Python, as WASI programs whose files are the process's
 namespace (Christine, 2026-10-09; [architecture.md](architecture.md)).
 
@@ -466,9 +479,9 @@ the root is served by the same 9P (`Store` over a `Backend`): the built
 root, from an index of its 1,331 entries, each file fetched the first time
 it is read. `console.html` is the system with no window manager: the
 console, the line held and echoed by the page, as rio's window does.
-**Tested**: `hosts/web/test/web.test.mjs`, 33 tests under Node — the
+**Tested**: `hosts/web/test/web.test.mjs`, 34 tests under Node — the
 terminal host's typed tests on this machine, plumber's shared-memory
-threads, `stop`, `^C` and ghostscript among them — and
+threads, `stop`, `^C`, ghostscript, and `os` answered as a call the page does not have, among them — and
 `hosts/web/test/browser.mjs`, ten checks of the console in headless
 Chromium, which boots to the prompt in 2.0 s.
 
@@ -565,9 +578,32 @@ the conformance suite runs; and the kernel's `#9` tests
   written** across visits, in the origin private file system; **WebKit** is
   not tested.
 
-**P9 is not built.** Host commands are designed ([saranos.md](saranos.md),
-*The host's resources*); nothing of them — the call, its host half, `os` —
-exists yet.
+**P9's acceptance passes** (2026-10-09; RESEARCH §16.39). On the
+terminal, `os echo hello` prints `hello`; `{…} | os sort` sorts; `os false`
+fails with `host: exit: 1`; the interrupt key, and a `kill` of `os` alone,
+kill the command — its process group — and `-b`'s survives; `os go build`
+then `os ./hello` runs. **9P over `#9`** (Christine, 2026-10-09): the host
+serves each command as a conversation of `#9/1` (`hosts/ipnx/src/oscmd.rs`)
+and the kernel's half of the call attaches it and opens its files into
+descriptors, changing no namespace. The machine's call reads its argument
+vectors and passes the bytes as they are; the environment laid over the
+host's is `#e`'s, as APE makes one. A command that cannot start says why in
+Inferno's words, as the attach's error — the attach is what starts it, so
+nothing runs on the host until the kernel's checks have passed, and a
+process `RFNOMNT` has shut in starts nothing (`sysfile.c:1011`). Tested in
+the host's `hostcmds` (ten) and `oscmd` (six), and in the kernel (two).
+
+Since the terminal's `#9/1` is its commands, a profile can no longer take
+`#9/1` to mean a window manager: kitty's `start.rc` and `emca` ask
+`$terminal`, as Plan 9's `termrc` tells its hosts apart (`termrc:48`).
+
+**Not built for P9**: host commands in the browser — the page answers the
+call as one it does not have, *"bad sys call"*, and claims none; the Mac
+app's host half, with the app; a way to learn, from inside, the host
+directory `os` runs in without `-d` — Inferno publishes it as `$emuroot`
+(`emu/port/main.c:320`), and nothing here does yet (RESEARCH §16.39); and a
+command run as anyone but the host's own user — Inferno runs one as the
+host's `nobody` when its emulator is root (`cmd.c:58`).
 
 **A channel's mode, and who may open what** (2026-10-07; RESEARCH §16.21).
 `read` and `write` check a descriptor's open mode, `mount`, `fversion` and

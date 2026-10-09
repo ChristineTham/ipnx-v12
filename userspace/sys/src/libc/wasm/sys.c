@@ -83,6 +83,20 @@ SYS(segattach)	extern void*	__segattach(int, char*, void*, ulong);
 SYS(segdetach)	extern int	__segdetach(void*);
 SYS(segfree)	extern int	__segfree(void*, ulong);
 SYS(segflush)	extern int	__segflush(void*, ulong);
+/*
+ * **The host's call — not one of Plan 9's** (docs/saranos.md, *The host's
+ * resources*; Christine, 2026-10-08: *"A call to the host"*): start argv on
+ * the host — in dir, or the host directory the root is served from when dir
+ * is nil; with envp, `name=value` strings, laid over the host's environment;
+ * at a lower priority when nice is not 0 — with its standard input, output
+ * and error opened into fd[0], fd[1] and fd[2], unless fd is nil, when they
+ * are left unconnected; and answer a descriptor that reads its status when
+ * it ends, Inferno's `pid user sys real status` (`emu/MacOSX/cmd.c:198`),
+ * or -1. `sys.h` has no number for it; the kernel's is 54
+ * (`kernel/src/lib.rs`, `sysno::OSCMD`). A host that runs no commands has
+ * no such call. `os` makes it (`cmd/os.c`).
+ */
+SYS(oscmd)	extern int	__oscmd(char**, char**, char*, int, int*);
 
 /*
  * Every stub but `notify` and `noted` looks, on the way back, for a jump a
@@ -131,6 +145,7 @@ void*	segattach(int a, char *c, void *v, ulong n){ void *r = __segattach(a, c, v
 int	segdetach(void *a){ int r = __segdetach(a); _notejmped(); return r; }
 int	segfree(void *a, ulong n){ int r = __segfree(a, n); _notejmped(); return r; }
 int	segflush(void *a, ulong n){ int r = __segflush(a, n); _notejmped(); return r; }
+int	oscmd(char **a, char **e, char *d, int n, int *fd){ int r = __oscmd(a, e, d, n, fd); _notejmped(); return r; }
 
 /*
  * `exits` is the one call whose stub is not a forwarding call. Two things
