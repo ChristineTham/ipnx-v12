@@ -22,3 +22,9 @@ wat = "1"
 # `SIGINT`: the terminal turns `^C` into a signal to this process, and the
 # host catches it to hand the system its interrupt key.
 libc = "0.2"
+# **WASI, wasmtime's own** (Christine, 2026-10-09: *"B: the namespace"*):
+# `wasi-common`'s preview 1, its functions linked as `async` ones — the
+# `tokio` feature is what generates those; nothing here runs tokio — and its
+# files and directories this host's, over the kernel's calls (`wasi.rs`).
+wasi-common = { version = "39", default-features = false, features = ["wasmtime", "tokio"] }
+async-trait = "0.1"

@@ -28,6 +28,12 @@ difference between 9legacy and the final Labs release can be *attributed*.
 **The userspace first**, because the tests run the real binaries and `cargo`
 cannot build a wasm userspace:
 
+`mk.sh` also builds **Python**, a package (`userspace/pkg/python/mk.sh`):
+CPython's own WASI build, from its tag. The first time it clones CPython
+and builds it twice — a build Python, then the WASI one — about ten minutes
+on four cores, wanting git and a C compiler; after that it is kept in
+`userspace/build/`. What it could not do is in `build/failed`.
+
 ```bash
 bash userspace/mk.sh     # libc, the commands, rc  ->  userspace/root/pkg/system/<version>/wasm/bin
 cargo test               # the kernel, the host, and the conformance suite

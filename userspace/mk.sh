@@ -234,6 +234,15 @@ if [ -s "$failed" ] && command -v cargo >/dev/null; then
 	fi
 fi
 
+# **Python**, a package (P10): CPython's own WASI build (`pkg/python/mk.sh`),
+# made once and kept in build/; it wants git and a C compiler for the build
+# Python its build makes first. What it could not do is in build/failed.
+if ! WASI_SDK=$WASI_SDK build=$build root=$root OBJTYPE=$OBJTYPE \
+	bash "$here/pkg/python/mk.sh" >"$build/python.log" 2>&1; then
+	echo "pkg/python: did not build: $(tail -1 "$build/python.log") (build/python.log)" >>"$failed"
+fi
+tail -1 "$build/python.log"
+
 echo "mk.sh: /pkg/system/$VERSION/$OBJTYPE/bin: $(ls "$pkg/$OBJTYPE/bin" | wc -l) programs"
 if [ -s "$failed" ]; then
 	echo "mk.sh: $(wc -l <"$failed") did not build (build/failed):"

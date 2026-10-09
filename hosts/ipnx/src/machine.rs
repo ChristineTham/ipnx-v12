@@ -104,7 +104,7 @@ impl Mem {
 /// was running. It is not a fault, and [`Wasm::touser`] takes it as the
 /// ordinary end of a process.
 #[derive(Debug)]
-struct Exited;
+pub(crate) struct Exited;
 
 impl std::fmt::Display for Exited {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -372,10 +372,10 @@ const EBADEXEC: &str = "exec header invalid";
 ///
 /// The kernel has already said where the process went: it is `Wakeme` on a
 /// `Rendez`, or `Ready`. So this carries nothing and needs no waker.
-struct Sched(bool);
+pub(crate) struct Sched(bool);
 
 impl Sched {
-    fn new() -> Sched {
+    pub(crate) fn new() -> Sched {
         Sched(false)
     }
 }
@@ -459,6 +459,10 @@ pub struct Proc {
     /// outside it — libthread's, in the heap: the region's frames above it
     /// are still its own, and wait for a `longjmp` back.
     region_low: i32,
+    /// **A WASI program's context** — its arguments, environment, standard
+    /// streams and the namespace preopened as `/` (`wasi.rs`) — which
+    /// `wasi-common`'s functions answer from. Nothing for any other image.
+    wasi: Option<wasi_common::WasiCtx>,
 }
 
 impl Proc {
@@ -477,6 +481,7 @@ impl Proc {
             spg: None,
             low: Arc::new(AtomicI32::new(0)),
             region_low: 0,
+            wasi: None,
         }
     }
 
@@ -720,7 +725,7 @@ fn enter(sys: &mut dyn Syscalls) -> Entered {
 /// can only mean a fiber was resumed on a thread other than the one that
 /// owns its kernel. That is a bug in whatever resumed it, and saying so is
 /// the whole point of keeping the kernel here.
-fn kernel() -> *mut (dyn Syscalls + 'static) {
+pub(crate) fn kernel() -> *mut (dyn Syscalls + 'static) {
     KERNEL.with(|k| k.get()).expect(
         "a process ran on a thread with no kernel: a fiber was resumed on a thread \
          other than the one that booted its kernel",
@@ -1180,6 +1185,19 @@ impl Wasm {
         store.set_epoch_deadline(1);
         store.epoch_deadline_callback(clockintr);
         let linker = self.linker(&store, &module, None).map_err(|e| e.to_string())?;
+        // **A WASI program** (`wasi.rs`): its context made — which asks the
+        // kernel for the process's environment and descriptors, so it is
+        // made here, on the process's fiber — and its `_start`, which takes
+        // nothing; no `Tos`, no stack the machine keeps, no `fork`.
+        if crate::wasi::is_wasi(&module) {
+            return Ok(Box::pin(async move {
+                store.data_mut().wasi = Some(crate::wasi::ctx(pid, &args).await?);
+                let instance = linker.instantiate_async(&mut store, &module).await?;
+                let start = instance.get_typed_func::<(), ()>(&mut store, "_start")?;
+                let r = start.call_async(&mut store, ()).await;
+                crate::wasi::ended(pid, r).await
+            }));
+        }
         Ok(Box::pin(async move {
             let instance = linker.instantiate_async(&mut store, &module).await?;
             store.data_mut().spg = instance.get_global(&mut store, "__stack_pointer");
@@ -1539,8 +1557,12 @@ fn place(
     Ok((args.len() as i32, argv as i32))
 }
 
-/// The import table — this machine's `9syscall`.
+/// The import table — this machine's `9syscall`; and WASI's, `wasi-common`'s
+/// own, for a WASI program (`wasi.rs`).
 fn imports(l: &mut Linker<Proc>) -> Result<(), wasmtime::Error> {
+    wasi_common::tokio::add_to_linker(l, |p: &mut Proc| {
+        p.wasi.as_mut().expect("WASI's calls are made only by a WASI program, which has its context")
+    })?;
     l.func_wrap_async("sys", "open", |mut c: Caller<'_, Proc>, (p, mode): (i32, i32)| Box::new(async move {
         c.data_mut().s = [p.word(), mode.word(), 0, 0, 0];
         let r = async {

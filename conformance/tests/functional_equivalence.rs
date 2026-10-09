@@ -71,6 +71,10 @@ enum State {
     /// A person can do this today.
     Reached,
     /// Not yet, and this is the phase that will deliver it.
+    ///
+    /// No line is one on 2026-10-09, when the last two were reached; the
+    /// state stays, for the next line the demo gives.
+    #[allow(dead_code)]
     Pending(&'static str),
     /// Not yet, and **no phase of `docs/implementation.md` delivers it** —
     /// a gap, in the sense of the triage rule (CLAUDE.md): undesigned, and
@@ -165,15 +169,41 @@ fn demo() -> Vec<Behaviour> {
         },
         Behaviour {
             what: "run a Go program",
-            state: Pending("P10"),
+            state: Reached,
             how: "it runs and prints what it printed before",
-            check: None,
+            // A Go program is a WASI program (P10): built for `wasip1` — here
+            // by the host's Go, through `os` — and run natively, by its name,
+            // its files the namespace's.
+            check: Some(|| {
+                let d = format!("{}/usr/kitty/hello-wasi", ipnx::rootcopy().display());
+                let out = typing(&format!(
+                    "mkdir -p /usr/kitty/hello-wasi\ncd /usr/kitty/hello-wasi\n\
+                     echo 'module hello' >go.mod\necho 'go 1.21' >>go.mod\n\
+                     echo 'package main; import (\"fmt\"; \"os\"); func main() {{ b, _ := os.ReadFile(\"/etc/motd\"); fmt.Println(\"a go program read\", len(b) > 0) }}' >main.go\n\
+                     GOOS=wasip1 GOARCH=wasm os -d {d} go build -o hello </dev/null\n\
+                     ./hello\n"
+                ));
+                if out.lines().any(|l| l.trim_start_matches("% ") == "a go program read true") {
+                    Ok(())
+                } else {
+                    Err(format!("it did not run: {out:?}"))
+                }
+            }),
         },
         Behaviour {
             what: "run Python",
-            state: Pending("P10"),
+            state: Reached,
             how: "it starts, imports from its library, and computes",
-            check: None,
+            // CPython's own WASI build, a package of the system
+            // (`userspace/pkg/python/mk.sh`), run natively (P10)
+            check: Some(|| {
+                let out = typing("python3 -c 'import json; print(json.dumps({\"sum\": sum(range(10))}))'\n");
+                if out.lines().any(|l| l.trim_start_matches("% ") == "{\"sum\": 45}") {
+                    Ok(())
+                } else {
+                    Err(format!("it did not run: {out:?}"))
+                }
+            }),
         },
         Behaviour {
             // The demo: *"installing is a bind … and a subshell that does

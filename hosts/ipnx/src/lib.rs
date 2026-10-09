@@ -18,6 +18,8 @@
 pub mod machine;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod oscmd;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod wasi;
 pub mod store;
 
 use ipnx_kernel::{

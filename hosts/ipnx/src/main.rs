@@ -1358,11 +1358,7 @@ mod hostcmds {
     fn a_shut_in_process_starts_no_host_command() {
         let s = Scratch::new("os-nomnt");
         let out = typing_at(
-            "os sleep 4 </dev/null &
-sleep 1
-@{rfork m; os -b sh -c 'echo ran >ran'}
-sleep 1
-",
+            "os sleep 4 </dev/null &\nsleep 1\n@{rfork m; os -b sh -c 'echo ran >ran'}\nsleep 1\n",
             s.path(),
         );
         assert!(out.contains("os: cannot exec: mount/attach disallowed"), "{out:?}");
@@ -1392,5 +1388,179 @@ sleep 1
             s.path(),
         );
         assert!(line(&out, "hello from go"), "{out:?}");
+    }
+}
+
+/// **P10, on the terminal: a WASI binary runs natively** (architecture.md,
+/// *A WASI binary runs natively*) — under `wasi-common`, its files the
+/// process's namespace.
+#[cfg(test)]
+mod wasi {
+    use super::storage::Scratch;
+    use super::userspace::typing_at;
+    use std::os::unix::fs::PermissionsExt;
+
+    /// A WASI program, as any engine runs one: it writes to its standard
+    /// output, opens `etc/motd` under the preopened `/` and copies it out,
+    /// and exits 3.
+    const HELLO: &str = r#"(module
+      (import "wasi_snapshot_preview1" "fd_write" (func $fd_write (param i32 i32 i32 i32) (result i32)))
+      (import "wasi_snapshot_preview1" "fd_read" (func $fd_read (param i32 i32 i32 i32) (result i32)))
+      (import "wasi_snapshot_preview1" "path_open"
+        (func $path_open (param i32 i32 i32 i32 i32 i64 i64 i32 i32) (result i32)))
+      (import "wasi_snapshot_preview1" "proc_exit" (func $proc_exit (param i32)))
+      (memory (export "memory") 1)
+      (data (i32.const 100) "hello from wasi\n")
+      (data (i32.const 200) "etc/motd")
+      (func (export "_start")
+        (i32.store (i32.const 0) (i32.const 100))
+        (i32.store (i32.const 4) (i32.const 16))
+        (drop (call $fd_write (i32.const 1) (i32.const 0) (i32.const 1) (i32.const 8)))
+        (drop (call $path_open (i32.const 3) (i32.const 0) (i32.const 200) (i32.const 8) (i32.const 0)
+          (i64.const 0x1fffffff) (i64.const 0x1fffffff) (i32.const 0) (i32.const 16)))
+        (i32.store (i32.const 20) (i32.const 1000))
+        (i32.store (i32.const 24) (i32.const 1000))
+        (drop (call $fd_read (i32.load (i32.const 16)) (i32.const 20) (i32.const 1) (i32.const 28)))
+        (i32.store (i32.const 32) (i32.const 1000))
+        (i32.store (i32.const 36) (i32.load (i32.const 28)))
+        (drop (call $fd_write (i32.const 1) (i32.const 32) (i32.const 1) (i32.const 40)))
+        (call $proc_exit (i32.const 3))))"#;
+
+    fn install(s: &Scratch, name: &str, wat: &str) {
+        let p = s.path().join("usr/kitty").join(name);
+        std::fs::write(&p, wat::parse_str(wat).expect("a module")).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    /// A Go program, as the demo's: its arguments, a file and a directory of
+    /// the namespace, a sleep, the environment, and a file written.
+    const GO: &str = r#"package main
+
+import (
+	"fmt"
+	"os"
+	"sort"
+	"strings"
+	"time"
+)
+
+func main() {
+	fmt.Println("hello from go:", strings.Join(os.Args[1:], " "))
+	b, err := os.ReadFile("/etc/motd")
+	if err != nil {
+		fmt.Println("read:", err)
+	}
+	fmt.Println("motd says", strings.Fields(string(b))[0])
+	ents, err := os.ReadDir("/usr/kitty/hello-go")
+	if err != nil {
+		fmt.Println("readdir:", err)
+	}
+	var names []string
+	for _, e := range ents {
+		names = append(names, e.Name())
+	}
+	sort.Strings(names)
+	fmt.Println("its directory has", strings.Join(names, " "))
+	t := time.Now()
+	time.Sleep(50 * time.Millisecond)
+	fmt.Println("slept:", time.Since(t) >= 50*time.Millisecond)
+	fmt.Println("user is", os.Getenv("user"))
+	if err := os.WriteFile("/tmp/from-go", []byte("written by go\n"), 0644); err != nil {
+		fmt.Println("write:", err)
+	}
+	os.Exit(len(os.Args) - 1)
+}
+"#;
+
+    /// **A Go program built for `wasip1` runs**, as on any WASI engine: built
+    /// by the host's Go through `os` (P9), with `GOOS=wasip1` in rc's
+    /// environment, and run by typing its name. Where the host has no `go`,
+    /// there is nothing to build it with.
+    #[test]
+    fn a_go_program_built_for_wasip1_runs() {
+        if std::process::Command::new("go").arg("version").output().is_err() {
+            eprintln!("no go on this host: skipped");
+            return;
+        }
+        let s = Scratch::new("wasi-go");
+        let dir = s.path().join("usr/kitty/hello-go");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("go.mod"), "module hello\ngo 1.21\n").unwrap();
+        std::fs::write(dir.join("main.go"), GO).unwrap();
+        let out = typing_at(
+            &format!(
+                "GOOS=wasip1 GOARCH=wasm os -d {} go build -o hello </dev/null\n\
+                 /usr/kitty/hello-go/hello a b\necho status $status\n",
+                dir.display()
+            ),
+            s.path(),
+        );
+        let line = |want: &str| out.lines().any(|l| l.trim_start_matches("% ") == want);
+        assert!(line("hello from go: a b"), "{out:?}");
+        assert!(line("motd says Saranos."), "{out:?}");
+        assert!(line("its directory has go.mod hello main.go"), "{out:?}");
+        assert!(line("slept: true") && line("user is kitty"), "{out:?}");
+        assert!(out.lines().any(|l| l.contains("status") && l.ends_with(": 2")), "{out:?}");
+        assert_eq!(std::fs::read_to_string(s.path().join("tmp/from-go")).unwrap(), "written by go\n");
+    }
+
+    /// Typed at rc, it runs: its output is rc's console, `/etc/motd` is the
+    /// namespace's, and its exit status is APE's for 3 (`_exit.c:26`).
+    #[test]
+    fn a_wasi_program_runs_with_the_namespace_for_its_files() {
+        let s = Scratch::new("wasi-hello");
+        install(&s, "hello", HELLO);
+        let out = typing_at("/usr/kitty/hello\necho status $status\n", s.path());
+        assert!(out.lines().any(|l| l.trim_start_matches("% ") == "hello from wasi"), "{out:?}");
+        assert!(out.contains("Saranos."), "it did not read /etc/motd: {out:?}");
+        assert!(out.lines().any(|l| l.contains("status") && l.ends_with(": 3")), "{out:?}");
+    }
+}
+
+/// **P10: Python, a package of the system** — CPython's own WASI build
+/// (`userspace/pkg/python/mk.sh`), run natively, its library files of the
+/// namespace at `/sys/lib/python3.14`.
+#[cfg(test)]
+mod python {
+    use super::userspace::typing;
+
+    /// Whether the build made the package; without it there is nothing to
+    /// run, and a test says so rather than failing.
+    fn built() -> bool {
+        let there = ipnx::rootcopy().join("pkg/python").is_dir();
+        if !there {
+            eprintln!("no /pkg/python in the built root (userspace/pkg/python/mk.sh): skipped");
+        }
+        there
+    }
+
+    fn line(out: &str, want: &str) -> bool {
+        out.lines().any(|l| l.trim_start_matches("% ").trim_start_matches(">>> ") == want)
+    }
+
+    /// It starts, imports `json` from its library, and computes; its prefix
+    /// is the package's, and what it writes is a file of the namespace.
+    #[test]
+    fn python_imports_from_its_library_and_computes() {
+        if !built() {
+            return;
+        }
+        let out = typing(
+            "python3 -c 'import json, sys; print(json.dumps({\"answer\": 6*7}), sys.prefix)'\n\
+             python3 -c 'open(\"/tmp/from-python\", \"w\").write(\"written by python\\n\")'\n\
+             cat /tmp/from-python\n",
+        );
+        assert!(line(&out, "{\"answer\": 42} /sys"), "{out:?}");
+        assert!(line(&out, "written by python"), "{out:?}");
+    }
+
+    /// Its prompt reads the console, as any program's input is read.
+    #[test]
+    fn python_reads_its_prompt_from_the_console() {
+        if !built() {
+            return;
+        }
+        let out = typing("python3 -q\nprint(sum(range(10)))\n");
+        assert!(out.contains("45"), "{out:?}");
     }
 }

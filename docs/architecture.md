@@ -297,8 +297,13 @@ with the kernel's calls — so it sees the same tree on every host, `/dev` and
 are the process's descriptors 0, 1 and 2, its arguments `exec`'s, its
 environment the process's. It starts no process — WASI has no call that
 does, so Go's toolchain built for WASI cannot build (RESEARCH §16.36) — and
-reaches no network, which preview 1 does not have. Nothing runs one yet
-(P10).
+reaches no network, which preview 1 does not have. What WASI asks that
+Plan 9 says otherwise is answered as APE, Plan 9's own POSIX, answers it:
+an errno by `_syserrno`'s table, a rename as `rename.c` does one, an exit
+status as `_exit.c` makes one (RESEARCH §16.40). On the terminal the
+machine makes the program's calls for it, their arguments already the
+kernel's (`Syscalls::hostcall`, below); in the page, the program's layer
+passes them through a shared region the kernel reads, as a program's own.
 
 **A personality is userspace** (Christine: *"even the Unix v10 personality
 should be userspace"*) — a library over this ABI, and nothing in the kernel.
@@ -334,6 +339,14 @@ between a process and a server the embedding holds. Earlier drafts of this
 section specified all three — an effect list, an opaque continuation, console
 wiring for `#c`, a clock stamped in before every entry. All of it was invented
 here and has been removed from the code.
+
+**Added for WASI, 2026-10-09, and not reviewed: a call the machine makes on
+a process's behalf** (`Syscalls::hostcall`). A WASI program's call names no
+address in its memory — `wasi-common` copies its buffers — so the kernel's
+call made for it is checked as the kernel's own boot calls are, not as a
+process's trapped one, and is otherwise that process's call (RESEARCH
+§16.40). It is the one way into the kernel the machine has that is not a
+process's trap.
 
 **What is settled, because it follows from rules that are:** the embedding owns
 no device. A console, a clock, storage and randomness are **file servers**,

@@ -441,19 +441,31 @@ impl<B: Backend> Nineserver for Store<B> {
                     return Ok(err("file does not exist", tag));
                 };
                 let data = if md.dir {
-                    // A directory reads as `Dir` entries, and an entry is
-                    // never split — so the offset must land on one.
-                    let mut all = Vec::new();
+                    // **A directory reads as whole `Dir` entries**, from
+                    // where the last read ended, as many as fit and never
+                    // part of one: `rread` (`u9fs.c:752`) — *"if((n=convD2M(&d,
+                    // p, ep-p)) <= BIT16SZ) break;"* (`:791`) — as read(5)
+                    // requires, and as the mount driver checks (`mntread`'s
+                    // *"if(p != e) error(Esbadstat)"*). It had cut the listing
+                    // at the count, so a read of one longer than that ended
+                    // in the middle of an entry.
                     let mut names = self.files.list(&path);
                     names.sort();
+                    let mut out = Vec::new();
+                    let mut at = 0u64;
                     for name in names {
-                        if let Some(d) = self.dirof(&path.join(&name), &name) {
-                            all.extend_from_slice(&d.conv_d2m());
+                        let Some(d) = self.dirof(&path.join(&name), &name) else { continue };
+                        let e = d.conv_d2m();
+                        if at < off {
+                            at += e.len() as u64;
+                            continue;
                         }
+                        if out.len() + e.len() > count as usize {
+                            break;
+                        }
+                        out.extend_from_slice(&e);
                     }
-                    let at = (off as usize).min(all.len());
-                    let end = (at + count as usize).min(all.len());
-                    all[at..end].to_vec()
+                    out
                 } else {
                     // `pread` (`rread`, `u9fs.c:717`): what is asked for,
                     // from where it is asked, and no more.
@@ -590,6 +602,42 @@ impl<B: Backend> Nineserver for Store<B> {
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod tests {
     use super::*;
+
+    /// **A directory read gives whole entries**, however small the count,
+    /// and the next read the ones after them (`u9fs.c:752`).
+    #[test]
+    fn a_directory_reads_as_whole_entries() {
+        let dir = std::env::temp_dir().join(format!("ipnx-dirread-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for i in 0..40 {
+            std::fs::write(dir.join(format!("file-with-a-longish-name-{i:02}")), "x").unwrap();
+        }
+        let mut s = Store::new(&dir).unwrap();
+        let mut rpc = |b: W, t: T| {
+            let r = s.rpc(&b.frame(t as u8, 1)).unwrap();
+            assert_ne!(r[4], T::Error as u8, "{t:?}: {}", String::from_utf8_lossy(&r[9..]));
+            r
+        };
+        rpc(W::new().u32(MSIZE).s("9P2000"), T::Version);
+        rpc(W::new().u32(0).u32(!0).s("kitty").s(""), T::Attach);
+        rpc(W::new().u32(0).u8(0), T::Open);
+        let (mut off, mut names) = (0u64, Vec::new());
+        loop {
+            let r = rpc(W::new().u32(0).u64(off).u32(1000), T::Read);
+            let n = u32::from_le_bytes([r[7], r[8], r[9], r[10]]) as usize;
+            if n == 0 {
+                break;
+            }
+            let entries = Dir::parse_all(&r[11..11 + n]);
+            let whole: usize = entries.iter().map(|d| d.conv_d2m().len()).sum();
+            assert_eq!(whole, n, "a read ended inside an entry");
+            names.extend(entries.into_iter().map(|d| d.name));
+            off += n as u64;
+        }
+        assert_eq!(names.len(), 40, "{names:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     /// A file made `ORCLOSE` is there while it is open and gone when its fid
     /// is clunked; one made without it stays (`u9fs.c:866`).

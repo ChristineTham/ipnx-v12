@@ -5,9 +5,9 @@ other document carries it.
 
 Measured 2026-09-20; the kernel's size and the test counts 2026-10-09.
 
-## The kernel — 20,052 lines of Rust, no dependencies
+## The kernel — 20,069 lines of Rust, no dependencies
 
-13,946 of them outside the test modules (2026-10-09, after the host's call;
+13,963 of them outside the test modules (2026-10-09, after WASI's call;
 every line not in a `#[cfg(test)]` item, and `testfs.rs`, the tests' file
 server, is a test module).
 
@@ -33,13 +33,13 @@ server, is a test module).
 | `namec.rs` | name → channel, with the mount check at every component, closing each channel a walk makes once it steps past it (`chan.c:1109`); all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk, where a device's walk that errs is a miss, as `ewalk`'s is (`chan.c:948`; 2026-09-24); `validname`'s characters (`chan.c:1731`) and `namelenerror`'s form of a name in an error (`:1250`) |
 | `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s. **And the clock** (2026-09-22): `Mach` (`pc/dat.h:206`, the fields `port/` reads), `timersinit`, `hzclock`, `accounttime`, `hzsched`, `rebalance`, `anyhigher`, and `sched`'s tail with `m->schedticks`. `pexit` takes the descriptor table, `dot` and the namespace (`proc.c:1145`) and answers what was their last reference, for the kernel to close; `rfork` without `RFPROC` the same of the tables it replaces; `clunkq` (`chan.c:517`) takes what a kill leaves unclosed and what `#p`'s `ctl` closes. The kernel processes share `kpgrp` (`proc.c:1469`) and have no descriptor table. The descriptor table grows `DELTAFD` at a time to 5000 (`growfd`, `sysfile.c:25`) and holds references: a channel's device is closed at its last |
 | `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
-| `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot |
+| `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot. And `hostcall`, a call the machine makes on a process's behalf — a WASI program's (2026-10-09; not reviewed) |
 | `lib.rs` | the 31 calls, `exec`, and `unionread`; and **the kernel's half of the host's call** (`Call::Oscmd`, 54 — not Plan 9's; 2026-10-09): `#9/<n>` attached as `mount` attaches (`sysfile.c:1031`) with the conversation's name, and each file walked and opened as `open` does, into descriptors, the namespace unchanged; the wire kept as a mount keeps one, so every command after the first joins its session, and the call's words checked as `exec`'s are |
 
-286 kernel tests, and 82 in `hosts/ipnx` — 13 in the library, 69 in the
-binary (2026-10-09, after P9).
+286 kernel tests, and 87 in `hosts/ipnx` — 14 in the library, 73 in the
+binary (2026-10-09, after P10's terminal half).
 
-## The host — `hosts/ipnx`, six files
+## The host — `hosts/ipnx`, seven files
 
 `machine.rs` is the machine: `procsetup`, `todget` and `touser` over wasmtime,
 and the import table that is this architecture's `9syscall` — with `oscmd`,
@@ -58,7 +58,14 @@ provides as `#9/1` — a conversation per command, its files `data`,
 `stderr` and `wait`, one host `read` per 9P read on a thread of its own and
 the reply held until it comes — and the command started, waited for and
 killed as Inferno's emulator does (`emu/MacOSX/cmd.c`): `execvp` in its
-directory, a process group of its own, `SIGTERM` to the group. `lib.rs` is
+directory, a process group of its own, `SIGTERM` to the group. `wasi.rs`
+is **a WASI program's world** (P10, 2026-10-09): `wasi-common`'s preview 1,
+with `/` preopened as the process's namespace, its standard streams the
+process's descriptors, its environment `#e`'s, its waiting the kernel's
+`sleep`, and every file operation the kernel's call, made for it
+(`hostcall`) — WASI's POSIX questions answered as APE answers them. A store
+directory reads as whole entries now, as `u9fs`'s does (`u9fs.c:791`): it
+had cut the listing at the byte count (RESEARCH §16.40). `lib.rs` is
 `startboot` (`initcode.c:21`): the device
 table — which is what a Plan 9 kernel's configuration file is, `mkdevc`
 turning a `dev` list into `devtab[]` — three opens of `#c/cons`, the binds,
@@ -357,6 +364,7 @@ mkfiles, and every linked image run through `wasm-opt --asyncify` (RESEARCH
 | `adm/timezone` | Plan 9's, vendored; init copies `local` into `#e/timezone`, and `local` — a site's choice, US_Eastern in the Labs' tree — is GMT's |
 | `profile/`, `usr/kitty/profile/`, `etc/motd`, `pkg/system/pkg.cfg` | the system's configuration and kitty's (P7 step 1; docs/packages.md), and the `system` package's description |
 | `cmd/pkg`, `cmd/service`, `cmd/template` | the commands written in rc that are not Plan 9's (P7 steps 3–5), installed in the `system` package's `rc/bin` |
+| `pkg/python/` | **Python, a package** (P10, 2026-10-09): CPython 3.14.8's own WASI build, from its tag, by its own script, with prefix `/sys` — `mk.sh` runs it, once, and lays it out as `/pkg/python/3.14.8/` (`wasm/bin/python3`, `sys/lib/python3.14`), installed to the system as `pkg install` records one. Less than `make install` installs: the regression tests, the static library for embedding, the bytecode. Nine of its modules are not built — `_bz2`, `_ctypes`, `_hashlib`, `_lzma`, `_ssl`, `_uuid`, `_zstd`, `readline`, `zlib` — their C libraries not being in the WASI SDK |
 | `cmd/os.c` | `os`, which runs a command on the host (P9, 2026-10-09): Inferno's `os(1)`, in C after `appl/cmd/os.b`, without `-m`; one call to the host where Inferno's opens `/cmd/clone`. It waits for the copier of the command's error where `os.b:118` kills it (RESEARCH §16.39) |
 
 **The system boots itself.** `cargo run -p ipnx` is `initcode.c:21` — three
@@ -400,7 +408,7 @@ scripted console after a full boot, some booting into a filesystem of their
 own. They need `userspace/mk.sh` to have run — `cargo test` cannot build a
 wasm userspace — and say so rather than passing quietly.
 
-## Functional equivalence to the demo — 10 of 12
+## Functional equivalence to the demo — 12 of 12
 
 The conformance suite lists twelve capabilities and **runs a check for every
 one it claims**: it boots the whole system on a scripted console and types at
@@ -421,9 +429,12 @@ what it says (`hosts/web/test/emca-browser.mjs`). The browser checks want
 **building a program with a toolchain** — the host's, typed through `os`:
 a Go module written in the namespace, `os -d <its host directory> go build`
 and `os -d … ./hello`, which prints what it was written to (2026-10-09; it
-wants `go` on the host, and fails without it). The other two are P10's, a
-Go program and Python, as WASI programs whose files are the process's
-namespace (Christine, 2026-10-09; [architecture.md](architecture.md)).
+wants `go` on the host, and fails without it). The last two are P10's, as
+WASI programs whose files are the process's namespace (Christine,
+2026-10-09): **a Go program** — built for `wasip1` by the host's Go through
+`os`, then run by its name, reading `/etc/motd` — and **Python**, the
+system's package, computing with `json` from its library. Both are checked
+on the terminal; the page runs no WASI program yet.
 
 Two lines were corrected on 2026-10-08. *"A package becomes available
 without installing anything into the tree"* and *"a language toolchain
@@ -434,7 +445,7 @@ with the right packages preinstalled"*. They are now the demo's own claims:
 *"installing is a bind … a subshell that does `rfork n` owns a private
 environment"*, and *"`cc hello.c` then `./a.out` … `go run hello.go`"*.
 
-It still fails, and will until all twelve are reached.
+It passes (2026-10-09), the first time it has.
 
 The phases are in [implementation.md](implementation.md). P0–P3 are done.
 
@@ -604,6 +615,20 @@ directory `os` runs in without `-d` — Inferno publishes it as `$emuroot`
 (`emu/port/main.c:320`), and nothing here does yet (RESEARCH §16.39); and a
 command run as anyone but the host's own user — Inferno runs one as the
 host's `nobody` when its emulator is root (`cmd.c:58`).
+
+**P10 is built on the terminal** (2026-10-09; RESEARCH §16.40). A module
+that imports `wasi_snapshot_preview1` runs as a process under
+`wasi-common`, its files the process's namespace (Christine, 2026-10-09:
+*"B: the namespace"*). A Go program built for `wasip1` — by the host's Go,
+through `os` — reads its arguments, `/etc/motd` and a directory, sleeps,
+reads `$user`, writes `/tmp/from-go` and exits with its status; CPython
+3.14.8, the system's `python` package, imports `json` from
+`/sys/lib/python3.14`, writes a file of the namespace, and reads its prompt
+from the console. Tested in the host's `wasi` (two) and `python` (two),
+and the suite's two lines. **Not built for P10**: WASI programs in the
+page — the page refuses an image that does not import its memory, which a
+WASI module does not; the nine CPython modules whose C libraries the WASI
+SDK lacks; and a working directory for a WASI program other than `/`.
 
 **A channel's mode, and who may open what** (2026-10-07; RESEARCH §16.21).
 `read` and `write` check a descriptor's open mode, `mount`, `fversion` and

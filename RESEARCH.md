@@ -6362,3 +6362,99 @@ and `exec`, and the conversation's reads. `go build` of a one-file module
 takes the host 0.40 s, and 0.10 s with its cache warm; the test that
 writes the module in the namespace, builds it with `os -d … go build` and
 runs it, boot and copy of the root included, 3.2 s.
+
+### 16.40 WASI programs on the terminal, and Python (2026-10-09)
+
+P10's terminal half, built: a module that imports `wasi_snapshot_preview1`
+runs under `wasi-common`, its files the process's namespace (Christine,
+2026-10-09: *"B: the namespace"*); a Go program built for `wasip1` and
+CPython's own WASI build run on it. What building it found.
+
+**`wasi-common` 39 suits a machine whose processes are fibers.** Its
+`WasiFile`, `WasiDir` and `WasiSched` are `async` traits, so a file's read
+can wait in the kernel by awaiting, as a process's own call does (`kcall`):
+the fiber suspends, the scheduler runs something else, and `resume` carries
+the call on. Its `tokio` feature is only what generates its functions as
+`func_wrap_async` ones; nothing runs tokio. Its own files and directories
+are `cap-std`'s, the host's; these are the namespace's (`hosts/ipnx/src/wasi.rs`).
+
+**A WASI call names nothing in the program's memory.** `wasi-common`
+copies a call's buffers itself, so the kernel's call made for it has its
+arguments already the kernel's — the shape of the calls the kernel makes
+for itself at boot, which are not checked against a process's memory
+(`Kernel::syscall`'s *"carries no argument words"*). A process's own call
+is checked (`validargs`) through the memory of the process in the call, and
+none is reachable then. So the machine's interface has a call made on a
+process's behalf, `Syscalls::hostcall`, which is otherwise the process's
+call: it sleeps and resumes as one.
+
+**WASI asks POSIX questions, and APE answers them on Plan 9.** An error
+string is an errno by `_syserrno`'s table (`ape/lib/ap/plan9/_errno.c:15`),
+in its order, `EINVAL` for none; two of APE's errnos have no WASI name
+(`ESHUTDOWN` is `EPIPE` here, APE's own `EGREG` `EIO`). A server of the
+host's files answers with the host's words — `u9fs` with `strerror(errno)` —
+which APE's table does not match (*"File exists"*), so they are matched
+without regard to case, with the host's `EEXIST`, `EISDIR` and `ENOENT`
+added. A rename is `rename.c`'s: what is at the new name removed, a
+`wstat` of the name in one directory, a copy and a remove across two. An
+environment variable is `_envsetup.c`'s, from `#e`. An exit status is
+`_exit.c`'s, `status & 0xFF` in decimal and none for 0. `O_APPEND` is a seek
+to the end before each write, as APE's `write.c` does it.
+
+**A WASI file is closed by being dropped**, and a drop cannot wait, while
+the kernel's `close` can — for `Rclunk`. So a dropped file's descriptor is
+closed at the program's next call, or by `pexit` at its end.
+
+**Waiting is the kernel's `sleep`.** WASI's `poll_oneoff` waits for clocks
+and for files to be ready. A file here is ready at once — a read that cannot
+be answered yet waits in the kernel, as every read does — and a clock is
+slept for, in the kernel, until it is due; `sched_yield` is `sleep(0)`,
+which is `yield()`.
+
+**What a WASI program sees as a file's type** is read from its directory
+entry: a directory; a file a server serves (`#M`) or an environment
+variable, regular; a pipe; and any other device's file a character device,
+which is how a program knows the console is a person's.
+
+**The root's server cut a directory listing at the byte count.** read(5)
+gives a directory read whole entries only, and `u9fs` stops before one that
+does not fit (`rread`, `u9fs.c:791`); `store.rs` sliced the listing at
+`offset + count`, so a read of a directory longer than the count ended
+inside an entry, and the mount driver refused it — *"invalid directory
+entry received from server"* (`mntread`'s `Esbadstat`). Plan 9's own
+programs had never met it: `dirread` asks for `DIRMAX`, about 64 KB, at
+once (`libc/9sys/dirread.c`). A WASI program asks for less; Python's first
+listing of its library, 193 entries, failed with `EINVAL`. The store gives
+whole entries now, as `u9fs` does, and the page's tree with it.
+
+**A Go program for `wasip1` runs as on any engine**: built by the host's Go
+through `os` with `GOOS=wasip1 GOARCH=wasm` in rc's environment, it reads
+its arguments, a file and a directory of the namespace, sleeps, reads the
+environment, writes a file into the namespace, and exits with its status
+(`hostcmds` and `wasi` tests). A WASI program starts in `/`: wasi-libc's
+working directory begins there, and Go's from `$PWD`, which rc does not
+export; its relative names are the root's.
+
+**CPython's own WASI build**, 3.14.8, from its tag, by its own script
+(`Tools/wasm/wasi`): a build Python first, then the WASI one, with
+wasi-sdk 34 where the script names 24 — it warns, and builds. Its prefix is
+`/sys`, so the library is `/sys/lib/python3.14`, where Plan 9 keeps a system
+library's files. Nine of its modules are not built, because the C libraries
+they wrap are not in the WASI SDK: `_bz2`, `_ctypes`, `_hashlib`, `_lzma`,
+`_ssl`, `_uuid`, `_zstd`, `readline` and `zlib`. The interpreter is 31 MB
+with its debugging information and 8 MB without; the library 16 MB without
+the regression tests (161 MB with their bytecode) or the static library
+for embedding Python (43 MB). **Sources looked at and not used**:
+`www.python.org` is refused by this environment's egress policy;
+GitHub's release files are not git, which is all its proxy serves of a
+repository not attached; and the one CPython WASI build on npm,
+`@antonz/python-wasi`, is a repackaging of VMware Labs' build with its
+library packed inside the module (wasi-vfs), so its library would not be
+the namespace's, and its provenance could not be checked here.
+
+**Measured** (debug build, this container): a boot that runs `python3 -c
+pass` and ends takes 9.3 s, and one that runs it twice the same — so a boot
+is about 2 s (§16.39), compiling the 8 MB module about 7, and starting
+Python again in the same boot almost nothing: wasmtime compiles an image
+once per boot (`Wasm::compile`), and keeps no compiled image between
+boots.

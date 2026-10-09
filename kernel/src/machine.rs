@@ -42,6 +42,16 @@ pub trait Syscalls {
     /// [`Ret::Sched`] again.
     fn resume(&mut self, up: Pid) -> Result<Ret, String>;
 
+    /// **A call the machine makes on a process's behalf**, its arguments
+    /// already the kernel's: a WASI program's, which the machine's WASI
+    /// engine has read out of the program's own calls (architecture.md, *A
+    /// WASI binary runs natively*). It names nothing in the process's memory,
+    /// so nothing there is checked, as nothing is for the calls the kernel
+    /// makes for itself at boot ([`crate::Kernel::syscall`]); otherwise it
+    /// is the process's call, and answers — and sleeps, and resumes — as
+    /// [`Syscalls::syscall`] does.
+    fn hostcall(&mut self, up: Pid, call: Call) -> Result<Ret, String>;
+
     /// **The clock interrupt**, taken while a process runs: a machine's
     /// `clockintr` calls the portable `timerintr` (`kw/clock.c:46`;
     /// `i8253clock` on the PC, `pc/i8253.c:262`), and `trap()`'s tail then

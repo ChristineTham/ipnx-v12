@@ -1278,6 +1278,13 @@ impl machine::Syscalls for Kernel {
         Kernel::resume(self, up)
     }
 
+    fn hostcall(&mut self, up: Pid, call: Call) -> Result<Ret, String> {
+        if let Some(p) = self.procs.borrow_mut().get_mut(up) {
+            p.s = [0; machine::MAXSYSARG];
+        }
+        self.syscall_(up, call, &|| 0, false)
+    }
+
     fn postnote(&mut self, up: Pid, msg: &str, flag: proc::NoteFlag) -> bool {
         self.procs.borrow_mut().postnote(up, msg, flag)
     }
