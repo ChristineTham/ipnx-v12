@@ -6524,6 +6524,24 @@ compiler. The fifteen one-liners and the boot, 6.3 s. In headless Chromium
 compiling, in 0.68 s; and the interrupt key ends Python in a loop and the
 shell answers the next line in 0.89 s.
 
+**CI could not build Python, and nothing said so** (found on the push of
+this work). `mk.sh` exports its compiler and flags — wasi-sdk's clang,
+`--target=wasm32-unknown-unknown -nostdlib -nostdinc`, `wasm-ld`'s flags
+— for the userspace, and CPython's script hands the environment it was
+given to `configure` (`Tools/wasm/wasi/__main__.py`, `call`), so the build
+Python's `configure` failed: *"C compiler cannot create executables"*,
+exit 77. It failed on both of the day's CI runs that built CPython, whose
+cache was empty for each; here it had been built once outside `mk.sh`,
+and `mk.sh` found the stage and did not build it again. Three things
+kept it quiet: `mk.sh` records a package that does not build in
+`build/failed` and goes on, as it does for a command; every test that
+wants the package skips without it, which is right on a machine that has
+not built it; and the suite's step was allowed to fail, from when it was
+expected to. `mk.sh` now runs the package's build without its compiler's
+environment, as it already ran `cargo`; reproduced with that environment
+and built again from an empty directory without it. And the suite's step
+fails the run.
+
 **`gohello`** is the previous demo's Go program, back: its source was
 `userspace/wasi/gohello` (at `ad305ed2^`), built by that demo's `mk.sh`
 with `GOOS=wasip1 GOARCH=wasm go build -trimpath`, and it printed *"Hello

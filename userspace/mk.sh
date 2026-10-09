@@ -248,8 +248,13 @@ fi
 
 # **Python**, a package (P10): CPython's own WASI build (`pkg/python/mk.sh`),
 # made once and kept in build/; it wants git and a C compiler for the build
-# Python its build makes first. What it could not do is in build/failed.
-if ! WASI_SDK=$WASI_SDK build=$build root=$root OBJTYPE=$OBJTYPE \
+# Python its build makes first. Not with this build's compiler and flags,
+# which are for wasm32 with no C library: its `configure` reads them from
+# the environment, and the build Python's cannot make a program with them
+# (*"C compiler cannot create executables"*). What it could not do is in
+# build/failed.
+if ! env -u CC -u CFLAGS -u LD -u LDFLAGS -u AR \
+	WASI_SDK=$WASI_SDK build=$build root=$root OBJTYPE=$OBJTYPE \
 	bash "$here/pkg/python/mk.sh" >"$build/python.log" 2>&1; then
 	echo "pkg/python: did not build: $(tail -1 "$build/python.log") (build/python.log)" >>"$failed"
 fi
