@@ -559,9 +559,10 @@ two of the tabs.
 and its 9P, its directory entries among them; `emca-system.test.mjs`, 4
 tests of emca with the whole system under Node — the layout filled, a
 shell window, the interrupt, and Open, Run, Save, Revert, Edit and a filter
-through IPNX; `emca-browser.mjs`, eight checks in headless Chromium —
-every window filled in 5.1 s, and a Go program and Python in the shell
-window among them — four of which the conformance suite runs; and the kernel's `#9` tests
+through IPNX; `emca-browser.mjs`, nine checks in headless Chromium —
+every window filled in 5.1 s; a Go program and Python in the shell window,
+and a shell window keeping its place when the layout moves it, among them
+— four of which the conformance suite runs; and the kernel's `#9` tests
 (`a_reply_the_server_holds_comes_in_at_the_clock`,
 `replies_held_and_answered_out_of_order_go_to_their_own_calls`,
 `a_flushed_request_is_not_waited_for`).

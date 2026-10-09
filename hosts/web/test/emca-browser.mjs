@@ -192,6 +192,29 @@ try {
     await until('undone', (s) => !titled(s, '/home/README').text.includes('undone'));
   });
 
+  // A layout moves windows, and a moved element forgets where it was
+  // scrolled to: rc's window jumped back to the top of its transcript when
+  // the listing opened a directory beside it
+  await check('a shell window keeps its place when the layout changes', async () => {
+    const rc = titled(await seen(), '/bin/rc');
+    await win(rc.id).locator('.body').click();
+    await page.keyboard.type('seq 300\n');
+    await until('seq', (s) => titled(s, '/bin/rc').text.includes('\n300\n'));
+    // the listing beside it becomes tabs, or stops being them: the row
+    // both are in is laid out again
+    const profile = page.locator('section.container[data-kind="tabs"] .tab', { hasText: 'profile' });
+    if (await profile.count()) {
+      await profile.locator('button.x').click();
+      await until('profile/, closed', (s) => !titled(s, '/home/profile'));
+    } else {
+      await win(titled(await seen(), '/home').id).locator('.name', { hasText: 'profile/' }).click();
+      await until('profile/, opened', (s) => titled(s, '/home/profile'));
+    }
+    await page.waitForTimeout(500);
+    const atend = await win(rc.id).locator('.body').evaluate((b) => b.scrollTop + b.clientHeight >= b.scrollHeight - 4);
+    assert(atend, "rc's window is not at the end of its transcript");
+  });
+
   // WASI programs in the site's own shell window (P10): their standard
   // streams are emca's files there, where on the console page they are the
   // console's — and emca's directory entries were two bytes short, which

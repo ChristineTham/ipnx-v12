@@ -110,6 +110,11 @@ export class Surface {
     const height = this.main.clientHeight - parseFloat(cs.paddingTop) - parseFloat(cs.paddingBottom);
     const node = this.layout(e.root, width, height, seen);
     if (this.main.firstChild !== node) this.main.replaceChildren(node);
+    // A layout moves windows, and a moved element forgets where it was
+    // scrolled to: a shell window goes back to where it was being read.
+    for (const v of this.views.values()) {
+      if (v.kind === 'shell') v.body.scrollTop = v.atend ? v.body.scrollHeight : v.top;
+    }
     for (const [id, v] of this.views) {
       if (!seen.has(id)) {
         v.destroy?.();
@@ -469,6 +474,14 @@ export class Surface {
     v.line.setAttribute('aria-label', 'what you type');
     v.log.append(v.line);
     v.body.append(v.log);
+    // where the transcript is being read: at its end, which new output
+    // follows, or where a person scrolled to
+    v.atend = true;
+    v.top = 0;
+    v.body.addEventListener('scroll', () => {
+      v.atend = v.body.scrollTop + v.body.clientHeight >= v.body.scrollHeight - 4;
+      v.top = v.body.scrollTop;
+    });
     v.body.addEventListener('click', () => {
       if (!getSelection().toString()) v.line.focus();
     });
@@ -507,9 +520,8 @@ export class Surface {
 
   updateshell(w, v) {
     if (v.out.data === w.body) return;
-    const atend = v.body.scrollTop + v.body.clientHeight >= v.body.scrollHeight - 4;
     v.out.data = w.body;
-    if (atend) v.body.scrollTop = v.body.scrollHeight;
+    if (v.atend) v.body.scrollTop = v.body.scrollHeight;
   }
 
   // ---- the verbs ---------------------------------------------------------------
