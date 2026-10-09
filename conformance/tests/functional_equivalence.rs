@@ -84,6 +84,10 @@ enum State {
     /// Not yet: **a design is proposed** in `docs/proposals.md` and awaits
     /// Christine's review. No phase builds it until she endorses it — the
     /// triage rule's middle state.
+    ///
+    /// No line is one on 2026-10-09, when she decided Go's and Python's;
+    /// the state stays, because the triage has three.
+    #[allow(dead_code)]
     Proposed,
 }
 
@@ -161,13 +165,13 @@ fn demo() -> Vec<Behaviour> {
         },
         Behaviour {
             what: "run a Go program",
-            state: Proposed,
+            state: Pending("P10"),
             how: "it runs and prints what it printed before",
             check: None,
         },
         Behaviour {
             what: "run Python",
-            state: Proposed,
+            state: Pending("P10"),
             how: "it starts, imports from its library, and computes",
             check: None,
         },

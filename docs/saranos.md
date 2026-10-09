@@ -73,6 +73,12 @@ uses; here `os` makes a call to the host.
   `-n` and `-N` lower its priority. The program gets the command's standard
   input, output and error back as descriptors, and a fourth that reads its
   status when it ends, as Inferno's `wait` file does, and carries on.
+- **What the descriptors are** (Christine, 2026-10-09: *"9P over #9"*): the
+  host serves the command's four streams as files of a 9P server it provides
+  through `#9`, as it serves the root and emca, and the kernel attaches that
+  server and opens the four files straight into the process's descriptors.
+  No device, and no change to the namespace; a read waits as any 9P read
+  waits, and the host answers it when the command has written.
 - **Its environment** is the host's own with the process's `/env` laid over it
   (*"yes (overlay)"*), each variable as APE makes one
   (`ape/lib/ap/plan9/_envsetup.c:15`). Here this departs from Inferno, whose
@@ -97,10 +103,7 @@ uses; here `os` makes a call to the host.
 - **A WASI program cannot make the call**: unmodified, it knows only WASI's
   calls, and WASI has none that starts a process.
 
-Not built; it is P9 of the plan ([implementation.md](implementation.md)),
-which begins with a way for the host to fill the descriptors — the only host
-input the kernel takes today is the console's, at clock time (`kbdputcclock`,
-`devcons.c:556`).
+Not built; it is P9 of the plan ([implementation.md](implementation.md)).
 
 ## The names
 

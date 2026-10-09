@@ -408,9 +408,9 @@ what it says (`hosts/web/test/emca-browser.mjs`). The browser checks want
 `hosts/web/build.sh` run and Playwright's Chromium. Of the other three, one
 is P9's — building a program with a toolchain, which is the
 host's, typed through `os`, and so there only where the host runs commands
-([saranos.md](saranos.md), *The host's resources*) — and **two are built by
-no phase of [implementation.md](implementation.md)**: a Go program and
-Python, whose design is proposed and unreviewed ([proposals.md](proposals.md)).
+([saranos.md](saranos.md), *The host's resources*) — and two are P10's, a
+Go program and Python, as WASI programs whose files are the process's
+namespace (Christine, 2026-10-09; [architecture.md](architecture.md)).
 
 Two lines were corrected on 2026-10-08. *"A package becomes available
 without installing anything into the tree"* and *"a language toolchain

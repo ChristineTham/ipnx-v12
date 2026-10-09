@@ -263,8 +263,17 @@ The machine's obligations, which are Plan 9's semantics:
 `wasi_snapshot_preview1`, run by an existing WASI engine and understanding
 none of IPNX's conventions (Christine, 2026-10-08: *"as WASI native as
 possible"*; *"WASI is not a personality, we support WASI binaries
-natively"*). Which files it sees is proposed, not decided
-([proposals.md](proposals.md), *Go and Python*), and nothing runs one yet.
+natively"*). **Its files are the process's namespace** (Christine,
+2026-10-09): the host runs it under `wasi-common`, wasmtime's own WASI
+preview 1, and in the page under `@bjorn3/browser_wasi_shim`, with `/`
+preopened as the namespace the process has — every open, read and stat made
+with the kernel's calls — so it sees the same tree on every host, `/dev` and
+`/proc` among it, and the packages its project binds. Its standard streams
+are the process's descriptors 0, 1 and 2, its arguments `exec`'s, its
+environment the process's. It starts no process — WASI has no call that
+does, so Go's toolchain built for WASI cannot build (RESEARCH §16.36) — and
+reaches no network, which preview 1 does not have. Nothing runs one yet
+(P10).
 
 **A personality is userspace** (Christine: *"even the Unix v10 personality
 should be userspace"*) — a library over this ABI, and nothing in the kernel.

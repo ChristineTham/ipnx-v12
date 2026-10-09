@@ -512,3 +512,12 @@ On P8, after the triage, the same evening:
   <br>— `docs/surface.md`, `docs/emca.md`, `docs/implementation.md` P8
 - *"emca is not rio, it is a full windowing manager implemented on host side. We have already agreed on most of the details"*
   <br>— `docs/emca.md`, `docs/window.md`, `docs/surface.md`, `docs/saranos.md`, `CLAUDE.md`
+
+On the three questions put to her on 2026-10-09, after P8 — *"keep going until we have the demo replicated and working"*:
+
+- selected *"9P over #9"* — the host serves a host command's input, output, error and status as files of a 9P server it provides through `#9`, as it serves the root and emca, and the kernel attaches that server and opens the four files straight into the process's descriptors; no device, no change to the namespace
+  <br>— `docs/saranos.md`, `docs/implementation.md` P9
+- selected *"B: the namespace"* — a WASI program sees the process's namespace as its files, through `wasi-common`, wasmtime's own WASI
+  <br>— `docs/architecture.md`, `docs/implementation.md` P10
+- selected *"browser_wasi_shim"* — `@bjorn3/browser_wasi_shim` runs WASI programs in the browser
+  <br>— `docs/architecture.md`, `docs/implementation.md` P10

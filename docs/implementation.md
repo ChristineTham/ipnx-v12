@@ -77,8 +77,9 @@ final state; design resumes after it. **Don't overengineer.**
 | **the website** | emca in the browser doing what the site does now — a listing on the left, `motd`/`tour`/`README` as tabs, `rc` below them — with the windows, toolbar and status line to spec | emca owns windows entirely, the contract and the types hold, the surface renders files and never pixels |
 
 **Not in the demo:** a window on a Mac or an iPad, the raster, `/net`, git.
-**P0–P9 deliver it.** P9, host commands, is the CLI's, and does not wait for
-P8.
+**P0–P10 deliver it.** P9, host commands, is the CLI's, and does not wait for
+P8; P10, WASI programs — Go and Python — is the CLI's and the website's both
+(added 2026-10-09).
 
 ---
 
@@ -307,10 +308,26 @@ system says so.
 
 | | |
 |---|---|
-| **builds** | first, how the host fills a program's descriptors — the kernel takes host input today only at the console (`kbdputcclock`, `devcons.c:556`), and what carries a command's input, output, error and status is designed when this phase is reached. Then the call, in this machine's half of libc (`sys/src/libc/wasm/`), with the userspace ABI's contract changed in the same commit ([architecture.md](architecture.md)); its host half in `hosts/ipnx` — `execvp` in the directory asked for, the environment overlaid, a process group of its own, `SIGTERM` to it when `os` goes (`emu/MacOSX/cmd.c`); and `os` in `cmd/`, in C after Inferno's `os.b` |
+| **builds** | first, what carries a command's input, output, error and status: **9P over `#9`** (Christine, 2026-10-09) — the host serves them as files of a 9P server it provides through `#9`, and the kernel attaches that server and opens the four files into the process's descriptors, one entry point for the host to do so on a process's behalf. Then the call, in this machine's half of libc (`sys/src/libc/wasm/`), with the userspace ABI's contract changed in the same commit ([architecture.md](architecture.md)); its host half in `hosts/ipnx` — `execvp` in the directory asked for, the environment overlaid, a process group of its own, `SIGTERM` to it when `os` goes (`emu/MacOSX/cmd.c`); and `os` in `cmd/`, in C after Inferno's `os.b` |
 | **depends on** | P6 — a read of a command's output waits as any read does. Not on P8: it is the CLI's, and can be built before the website |
 | **acceptance** | on the terminal: `os echo hello` prints `hello`; `cat x \| os sort` sorts; `os false` fails with `host: exit: 1`; killing `os` kills the command; and `os go build` then `os ./hello` runs — the conformance suite's toolchain line. In the browser there are no host commands, and the website does not claim them |
 | **exposes** | the Mac app's host half, when it is built, does the same |
+
+## P10 — WASI programs: Go and Python *(added 2026-10-09)*
+
+*"as WASI native as possible … A package like go which is compiled as a WASI
+binary must be allowed to run as if it is on a vanilla WASI engine"*
+(Christine, 2026-10-08); and its files are **the process's namespace**,
+through `wasi-common`, wasmtime's own WASI, and in the browser
+`@bjorn3/browser_wasi_shim` (Christine, 2026-10-09). The design is
+[architecture.md](architecture.md), *A WASI binary runs natively*.
+
+| | |
+|---|---|
+| **builds** | `exec` of a module that imports `wasi_snapshot_preview1`: the host runs it under `wasi-common` on the terminal and `browser_wasi_shim` in the page, with `/` preopened as the process's namespace — every open, read and stat made with the kernel's calls — its standard streams the process's descriptors 0, 1 and 2, its arguments `exec`'s and its environment the process's. Then a Go program built with `GOOS=wasip1 GOARCH=wasm`, and CPython's WASI build with its library, as a package |
+| **depends on** | P6 — a WASI program's call waits in the kernel as any other process's does — and P7, because Python is a package |
+| **acceptance** | a Go program built for `wasip1` prints what it printed before; Python starts, imports `json` from its library, and computes; on the terminal and in the page — the suite's two lines |
+| **exposes** | any WASI program, unmodified |
 
 ---
 
