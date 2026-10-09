@@ -10,7 +10,6 @@
 // calls are WASI's, which wasi.mjs makes into these.
 
 import { CALLS, ev, rep, mailbox, tell } from './mailbox.mjs';
-import { iswasi, runwasi } from './wasi.mjs';
 
 const node = typeof process === 'object' && !!process.versions?.node;
 const port = node ? (await import('node:worker_threads')).parentPort : self;
@@ -57,18 +56,27 @@ function begin(m) {
   else m.port.onmessage = (e) => go(m, e.data.mem);
 }
 
+// Whether a module is a WASI program: it imports WASI preview 1's calls
+// (hosts/web/src/module.rs, `wasi`, which the kernel asks).
+const iswasi = (module) => WebAssembly.Module.imports(module).some((i) => i.module === 'wasi_snapshot_preview1');
+
 function go(m, memory) {
   m.port.close();
   pid = m.pid;
   mem = memory;
   box = mailbox(m.box);
-  try {
-    // A WASI program: its own memory, and its calls made through this one
-    if (m.start && iswasi(m.module)) {
-      runwasi(m.module, mem, m.args, call);
-      tell(box, ev.EXITED);
-      return;
-    }
+  // A WASI program: its own memory, and its calls made through this one by
+  // wasi.mjs — loaded for it, and not by every process: loading it and the
+  // shim in each worker doubled what a process took to start (RESEARCH
+  // §16.42)
+  if (m.start && iswasi(m.module)) {
+    import('./wasi.mjs').then(
+      ({ runwasi }) => image(() => runwasi(m.module, mem, m.args, call)),
+      (e) => tell(box, ev.FAULT, `sys: trap: ${e?.message ?? e}`),
+    );
+    return;
+  }
+  image(() => {
     const imports = { sys: sys() };
     for (const i of WebAssembly.Module.imports(m.module)) {
       if (i.kind === 'memory') (imports[i.module] ??= {})[i.name] = mem;
@@ -89,6 +97,13 @@ function go(m, memory) {
       rewindinto(s.frames, s.sp, 0);
       run(s.entry);
     }
+  });
+}
+
+// Run an image to its end, and say so — or say how it trapped.
+function image(f) {
+  try {
+    f();
     tell(box, ev.EXITED);
   } catch (e) {
     if (e instanceof Gone) return;

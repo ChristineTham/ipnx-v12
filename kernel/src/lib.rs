@@ -2367,6 +2367,9 @@ impl Kernel {
             // is disallowed to avoid surprises"* — a new name for a file on
             // a mount point is `Eismtpt`, with its path (`:1181`).
             Call::Wstat { path, edir } => {
+                // *"validstat((uchar*)arg[1], l)"* before the name
+                // (`sysfile.c:1204`)
+                namec::validstat(&edir)?;
                 let (c, src) = self.walk(up, &path, namec::A::Access, 0)?;
                 self.done(c, src.is_none(), |k, c| {
                     renamesmtpt(c, &edir)?;
@@ -2375,7 +2378,9 @@ impl Kernel {
                 Ok(Ret::Ok)
             }
             Call::Fwstat { fd, edir } => {
-                // *"c = fdtochan(arg[0], -1, 1, 1)"* (`sysfile.c:1219`).
+                // *"validstat((uchar*)arg[1], l); c = fdtochan(arg[0], -1,
+                // 1, 1)"* (`sysfile.c:1218`).
+                namec::validstat(&edir)?;
                 let mut c = self.fdtochan(up, fd, None, true)?.borrow().clone();
                 renamesmtpt(&c, &edir)?;
                 self.tab.dwstat(&mut c, &edir)?;
@@ -5206,6 +5211,18 @@ mod syscalls {
         );
     }
 
+    /// `syswstat` checks the buffer before the name, and `sysfwstat` before
+    /// the descriptor (`sysfile.c:1204`, `:1218`): a malformed one is
+    /// `Ebadstat`, whether or not there is a file.
+    #[test]
+    fn wstat_checks_the_buffer_first() {
+        let mut k = booted();
+        let mut bad = ninep::Dir { name: "x".into(), ..Default::default() }.conv_d2m();
+        bad.push(0);
+        assert_eq!(k.syscall(1, Call::Wstat { path: "/no/such/file".into(), edir: bad.clone() }), Err(namec::EBADSTAT.into()));
+        assert_eq!(k.syscall(1, Call::Fwstat { fd: 99, edir: bad }), Err(namec::EBADSTAT.into()));
+    }
+
     /// `srvwstat` (`devsrv.c:235`): the owner, or eve, may rename a posted
     /// name and change its mode; a `/` in the name is `Ebadchar`.
     #[test]
@@ -5222,9 +5239,11 @@ mod syscalls {
         k.procs.borrow_mut().setuser(1, "other");
         assert!(k.syscall(1, Call::Wstat { path: "#s/a".into(), edir: wstat("b", !0) }).is_err());
         k.procs.borrow_mut().setuser(1, "glenda");
+        // `validstat` sees it first (`sysfile.c:1204`), and `validname`
+        // names it (`chan.c:1739`): `srvwstat`'s own check is behind that
         assert_eq!(
             k.syscall(1, Call::Wstat { path: "#s/a".into(), edir: wstat("x/y", !0) }),
-            Err("bad character in file name".into())
+            Err("bad character in file name: 'x/y'".into())
         );
         k.syscall(1, Call::Wstat { path: "#s/a".into(), edir: wstat("b", 0o644) }).unwrap();
         assert!(k.walk(1, "#s/a", namec::A::Access, 0).is_err());

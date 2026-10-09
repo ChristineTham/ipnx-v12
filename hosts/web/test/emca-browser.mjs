@@ -192,6 +192,23 @@ try {
     await until('undone', (s) => !titled(s, '/home/README').text.includes('undone'));
   });
 
+  // WASI programs in the site's own shell window (P10): their standard
+  // streams are emca's files there, where on the console page they are the
+  // console's — and emca's directory entries were two bytes short, which
+  // only a program that reads its streams' stat met
+  await check('a Go program runs in the shell window', async () => {
+    const rc = titled(await seen(), '/bin/rc');
+    await win(rc.id).locator('.body').click();
+    await page.keyboard.type('gohello\n');
+    await until('gohello', (s) => titled(s, '/bin/rc').text.includes('Hello Kitty — from Go (GOOS=wasip1, unmodified)'), 60000);
+  });
+  await check('Python runs in the shell window', async () => {
+    const rc = titled(await seen(), '/bin/rc');
+    await win(rc.id).locator('.body').click();
+    await page.keyboard.type(`python3 -c 'import json; print(json.dumps({"sum": sum(range(10))}))'\n`);
+    await until('python3', (s) => titled(s, '/bin/rc').text.includes('{"sum": 45}'), 120000);
+  });
+
   await check('nothing went wrong in the page', always(async () => {
     assert(!errors.length, errors.join('\n'));
   }));

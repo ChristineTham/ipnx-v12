@@ -6549,3 +6549,52 @@ Kitty — from Go (GOOS=wasip1, unmodified)"*. It is `userspace/cmd/gohello`
 now, built the same way into the system package when the machine has
 `go`; its `go.mod` names Go 1.21, where it named 1.25, because 1.21 is
 `wasip1`'s first release and an older Go builds it. 2.4 MB.
+
+### 16.42 What showing the demo found (2026-10-09)
+
+Christine: *"i want to see a working demo before I accept any of the
+proposals"*. A recorded walkthrough of the site's page — emca, in
+Chromium, typed at as a person would — found what every suite had passed:
+`gohello` and `python3`, typed into the site's shell window, died at once,
+*"sys: trap: Offset is outside the bounds of the DataView"*.
+
+**emca's directory entries were two bytes short.** stat(5) is `size[2]
+type[2] dev[4] qid[13] …`; emca's server wrote `size[2]` and one 4-byte
+word (`www/ninep.mjs`, `dir`), so every field after it sat two bytes early.
+A WASI program stats its standard streams to learn what they are, and in
+a shell window of the site they are emca's files; `wasi.mjs` read the
+entry field by field, ran off its end, and the program trapped. It writes
+`type[2]` and `dev[4]` now, as nothing — the kernel's mount driver writes
+both (`mntdirfix`, `devmnt.c:1165`) — and a test of emca's server checks
+its entries as `statcheck` does.
+
+**The kernel had no `validstat`**, the check that would have refused them
+the day they were written. Plan 9's mount driver asks it of every entry a
+server gives — *"validstat(dp, n); mntdirfix(dp, c);"* in a stat
+(`devmnt.c:489`), and each entry of a directory's read (`:672`) — and
+`wstat` and `fwstat` of the buffer a process gives, before the name or the
+descriptor (`sysfile.c:1204`, `:1218`). `validstat` (`sysfile.c:890`) is
+`statcheck` (`libc/9sys/convM2D.c`) — one entry, its count the rest of it,
+its four strings ending where it does — and `validname` of the name, which
+C copies to its first NUL in 64 bytes and lets the server decide when it is
+longer. The kernel has both now, called where Plan 9 calls them. One
+test's expectation moved with it: renaming `#s/a` to `x/y` is
+`validname`'s error, with the name, as on Plan 9, where `srvwstat`'s own
+check had answered first.
+
+**The page's WASI layer let a malformed entry trap the program**; it is
+`EIO` now, as on the terminal (`wasi.rs`, `dir`).
+
+**Why no test saw it**: the page's checks of WASI programs ran on the
+console page, where a program's standard streams are the console (`#c`);
+on the site they are a window's. The suite's Go and Python lines now type
+into the site's shell window (`emca-browser.mjs`).
+
+**And the page had grown slow to start a process.** emca's page filled its
+windows in 9.2 s, here and in CI, where P9's run in CI took 4.0 s: since
+P10, every process's worker loaded the WASI layer and four of the shim's
+modules, whether its image was a WASI program or not. A hundred programs
+run one after another took 4.0 s in Chromium, twice measured; with
+`wasi.mjs` loaded only for a WASI program (`proc.mjs`), 2.1 s, and emca's
+page fills its windows in 5.1 s, the console page reaching its prompt in
+1.9 s.

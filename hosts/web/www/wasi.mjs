@@ -51,12 +51,6 @@ let R;      // the region
 let kcall;  // the process's call (proc.mjs): its number and words, its value
 let w;      // the shim: its descriptors, and the program's memory
 
-// Whether a module is a WASI program: it imports WASI preview 1's calls
-// (hosts/web/src/module.rs, `wasi`, which the kernel asks).
-export function iswasi(module) {
-  return WebAssembly.Module.imports(module).some((i) => i.module === 'wasi_snapshot_preview1');
-}
-
 // ---- the calls -------------------------------------------------------
 
 // A WASI error: the errno WASI has for what failed.
@@ -131,14 +125,20 @@ function pwrite(fd, b, off) {
   return done;
 }
 
-// A directory entry, stat(5)'s machine-independent form (`convM2D`).
+// A directory entry, stat(5)'s machine-independent form (`convM2D`); one
+// that is not is EIO, as wasi.rs's `dir` answers it.
 function parsedir(b) {
-  const r = new Reader(b);
-  r.u16();
-  const type = r.u16(), dev = r.u32();
-  const qid = { type: r.u8(), vers: r.u32(), path: r.u64() };
-  const mode = r.u32(), atime = r.u32(), mtime = r.u32(), length = r.u64();
-  return { type, dev, qid, mode, atime, mtime, length, name: r.s(), uid: r.s(), gid: r.s(), muid: r.s() };
+  try {
+    const r = new Reader(b);
+    r.u16();
+    const type = r.u16(), dev = r.u32();
+    const qid = { type: r.u8(), vers: r.u32(), path: r.u64() };
+    const mode = r.u32(), atime = r.u32(), mtime = r.u32(), length = r.u64();
+    return { type, dev, qid, mode, atime, mtime, length, name: r.s(), uid: r.s(), gid: r.s(), muid: r.s() };
+  } catch (e) {
+    if (e instanceof RangeError) throw new Err(W.ERRNO_IO);
+    throw e;
+  }
 }
 
 const stat = (path) => parsedir(R.slice(STAT, STAT + Number(sys(CALLS.stat, [put(NAME, path), STAT, STATMAX]))));

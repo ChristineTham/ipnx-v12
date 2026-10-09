@@ -571,8 +571,8 @@ impl MntDev {
     pub fn read(&mut self, t: &mut dyn Transport, c: &mut Chan, n: usize, off: u64) -> Result<Vec<u8>, String> {
         let fid = c.fid;
         let mut buf = self.mnt(c)?.read(t, fid, n, off)?;
-        // a directory's entries are the mount driver's, as a stat is
-        // (`devmnt.c:667`)
+        // a directory's entries are the mount driver's, as a stat is, and
+        // each must be one (`devmnt.c:667`)
         if c.qid.qtype & crate::ninep::QTDIR != 0 {
             let mut p = 0;
             while p + 2 < buf.len() {
@@ -580,6 +580,7 @@ impl MntDev {
                 if p + len > buf.len() {
                     break;
                 }
+                crate::namec::validstat(&buf[p..p + len])?;
                 dirfix(&mut buf[p..p + len], c);
                 p += len;
             }
@@ -599,6 +600,8 @@ impl MntDev {
         let fid = c.fid;
         let m = self.mounts.get_mut(c.devno as usize).ok_or("not mounted")?;
         let mut d = m.stat(t, fid)?;
+        // *"validstat(dp, n); mntdirfix(dp, c);"* (`devmnt.c:489`)
+        crate::namec::validstat(&d)?;
         dirfix(&mut d, c);
         Ok(d)
     }
@@ -721,6 +724,11 @@ mod tests {
             let mut files = HashMap::new();
             files.insert("hello".into(), b"from a server".to_vec());
             files.insert("big".into(), vec![b'x'; 5000]);
+            // a file whose stat, and a listing whose second entry, is what
+            // emca's server wrote: two bytes short, with no `type[2]`
+            files.insert("short".into(), Vec::new());
+            let good = crate::ninep::Dir { name: "good".into(), ..Default::default() }.conv_d2m();
+            files.insert("listing".into(), [good, short_entry("bad")].concat());
             Server { files, fids: HashMap::new(), msize, handed: 0, strays: 0, versions: 0, attaches: 0, reads: 0, authed: Vec::new(), attached_with: Vec::new() }
         }
 
@@ -810,7 +818,7 @@ mod tests {
                     let Some(name) = self.fids.get(&fid) else { return err("unknown fid") };
                     // what a server may write: its own letter and number
                     let d = crate::ninep::Dir { dtype: b'9' as u16, dev: 7, name: name.clone(), ..Default::default() };
-                    let b = d.conv_d2m();
+                    let b = if name == "short" { short_entry(name) } else { d.conv_d2m() };
                     W::new().u16(b.len() as u16).raw(&b).frame(T::Stat.reply(), tag)
                 }
                 x if x == T::Clunk as u8 => {
@@ -824,6 +832,15 @@ mod tests {
                 _ => err("not implemented by this server"),
             }
         }
+    }
+
+    /// An entry without its `type[2]`, its count made to agree.
+    fn short_entry(name: &str) -> Vec<u8> {
+        let mut b = crate::ninep::Dir { name: name.into(), ..Default::default() }.conv_d2m();
+        b.drain(2..4);
+        let n = (b.len() - 2) as u16;
+        b[..2].copy_from_slice(&n.to_le_bytes());
+        b
     }
 
     /// The transport: hand a request straight to the server. A pipe or a
@@ -869,6 +886,28 @@ mod tests {
         assert_eq!(dir.dtype, 'M' as u16, "the mount driver's letter");
         assert_eq!(dir.dev, c.devno, "the mount's number");
         assert_eq!(dir.name, "hello");
+    }
+
+    /// **`validstat` on what a server answers** (`devmnt.c:489`): a stat
+    /// two bytes short — emca's, before it wrote `type[2]` — is refused,
+    /// where it had been passed on to be taken apart wrongly.
+    #[test]
+    fn a_malformed_stat_from_a_server_is_refused() {
+        let (mut d, mut t, root, _) = mounted(MAXRPC);
+        let mut c = d.walk(&mut t, &root, "short").unwrap().expect("no short");
+        c.fid = 2;
+        assert_eq!(d.stat(&mut t, &c), Err(crate::namec::EBADSTAT.into()));
+    }
+
+    /// And each entry a directory reads as (`devmnt.c:672`).
+    #[test]
+    fn a_malformed_entry_in_a_directory_is_refused() {
+        let (mut d, mut t, root, _) = mounted(MAXRPC);
+        let mut c = d.walk(&mut t, &root, "listing").unwrap().expect("no listing");
+        c.fid = 2;
+        let mut c = d.open(&mut t, c, 0).unwrap();
+        c.qid.qtype |= QTDIR;
+        assert_eq!(d.read(&mut t, &mut c, 8192, 0), Err(crate::namec::EBADSTAT.into()));
     }
 
     /// **Two mounts of one wire share one fid space**, so no fid may be

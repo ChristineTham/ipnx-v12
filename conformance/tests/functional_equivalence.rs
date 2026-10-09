@@ -170,7 +170,7 @@ fn demo() -> Vec<Behaviour> {
         Behaviour {
             what: "run a Go program",
             state: Reached,
-            how: "it runs and prints what it printed before: on the terminal, and in a page in Chromium",
+            how: "it runs and prints what it printed before: on the terminal, and in the site's shell window in Chromium",
             // A Go program is a WASI program (P10): `gohello`, the previous
             // demo's, built for `wasip1` by Go's own toolchain
             // (`userspace/mk.sh`) and run natively by its name — under
@@ -181,13 +181,13 @@ fn demo() -> Vec<Behaviour> {
                 if !out.lines().any(|l| l.trim_start_matches("% ") == "Hello Kitty — from Go (GOOS=wasip1, unmodified)") {
                     return Err(format!("it did not run on the terminal: {out:?}"));
                 }
-                browser(&["hosts/web/test/wasi-browser.mjs", "a Go program"])
+                browser(&["hosts/web/test/emca-browser.mjs", "a Go program"])
             }),
         },
         Behaviour {
             what: "run Python",
             state: Reached,
-            how: "it starts, imports from its library, and computes: on the terminal, and in a page in Chromium",
+            how: "it starts, imports from its library, and computes: on the terminal, and in the site's shell window in Chromium",
             // CPython's own WASI build, a package of the system
             // (`userspace/pkg/python/mk.sh`), run natively (P10)
             check: Some(|| {
@@ -195,7 +195,7 @@ fn demo() -> Vec<Behaviour> {
                 if !out.lines().any(|l| l.trim_start_matches("% ") == "{\"sum\": 45}") {
                     return Err(format!("it did not run on the terminal: {out:?}"));
                 }
-                browser(&["hosts/web/test/wasi-browser.mjs", "Python imports"])
+                browser(&["hosts/web/test/emca-browser.mjs", "Python runs"])
             }),
         },
         Behaviour {

@@ -5,9 +5,9 @@ other document carries it.
 
 Measured 2026-09-20; the kernel's size and the test counts 2026-10-09.
 
-## The kernel — 20,069 lines of Rust, no dependencies
+## The kernel — 20,202 lines of Rust, no dependencies
 
-13,963 of them outside the test modules (2026-10-09, after WASI's call;
+14,021 of them outside the test modules (2026-10-09, after `validstat`;
 every line not in a `#[cfg(test)]` item, and `testfs.rs`, the tests' file
 server, is a test module).
 
@@ -22,7 +22,7 @@ server, is a test module).
 | `devpipe.rs` | `#\|` — an attach mints a pipe; the two ends are crossed. Each end is a `qio` queue: a read of an empty pipe **sleeps** on `q->rr` until a write wakes it, and the last close of an end hangs up the other (`pipeclose`, `devpipe.c:247`), which is end of file once what was queued is read. Eve may change both ends' mode (`pipewstat`, `devpipe.c:181`) |
 | `devproc.rs` | `#p` — the process table as files: **twelve of `procdir[]`'s eighteen** (`devproc.c:79`), and the table says why each of the other six is absent. Each file's mode is `procgen`'s — `ctl`, `note` and `notepg` take the process's `procmode`, `0640` — checked at the open (`devproc.c:471`), and changed by `procwstat`. `ns` prints the bind lines that rebuild the namespace — paths, `int2flag`'s letters, and `mount <flag> <server> <on> <spec>` with `srvname`. `ctl` is `lookupcmd` over `proccmd[]` (`devproc.c:102`); the real-time scheduler's messages are not built |
 | `devcap.rs` | `#¤` — eve mints a capability; a process spends it once and becomes another user. Eve removing `caphash` hides it for good (`capremove`, `devcap.c:64`) |
-| `devmnt.rs` | `#M` — the 9P client: version, attach, a walk of up to `MAXWELEM` names, open, read and write in a loop, and a clunk that waits for `Rclunk`; an RPC a note interrupts is flushed (`mountio`, `devmnt.c:782`). A walk the server refuses leaves no fid to clunk (`devmnt.c:410`). Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
+| `devmnt.rs` | `#M` — the 9P client: version, attach, a walk of up to `MAXWELEM` names, open, read and write in a loop, and a clunk that waits for `Rclunk`; every entry a server gives — a stat, and each of a directory's — checked by `validstat` before `mntdirfix` writes its type and dev (`devmnt.c:489`, `:672`; 2026-10-09); an RPC a note interrupts is flushed (`mountio`, `devmnt.c:782`). A walk the server refuses leaves no fid to clunk (`devmnt.c:410`). Reached through the table's dispatcher, which takes it out while it runs. Fids come from one counter for the whole driver, as `chanalloc.fid` is (`chan.c:250`) — per mount, two mounts of one wire collided (2026-09-24) |
 | `sha1.rs` | SHA-1 and HMAC-SHA1, because `#¤` needs them and the kernel has no dependencies |
 | `devsrv.rs` | `#s` — post a file descriptor's NUMBER (`strtoul`'s), and an open of the name answers the posted channel itself, shared with the poster (`devsrv.c:135`). Its owner or eve renames it (`srvwstat`); it is removed by `srvremove`'s rules, and removing it closes what was posted |
 | `devvirtio9p.rs` | `#9` — a channel to each 9P server the MACHINE provides, `0`, `1`, … (`v9gen`, `devvirtio9p.c:1059`). It marshals nothing: `#M` writes a T-message down it and reads the R-message back, as it would down a TCP connection. **A reply may come later** (2026-10-09), as the virtqueue's does: a write is `submit` (`:597`), a server that cannot answer yet holds the request, the clock harvests what it has answered (`vqharvest`, `:470`, from `v9interrupt`, `:508`) and wakes the reader, which sleeps for one as `getreply` does (`:569`); replies come back in any order and `#M` sorts them by tag. A request whose `Tflush` is answered is not waited for, and the clock keeps ticking while a server holds one |
@@ -30,14 +30,14 @@ server, is a test module).
 | `devenv.rs` | `#e` — the environment as files, one per variable, over the group `rfork` shares; and `#ec`, the kernel configuration group, which nothing fills yet |
 | `dev.rs`'s `eve` | `char *eve` (`auth.c:10`) — **kernel-wide, mutable, and empty at boot** (`pc/main.c:285`). The device table hands the one cell to each device as it joins, which is what a Rust kernel writes where Plan 9 reads a global. The host names the host owner by writing `#c/hostowner`, as Plan 9's `boot` does (`bootauth.c:56`), so `$user` is `kitty` — the host's `plan9.ini` says `user=kitty` (`plan9ini`, `hosts/ipnx/src/lib.rs`); Plan 9's fallback, `glenda`, is for one that names none — and not the role's own name |
 | `devcons.rs` | `#c` — all 23 of `consdir[]`, `cons` and `consctl` among them: the line discipline is here, as `port/devcons.c` keeps it, and the machine supplies only `screenputs` and the keyboard's characters. The rest is a **reporting** device — identity, this process's numbers, the clock, the kernel's log and name, the generators. `kprint` is a queue that takes the console's output while it is open (`devcons.c:166`) |
-| `namec.rs` | name → channel, with the mount check at every component, closing each channel a walk makes once it steps past it (`chan.c:1109`); all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk, where a device's walk that errs is a miss, as `ewalk`'s is (`chan.c:948`; 2026-09-24); `validname`'s characters (`chan.c:1731`) and `namelenerror`'s form of a name in an error (`:1250`) |
+| `namec.rs` | name → channel, with the mount check at every component, closing each channel a walk makes once it steps past it (`chan.c:1109`); all seven of Plan 9's access modes, and which of them steps onto a mount; the union walk, where a device's walk that errs is a miss, as `ewalk`'s is (`chan.c:948`; 2026-09-24); `validname`'s characters (`chan.c:1731`) and `namelenerror`'s form of a name in an error (`:1250`); and `validstat` (`sysfile.c:890`), which `wstat` and `fwstat` ask of the buffer before the name or the descriptor (`:1204`, `:1218`; 2026-10-09) |
 | `proc.rs` | the process table; `rfork`'s share, copy and clear, its flag checks (`sysproc.c:43`), `exits`, `await`, and `up->user` with `renameuser`. **And the scheduler above the switch** (P6, begun 2026-09-21): the twelve states (`portdat.h:610`), `Rendez`, `runq[Nrq]` with `queueproc`/`dequeueproc`, `updatecpu`, `reprioritize`, `ready`, `runproc`, `sleep`, `wakeup`, `tsleep` and `timerintr` — all `port/proc.c`'s. **And the clock** (2026-09-22): `Mach` (`pc/dat.h:206`, the fields `port/` reads), `timersinit`, `hzclock`, `accounttime`, `hzsched`, `rebalance`, `anyhigher`, and `sched`'s tail with `m->schedticks`. `pexit` takes the descriptor table, `dot` and the namespace (`proc.c:1145`) and answers what was their last reference, for the kernel to close; `rfork` without `RFPROC` the same of the tables it replaces; `clunkq` (`chan.c:517`) takes what a kill leaves unclosed and what `#p`'s `ctl` closes. The kernel processes share `kpgrp` (`proc.c:1469`) and have no descriptor table. The descriptor table grows `DELTAFD` at a time to 5000 (`growfd`, `sysfile.c:25`) and holds references: a channel's device is closed at its last |
-| `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads |
+| `ninep.rs` | the 9P2000 codec, and `Dir` with `convD2M`/`convM2D` — how every directory in the system reads — and `statcheck` (`libc/9sys/convM2D.c`) |
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot. And `hostcall`, a call the machine makes on a process's behalf — a WASI program's (2026-10-09; not reviewed) |
 | `lib.rs` | the 31 calls, `exec`, and `unionread`; and **the kernel's half of the host's call** (`Call::Oscmd`, 54 — not Plan 9's; 2026-10-09): `#9/<n>` attached as `mount` attaches (`sysfile.c:1031`) with the conversation's name, and each file walked and opened as `open` does, into descriptors, the namespace unchanged; the wire kept as a mount keeps one, so every command after the first joins its session, and the call's words checked as `exec`'s are |
 
-286 kernel tests, and 91 in `hosts/ipnx` — 14 in the library, 77 in the
-binary (2026-10-09, after P10).
+290 kernel tests, and 91 in `hosts/ipnx` — 14 in the library, 77 in the
+binary (2026-10-09, after `validstat`).
 
 ## The host — `hosts/ipnx`, seven files
 
@@ -435,7 +435,8 @@ WASI programs whose files are the process's namespace (Christine,
 `wasip1` by Go's own toolchain when the userspace is built, and run by its
 name, printing what it printed there — and **Python**, the system's
 package, computing with `json` from its library. Both are checked on the
-terminal and in a page in Chromium (`hosts/web/test/wasi-browser.mjs`).
+terminal and in the site's shell window in Chromium
+(`hosts/web/test/emca-browser.mjs`).
 
 Two lines were corrected on 2026-10-08. *"A package becomes available
 without installing anything into the tree"* and *"a language toolchain
@@ -554,12 +555,13 @@ and the shell role's verbs at `/type/shell`, each with its `rules`,
 `manager`, `namespace` and `verbs`. `/bin/tour` and kitty's `README` are
 two of the tabs.
 
-**Tested**: `hosts/web/test/emca.test.mjs`, 15 tests of the window manager
-and its 9P; `emca-system.test.mjs`, 4 tests of emca with the whole system
-under Node — the layout filled, a shell window, the interrupt, and Open,
-Run, Save, Revert, Edit and a filter through IPNX; `emca-browser.mjs`, six
-checks in headless Chromium — every window filled in 5.0 s — two of which
-the conformance suite runs; and the kernel's `#9` tests
+**Tested**: `hosts/web/test/emca.test.mjs`, 16 tests of the window manager
+and its 9P, its directory entries among them; `emca-system.test.mjs`, 4
+tests of emca with the whole system under Node — the layout filled, a
+shell window, the interrupt, and Open, Run, Save, Revert, Edit and a filter
+through IPNX; `emca-browser.mjs`, eight checks in headless Chromium —
+every window filled in 5.1 s, and a Go program and Python in the shell
+window among them — four of which the conformance suite runs; and the kernel's `#9` tests
 (`a_reply_the_server_holds_comes_in_at_the_clock`,
 `replies_held_and_answered_out_of_order_go_to_their_own_calls`,
 `a_flushed_request_is_not_waited_for`).
@@ -637,7 +639,8 @@ reads its prompt from the console, sees a subshell's bind and not
 another's, exits with APE's status, and is ended by the interrupt key in a
 loop — each the same on both hosts. Tested in the host's `wasi` (three) and
 `python` (five), in `hosts/web/test/web.test.mjs` (six), in Chromium by
-`hosts/web/test/wasi-browser.mjs` (four), and the suite's two lines.
+`hosts/web/test/wasi-browser.mjs` (four) and in the site's shell window by
+`emca-browser.mjs` (two), and the suite's two lines.
 **Not built for P10**: the nine CPython modules whose C libraries the WASI
 SDK lacks; a working directory for a WASI program other than `/`; and, in
 the page, the snapshot before preview 1 (`wasi_unstable`) and a WASI

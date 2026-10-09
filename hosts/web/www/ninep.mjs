@@ -60,9 +60,13 @@ export class Writer {
   }
 }
 
-// One directory entry, stat(5)'s machine-independent form.
+// One directory entry, stat(5)'s machine-independent form: size[2] type[2]
+// dev[4] qid[13] mode[4] atime[4] mtime[4] length[8] name[s] uid[s] gid[s]
+// muid[s]. The type and dev are the kernel's, which its mount driver writes
+// (mntdirfix, devmnt.c:1165); they are here, as nothing, so that every
+// field after them is where stat(5) puts it.
 export function dir({ qid, mode, length = 0, name, user = 'emca', mtime = 0 }) {
-  const w = new Writer().u16(0).u32(0).qid(qid).u32(mode).u32(mtime).u32(mtime).u64(length).s(name).s(user).s(user).s(user);
+  const w = new Writer().u16(0).u16(0).u32(0).qid(qid).u32(mode).u32(mtime).u32(mtime).u64(length).s(name).s(user).s(user).s(user);
   const b = w.bytes();
   new DataView(b.buffer).setUint16(0, b.length - 2, true);
   return b;

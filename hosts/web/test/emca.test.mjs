@@ -80,6 +80,46 @@ function asked(e) {
   return lines;
 }
 
+// stat(5): size[2] type[2] dev[4] qid[13] mode[4] atime[4] mtime[4]
+// length[8], then name, uid, gid and muid — what the kernel's mount driver
+// asks of every entry a server gives (validstat, sysfile.c:890, by
+// statcheck, libc/9sys/convM2D.c). emca's lacked type[2], and the kernel,
+// which did not ask, passed each on two bytes short.
+function statcheck(b) {
+  const g16 = (at) => b[at] | (b[at + 1] << 8);
+  if (b.length < 49 || b.length !== 2 + g16(0)) return false;
+  let at = 41;
+  for (let i = 0; i < 4; i++) {
+    if (at + 2 > b.length) return false;
+    at += 2 + g16(at);
+  }
+  return at === b.length;
+}
+const nameof = (b) => dec.decode(b.subarray(43, 43 + (b[41] | (b[42] << 8))));
+
+test("emca's directory entries are stat(5)'s, in a stat and in a directory's read", () => {
+  const c = client();
+  const root = c.attach('');
+  c.put(root, 'layout', '/home\n');
+  const f = c.walk(root, ['layout']);
+  const m = c.answer(c.rpc(T.stat, (w) => w.u32(f)));
+  const st = m.bytes(m.u16());
+  assert.ok(statcheck(st), 'the stat is not one entry');
+  assert.equal(nameof(st), 'layout');
+  const d = c.walk(root, []);
+  c.open(d, 0);
+  const r = c.answer(c.rpc(T.read, (w) => w.u32(d).u64(0).u32(8192)));
+  const b = r.bytes(r.u32());
+  const names = [];
+  for (let at = 0; at < b.length; ) {
+    const e = b.subarray(at, at + 2 + (b[at] | (b[at + 1] << 8)));
+    assert.ok(statcheck(e), `an entry is not one: ${[...e]}`);
+    names.push(nameof(e));
+    at += e.length;
+  }
+  assert.ok(names.includes('layout'), `the root reads as ${names}`);
+});
+
 test('rc reads the quoting emca writes', () => {
   assert.equal(rcquote('/etc/motd'), '/etc/motd');
   assert.equal(rcquote("it's here"), "'it''s here'");

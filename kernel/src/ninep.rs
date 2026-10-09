@@ -190,6 +190,29 @@ pub const DMDIR: u32 = 0x8000_0000;
 /// `DMEXCL` — *"mode bit for exclusive use files"* (`libc.h:599`).
 pub const DMEXCL: u32 = 0x2000_0000;
 
+/// `STATFIXLEN` (`fcall.h:84`): *"amount of fixed length data in a stat
+/// buffer"*, its leading count included — `size[2] type[2] dev[4] qid[13]
+/// mode[4] atime[4] mtime[4] length[8]` and the four strings' counts.
+pub const STATFIXLEN: usize = 2 + 13 + 5 * 2 + 4 * 4 + 8;
+
+/// `statcheck` (`libc/9sys/convM2D.c`): whether `buf` is one directory
+/// entry — at least the fixed part, its count the rest of it, and its four
+/// strings ending where it does.
+pub fn statcheck(buf: &[u8]) -> bool {
+    let n = buf.len();
+    if n < STATFIXLEN || n != 2 + u16::from_le_bytes([buf[0], buf[1]]) as usize {
+        return false;
+    }
+    let mut at = STATFIXLEN - 4 * 2;
+    for _ in 0..4 {
+        if at + 2 > n {
+            return false;
+        }
+        at += 2 + u16::from_le_bytes([buf[at], buf[at + 1]]) as usize;
+    }
+    at == n
+}
+
 impl Qid {
     pub fn is_dir(self) -> bool {
         self.qtype & QTDIR != 0

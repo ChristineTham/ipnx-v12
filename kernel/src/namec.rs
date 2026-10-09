@@ -1142,6 +1142,31 @@ mod tests {
     use crate::devroot::Root;
     use crate::ns::{Bind, Element};
 
+    /// `validstat` (`sysfile.c:890`): one entry, as `statcheck` counts it,
+    /// whose name is a name — but `/`, a name too long for its 64 bytes, and
+    /// what follows a NUL pass, as they do in C.
+    #[test]
+    fn validstat_wants_one_entry_and_a_name() {
+        let entry = |name: &str| crate::ninep::Dir { name: name.into(), ..Default::default() }.conv_d2m();
+        assert_eq!(validstat(&entry("motd")), Ok(()));
+        assert_eq!(validstat(&entry("/")), Ok(()));
+        // two bytes short, as emca's server wrote one: no `type[2]`
+        let mut short = entry("motd");
+        short.drain(2..4);
+        let n = (short.len() - 2) as u16;
+        short[..2].copy_from_slice(&n.to_le_bytes());
+        assert_eq!(validstat(&short), Err(EBADSTAT.into()));
+        // a byte more than its count, and less than the fixed part
+        let mut long = entry("motd");
+        long.push(0);
+        assert_eq!(validstat(&long), Err(EBADSTAT.into()));
+        assert_eq!(validstat(&entry("motd")[..20]), Err(EBADSTAT.into()));
+        // a `/` in the name is `Ebadchar`, with the name
+        assert_eq!(validstat(&entry("a/b")), Err(format!("{EBADCHAR}: 'a/b'")));
+        assert_eq!(validstat(&entry(&"x/".repeat(32))), Ok(()));
+        assert_eq!(validstat(&entry("ok\0/x")), Ok(()));
+    }
+
     fn tab_with_root() -> (Devtab, Rc<Chan>) {
         let mut tab = Devtab::new();
         let mut r = Root::new();
@@ -1902,6 +1927,9 @@ const EBADSHARP: &str = "unknown device in # filename";
 /// `Ebadchar` (`error.h:14`).
 pub const EBADCHAR: &str = "bad character in file name";
 
+/// `Ebadstat` (`error.h:49`).
+pub const EBADSTAT: &str = "malformed stat buffer";
+
 /// `Eismtpt` (`error.h:4`).
 pub const EISMTPT: &str = "is a mount point";
 
@@ -1961,4 +1989,28 @@ pub fn validname(name: &str, slashok: bool) -> Result<(), String> {
         return Err(e[..n].to_string());
     }
     Ok(())
+}
+
+/// `validstat` (`sysfile.c:890`): a stat buffer `statcheck` accepts, whose
+/// name is a name. The name is copied as C copies it — to its first NUL, in
+/// 64 bytes — and *"if it's too long, let the server decide"*; *"name could
+/// be '/'"*. The mount driver asks it of every entry a server gives
+/// (`devmnt.c:489`, `:672`), and `wstat` of every buffer a process gives
+/// (`sysfile.c:1204`, `:1218`).
+pub fn validstat(s: &[u8]) -> Result<(), String> {
+    if !crate::ninep::statcheck(s) {
+        return Err(EBADSTAT.into());
+    }
+    // *"s += STATFIXLEN - 4*BIT16SZ; /* location of first string */"*
+    let at = crate::ninep::STATFIXLEN - 4 * 2;
+    let m = u16::from_le_bytes([s[at], s[at + 1]]) as usize;
+    if m + 1 > 64 {
+        return Ok(());
+    }
+    let name = s[at + 2..at + 2 + m].split(|&b| b == 0).next().unwrap_or_default();
+    let name = String::from_utf8_lossy(name);
+    if name == "/" {
+        return Ok(());
+    }
+    validname(&name, false)
 }
