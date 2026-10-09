@@ -8,3 +8,14 @@ LICENSE beside this file is codemirror@6.0.1's, verbatim. The packages the
 bundle includes — @codemirror/view, @codemirror/state and the rest — carry
 the same licence, their copyright line reading "Copyright (C) 2018-2021 by
 Marijn Haverbeke <marijn@haverbeke.berlin> and others".
+
+browser_wasi_shim/ — @bjorn3/browser_wasi_shim 0.4.2, its dist/ files, under
+the MIT licence or the Apache License 2.0, at your option; bjorn3 and
+others. Vendored unmodified from the npm package: it is WASI preview 1 in
+the page, which www/wasi.mjs gives the process's namespace (docs/
+architecture.md, "A WASI binary runs natively"). Where one of its calls is
+wrong for a program here, wasi.mjs replaces the call and says why; the
+files here are not patched. https://github.com/bjorn3/browser_wasi_shim
+
+LICENSE-MIT and LICENSE-APACHE in browser_wasi_shim/ are the package's own,
+verbatim.

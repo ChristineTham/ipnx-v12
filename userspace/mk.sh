@@ -234,6 +234,18 @@ if [ -s "$failed" ] && command -v cargo >/dev/null; then
 	fi
 fi
 
+# `gohello`, the previous demo's Go program, built for WASI preview 1 by
+# Go's own toolchain (P10): a WASI program the system runs unmodified, on
+# the terminal and in the page. Go is the host's, as wasi-sdk is; without it
+# the program is not built, and build/failed says so.
+if command -v go >/dev/null; then
+	(cd "$here/cmd/gohello" && env -u CC -u CFLAGS -u LD -u LDFLAGS -u AR \
+		GOOS=wasip1 GOARCH=wasm go build -trimpath -o "$pkg/$OBJTYPE/bin/gohello" .) ||
+		echo "cmd/gohello: go build failed" >>"$failed"
+else
+	echo "cmd/gohello: no go on this machine (GOOS=wasip1 GOARCH=wasm go build)" >>"$failed"
+fi
+
 # **Python**, a package (P10): CPython's own WASI build (`pkg/python/mk.sh`),
 # made once and kept in build/; it wants git and a C compiler for the build
 # Python its build makes first. What it could not do is in build/failed.

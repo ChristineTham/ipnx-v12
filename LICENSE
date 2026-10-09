@@ -55,6 +55,18 @@ CodeMirror (hosts/web/www/vendor/codemirror.bundle.mjs), the page's text
 editor, is under its authors' MIT licence, per hosts/web/www/vendor/LICENSE
 and NOTICE.
 
+browser_wasi_shim (hosts/web/www/vendor/browser_wasi_shim), WASI preview 1
+in the page, is under the MIT licence or the Apache License 2.0, at your
+option, per its LICENSE-MIT and LICENSE-APACHE there and
+hosts/web/www/vendor/NOTICE.
+
+Two programs in the built root are made from sources not kept here, and
+their notices go with them: CPython, built by userspace/pkg/python/mk.sh
+from python/cpython, under the PSF License, whose LICENSE.txt the package
+carries in its library; and gohello, whose source (userspace/cmd/gohello)
+is this repository's but whose binary links Go's runtime and libraries,
+under Go's BSD-style licence (https://go.dev/LICENSE).
+
 Plan 9 sources are vendored under userspace/ — sys/, each architecture's
 include/, rc/ and lib/ — under the Plan 9 Foundation's MIT licence, per
 userspace/NOTICE and userspace/LICENSE, which are the Foundation's own.

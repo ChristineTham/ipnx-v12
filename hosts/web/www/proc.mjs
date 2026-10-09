@@ -6,9 +6,11 @@
 // message in the mailbox and a wait until the kernel answers — the trap.
 // setjmp, longjmp and fork are asyncify's, as on the terminal machine
 // (hosts/ipnx/src/machine.rs: `run`, `unwind`, `rewound`; RESEARCH §16.12),
-// and this file follows that one function by function.
+// and this file follows that one function by function. A WASI program's
+// calls are WASI's, which wasi.mjs makes into these.
 
 import { CALLS, ev, rep, mailbox, tell } from './mailbox.mjs';
+import { iswasi, runwasi } from './wasi.mjs';
 
 const node = typeof process === 'object' && !!process.versions?.node;
 const port = node ? (await import('node:worker_threads')).parentPort : self;
@@ -61,6 +63,12 @@ function go(m, memory) {
   mem = memory;
   box = mailbox(m.box);
   try {
+    // A WASI program: its own memory, and its calls made through this one
+    if (m.start && iswasi(m.module)) {
+      runwasi(m.module, mem, m.args, call);
+      tell(box, ev.EXITED);
+      return;
+    }
     const imports = { sys: sys() };
     for (const i of WebAssembly.Module.imports(m.module)) {
       if (i.kind === 'memory') (imports[i.module] ??= {})[i.name] = mem;
@@ -207,7 +215,7 @@ function sys() {
 // noted(NCONT).
 function handler(f) {
   const { I, T } = box;
-  const g = X.__stack_pointer, start = X.__notestart;
+  const g = X?.__stack_pointer, start = X?.__notestart;
   if (!g || !start) throw new Trap('sys: trap: no note handler entry');
   const old = g.value;
   const at = ((old >>> 0) - (256 + ERRMAX)) & ~15;

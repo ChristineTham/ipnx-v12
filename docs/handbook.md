@@ -32,7 +32,9 @@ cannot build a wasm userspace:
 CPython's own WASI build, from its tag. The first time it clones CPython
 and builds it twice — a build Python, then the WASI one — about ten minutes
 on four cores, wanting git and a C compiler; after that it is kept in
-`userspace/build/`. What it could not do is in `build/failed`.
+`userspace/build/`. And **`gohello`**, a Go program built for WASI preview
+1 (`userspace/cmd/gohello`), wanting **Go** 1.21 or later. What it could
+not do is in `build/failed`.
 
 ```bash
 bash userspace/mk.sh     # libc, the commands, rc  ->  userspace/root/pkg/system/<version>/wasm/bin
@@ -60,6 +62,7 @@ node hosts/web/test/browser.mjs        # the console page in Chromium (Playwrigh
 node --test hosts/web/test/emca.test.mjs          # emca and its 9P, alone
 node --test hosts/web/test/emca-system.test.mjs   # emca with the system, under Node
 node hosts/web/test/emca-browser.mjs [check…]     # emca's page in Chromium
+node hosts/web/test/wasi-browser.mjs [check…]     # Go and Python in the page, in Chromium
 ```
 
 The site's page, `index.html`, boots into emca, the window manager

@@ -170,39 +170,32 @@ fn demo() -> Vec<Behaviour> {
         Behaviour {
             what: "run a Go program",
             state: Reached,
-            how: "it runs and prints what it printed before",
-            // A Go program is a WASI program (P10): built for `wasip1` — here
-            // by the host's Go, through `os` — and run natively, by its name,
+            how: "it runs and prints what it printed before: on the terminal, and in a page in Chromium",
+            // A Go program is a WASI program (P10): `gohello`, the previous
+            // demo's, built for `wasip1` by Go's own toolchain
+            // (`userspace/mk.sh`) and run natively by its name — under
+            // wasi-common on the terminal and browser_wasi_shim in the page,
             // its files the namespace's.
             check: Some(|| {
-                let d = format!("{}/usr/kitty/hello-wasi", ipnx::rootcopy().display());
-                let out = typing(&format!(
-                    "mkdir -p /usr/kitty/hello-wasi\ncd /usr/kitty/hello-wasi\n\
-                     echo 'module hello' >go.mod\necho 'go 1.21' >>go.mod\n\
-                     echo 'package main; import (\"fmt\"; \"os\"); func main() {{ b, _ := os.ReadFile(\"/etc/motd\"); fmt.Println(\"a go program read\", len(b) > 0) }}' >main.go\n\
-                     GOOS=wasip1 GOARCH=wasm os -d {d} go build -o hello </dev/null\n\
-                     ./hello\n"
-                ));
-                if out.lines().any(|l| l.trim_start_matches("% ") == "a go program read true") {
-                    Ok(())
-                } else {
-                    Err(format!("it did not run: {out:?}"))
+                let out = typing("gohello\n");
+                if !out.lines().any(|l| l.trim_start_matches("% ") == "Hello Kitty — from Go (GOOS=wasip1, unmodified)") {
+                    return Err(format!("it did not run on the terminal: {out:?}"));
                 }
+                browser(&["hosts/web/test/wasi-browser.mjs", "a Go program"])
             }),
         },
         Behaviour {
             what: "run Python",
             state: Reached,
-            how: "it starts, imports from its library, and computes",
+            how: "it starts, imports from its library, and computes: on the terminal, and in a page in Chromium",
             // CPython's own WASI build, a package of the system
             // (`userspace/pkg/python/mk.sh`), run natively (P10)
             check: Some(|| {
                 let out = typing("python3 -c 'import json; print(json.dumps({\"sum\": sum(range(10))}))'\n");
-                if out.lines().any(|l| l.trim_start_matches("% ") == "{\"sum\": 45}") {
-                    Ok(())
-                } else {
-                    Err(format!("it did not run: {out:?}"))
+                if !out.lines().any(|l| l.trim_start_matches("% ") == "{\"sum\": 45}") {
+                    return Err(format!("it did not run on the terminal: {out:?}"));
                 }
+                browser(&["hosts/web/test/wasi-browser.mjs", "Python imports"])
             }),
         },
         Behaviour {

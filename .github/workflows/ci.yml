@@ -104,13 +104,15 @@ jobs:
           playwright install --with-deps chromium
           node hosts/web/test/browser.mjs
           node hosts/web/test/emca-browser.mjs
+          node hosts/web/test/wasi-browser.mjs
 
-      # **Expected red**, and deliberately not hidden. The suite asserts
-      # functional equivalence with the demo and fails until it is
+      # **Red until conformant**, and deliberately not hidden. The suite
+      # asserts functional equivalence with the demo and fails until it is
       # conformant — an earlier version printed "0 of 12" and reported `ok`,
-      # which is the false signal it exists to prevent. It stays red until
-      # P10 — a Go program and Python, as WASI programs — and its toolchain
-      # line wants the runner's `go`. The count in the log is the distance.
+      # which is the false signal it exists to prevent. Its Go and toolchain
+      # lines want the runner's `go`, and its browser checks the Chromium
+      # installed above. The count in the log is the distance; what it is
+      # now, docs/when.md says.
       - name: "conformance (red until conformant)"
         continue-on-error: true
         run: cargo test -p conformance -- --nocapture

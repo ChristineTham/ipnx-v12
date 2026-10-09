@@ -36,8 +36,8 @@ server, is a test module).
 | `machine.rs` | `procsetup`, `touser` and **`gotolabel`** — the machine-dependent half, naming no machine. `Left` says how a process left, because a module's exported function can simply return where a Plan 9 process cannot. And `hostcall`, a call the machine makes on a process's behalf — a WASI program's (2026-10-09; not reviewed) |
 | `lib.rs` | the 31 calls, `exec`, and `unionread`; and **the kernel's half of the host's call** (`Call::Oscmd`, 54 — not Plan 9's; 2026-10-09): `#9/<n>` attached as `mount` attaches (`sysfile.c:1031`) with the conversation's name, and each file walked and opened as `open` does, into descriptors, the namespace unchanged; the wire kept as a mount keeps one, so every command after the first joins its session, and the call's words checked as `exec`'s are |
 
-286 kernel tests, and 87 in `hosts/ipnx` — 14 in the library, 73 in the
-binary (2026-10-09, after P10's terminal half).
+286 kernel tests, and 91 in `hosts/ipnx` — 14 in the library, 77 in the
+binary (2026-10-09, after P10).
 
 ## The host — `hosts/ipnx`, seven files
 
@@ -431,10 +431,11 @@ a Go module written in the namespace, `os -d <its host directory> go build`
 and `os -d … ./hello`, which prints what it was written to (2026-10-09; it
 wants `go` on the host, and fails without it). The last two are P10's, as
 WASI programs whose files are the process's namespace (Christine,
-2026-10-09): **a Go program** — built for `wasip1` by the host's Go through
-`os`, then run by its name, reading `/etc/motd` — and **Python**, the
-system's package, computing with `json` from its library. Both are checked
-on the terminal; the page runs no WASI program yet.
+2026-10-09): **a Go program** — `gohello`, the previous demo's, built for
+`wasip1` by Go's own toolchain when the userspace is built, and run by its
+name, printing what it printed there — and **Python**, the system's
+package, computing with `json` from its library. Both are checked on the
+terminal and in a page in Chromium (`hosts/web/test/wasi-browser.mjs`).
 
 Two lines were corrected on 2026-10-08. *"A package becomes available
 without installing anything into the tree"* and *"a language toolchain
@@ -487,14 +488,17 @@ its own, and a worker is woken before it is ended (2026-10-09): Chromium
 holds about 125 shared memories at once, and an ended worker still waiting
 kept its own. The boot is `hosts/ipnx`'s, shared (`startboot_with`), and
 the root is served by the same 9P (`Store` over a `Backend`): the built
-root, from an index of its 1,331 entries, each file fetched the first time
+root, from an index of its 2,169 entries (2026-10-09, with Python's
+package), each file fetched the first time
 it is read. `console.html` is the system with no window manager: the
 console, the line held and echoed by the page, as rio's window does.
-**Tested**: `hosts/web/test/web.test.mjs`, 34 tests under Node — the
+**Tested**: `hosts/web/test/web.test.mjs`, 40 tests under Node — the
 terminal host's typed tests on this machine, plumber's shared-memory
-threads, `stop`, `^C`, ghostscript, and `os` answered as a call the page does not have, among them — and
+threads, `stop`, `^C`, ghostscript, `os` answered as a call the page does
+not have, and P10's WASI programs, among them — and
 `hosts/web/test/browser.mjs`, ten checks of the console in headless
-Chromium, which boots to the prompt in 2.0 s.
+Chromium, which boots to the prompt in 2.0 s, and
+`hosts/web/test/wasi-browser.mjs`, Go and Python there.
 
 **Step 2, emca in the page** (2026-10-09). `www/emca.mjs` is the window
 manager — its tree of windows and what each holds — and `www/surface.mjs`
@@ -616,19 +620,29 @@ directory `os` runs in without `-d` — Inferno publishes it as `$emuroot`
 command run as anyone but the host's own user — Inferno runs one as the
 host's `nobody` when its emulator is root (`cmd.c:58`).
 
-**P10 is built on the terminal** (2026-10-09; RESEARCH §16.40). A module
-that imports `wasi_snapshot_preview1` runs as a process under
-`wasi-common`, its files the process's namespace (Christine, 2026-10-09:
-*"B: the namespace"*). A Go program built for `wasip1` — by the host's Go,
-through `os` — reads its arguments, `/etc/motd` and a directory, sleeps,
-reads `$user`, writes `/tmp/from-go` and exits with its status; CPython
-3.14.8, the system's `python` package, imports `json` from
-`/sys/lib/python3.14`, writes a file of the namespace, and reads its prompt
-from the console. Tested in the host's `wasi` (two) and `python` (two),
-and the suite's two lines. **Not built for P10**: WASI programs in the
-page — the page refuses an image that does not import its memory, which a
-WASI module does not; the nine CPython modules whose C libraries the WASI
-SDK lacks; and a working directory for a WASI program other than `/`.
+**P10 is built** (2026-10-09; RESEARCH §16.40, §16.41). A module that
+imports `wasi_snapshot_preview1` runs as a process, its files the process's
+namespace (Christine, 2026-10-09: *"B: the namespace"*) — on the terminal
+under `wasi-common`, and in the page under `@bjorn3/browser_wasi_shim`
+(`hosts/web/www/wasi.mjs`), whose calls the process's worker makes as the
+process's own, through a memory of 32 pages the kernel gives a WASI
+process beside the program's. A Go program built for `wasip1` — by the
+host's Go, through `os` — reads its arguments, `/etc/motd` and a
+directory, sleeps, reads `$user`, writes `/tmp/from-go` and exits with its
+status; `gohello`, the previous demo's Go program, is built with the
+userspace when the machine has `go` (`userspace/cmd/gohello`) and prints
+what it printed there; CPython 3.14.8, the system's `python` package,
+imports `json` from `/sys/lib/python3.14`, writes a file of the namespace,
+reads its prompt from the console, sees a subshell's bind and not
+another's, exits with APE's status, and is ended by the interrupt key in a
+loop — each the same on both hosts. Tested in the host's `wasi` (three) and
+`python` (five), in `hosts/web/test/web.test.mjs` (six), in Chromium by
+`hosts/web/test/wasi-browser.mjs` (four), and the suite's two lines.
+**Not built for P10**: the nine CPython modules whose C libraries the WASI
+SDK lacks; a working directory for a WASI program other than `/`; and, in
+the page, the snapshot before preview 1 (`wasi_unstable`) and a WASI
+program that imports its memory, which the terminal runs and the page
+refuses as images it cannot run.
 
 **A channel's mode, and who may open what** (2026-10-07; RESEARCH §16.21).
 `read` and `write` check a descriptor's open mode, `mount`, `fversion` and

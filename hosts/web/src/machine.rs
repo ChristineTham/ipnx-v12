@@ -32,9 +32,18 @@
 //!     memory through the object it made the process with, so an image
 //!     that makes its own cannot be run here. Every image `mk.sh` builds
 //!     imports one (`--import-memory`).
+//!   * **A WASI program makes its own** (docs/architecture.md, *A WASI
+//!     binary runs natively*), and its calls are not this system's but
+//!     WASI's, which the process's worker makes into this system's
+//!     (`www/wasi.mjs`). The kernel never reaches the program's memory: it
+//!     gives the process a small one of its own, [`WASIREGION`] pages, and
+//!     every call the worker makes for the program is made through that —
+//!     a name or the data copied in, and what the call answers copied out.
+//!     A WASI program that imports its memory instead is refused here, as
+//!     an image this machine cannot run.
 
 use crate::js::{self, ev, rep};
-use crate::module::memimport;
+use crate::module::{memimport, wasi};
 use ipnx_kernel::machine::{Left, Machine, NoteAt, Notify, Syscalls, Tod, Ureg, MAXSYSARG};
 use ipnx_kernel::proc::{noted, rf, NoteFlag, ERRMAX, HZ};
 use ipnx_kernel::sysno::*;
@@ -49,6 +58,12 @@ const EBADEXEC: &str = "exec header invalid";
 /// **The `Tos`** (`sys/include/tos.h`): where the pid is in it. The process
 /// worker puts the `Tos` at the top of the stack (`www/proc.js`, `settos`).
 const TOSPID: u32 = 48;
+
+/// **The memory a WASI program's calls are made through**, in pages: what
+/// the kernel gives a process whose image makes its own. Its layout is
+/// `www/wasi.mjs`'s; 2 MiB holds a name, the error string, a directory entry
+/// and a megabyte of data, the most one read or write moves.
+const WASIREGION: u32 = 32;
 
 /// The mailbox word where a process leaves the lowest address of its stack
 /// region in use, each time it says something — what the terminal machine's
@@ -139,7 +154,16 @@ impl Web {
         if let Some(i) = self.modules.borrow().get(bytes) {
             return Ok(*i);
         }
-        let (initial, maximum) = memimport(bytes).ok_or(EBADEXEC)?;
+        let (initial, maximum) = if wasi(bytes) {
+            // A WASI program that imports its memory, as the terminal runs
+            // one, has none of its own for the region to be beside.
+            if memimport(bytes).is_some() {
+                return Err(EBADEXEC.into());
+            }
+            (WASIREGION, WASIREGION)
+        } else {
+            memimport(bytes).ok_or(EBADEXEC)?
+        };
         // SAFETY: the page copies `bytes` and keeps nothing of the pointer.
         let module = unsafe { js::compile(bytes.as_ptr(), bytes.len()) };
         if module < 0 {

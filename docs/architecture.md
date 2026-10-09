@@ -302,8 +302,15 @@ Plan 9 says otherwise is answered as APE, Plan 9's own POSIX, answers it:
 an errno by `_syserrno`'s table, a rename as `rename.c` does one, an exit
 status as `_exit.c` makes one (RESEARCH §16.40). On the terminal the
 machine makes the program's calls for it, their arguments already the
-kernel's (`Syscalls::hostcall`, below); in the page, the program's layer
-passes them through a shared region the kernel reads, as a program's own.
+kernel's (`Syscalls::hostcall`, below). In the page the process's worker
+makes them, as the process's own calls through its mailbox — but the
+program's memory is its own, which the kernel cannot reach, so the kernel
+gives the process a small memory of 32 pages beside it and every call is
+made through that, the name or the data copied in and the answer copied
+out (`hosts/web/www/wasi.mjs`; RESEARCH §16.41). The page runs preview 1;
+the terminal also runs the snapshot before it, `wasi_unstable`, and a WASI
+program that imports its memory, both of which the page refuses as images
+it cannot run.
 
 **A personality is userspace** (Christine: *"even the Unix v10 personality
 should be userspace"*) — a library over this ABI, and nothing in the kernel.

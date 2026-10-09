@@ -6458,3 +6458,76 @@ is about 2 s (§16.39), compiling the 8 MB module about 7, and starting
 Python again in the same boot almost nothing: wasmtime compiles an image
 once per boot (`Wasm::compile`), and keeps no compiled image between
 boots.
+
+### 16.41 WASI programs in the page (2026-10-09)
+
+P10's page half, built: a WASI program runs in the browser host under
+`@bjorn3/browser_wasi_shim` 0.4.2 (Christine, 2026-10-09), its files the
+process's namespace as on the terminal (`hosts/web/www/wasi.mjs`, which
+follows `hosts/ipnx/src/wasi.rs` part by part). What building it found.
+
+**The kernel cannot reach a WASI program's memory.** In the page the
+kernel reaches a process's memory through the object it made the process
+with (§16.38), so every image imports one. A WASI program defines its own,
+in its worker. So the kernel gives a WASI process a memory of 32 pages
+beside it (`hosts/web/src/machine.rs`, `WASIREGION`), and the worker makes
+each of the program's calls as the process's own — through its mailbox,
+checked by `validargs` as any process's call is — with the name or the data
+copied into that memory and the answer copied out. The page needs no call
+made on a process's behalf, which the terminal does (§16.40): the program's
+layer is in the process's own worker, as APE is in a C program's image. A
+WASI program that imports its memory is refused there — it has none of its
+own for the region to be beside — and so is the snapshot before preview 1,
+`wasi_unstable`, whose structures the shim does not lay out; the terminal
+runs both.
+
+**Address 0 is nil.** The first layout put the name a call passes at 0,
+and a Go program's `os.Exit(3)` lost its status: `exits` reads a nil
+pointer as the empty status (`decode`, *"`exits(nil)` is the empty
+status"*), and 0 is nil. Nothing is at 0 now.
+
+**The shim, read before use, is wrong in places that matter here**, and
+each is answered by replacing its call in `wasi.mjs`, not by patching it.
+The three encodings were measured on the vendored files as well as read: a
+stat of size `0x1111111111111111` read back as `0xaaaa111111111111`, the
+access time written over it; a clock subscription's `ABSTIME`, 1 at +40,
+read as 2, from its precision's bytes.
+
+| | the shim (0.4.2, `dist/`) | WASI preview 1 |
+|---|---|---|
+| `Filestat.write_bytes` | `atim`, `mtim`, `ctim` at +38, +46, +52 — over `size` | +40, +48, +56 of 64 bytes |
+| `Subscription.read_bytes` | a clock's flags at +36, inside `precision` | +40 |
+| `poll_oneoff` | one subscription, `ENOTSUP` for more; never writes how many events (it takes three arguments of four); waits by spinning | any number; the count out |
+| `args_sizes_get` | an argument's UTF-16 units (`arg.length + 1`): for `héllo wörld` it says 12 bytes, and `args_get` writes 14 | the UTF-8 bytes `args_get` writes, so a non-ASCII argument went past the end of the buffer the program allocated for it |
+| its log | on, unless `{ debug: false }` is given (`debug.enable(undefined)`) | — |
+| `sock_*`, `proc_raise` | throw a string | an errno; wasi-common traps `proc_raise` |
+| `path_rename` | unlinks an inode and links it | the namespace has no inodes: APE's `rename.c` |
+| `fd_read`, `fd_write` | a call for each buffer | wasi-libc's stdio writes two at a time; the terminal makes one call |
+| `clock_time_get` | a CPU-time clock reads 0, and succeeds | wasi-common: `EBADF` |
+
+**The two hosts agree.** Fifteen Python one-liners — `json`, a listing,
+`sys.exit(5)`, an uncaught `SystemExit`, input from a pipe, a 100,000-byte
+file renamed in one directory and across two, a sleep, a non-ASCII
+argument, the working directory and `$home`, `isatty`, `stat`, a remove,
+`os.write`, `O_APPEND` — printed the same on both, line for line, but for
+the pids; so did a Go program built for `wasip1` reading a file and a
+directory, sleeping, writing, and exiting 3 (`gotry 33: 3` on the
+terminal, `gotry 34: 3` in the page).
+
+**Measured** (this container, release kernel for wasm32 under Node 22): a
+boot that runs `python3 -c 'print(1+1)'` and ends, 3.8 s — against 9.3 s on
+the terminal's debug build (§16.40), about 7 s of which is wasmtime
+compiling the 8 MB module with Cranelift; V8 starts a module on a baseline
+compiler. The fifteen one-liners and the boot, 6.3 s. In headless Chromium
+(`wasi-browser.mjs`): the console boots in 2.5 s; `gohello` prints in
+0.11 s; Python's `json` line, its first run in the page and so its module's
+compiling, in 0.68 s; and the interrupt key ends Python in a loop and the
+shell answers the next line in 0.89 s.
+
+**`gohello`** is the previous demo's Go program, back: its source was
+`userspace/wasi/gohello` (at `ad305ed2^`), built by that demo's `mk.sh`
+with `GOOS=wasip1 GOARCH=wasm go build -trimpath`, and it printed *"Hello
+Kitty — from Go (GOOS=wasip1, unmodified)"*. It is `userspace/cmd/gohello`
+now, built the same way into the system package when the machine has
+`go`; its `go.mod` names Go 1.21, where it named 1.25, because 1.21 is
+`wasip1`'s first release and an older Go builds it. 2.4 MB.

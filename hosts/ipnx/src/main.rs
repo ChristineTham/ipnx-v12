@@ -1504,6 +1504,27 @@ func main() {
         assert_eq!(std::fs::read_to_string(s.path().join("tmp/from-go")).unwrap(), "written by go\n");
     }
 
+    /// **`gohello`**, the previous demo's Go program, built for `wasip1` by
+    /// `userspace/mk.sh` with Go's own toolchain, runs unmodified and prints
+    /// what it printed there. Where the build had no `go`, it is not there.
+    #[test]
+    fn gohello_runs_unmodified() {
+        let built = std::fs::read_dir(ipnx::rootcopy().join("pkg/system"))
+            .into_iter()
+            .flatten()
+            .flatten()
+            .any(|v| v.path().join("wasm/bin/gohello").is_file());
+        if !built {
+            eprintln!("no gohello in the built root (userspace/mk.sh builds it with go): skipped");
+            return;
+        }
+        let out = super::userspace::typing("gohello\n");
+        assert!(
+            out.lines().any(|l| l.trim_start_matches("% ") == "Hello Kitty — from Go (GOOS=wasip1, unmodified)"),
+            "{out:?}"
+        );
+    }
+
     /// Typed at rc, it runs: its output is rc's console, `/etc/motd` is the
     /// namespace's, and its exit status is APE's for 3 (`_exit.c:26`).
     #[test]
@@ -1562,5 +1583,47 @@ mod python {
         }
         let out = typing("python3 -q\nprint(sum(range(10)))\n");
         assert!(out.contains("45"), "{out:?}");
+    }
+
+    /// **Its files are its process's namespace** (Christine, 2026-10-09:
+    /// *"B: the namespace"*): a bind in a subshell is what the program there
+    /// opens, and not what one outside it does.
+    #[test]
+    fn its_files_are_its_process_namespace() {
+        if !built() {
+            return;
+        }
+        let out = typing(
+            "mkdir /tmp/alt; echo ALT >/tmp/alt/motd\n\
+             @{rfork n; bind /tmp/alt /etc; python3 -c 'print(\"IN\", open(\"/etc/motd\").read().strip())'}\n\
+             python3 -c 'print(\"OUT\", open(\"/etc/motd\").read().split()[0])'\n",
+        );
+        assert!(line(&out, "IN ALT"), "{out:?}");
+        assert!(line(&out, "OUT Saranos."), "{out:?}");
+    }
+
+    /// Its exit status is APE's (`_exit.c:26`): the number, and none for 0.
+    #[test]
+    fn its_exit_status_is_apes() {
+        if !built() {
+            return;
+        }
+        let out = typing("python3 -c 'import sys; sys.exit(5)'; echo status $status\npython3 -c 'pass' && echo succeeded\n");
+        assert!(out.lines().any(|l| l.contains("status python3") && l.ends_with(": 5")), "{out:?}");
+        assert!(line(&out, "succeeded"), "{out:?}");
+    }
+
+    /// A WASI program has no note handler: the interrupt key ends one in a
+    /// loop, at the clock, and the shell carries on.
+    #[test]
+    fn the_interrupt_key_ends_it_in_a_loop() {
+        if !built() {
+            return;
+        }
+        let out = super::userspace::typing_marked(
+            "python3 -c 'print(\"looping\", flush=True); exec(\"while True: pass\")'\n\x03echo after\n",
+            "looping",
+        );
+        assert!(line(&out, "after"), "{out:?}");
     }
 }

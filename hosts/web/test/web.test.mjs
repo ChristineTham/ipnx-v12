@@ -299,3 +299,59 @@ test('ghostscript runs, with its fonts', async () => {
   assert.ok(out.split('\n').some((l) => last(l) === '3'), out);
   assert.ok(out.split('\n').some((l) => { const w = Number(last(l)); return w >= 9.5 && w < 10.5; }), out);
 });
+
+// ---- WASI programs (P10; docs/architecture.md, A WASI binary runs natively) ----
+// wasi.mjs: WASI preview 1 over the process's own calls, with its namespace
+// as the program's files — what hosts/ipnx's `wasi` and `python` tests ask of
+// the terminal. Each program is the build's, and a test without it says so.
+
+const inroot = (p) => fs.existsSync(new URL(`root/${p}`, dist));
+const gohello = fs.readdirSync(new URL('root/pkg/system/', dist)).some((v) => inroot(`pkg/system/${v}/wasm/bin/gohello`));
+const nogo = !gohello && 'no gohello in the root: userspace/mk.sh builds it with go';
+const nopython = !inroot('pkg/python') && 'no /pkg/python in the root: userspace/pkg/python/mk.sh';
+// typing is not echoed: the output follows the prompt
+const line = (out, want) => out.split('\n').some((l) => l.replace(/^(% )+/, '') === want);
+
+test('a Go program built for wasip1 runs, unmodified', { skip: nogo }, async () => {
+  const out = await typing('gohello\n');
+  assert.ok(line(out, 'Hello Kitty — from Go (GOOS=wasip1, unmodified)'), out);
+});
+
+test('Python imports from its library and computes', { skip: nopython }, async () => {
+  const out = await typing(
+    'python3 -c \'import json, sys; print(json.dumps({"answer": 6*7}), sys.prefix)\'\n' +
+      'python3 -c \'open("/tmp/from-python", "w").write("written by python\\n")\'\n' +
+      'cat /tmp/from-python\n',
+  );
+  assert.ok(line(out, '{"answer": 42} /sys'), out);
+  assert.ok(line(out, 'written by python'), out);
+});
+
+test('Python reads its prompt from the console', { skip: nopython }, async () => {
+  assert.match(await typing('python3 -q\nprint(sum(range(10)))\n'), /45/);
+});
+
+// "B: the namespace" (Christine, 2026-10-09): a bind in a subshell is what
+// the program there opens, and not what one outside it does.
+test("a WASI program's files are its process's namespace", { skip: nopython }, async () => {
+  const out = await typing(
+    'mkdir /tmp/alt; echo ALT >/tmp/alt/motd\n' +
+      "@{rfork n; bind /tmp/alt /etc; python3 -c 'print(\"IN\", open(\"/etc/motd\").read().strip())'}\n" +
+      "python3 -c 'print(\"OUT\", open(\"/etc/motd\").read().split()[0])'\n",
+  );
+  assert.ok(line(out, 'IN ALT'), out);
+  assert.ok(line(out, 'OUT Saranos.'), out);
+});
+
+// _exit.c's status: the number, and none for 0
+test("a WASI program's exit status is APE's", { skip: nopython }, async () => {
+  const out = await typing("python3 -c 'import sys; sys.exit(5)'; echo status $status\npython3 -c 'pass' && echo succeeded\n");
+  assert.match(out, /status python3 \d+: 5\n/);
+  assert.ok(line(out, 'succeeded'), out);
+});
+
+// A WASI program has no note handler: the interrupt ends it, at the clock.
+test('the interrupt key ends a WASI program in a loop, and the shell carries on', { skip: nopython }, async () => {
+  const out = await typing("python3 -c 'print(\"looping\", flush=True); exec(\"while True: pass\")'\n\x03echo after\n", { mark: 'looping' });
+  assert.ok(line(out, 'after'), out);
+});

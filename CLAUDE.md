@@ -153,6 +153,7 @@ node --test hosts/web/test/web.test.mjs   # the system under Node, typed at
 node hosts/web/test/browser.mjs           # the console page in Chromium
 node --test hosts/web/test/emca.test.mjs hosts/web/test/emca-system.test.mjs
 node hosts/web/test/emca-browser.mjs      # emca's page — the site's — in Chromium
+node hosts/web/test/wasi-browser.mjs      # Go and Python, WASI programs, in the page
 ```
 
 Node ≥ 22 where it is used (`worker_threads`, SAB, wasm `try_table` exception
