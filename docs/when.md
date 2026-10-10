@@ -568,6 +568,17 @@ and a shell window keeping its place when the layout moves it, among them
 `replies_held_and_answered_out_of_order_go_to_their_own_calls`,
 `a_flushed_request_is_not_waited_for`).
 
+**The site is served** (2026-10-10; RESEARCH §16.43): its own Netlify
+site, [ipnx-v12.netlify.app](https://ipnx-v12.netlify.app/) (Christine,
+*"New Netlify site"*), serves `hosts/web/dist` built from `1551a71c`,
+uploaded by hand from a cloud session — no CI deploys it — with the
+headers of handbook.md's *Serving it from a site*. It carries the
+repository's `LICENSE`, the root's notices at its `/` and the source it
+was built from. Opened live in Chromium from the cloud session: isolated,
+booted into emca in 15.8 s, and `tr`, `/NOTICE`, `gohello` and `python3`
+typed into its shell window, with no error in the page. `gh-pages` is
+Christine's, untouched.
+
 **Not built** (P8):
 
 - **A listing edited as names** — `edit` on `inode/directory` (type.md, *the
@@ -593,12 +604,6 @@ and a shell window keeping its place when the layout moves it, among them
 - **A container's own chrome**, **the selection's verbs** (emca.md), **the
   keyboard grammar** past ⌘S, ⌘↵ and ⌘⇧↵ (compositor.md), and **the
   `properties` role**.
-- **Deploying the site.** Its own Netlify site, `ipnx-v12` (Christine,
-  2026-10-10, *"New Netlify site"*), is made and serves nothing yet: the
-  upload from the session's cloud container was refused by the
-  container's network policy — the proxy answered 403 to `CONNECT
-  netlify-mcp.netlify.app:443`, and to `ipnx-v12.netlify.app` — and waits
-  on those hosts being allowed. `gh-pages` is Christine's, untouched.
 - **Keeping what is written** across visits, in the origin private file
   system; **WebKit** is not tested.
 

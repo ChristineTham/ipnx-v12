@@ -315,3 +315,31 @@ Nothing external steered.
 
 **Next review**: after M5 ships the canvas surface, or 2026-11 —
 whichever is first.
+
+### Review 2026-10-10 — the rebuild ships: a site of its own
+
+**What has shipped**: the rebuilt system in a browser tab —
+[ipnx-v12.netlify.app](https://ipnx-v12.netlify.app/), Christine's own
+Netlify site (*"New Netlify site"*), serving `hosts/web/dist` built from
+`1551a71c`: emca's page, the kernel compiled to wasm32, and the built
+root with Python's package and `gohello`. It is the rebuild's first public
+form (P0–P10); the frozen proof of concept at christham.net/ipnx-v12
+(`gh-pages`) is Christine's and untouched, so two forms are in the field,
+and they are different systems. It is deployed by hand from a cloud
+session, not by CI.
+
+**What it changes about the bet**: its purpose is narrower than the
+2026-08-29 demo's. Christine asked to *see* a working demo before
+accepting any proposal, and this is that demo.
+
+**What serving it found** (RESEARCH §16.43): the built root carried none
+of its notices, and Ghostscript's licence asks for its source from the
+same place — both now go with the site. And a host that isolates the page
+itself bypasses the service worker that kept every process's scripts, so
+the boot took 135 s until the site's headers kept them (15.8 s).
+
+**External-goods question, asked**: the deploy was steered by Christine's
+request to see the system and by what its licences require. Nothing
+external steered.
+
+**Next review**: 2026-11, as scheduled.

@@ -86,16 +86,32 @@ The root carries its own notices at its `/`.
 `root` copied rather than linked (`cp -rL`). The page needs cross-origin
 isolation for its shared memory: `coi-sw.js` stamps COOP and COEP where a
 host cannot set headers (GitHub Pages), and on Netlify a `_headers` file
-beside the page sets them on every response —
+beside the page sets them on every response. Where the headers isolate
+the page, `coi-register.js` installs no service worker, and nothing keeps
+the scripts every process's worker loads; asked for again at each start —
+some 450 processes at boot, 900 requests — the boot took 135 s instead of
+16 (RESEARCH §16.43). So `_headers` keeps them five minutes:
 
 ```
 /*
   Cross-Origin-Opener-Policy: same-origin
   Cross-Origin-Embedder-Policy: require-corp
+
+/proc.mjs
+  Cache-Control: public, max-age=300
+/mailbox.mjs
+  Cache-Control: public, max-age=300
+/wasi.mjs
+  Cache-Control: public, max-age=300
+/ninep.mjs
+  Cache-Control: public, max-age=300
+/vendor/browser_wasi_shim/*
+  Cache-Control: public, max-age=300
 ```
 
 — with a `netlify.toml` of `[build]`, `publish = "."` and `command = ""`,
-so the folder is published with no build.
+so the folder is published with no build. A visitor who loaded the page in
+the five minutes before a deploy can be given those scripts from before it.
 
 `userspace/build/` and `userspace/root/` are generated and gitignored. Userspace
 binaries carry no `.wasm` extension: exec walks the namespace for `/bin/echo`,

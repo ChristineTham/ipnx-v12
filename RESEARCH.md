@@ -6642,3 +6642,29 @@ from the same place counts as distribution of the source code"*:
 (20 MB, 2.3 s). Its distribution *"by a commercial
 organization to any third party is prohibited if any payment is made in
 connection with such distribution"* (§2(a)); the site is free to visit.
+
+**Served from a host that isolates the page itself, it booted in 135 s.**
+Every process is a worker of its own (§16.37), and each loads its module
+graph when it starts — `proc.mjs`, which imports `mailbox.mjs`. emca's
+boot starts some 450 processes: 449 loads of `proc.mjs` and 451 of
+`mailbox.mjs`, of 954 requests in all, and 45 of the root's files
+(1.5 MB), each fetched once. Locally they cost nothing. Netlify serves
+every file `public,max-age=0,must-revalidate`, so the browser asks again
+each time; and where the headers isolate the page, `coi-register.js`
+installs no service worker — *"already isolated, or no SW support: do
+nothing"* — so nothing else keeps them. The same boot from a server that
+adds 150 ms to every request took 147.1 s and 954 requests as Netlify
+caches, and 12.2 s and 58 requests with the scripts kept five minutes
+(`max-age=300`). The site's `_headers` keeps the scripts a process's
+worker loads five minutes, and the live boot, opened from the cloud
+session, went from 135.4 s to 15.8 s.
+
+**What serving and checking it from a cloud session took.** Netlify's
+deploy uploads with Node's own `fetch`, which goes through the container's
+proxy only when run with `NODE_USE_ENV_PROXY=1` (Node 22.21 and later);
+the container's network policy refused both Netlify hosts until Christine
+opened it (2026-10-10); and the container's browser trust store
+(`~/.pki/nssdb`) held no certificate at all, so Chromium refused every
+site through the proxy, which presents certificates of its own authority.
+The live check ran with a copy of the store holding that one
+certificate, verification on.
