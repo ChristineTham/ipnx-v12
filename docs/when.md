@@ -490,8 +490,8 @@ its own, and a worker is woken before it is ended (2026-10-09): Chromium
 holds about 125 shared memories at once, and an ended worker still waiting
 kept its own. The boot is `hosts/ipnx`'s, shared (`startboot_with`), and
 the root is served by the same 9P (`Store` over a `Backend`): the built
-root, from an index of its 2,169 entries (2026-10-09, with Python's
-package), each file fetched the first time
+root, from an index of its 2,174 entries (2026-10-10, with Python's
+package and the root's notices), each file fetched the first time
 it is read. `console.html` is the system with no window manager: the
 console, the line held and echoed by the page, as rio's window does.
 **Tested**: `hosts/web/test/web.test.mjs`, 40 tests under Node — the
@@ -593,9 +593,14 @@ and a shell window keeping its place when the layout moves it, among them
 - **A container's own chrome**, **the selection's verbs** (emca.md), **the
   keyboard grammar** past ⌘S, ⌘↵ and ⌘⇧↵ (compositor.md), and **the
   `properties` role**.
-- **Deploying the site** — `gh-pages` is Christine's — and **keeping what is
-  written** across visits, in the origin private file system; **WebKit** is
-  not tested.
+- **Deploying the site.** Its own Netlify site, `ipnx-v12` (Christine,
+  2026-10-10, *"New Netlify site"*), is made and serves nothing yet: the
+  upload from the session's cloud container was refused by the
+  container's network policy — the proxy answered 403 to `CONNECT
+  netlify-mcp.netlify.app:443`, and to `ipnx-v12.netlify.app` — and waits
+  on those hosts being allowed. `gh-pages` is Christine's, untouched.
+- **Keeping what is written** across visits, in the origin private file
+  system; **WebKit** is not tested.
 
 **P9's acceptance passes** (2026-10-09; RESEARCH §16.39). On the
 terminal, `os echo hello` prints `hello`; `{…} | os sort` sorts; `os false`

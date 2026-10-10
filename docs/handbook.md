@@ -82,6 +82,21 @@ a copy served from a site serve its source from the same place (RESEARCH
 §16.43) — so a site is served from a clean checkout of a pushed commit.
 The root carries its own notices at its `/`.
 
+**Serving it from a site.** A site serves `hosts/web/dist` as it is, with
+`root` copied rather than linked (`cp -rL`). The page needs cross-origin
+isolation for its shared memory: `coi-sw.js` stamps COOP and COEP where a
+host cannot set headers (GitHub Pages), and on Netlify a `_headers` file
+beside the page sets them on every response —
+
+```
+/*
+  Cross-Origin-Opener-Policy: same-origin
+  Cross-Origin-Embedder-Policy: require-corp
+```
+
+— with a `netlify.toml` of `[build]`, `publish = "."` and `command = ""`,
+so the folder is published with no build.
+
 `userspace/build/` and `userspace/root/` are generated and gitignored. Userspace
 binaries carry no `.wasm` extension: exec walks the namespace for `/bin/echo`,
 and a freshly built module is indistinguishable from a shipped one.
