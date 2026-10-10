@@ -65,12 +65,25 @@ their notices go with them: CPython, built by userspace/pkg/python/mk.sh
 from python/cpython, under the PSF License, whose LICENSE.txt the package
 carries in its library; and gohello, whose source (userspace/cmd/gohello)
 is this repository's but whose binary links Go's runtime and libraries,
-under Go's BSD-style licence (https://go.dev/LICENSE).
+under Go's BSD-style licence (https://go.dev/LICENSE), whose text — the
+LICENSE of the Go that builds it — the built root carries as /LICENSE.go.
 
 Plan 9 sources are vendored under userspace/ — sys/, each architecture's
 include/, rc/ and lib/ — under the Plan 9 Foundation's MIT licence, per
 userspace/NOTICE and userspace/LICENSE, which are the Foundation's own.
-Ghostscript (userspace/sys/src/cmd/gs), as Plan 9 distributes it, is under
-the Aladdin Free Public License or the GPL instead, per
-userspace/LICENSE.afpl and userspace/LICENSE.gpl; its fonts
-(userspace/sys/lib/ghostscript/font) are under the GPL, per their README.
+Ghostscript (userspace/sys/src/cmd/gs), as Plan 9 distributes it, is AFPL
+Ghostscript (gs/src/gscdef.c:43), under the Aladdin Free Public License,
+per userspace/LICENSE.afpl, and not the GPL; its fonts
+(userspace/sys/lib/ghostscript/font) are under the GPL, per
+userspace/LICENSE.gpl, which says it applies to them alone, and their
+README. One file of Ghostscript's is changed here, gs/arch.h, on
+2026-09-28, and says so at its head, as the AFPL asks of a changed file.
+
+The built root carries all four — NOTICE, LICENSE, LICENSE.afpl and
+LICENSE.gpl — at its /, as Plan 9's own root does
+(sys/lib/sysconfig/proto/stand-usb:3, "files like NOTICE"), so they go
+with every copy of what is built from them. And the AFPL asks that a copy
+served from a site serve its source from the same place: the browser
+host's build (hosts/web/build.sh) puts this file beside the page, and
+this repository, at the commit the site is built from, beside it as
+source.tar.gz.

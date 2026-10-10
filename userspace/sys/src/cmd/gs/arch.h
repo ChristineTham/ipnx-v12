@@ -1,3 +1,8 @@
+/*
+ * ipnx: modified 2026-09-28 by Christine Tham, for ipnx-v12
+ * (https://github.com/ChristineTham/ipnx-v12): the case for Twasm below,
+ * this machine, whose header genarch writes (mkfile: $objtype.h).
+ */
 #ifndef _ARCH_H
 #define _ARCH_H
 #ifdef T386

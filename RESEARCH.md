@@ -6598,3 +6598,47 @@ run one after another took 4.0 s in Chromium, twice measured; with
 `wasi.mjs` loaded only for a WASI program (`proc.mjs`), 2.1 s, and emca's
 page fills its windows in 5.1 s, the console page reaching its prompt in
 1.9 s.
+
+### 16.43 What serving the site from a host of its own asks (2026-10-10)
+
+Christine chose a live copy of the site on a Netlify site of its own
+(2026-10-10, *"New Netlify site"*; `gh-pages` is hers, and untouched).
+Reading what the site would serve before serving it found that the
+notices did not go with it.
+
+**The built root carried none of its notices.** Plan 9's installer puts
+its notices at the root — *"# files like NOTICE"*
+(`sys/lib/sysconfig/proto/stand-usb:3`) — and `plan9/` has five there:
+`NOTICE`, `LICENSE`, `LICENSE.afpl`, `LICENSE.gpl` and `LICENSE.lucida`.
+`userspace/` vendors four (no Lucida font is vendored) and `mk.sh`
+installed none, so the site would have served the programs built from the
+Foundation's source, `gs` and the 114 files of its font directory, and a Go binary, with no
+notice at all. MIT's notice *"shall be included in all copies or
+substantial portions of the Software"*; Go's licence asks that
+*"Redistributions in binary form must reproduce the above copyright
+notice"*. `mk.sh` installs the four at `/`, and the `LICENSE` of the Go
+that builds `gohello` as `/LICENSE.go`, named as Plan 9 names a licence
+that is not its own (`LICENSE.lucida`). CPython's went with it already, in
+its library (§16.40); CodeMirror's and the shim's are in `vendor/`.
+
+**Plan 9's Ghostscript is the AFPL's, not the GPL's.** It is *"AFPL
+Ghostscript"* (`gs/src/gscdef.c:43`); `LICENSE.gpl` begins *"This license
+applies only to the printer fonts identified in subdirectory
+/sys/lib/ghostscript/font"*; and Ghostscript's `doc/Copying.htm` is
+titled *"Not the Gnu General Public License"*. The repository's
+`LICENSE` had said "the Aladdin Free Public License or the GPL".
+
+**The AFPL asks three things of a copy served from a site.** That *"you
+distribute an unmodified copy of this License with the Program"* (§1),
+now `/LICENSE.afpl`. That each changed source file carry *"a prominent
+notice that you have modified the file, including your name, your e-mail
+address (if any), and the date and purpose of the change"* (§2(c)(i)):
+`gs/arch.h`, changed on 2026-09-28 for this machine, said why and not
+who or when, and says all three at its head now. And the complete source
+(§2(c)(iv)), where *"offering equivalent ability to copy the source code
+from the same place counts as distribution of the source code"*:
+`hosts/web/build.sh` puts the repository's `LICENSE` beside the page, and
+`git archive` of the commit checked out beside it as `source.tar.gz`
+(20 MB, 2.3 s). Its distribution *"by a commercial
+organization to any third party is prohibited if any payment is made in
+connection with such distribution"* (§2(a)); the site is free to visit.

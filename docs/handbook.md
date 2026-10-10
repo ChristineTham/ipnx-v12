@@ -76,17 +76,23 @@ copied into `userspace/root/pkg/system/*/rc/bin/` and the page rebuilt.
 
 `hosts/web/dist/` is generated and gitignored; its `root` is a link to
 `userspace/root`, so the page serves what `mk.sh` built last.
+Beside the page it puts the repository's `LICENSE` and `source.tar.gz`,
+`git archive` of the commit checked out — Ghostscript's licence asks that
+a copy served from a site serve its source from the same place (RESEARCH
+§16.43) — so a site is served from a clean checkout of a pushed commit.
+The root carries its own notices at its `/`.
 
 `userspace/build/` and `userspace/root/` are generated and gitignored. Userspace
 binaries carry no `.wasm` extension: exec walks the namespace for `/bin/echo`,
 and a freshly built module is indistinguishable from a shipped one.
 
 `cargo test -p conformance -- --nocapture` prints the distance to the demo:
-a checklist of what the system can do, and how much of it is reached. **It
-fails, and is meant to** — the suite asserts equivalence with the demo and
-goes green when all twelve are reached, not before. `cargo test` therefore reports a failure on a
-perfectly healthy tree; for day-to-day work run `cargo test -p ipnx-kernel`
-and `cargo test -p ipnx`.
+a checklist of what the system can do, and how much of it is reached
+([when.md](when.md) says how much). It fails while any line is not
+reached, and the checklist says which. Some lines run the page's checks
+in Chromium (`hosts/web/test/*-browser.mjs`), so it wants the page built
+and Playwright's Chromium; for day-to-day work run `cargo test -p
+ipnx-kernel` and `cargo test -p ipnx`.
 
 ### CI
 
@@ -94,10 +100,8 @@ and `cargo test -p ipnx`.
 pinned wasi-sdk 34.0 and Binaryen 132, `bash userspace/mk.sh`, then the kernel's tests, the
 host's tests on the world just built, `RUSTFLAGS=-D warnings cargo build
 --workspace --all-targets`, and the browser host — built with warnings
-denied, its tests under Node, and the page in Chromium. Conformance runs with `continue-on-error` so its
-count is visible without gating the branch.
-
-**A green CI means the system builds and boots, not that it is conformant.**
+denied, its tests under Node, and the page in Chromium — and then
+conformance, which fails the run like the rest.
 
 ### Three build flags are load-bearing
 

@@ -176,6 +176,11 @@ cp -f "$sys/lib/grap.defines" "$root/sys/lib/"
 mkdir -p "$root/sys/lib/lex" && cp -f "$sys/lib/lex/ncform" "$root/sys/lib/lex/"
 # Plan 9's `/adm/timezone`, which init copies into `#e/timezone` (`init.c`)
 mkdir -p "$root/adm" && cp -rf "$here/adm/timezone" "$root/adm/"
+# and its notices, at the root, where its installer puts them
+# (`sys/lib/sysconfig/proto/stand-usb:3`, *"files like NOTICE"*): the
+# Foundation's, which go with every copy of what is built from its source,
+# and Ghostscript's two, since gs is built (LICENSE)
+cp -f "$here/NOTICE" "$here/LICENSE" "$here/LICENSE.afpl" "$here/LICENSE.gpl" "$root/"
 # **The commands written in rc** — Plan 9's `/rc/bin`, vendored whole at
 # `rc/bin` — are the package's `rc/bin`, bound onto `/bin` after the
 # programs as `/lib/namespace:27` binds them (docs/packages.md, "`/rc`
@@ -238,10 +243,18 @@ fi
 # Go's own toolchain (P10): a WASI program the system runs unmodified, on
 # the terminal and in the page. Go is the host's, as wasi-sdk is; without it
 # the program is not built, and build/failed says so.
+rm -f "$root/LICENSE.go"
 if command -v go >/dev/null; then
-	(cd "$here/cmd/gohello" && env -u CC -u CFLAGS -u LD -u LDFLAGS -u AR \
-		GOOS=wasip1 GOARCH=wasm go build -trimpath -o "$pkg/$OBJTYPE/bin/gohello" .) ||
+	if (cd "$here/cmd/gohello" && env -u CC -u CFLAGS -u LD -u LDFLAGS -u AR \
+		GOOS=wasip1 GOARCH=wasm go build -trimpath -o "$pkg/$OBJTYPE/bin/gohello" .); then
+		# The binary links Go's runtime and libraries, whose licence must go
+		# with it (LICENSE): beside the root's own, named as Plan 9 names a
+		# licence that is not its own (`LICENSE.lucida`)
+		cp -f "$(go env GOROOT)/LICENSE" "$root/LICENSE.go" ||
+			echo "cmd/gohello: no LICENSE in $(go env GOROOT) to go with it" >>"$failed"
+	else
 		echo "cmd/gohello: go build failed" >>"$failed"
+	fi
 else
 	echo "cmd/gohello: no go on this machine (GOOS=wasip1 GOARCH=wasm go build)" >>"$failed"
 fi
